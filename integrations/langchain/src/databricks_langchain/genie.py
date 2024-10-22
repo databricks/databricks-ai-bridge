@@ -1,5 +1,6 @@
 from databricks_ai_bridge.genie import Genie
 
+
 def _concat_messages_array(messages):
     concatenated_message = "\n".join(
         [
@@ -14,6 +15,7 @@ def _concat_messages_array(messages):
 
 def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
     from langchain_core.messages import AIMessage
+
     genie = Genie(genie_space_id)
 
     message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
@@ -37,7 +39,9 @@ def create_genie_agent(genie_space_id, genie_agent_name="Genie"):
     from langchain_core.runnables import RunnableLambda
 
     # Create a partial function with the genie_space_id pre-filled
-    partial_genie_agent = partial(_query_genie_as_agent, genie_space_id=genie_space_id, genie_agent_name=genie_agent_name)
+    partial_genie_agent = partial(
+        _query_genie_as_agent, genie_space_id=genie_space_id, genie_agent_name=genie_agent_name
+    )
 
     # Use the partial function in the RunnableLambda
     return RunnableLambda(partial_genie_agent)
