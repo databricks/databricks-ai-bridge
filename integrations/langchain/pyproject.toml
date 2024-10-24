@@ -20,7 +20,6 @@ dev = [
   "typing_extensions",
   "databricks-sdk>=0.34.0",
   "ruff==0.6.4",
-  "langgraph",
 ]
 
 [build-system]

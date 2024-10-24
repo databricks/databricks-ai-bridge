@@ -1,7 +1,7 @@
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
-from my_module import _concat_messages_array, _query_genie_as_agent, create_genie_agent
+from databricks_langchain.genie import _concat_messages_array, _query_genie_as_agent, create_genie_agent
 
 
 def test_concat_messages_array():
@@ -35,7 +35,7 @@ def test_concat_messages_array():
     assert result == expected
 
 
-@patch("databricks_ai_bridge.genie.Genie")
+@patch("databricks_langchain.genie.Genie")
 def test_query_genie_as_agent(MockGenie):
     # Mock the Genie class and its response
     mock_genie = MockGenie.return_value
