@@ -3,9 +3,9 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
+    GenieAgent,
     _concat_messages_array,
     _query_genie_as_agent,
-    create_genie_agent,
 )
 
 
@@ -64,7 +64,7 @@ def test_query_genie_as_agent(MockGenie):
 def test_create_genie_agent(MockRunnableLambda):
     mock_runnable = MockRunnableLambda.return_value
 
-    agent = create_genie_agent("space-id", "Genie")
+    agent = GenieAgent("space-id", "Genie")
     assert agent == mock_runnable
 
     # Check that the partial function is created with the correct arguments
