@@ -9,7 +9,9 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
   "typing_extensions",
-  "pydantic"
+  "pydantic",
+  "databricks-sdk>=0.34.0",
+  "pandas",
 ]
 
 [project.license]
@@ -28,22 +30,9 @@ include = [
 packages = ["src/databricks_ai_bridge"]
 
 [project.optional-dependencies]
-databricks = [
-  "databricks-sdk>=0.34.0",
-  "pandas",
-]
-databricks-dev = [
-  "hatch",
-  "pytest",
-  "databricks-sdk>=0.34.0",
-  "pandas",
-  "ruff==0.6.4",
-]
 dev = [
   "hatch",
   "pytest",
-  "databricks-sdk>=0.34.0",
-  "pandas",
   "ruff==0.6.4",
 ]
 
