@@ -14,7 +14,10 @@ pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git#subdire
 
 ## Get started
 
-### Use a Genie space as an agent
+### (Preview) Use a Genie space as an agent
+
+> [!NOTE]
+> Requires Genie API Private Preview. Reach out to your account team for enablement. 
 
 ```python
 from databricks_langchain.genie import GenieAgent
