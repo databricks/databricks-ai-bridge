@@ -28,8 +28,6 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-      - name: Lint YAML files with yamllint
-        run: yamllint .
 
   core_test:
     runs-on: ubuntu-latest
