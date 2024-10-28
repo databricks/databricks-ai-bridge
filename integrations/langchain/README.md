@@ -4,13 +4,16 @@ Integrate Databricks AI Bridge package with Langchain to allow seamless usage of
 
 ## Installation
 
+### Install from PyPI
 ```sh
-# install from the source
-pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/langchain
+pip install databricks-langchain
 ```
 
-> [!NOTE]
-> Once this package is published to PyPI, users can install via `pip install databricks-langchain`
+### Install from source
+
+```sh
+pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/langchain
+```
 
 ## Get started
 

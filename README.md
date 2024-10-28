@@ -4,11 +4,15 @@ The Databricks AI Bridge library provides a shared layer of APIs to interact wit
 
 ## Installation
 
+### Install from PyPI
 ```sh
-# install from the source
+pip install databricks-ai-bridge
+```
+
+### Install from source
+
+```sh
 pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git
 ```
 
-> [!NOTE]
-> Once this package is published to PyPI, users can install via `pip install databricks-ai-bridge`
 
