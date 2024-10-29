@@ -5,8 +5,7 @@ from langchain_databricks import (
     DatabricksVectorSearch,
 )
 
-# Import any additional modules specific to databricks-langchain
-from .genie import GenieAgent  # Example for GenieAgent functionality
+from .genie import GenieAgent
 
 # Expose all integrations to users under databricks-langchain
 __all__ = [
