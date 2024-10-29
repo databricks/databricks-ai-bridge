@@ -2,6 +2,8 @@
 
 Integrate Databricks AI Bridge package with Langchain to allow seamless usage of Databricks AI features with Langchain/Langgraph applications.
 
+Note: This repository will replace all Databricks integrations currently present in the langchain-community and langchain-databricks packages. Users are encouraged to migrate to this repository as soon as possible.
+
 ## Installation
 
 ### Install from PyPI
