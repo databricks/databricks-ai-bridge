@@ -116,6 +116,9 @@ class Genie:
                     return poll_query_results()
                 elif resp["status"] == "COMPLETED":
                     return next(r for r in resp["attachments"] if "text" in r)["text"]["content"]
+                elif resp["status"] == "FAILED":
+                    logging.debug("Genie failed to execute the query")
+                    return None
                 else:
                     logging.debug(f"Waiting...: {resp['status']}")
                     time.sleep(5)
