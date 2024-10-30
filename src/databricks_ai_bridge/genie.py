@@ -6,6 +6,8 @@ from typing import Union
 import pandas as pd
 from databricks.sdk import WorkspaceClient
 
+MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
+MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
 
 def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     columns = resp["manifest"]["schema"]["columns"]
@@ -75,7 +77,8 @@ class Genie:
 
     def poll_for_result(self, conversation_id, message_id):
         def poll_result():
-            while True:
+            iteration_count = 0
+            while True and iteration_count < MAX_ITERATIONS:
                 resp = self.genie._api.do(
                     "GET",
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
@@ -92,7 +95,8 @@ class Genie:
                     time.sleep(5)
 
         def poll_query_results():
-            while True:
+            iteration_count = 0
+            while True and iteration_count < MAX_ITERATIONS:
                 resp = self.genie._api.do(
                     "GET",
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/query-result",
