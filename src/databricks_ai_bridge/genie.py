@@ -4,16 +4,18 @@ from datetime import datetime
 from typing import Union
 
 import pandas as pd
-from databricks.sdk import WorkspaceClient
 import tiktoken
+from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
 MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
+
 
 # Define a function to count tokens
 def _count_tokens(text):
     encoding = tiktoken.encoding_for_model("gpt-4o")
     return len(encoding.encode(text))
+
 
 def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     columns = resp["manifest"]["schema"]["columns"]
@@ -56,9 +58,7 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     tokens_used = _count_tokens(query_result)
     while trimmed_rows > 0 and tokens_used > MAX_TOKENS_OF_DATA:
         # convert to markdown
-        query_result = (
-            pd.DataFrame(rows, columns=header).head(trimmed_rows).to_markdown()
-        )
+        query_result = pd.DataFrame(rows, columns=header).head(trimmed_rows).to_markdown()
         # keep trimming down until we get under the token limit
         trimmed_rows -= 5
         # worst case, return None, which the Agent will handle and not display the query results
