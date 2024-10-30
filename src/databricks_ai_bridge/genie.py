@@ -109,8 +109,8 @@ class Genie:
                 )
                 if resp["status"] == "EXECUTING_QUERY":
                     query = next(r for r in resp["attachments"] if "query" in r)["query"]
-                    description = query["description"]
-                    sql = query["query"]
+                    description = query.get("description", "")
+                    sql = query.get("query", "")
                     logging.debug(f"Description: {description}")
                     logging.debug(f"SQL: {sql}")
                     return poll_query_results()

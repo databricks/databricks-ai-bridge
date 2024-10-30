@@ -65,7 +65,7 @@ def test_poll_for_result_executing_query(genie, mock_workspace_client):
         },
     ]
     result = genie.poll_for_result("123", "456")
-    assert result == pd.DataFrame().to_string()
+    assert result == pd.DataFrame().to_markdown()
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -109,7 +109,7 @@ def test_parse_query_result_with_data():
             "created_at": [datetime(2023, 10, 1).date(), datetime(2023, 10, 2).date()],
         }
     )
-    assert result == expected_df.to_string()
+    assert result == expected_df.to_markdown()
 
 
 def test_parse_query_result_with_null_values():
@@ -138,4 +138,4 @@ def test_parse_query_result_with_null_values():
             "created_at": [datetime(2023, 10, 1).date(), None],
         }
     )
-    assert result == expected_df.to_string()
+    assert result == expected_df.to_markdown()
