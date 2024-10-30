@@ -54,18 +54,11 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     query_result = pd.DataFrame(rows, columns=header).to_markdown()
 
     # trim down from the total rows until we get under the token limit
-    trimmed_rows = len(rows)
     tokens_used = _count_tokens(query_result)
-    while trimmed_rows > 0 and tokens_used > MAX_TOKENS_OF_DATA:
-        # convert to markdown
-        query_result = pd.DataFrame(rows, columns=header).head(trimmed_rows).to_markdown()
-        # keep trimming down until we get under the token limit
-        trimmed_rows -= 5
-        # worst case, return None, which the Agent will handle and not display the query results
+    while tokens_used > MAX_TOKENS_OF_DATA:
+        rows.pop()
+        query_result = pd.DataFrame(rows, columns=header).to_markdown()
         tokens_used = _count_tokens(query_result)
-        if trimmed_rows == 0:
-            query_result = None
-            tokens_used = 0
 
     return query_result.strip() if query_result else query_result
 
@@ -102,6 +95,7 @@ class Genie:
         def poll_result():
             iteration_count = 0
             while True and iteration_count < MAX_ITERATIONS:
+                iteration_count += 1
                 resp = self.genie._api.do(
                     "GET",
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
@@ -126,6 +120,7 @@ class Genie:
         def poll_query_results():
             iteration_count = 0
             while True and iteration_count < MAX_ITERATIONS:
+                iteration_count += 1
                 resp = self.genie._api.do(
                     "GET",
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/query-result",
