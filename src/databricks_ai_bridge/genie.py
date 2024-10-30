@@ -108,7 +108,10 @@ class Genie:
                     headers=self.headers,
                 )
                 if resp["status"] == "EXECUTING_QUERY":
-                    sql = next(r for r in resp["attachments"] if "query" in r)["query"]["query"]
+                    query = next(r for r in resp["attachments"] if "query" in r)["query"]
+                    description = query["description"]
+                    sql = query["query"]
+                    logging.debug(f"Description: {description}")
                     logging.debug(f"SQL: {sql}")
                     return poll_query_results()
                 elif resp["status"] == "COMPLETED":
