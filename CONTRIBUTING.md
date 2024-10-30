@@ -11,6 +11,12 @@ pip install -e ".[dev]"
 pip install -r requirements/lint-requirements.txt
 ```
 
+If you are working with integration packages install them as well
+
+```sh
+pip install -e "integrations/langchain[dev]"
+```
+
 ## Publishing to PyPI
 
 Note: this section is for maitainers only.

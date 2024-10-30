@@ -13,6 +13,7 @@ dependencies = [
   "databricks-sdk>=0.34.0",
   "pandas",
   "tiktoken>=0.8.0",
+  "tabulate",
 ]
 
 [project.license]
