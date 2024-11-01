@@ -2,9 +2,7 @@
 
 Integrate Databricks AI Bridge package with Langchain to allow seamless usage of Databricks AI features with Langchain/Langgraph applications.
 
-Note: This repository is the future home for all Databricks integrations currently found in langchain-databricks and langchain-community. Over time, we’ll be consolidating integrations here, including ChatDatabricks, DatabricksEmbeddings, DatabricksVectorSearch, and more.
-
-Stay tuned for updates on when each integration becomes available in this package. For now, you can continue using langchain-databricks until the transition is complete.
+Note: This repository is the future home for all Databricks integrations currently found in `langchain-databricks` and `langchain-community`. We have now aliased `langchain-databricks` to `databricks-langchain`, consolidating integrations such as ChatDatabricks, DatabricksEmbeddings, DatabricksVectorSearch, and more under this package.
 
 ## Installation
 
@@ -20,6 +18,13 @@ pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git#subdire
 ```
 
 ## Get started
+
+### Use LLMs on Databricks
+
+```python
+from databricks_langchain import ChatDatabricks
+llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+```
 
 ### (Preview) Use a Genie space as an agent
 
