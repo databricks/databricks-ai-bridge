@@ -27,6 +27,7 @@ We recommend first uploading to test-PyPI
 
 
 ```sh
+pip install build
 python3 -m build --wheel
 twine upload dist/*
 ```
