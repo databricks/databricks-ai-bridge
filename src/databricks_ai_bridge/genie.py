@@ -109,7 +109,20 @@ class Genie:
                     logging.debug(f"SQL: {sql}")
                     return poll_query_results()
                 elif resp["status"] == "COMPLETED":
-                    return next(r for r in resp["attachments"] if "text" in r)["text"]["content"]
+                    # Check if there is a query object in the attachments for the COMPLETED status
+                    query_attachment = next((r for r in resp["attachments"] if "query" in r), None)
+                    if query_attachment:
+                        query = query_attachment["query"]
+                        description = query.get("description", "")
+                        sql = query.get("query", "")
+                        logging.debug(f"Description: {description}")
+                        logging.debug(f"SQL: {sql}")
+                        return poll_query_results()
+                    else:
+                        # Handle the text object in the COMPLETED status
+                        return next(r for r in resp["attachments"] if "text" in r)["text"][
+                            "content"
+                        ]
                 elif resp["status"] == "FAILED":
                     logging.debug("Genie failed to execute the query")
                     return None

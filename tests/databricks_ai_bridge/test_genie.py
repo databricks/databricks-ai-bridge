@@ -43,12 +43,29 @@ def test_create_message(genie, mock_workspace_client):
     )
 
 
-def test_poll_for_result_completed(genie, mock_workspace_client):
+def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "COMPLETED", "attachments": [{"text": {"content": "Result"}}]},
     ]
     result = genie.poll_for_result("123", "456")
     assert result == "Result"
+
+
+def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "COMPLETED", "attachments": [{"query": {"query": "SELECT *"}}]},
+        {
+            "statement_response": {
+                "status": {"state": "SUCCEEDED"},
+                "manifest": {"schema": {"columns": []}},
+                "result": {
+                    "data_typed_array": [],
+                },
+            }
+        },
+    ]
+    result = genie.poll_for_result("123", "456")
+    assert result == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_executing_query(genie, mock_workspace_client):
