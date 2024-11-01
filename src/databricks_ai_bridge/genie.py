@@ -94,7 +94,7 @@ class Genie:
     def poll_for_result(self, conversation_id, message_id):
         def poll_result():
             iteration_count = 0
-            while True and iteration_count < MAX_ITERATIONS:
+            while iteration_count < MAX_ITERATIONS:
                 iteration_count += 1
                 resp = self.genie._api.do(
                     "GET",
@@ -113,13 +113,19 @@ class Genie:
                 elif resp["status"] == "FAILED":
                     logging.debug("Genie failed to execute the query")
                     return None
+                elif resp["status"] == "CANCELLED":
+                    logging.debug("Genie query cancelled")
+                    return None
+                elif resp["QUERY_RESULT_EXPIRED"]:
+                    logging.debug("Genie query result expired")
+                    return None
                 else:
                     logging.debug(f"Waiting...: {resp['status']}")
                     time.sleep(5)
 
         def poll_query_results():
             iteration_count = 0
-            while True and iteration_count < MAX_ITERATIONS:
+            while iteration_count < MAX_ITERATIONS:
                 iteration_count += 1
                 resp = self.genie._api.do(
                     "GET",

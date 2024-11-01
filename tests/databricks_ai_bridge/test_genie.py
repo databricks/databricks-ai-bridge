@@ -76,6 +76,22 @@ def test_poll_for_result_failed(genie, mock_workspace_client):
     assert result is None
 
 
+def test_poll_for_result_cancelled(genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "CANCELLED"},
+    ]
+    result = genie.poll_for_result("123", "456")
+    assert result is None
+
+
+def test_poll_for_result_expired(genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"status": "QUERY_RESULT_EXPIRED"},
+    ]
+    result = genie.poll_for_result("123", "456")
+    assert result is None
+
+
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
     # patch MAX_ITERATIONS to 2 for this test and sleep to avoid delays
     with (
