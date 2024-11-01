@@ -116,7 +116,7 @@ class Genie:
                 elif resp["status"] == "CANCELLED":
                     logging.debug("Genie query cancelled")
                     return None
-                elif resp["QUERY_RESULT_EXPIRED"]:
+                elif resp["status"] == "QUERY_RESULT_EXPIRED":
                     logging.debug("Genie query result expired")
                     return None
                 else:
