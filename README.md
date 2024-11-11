@@ -11,8 +11,15 @@ pip install databricks-ai-bridge
 
 ### Install from source
 
+With https:
+
+```sh
+pip install git+https://github.com/databricks/databricks-ai-bridge.git
+```
+
+With ssh creds:
+
 ```sh
 pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git
 ```
-
 
