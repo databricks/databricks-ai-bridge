@@ -7,6 +7,7 @@ __pycache__
 
 # Editor files
 *.vscode
+.idea
 
 # Mac
 .DS_Store
