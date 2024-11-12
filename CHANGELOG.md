@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.0.3 (2024-11-12)
+This is a patch release that includes bugfixes.
+
+Bug fixes:
+
+- Update Genie API polling logic to account for COMPLETED query state (#16, @prithvikannan)
+
+
 ## 0.0.2 (2024-11-01)
 Initial version of databricks-ai-bridge and databricks-langchain packages
 
