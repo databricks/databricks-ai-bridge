@@ -1,7 +1,7 @@
 [project]
 name = "databricks-langchain"
 version = "0.0.2"
-description = "Support for Datarbricks AI support in LangChain"
+description = "Support for Databricks AI support in LangChain"
 authors = [
     { name="Prithvi Kannan", email="prithvi.kannan@databricks.com" },
 ]
