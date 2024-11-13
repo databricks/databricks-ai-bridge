@@ -250,17 +250,17 @@ def test_parse_query_result_trims_large_data():
         }
         result = _parse_query_result(resp)
         assert (
-                result
-                == pd.DataFrame(
-            {
-                "id": [1, 2, 3],
-                "name": ["Alice", "Bob", "Charlie"],
-                "created_at": [
-                    datetime(2023, 10, 1).date(),
-                    datetime(2023, 10, 2).date(),
-                    datetime(2023, 10, 3).date(),
-                ],
-            }
-        ).to_markdown()
+            result
+            == pd.DataFrame(
+                {
+                    "id": [1, 2, 3],
+                    "name": ["Alice", "Bob", "Charlie"],
+                    "created_at": [
+                        datetime(2023, 10, 1).date(),
+                        datetime(2023, 10, 2).date(),
+                        datetime(2023, 10, 3).date(),
+                    ],
+                }
+            ).to_markdown()
         )
         assert _count_tokens(result) <= 100

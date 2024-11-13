@@ -11,11 +11,12 @@ from databricks.sdk import WorkspaceClient
 MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
 MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
 
-@dataclass(kw_only=True, frozen=True, repr=True)
+
+@dataclass(frozen=True, repr=True)
 class GenieResult:
     description: Optional[str]
     sql_query: Optional[str]
-    response: Optional[str] # can be a query result or a text result
+    response: Optional[str]  # can be a query result or a text result
 
 
 # Define a function to count tokens
@@ -114,7 +115,9 @@ class Genie:
                     sql = query.get("query", "")
                     logging.debug(f"Description: {description}")
                     logging.debug(f"SQL: {sql}")
-                    return GenieResult(sql_query=sql, description=description, response=poll_query_results())
+                    return GenieResult(
+                        sql_query=sql, description=description, response=poll_query_results()
+                    )
                 elif resp["status"] == "COMPLETED":
                     # Check if there is a query object in the attachments for the COMPLETED status
                     query_attachment = next((r for r in resp["attachments"] if "query" in r), None)
@@ -124,7 +127,9 @@ class Genie:
                         sql = query.get("query", "")
                         logging.debug(f"Description: {description}")
                         logging.debug(f"SQL: {sql}")
-                        return GenieResult(sql_query=sql, description=description, response=poll_query_results())
+                        return GenieResult(
+                            sql_query=sql, description=description, response=poll_query_results()
+                        )
                     else:
                         # Handle the text object in the COMPLETED status
                         text_content = next(r for r in resp["attachments"] if "text" in r)["text"][

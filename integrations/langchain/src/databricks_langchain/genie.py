@@ -47,7 +47,8 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
         question: str = Field(description="question to ask the agent")
         summarized_chat_history: str = Field(
             description="summarized chat history to provide the agent context of what may have been talked about. "
-                        "Say 'No history' if there is no history to provide.")
+            "Say 'No history' if there is no history to provide."
+        )
 
     class GenieQuestionToolWithTrace(BaseTool):
         name: str = f"{genie_agent_name}_details"
@@ -56,14 +57,16 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
         response_format: str = "content_and_artifact"
 
         def _run(
-                self,
-                question: str,
-                summarized_chat_history: str,
-                run_manager: Optional[CallbackManagerForToolRun] = None
+            self,
+            question: str,
+            summarized_chat_history: str,
+            run_manager: Optional[CallbackManagerForToolRun] = None,
         ) -> Tuple[str, Optional[GenieResult]]:
-            message = (f"I will provide you a chat history, where your name is {genie_agent_name}. "
-                       f"Please answer the following question: {question} with the following chat history "
-                       f"for context: {summarized_chat_history}.\n")
+            message = (
+                f"I will provide you a chat history, where your name is {genie_agent_name}. "
+                f"Please answer the following question: {question} with the following chat history "
+                f"for context: {summarized_chat_history}.\n"
+            )
             response = genie.ask_question_with_details(message)
             if response:
                 return response.response, response
@@ -77,16 +80,21 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
         args_schema: Type[BaseModel] = GenieToolInput
 
         def _run(
-                self,
-                question: str,
-                summarized_chat_history: str,
-                run_manager: Optional[CallbackManagerForToolRun] = None
+            self,
+            question: str,
+            summarized_chat_history: str,
+            run_manager: Optional[CallbackManagerForToolRun] = None,
         ) -> Tuple[str, GenieResult]:
-            tool_result = tool_with_details.invoke({
-                "args": {"question": question, "summarized_chat_history": summarized_chat_history},
-                "id": str(uuid.uuid4()),
-                "type": "tool_call"
-            })
+            tool_result = tool_with_details.invoke(
+                {
+                    "args": {
+                        "question": question,
+                        "summarized_chat_history": summarized_chat_history,
+                    },
+                    "id": str(uuid.uuid4()),
+                    "type": "tool_call",
+                }
+            )
             return tool_result.content
 
     return GenieQuestionToolCall()
