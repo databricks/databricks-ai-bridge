@@ -1,9 +1,8 @@
 import uuid
-from typing import Tuple, Type, Optional
-
-from pydantic import BaseModel, Field
+from typing import Optional, Tuple, Type
 
 from databricks_ai_bridge.genie import Genie, GenieResult
+from pydantic import BaseModel, Field
 
 
 def _concat_messages_array(messages):
@@ -46,8 +45,8 @@ class GenieToolInput(BaseModel):
 
 
 def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_description: str):
-    from langchain_core.tools import BaseTool
     from langchain_core.callbacks.manager import CallbackManagerForToolRun
+    from langchain_core.tools import BaseTool
 
     genie = Genie(genie_space_id)
 

@@ -2,7 +2,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Union, Optional
+from typing import Optional, Union
 
 import pandas as pd
 import tiktoken

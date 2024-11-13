@@ -3,8 +3,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-
-from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result, GenieResult
+from databricks_ai_bridge.genie import Genie, GenieResult, _count_tokens, _parse_query_result
 
 
 @pytest.fixture
