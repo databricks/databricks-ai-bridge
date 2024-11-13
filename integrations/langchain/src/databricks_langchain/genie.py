@@ -37,7 +37,7 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
         return {"messages": [AIMessage(content="")]}
 
 
-def GenieTool(genie_space_id: str, genie_agent_name: str, description):
+def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_description: str):
     from langchain_core.tools import BaseTool
     from langchain_core.callbacks.manager import CallbackManagerForToolRun
 
@@ -51,7 +51,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, description):
 
     class GenieQuestionToolWithTrace(BaseTool):
         name: str = genie_agent_name
-        description: str = description
+        description: str = genie_space_description
         args_schema: Type[BaseModel] = GenieToolInput
         response_format: str  = "content_and_artifact"
 
@@ -71,7 +71,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, description):
 
     class GenieQuestionToolCall(BaseTool):
         name: str = genie_agent_name
-        description: str = description
+        description: str = genie_space_description
         args_schema: Type[BaseModel] = GenieToolInput
 
         def _run(
