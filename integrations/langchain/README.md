@@ -45,3 +45,16 @@ from databricks_langchain.genie import GenieAgent
 
 genie_agent = GenieAgent("space-id", "Genie", description="This Genie space has access to sales data in Europe")
 ```
+
+### (Preview) Use a Genie space as an tool
+
+> [!NOTE]
+> Requires Genie API Private Preview. Reach out to your account team for enablement. 
+
+Once the genie tool is created, you can then bind it to a [AgentExecutor](https://python.langchain.com/docs/how_to/agent_executor/#tools) or Langgraph React Agent. 
+
+```python
+from databricks_langchain.genie import GenieTool
+
+genie_tool = GenieTool("space-id", "Genie", "This Genie space has access to sales data in Europe")
+```

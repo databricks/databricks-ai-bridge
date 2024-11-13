@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 from databricks_ai_bridge.genie import GenieResult
+from langchain_core.messages import AIMessage
+
 from databricks_langchain.genie import (
     GenieAgent,
     GenieTool,
@@ -8,7 +10,6 @@ from databricks_langchain.genie import (
     _concat_messages_array,
     _query_genie_as_agent,
 )
-from langchain_core.messages import AIMessage
 
 
 def test_concat_messages_array():
