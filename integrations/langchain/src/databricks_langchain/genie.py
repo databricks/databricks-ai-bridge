@@ -60,12 +60,14 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
                 question: str,
                 summarized_chat_history: str,
                 run_manager: Optional[CallbackManagerForToolRun] = None
-        ) -> Tuple[str, GenieResult]:
+        ) -> Tuple[str, Optional[GenieResult]]:
             message = (f"I will provide you a chat history, where your name is {genie_agent_name}. "
                        f"Please answer the following question: {question} with the following chat history "
                        f"for context: {summarized_chat_history}.\n")
             response = genie.ask_question(message, with_details=True)
-            return response.response, response
+            if response:
+                return response.response, response
+            return "no results from room", None
 
     tool_with_details = GenieQuestionToolWithTrace()
 
