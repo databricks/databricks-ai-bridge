@@ -105,10 +105,8 @@ def test_create_genie_tool_no_response(MockGenie):
     assert agent.args_schema == GenieToolInput
     assert agent.description == "Description"
     assert (
-            agent.invoke({"question": "What is the weather?", "summarized_chat_history": "No history"})
-            == ""
+        agent.invoke({"question": "What is the weather?", "summarized_chat_history": "No history"})
+        == ""
     )
 
     assert mock_genie.ask_question_with_details.call_count == 1
-
-
