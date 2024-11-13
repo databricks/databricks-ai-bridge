@@ -37,18 +37,19 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
         return {"messages": [AIMessage(content="")]}
 
 
+class GenieToolInput(BaseModel):
+    question: str = Field(description="question to ask the agent")
+    summarized_chat_history: str = Field(
+        description="summarized chat history to provide the agent context of what may have been talked about. "
+        "Say 'No history' if there is no history to provide."
+    )
+
+
 def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_description: str):
     from langchain_core.tools import BaseTool
     from langchain_core.callbacks.manager import CallbackManagerForToolRun
 
     genie = Genie(genie_space_id)
-
-    class GenieToolInput(BaseModel):
-        question: str = Field(description="question to ask the agent")
-        summarized_chat_history: str = Field(
-            description="summarized chat history to provide the agent context of what may have been talked about. "
-            "Say 'No history' if there is no history to provide."
-        )
 
     class GenieQuestionToolWithTrace(BaseTool):
         name: str = f"{genie_agent_name}_details"
@@ -70,7 +71,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
             response = genie.ask_question_with_details(message)
             if response:
                 return response.response, response
-            return "no results from room", None
+            return "", None
 
     tool_with_details = GenieQuestionToolWithTrace()
 
