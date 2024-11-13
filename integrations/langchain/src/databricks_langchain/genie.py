@@ -50,7 +50,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
                         "Say 'No history' if there is no history to provide.")
 
     class GenieQuestionToolWithTrace(BaseTool):
-        name: str = genie_agent_name
+        name: str = f"{genie_agent_name}_details"
         description: str = genie_space_description
         args_schema: Type[BaseModel] = GenieToolInput
         response_format: str  = "content_and_artifact"
@@ -83,7 +83,6 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
                 run_manager: Optional[CallbackManagerForToolRun] = None
         ) -> Tuple[str, GenieResult]:
             tool_result = tool_with_details.invoke({
-                "name": "GenieQuestionToolWithDetails",
                 "args": {"question": question, "summarized_chat_history": summarized_chat_history},
                 "id": str(uuid.uuid4()),
                 "type": "tool_call"
