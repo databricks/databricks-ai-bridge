@@ -1,7 +1,7 @@
 import uuid
-from typing import Tuple, Type
+from typing import Tuple, Type, Optional
 
-from pydantic import BaseModel, Field, Optional
+from pydantic import BaseModel, Field
 
 from databricks_ai_bridge.genie import Genie, GenieResult
 
