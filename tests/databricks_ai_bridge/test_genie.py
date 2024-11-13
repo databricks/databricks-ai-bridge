@@ -151,7 +151,7 @@ def test_ask_question_with_details(genie, mock_workspace_client):
         {"conversation_id": "123", "message_id": "456"},
         {"status": "COMPLETED", "attachments": [{"text": {"content": "Answer"}}]},
     ]
-    result = genie.ask_question("What is the meaning of life?", with_details=True)
+    result = genie.ask_question_with_details("What is the meaning of life?")
     assert isinstance(result, GenieResult)
     assert result.response == "Answer"
 

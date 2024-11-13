@@ -165,14 +165,14 @@ class Genie:
 
         return poll_result()
 
-    def ask_question(self, question, with_details: bool = False) -> Optional[GenieResult]:
+    def ask_question(self, question) -> Optional[str]:
         resp = self.start_conversation(question)
-        # TODO (prithvi): return the query and the result
         genie_result = self.poll_for_result(resp["conversation_id"], resp["message_id"])
-        if with_details is True:
-            # return the dataclass when with_details is True
-            return genie_result
+        # ask question will just return the string response
         if genie_result:
-            # return just the response when with_details is False
             return genie_result.response
         return None
+
+    def ask_question_with_details(self, question: str) -> Optional[GenieResult]:
+        resp = self.start_conversation(question)
+        return self.poll_for_result(resp["conversation_id"], resp["message_id"])

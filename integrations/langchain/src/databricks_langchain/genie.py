@@ -32,7 +32,7 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
     genie_response = genie.ask_question(message)
 
     if genie_response:
-        return {"messages": [AIMessage(content=genie_response.response)]}
+        return {"messages": [AIMessage(content=genie_response)]}
     else:
         return {"messages": [AIMessage(content="")]}
 
@@ -64,7 +64,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
             message = (f"I will provide you a chat history, where your name is {genie_agent_name}. "
                        f"Please answer the following question: {question} with the following chat history "
                        f"for context: {summarized_chat_history}.\n")
-            response = genie.ask_question(message, with_details=True)
+            response = genie.ask_question_with_details(message)
             if response:
                 return response.response, response
             return "no results from room", None
