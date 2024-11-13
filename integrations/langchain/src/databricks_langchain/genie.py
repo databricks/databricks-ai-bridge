@@ -53,7 +53,7 @@ def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_descriptio
         name: str = f"{genie_agent_name}_details"
         description: str = genie_space_description
         args_schema: Type[BaseModel] = GenieToolInput
-        response_format: str  = "content_and_artifact"
+        response_format: str = "content_and_artifact"
 
         def _run(
                 self,
