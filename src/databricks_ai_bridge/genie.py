@@ -1,7 +1,8 @@
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Union
+from typing import Optional, Union
 
 import pandas as pd
 import tiktoken
@@ -9,6 +10,13 @@ from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
 MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
+
+
+@dataclass(frozen=True, repr=True)
+class GenieResult:
+    description: Optional[str]
+    sql_query: Optional[str]
+    response: Optional[str]  # can be a query result or a text result
 
 
 # Define a function to count tokens
@@ -92,7 +100,7 @@ class Genie:
         return resp
 
     def poll_for_result(self, conversation_id, message_id):
-        def poll_result():
+        def poll_result() -> Optional[GenieResult]:
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
                 iteration_count += 1
@@ -107,7 +115,9 @@ class Genie:
                     sql = query.get("query", "")
                     logging.debug(f"Description: {description}")
                     logging.debug(f"SQL: {sql}")
-                    return poll_query_results()
+                    return GenieResult(
+                        sql_query=sql, description=description, response=poll_query_results()
+                    )
                 elif resp["status"] == "COMPLETED":
                     # Check if there is a query object in the attachments for the COMPLETED status
                     query_attachment = next((r for r in resp["attachments"] if "query" in r), None)
@@ -117,12 +127,15 @@ class Genie:
                         sql = query.get("query", "")
                         logging.debug(f"Description: {description}")
                         logging.debug(f"SQL: {sql}")
-                        return poll_query_results()
+                        return GenieResult(
+                            sql_query=sql, description=description, response=poll_query_results()
+                        )
                     else:
                         # Handle the text object in the COMPLETED status
-                        return next(r for r in resp["attachments"] if "text" in r)["text"][
+                        text_content = next(r for r in resp["attachments"] if "text" in r)["text"][
                             "content"
                         ]
+                        return GenieResult(sql_query=None, description=None, response=text_content)
                 elif resp["status"] == "FAILED":
                     logging.debug("Genie failed to execute the query")
                     return None
@@ -157,7 +170,14 @@ class Genie:
 
         return poll_result()
 
-    def ask_question(self, question):
+    def ask_question(self, question) -> Optional[str]:
         resp = self.start_conversation(question)
-        # TODO (prithvi): return the query and the result
+        genie_result = self.poll_for_result(resp["conversation_id"], resp["message_id"])
+        # ask question will just return the string response
+        if genie_result:
+            return genie_result.response
+        return None
+
+    def ask_question_with_details(self, question: str) -> Optional[GenieResult]:
+        resp = self.start_conversation(question)
         return self.poll_for_result(resp["conversation_id"], resp["message_id"])

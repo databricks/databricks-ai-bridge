@@ -1,4 +1,8 @@
-from databricks_ai_bridge.genie import Genie
+import uuid
+from typing import Optional, Tuple, Type
+
+from databricks_ai_bridge.genie import Genie, GenieResult
+from pydantic import BaseModel, Field
 
 
 def _concat_messages_array(messages):
@@ -30,6 +34,70 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
         return {"messages": [AIMessage(content=genie_response)]}
     else:
         return {"messages": [AIMessage(content="")]}
+
+
+class GenieToolInput(BaseModel):
+    question: str = Field(description="question to ask the agent")
+    summarized_chat_history: str = Field(
+        description="summarized chat history to provide the agent context of what may have been talked about. "
+        "Say 'No history' if there is no history to provide."
+    )
+
+
+def GenieTool(genie_space_id: str, genie_agent_name: str, genie_space_description: str):
+    from langchain_core.callbacks.manager import CallbackManagerForToolRun
+    from langchain_core.tools import BaseTool
+
+    genie = Genie(genie_space_id)
+
+    class GenieQuestionToolWithTrace(BaseTool):
+        name: str = f"{genie_agent_name}_details"
+        description: str = genie_space_description
+        args_schema: Type[BaseModel] = GenieToolInput
+        response_format: str = "content_and_artifact"
+
+        def _run(
+            self,
+            question: str,
+            summarized_chat_history: str,
+            run_manager: Optional[CallbackManagerForToolRun] = None,
+        ) -> Tuple[str, Optional[GenieResult]]:
+            message = (
+                f"I will provide you a chat history, where your name is {genie_agent_name}. "
+                f"Please answer the following question: {question} with the following chat history "
+                f"for context: {summarized_chat_history}.\n"
+            )
+            response = genie.ask_question_with_details(message)
+            if response:
+                return response.response, response
+            return "", None
+
+    tool_with_details = GenieQuestionToolWithTrace()
+
+    class GenieQuestionToolCall(BaseTool):
+        name: str = genie_agent_name
+        description: str = genie_space_description
+        args_schema: Type[BaseModel] = GenieToolInput
+
+        def _run(
+            self,
+            question: str,
+            summarized_chat_history: str,
+            run_manager: Optional[CallbackManagerForToolRun] = None,
+        ) -> Tuple[str, GenieResult]:
+            tool_result = tool_with_details.invoke(
+                {
+                    "args": {
+                        "question": question,
+                        "summarized_chat_history": summarized_chat_history,
+                    },
+                    "id": str(uuid.uuid4()),
+                    "type": "tool_call",
+                }
+            )
+            return tool_result.content
+
+    return GenieQuestionToolCall()
 
 
 def GenieAgent(genie_space_id, genie_agent_name="Genie", description=""):

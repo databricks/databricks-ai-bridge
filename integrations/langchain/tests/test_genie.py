@@ -1,9 +1,12 @@
 from unittest.mock import patch
 
+from databricks_ai_bridge.genie import GenieResult
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
     GenieAgent,
+    GenieTool,
+    GenieToolInput,
     _concat_messages_array,
     _query_genie_as_agent,
 )
@@ -69,3 +72,41 @@ def test_create_genie_agent(MockRunnableLambda):
 
     # Check that the partial function is created with the correct arguments
     MockRunnableLambda.assert_called()
+
+
+@patch("databricks_langchain.genie.Genie")
+def test_create_genie_tool(MockGenie):
+    mock_genie = MockGenie.return_value
+    mock_genie.ask_question_with_details.return_value = GenieResult(
+        description=None, sql_query=None, response="It is sunny."
+    )
+
+    agent = GenieTool("space-id", "Genie", "Description")
+
+    assert agent.name == "Genie"
+    assert agent.args_schema == GenieToolInput
+    assert agent.description == "Description"
+    assert (
+        agent.invoke({"question": "What is the weather?", "summarized_chat_history": "No history"})
+        == "It is sunny."
+    )
+
+    assert mock_genie.ask_question_with_details.call_count == 1
+
+
+@patch("databricks_langchain.genie.Genie")
+def test_create_genie_tool_no_response(MockGenie):
+    mock_genie = MockGenie.return_value
+    mock_genie.ask_question_with_details.return_value = None
+
+    agent = GenieTool("space-id", "Genie", "Description")
+
+    assert agent.name == "Genie"
+    assert agent.args_schema == GenieToolInput
+    assert agent.description == "Description"
+    assert (
+        agent.invoke({"question": "What is the weather?", "summarized_chat_history": "No history"})
+        == ""
+    )
+
+    assert mock_genie.ask_question_with_details.call_count == 1
