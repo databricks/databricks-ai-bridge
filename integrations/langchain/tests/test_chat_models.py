@@ -155,9 +155,7 @@ def mock_client() -> Generator:
 
 @pytest.fixture
 def llm() -> ChatDatabricks:
-    return ChatDatabricks(
-        endpoint="databricks-meta-llama-3-70b-instruct", target_uri="databricks"
-    )
+    return ChatDatabricks(endpoint="databricks-meta-llama-3-70b-instruct", target_uri="databricks")
 
 
 def test_dict(llm: ChatDatabricks) -> None:
@@ -239,9 +237,7 @@ class GetPopulation(BaseModel):
 
 def test_chat_model_bind_tools(llm: ChatDatabricks) -> None:
     llm_with_tools = llm.bind_tools([GetWeather, GetPopulation])
-    response = llm_with_tools.invoke(
-        "Which city is hotter today and which is bigger: LA or NY?"
-    )
+    response = llm_with_tools.invoke("Which city is hotter today and which is bigger: LA or NY?")
     assert isinstance(response, AIMessage)
 
 
@@ -438,9 +434,7 @@ def test_convert_tool_message_chunk() -> None:
         "id": "some_id",
     }
     result = _convert_dict_to_message_chunk(delta, "default_role")
-    expected_output = ToolMessageChunk(
-        content="foo", id="some_id", tool_call_id="tool_call_id"
-    )
+    expected_output = ToolMessageChunk(content="foo", id="some_id", tool_call_id="tool_call_id")
     assert result == expected_output
 
     # convert back

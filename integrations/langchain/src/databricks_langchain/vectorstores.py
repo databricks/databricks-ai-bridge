@@ -33,9 +33,7 @@ class IndexType(str, Enum):
 
 
 _DIRECT_ACCESS_ONLY_MSG = "`%s` is only supported for direct-access index."
-_NON_MANAGED_EMB_ONLY_MSG = (
-    "`%s` is not supported for index with Databricks-managed embeddings."
-)
+_NON_MANAGED_EMB_ONLY_MSG = "`%s` is not supported for index with Databricks-managed embeddings."
 _INDEX_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
 
 
@@ -104,9 +102,7 @@ class DatabricksVectorSearch(VectorStore):
 
             from langchain_databricks.vectorstores import DatabricksVectorSearch
 
-            vector_store = DatabricksVectorSearch(
-                index_name="<your-index-name>"
-            )
+            vector_store = DatabricksVectorSearch(index_name="<your-index-name>")
 
         If you are using a direct-access index or a delta-sync index with self-managed embeddings,
         you also need to provide the embedding model and text column in your source table to
@@ -119,7 +115,7 @@ class DatabricksVectorSearch(VectorStore):
             vector_store = DatabricksVectorSearch(
                 index_name="<your-index-name>",
                 embedding=OpenAIEmbeddings(),
-                text_column="document_content"
+                text_column="document_content",
             )
 
     Add Documents:
@@ -147,7 +143,7 @@ class DatabricksVectorSearch(VectorStore):
             for doc in results:
                 print(f"* {doc.page_content} [{doc.metadata}]")
         .. code-block:: python
-            * thud [{'id': '2'}]
+            *thud[{"id": "2"}]
 
         .. note:
 
@@ -163,7 +159,7 @@ class DatabricksVectorSearch(VectorStore):
                     columns=["baz", "bar"],
                 )
 
-                vector_store.similarity_search(query="thud",k=1)
+                vector_store.similarity_search(query="thud", k=1)
                 # Output: * thud [{'bar': 'baz', 'baz': None, 'id': '2'}]
 
     Search with filter:
@@ -172,7 +168,7 @@ class DatabricksVectorSearch(VectorStore):
             for doc in results:
                 print(f"* {doc.page_content} [{doc.metadata}]")
         .. code-block:: python
-            * thud [{'id': '2'}]
+            *thud[{"id": "2"}]
 
     Search with score:
         .. code-block:: python
@@ -205,7 +201,7 @@ class DatabricksVectorSearch(VectorStore):
             )
             retriever.invoke("thud")
         .. code-block:: python
-            [Document(metadata={'id': '2'}, page_content='thud')]
+            [Document(metadata={"id": "2"}, page_content="thud")]
     """  # noqa: E501
 
     def __init__(
@@ -251,9 +247,7 @@ class DatabricksVectorSearch(VectorStore):
 
         _validate_embedding(embedding, self._index_details)
         self._embeddings = embedding
-        self._text_column = _validate_and_get_text_column(
-            text_column, self._index_details
-        )
+        self._text_column = _validate_and_get_text_column(text_column, self._index_details)
         self._columns = _validate_and_get_return_columns(
             columns or [], self._text_column, self._index_details
         )
@@ -322,9 +316,7 @@ class DatabricksVectorSearch(VectorStore):
 
         upsert_resp = self.index.upsert(updates)
         if upsert_resp.get("status") in ("PARTIAL_SUCCESS", "FAILURE"):
-            failed_ids = upsert_resp.get("result", dict()).get(
-                "failed_primary_keys", []
-            )
+            failed_ids = upsert_resp.get("result", dict()).get("failed_primary_keys", [])
             if upsert_resp.get("status") == "FAILURE":
                 logger.error("Failed to add texts to the index.")
             else:
@@ -393,9 +385,7 @@ class DatabricksVectorSearch(VectorStore):
         )
         return [doc for doc, _ in docs_with_score]
 
-    async def asimilarity_search(
-        self, query: str, k: int = 4, **kwargs: Any
-    ) -> List[Document]:
+    async def asimilarity_search(self, query: str, k: int = 4, **kwargs: Any) -> List[Document]:
         # This is a temporary workaround to make the similarity search
         # asynchronous. The proper solution is to make the similarity search
         # asynchronous in the vector store implementations.
@@ -481,9 +471,7 @@ class DatabricksVectorSearch(VectorStore):
             List of Documents most similar to the embedding.
         """
         if self._index_details.is_databricks_managed_embeddings():
-            raise NotImplementedError(
-                _NON_MANAGED_EMB_ONLY_MSG % "similarity_search_by_vector"
-            )
+            raise NotImplementedError(_NON_MANAGED_EMB_ONLY_MSG % "similarity_search_by_vector")
 
         docs_with_score = self.similarity_search_by_vector_with_score(
             embedding=embedding,
@@ -536,17 +524,12 @@ class DatabricksVectorSearch(VectorStore):
 
         if query_type is not None and query_type.upper() == "HYBRID":
             if query is None:
-                raise ValueError(
-                    "A value for `query` must be specified for hybrid search."
-                )
+                raise ValueError("A value for `query` must be specified for hybrid search.")
             query_text = query
         else:
             if query is not None:
                 raise ValueError(
-                    (
-                        "Cannot specify both `embedding` and "
-                        '`query` unless `query_type="HYBRID"'
-                    )
+                    ("Cannot specify both `embedding` and " '`query` unless `query_type="HYBRID"')
                 )
             query_text = None
 
@@ -594,9 +577,7 @@ class DatabricksVectorSearch(VectorStore):
             List of Documents selected by maximal marginal relevance.
         """
         if self._index_details.is_databricks_managed_embeddings():
-            raise NotImplementedError(
-                _NON_MANAGED_EMB_ONLY_MSG % "max_marginal_relevance_search"
-            )
+            raise NotImplementedError(_NON_MANAGED_EMB_ONLY_MSG % "max_marginal_relevance_search")
 
         query_vector = self._embeddings.embed_query(query)  # type: ignore[union-attr]
         docs = self.max_marginal_relevance_search_by_vector(
@@ -682,8 +663,7 @@ class DatabricksVectorSearch(VectorStore):
             search_resp.get("manifest").get("columns").index({"name": embedding_column})
         )
         embeddings = [
-            doc[embeddings_result_index]
-            for doc in search_resp.get("result").get("data_array")
+            doc[embeddings_result_index] for doc in search_resp.get("result").get("data_array")
         ]
 
         mmr_selected = maximal_marginal_relevance(
@@ -693,9 +673,7 @@ class DatabricksVectorSearch(VectorStore):
             lambda_mult=lambda_mult,
         )
 
-        ignore_cols: List = (
-            [embedding_column] if embedding_column not in self._columns else []
-        )
+        ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
         candidates = self._parse_search_response(search_resp, ignore_cols=ignore_cols)
         selected_results = [r[0] for i, r in enumerate(candidates) if i in mmr_selected]
         return selected_results
@@ -717,10 +695,7 @@ class DatabricksVectorSearch(VectorStore):
         if ignore_cols is None:
             ignore_cols = []
 
-        columns = [
-            col["name"]
-            for col in search_resp.get("manifest", dict()).get("columns", [])
-        ]
+        columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
         docs_with_score = []
         for result in search_resp.get("result", dict()).get("data_array", []):
             doc_id = result[columns.index(self._primary_key)]
@@ -738,9 +713,7 @@ class DatabricksVectorSearch(VectorStore):
         return docs_with_score
 
 
-def _validate_and_get_text_column(
-    text_column: Optional[str], index_details: IndexDetails
-) -> str:
+def _validate_and_get_text_column(text_column: Optional[str], index_details: IndexDetails) -> str:
     if index_details.is_databricks_managed_embeddings():
         index_source_column: str = index_details.embedding_source_column["name"]
         # check if input text column matches the source column of the index
@@ -771,9 +744,7 @@ def _validate_and_get_return_columns(
         columns.append(text_column)
 
     # Validate specified columns are in the index
-    if index_details.is_direct_access_index() and (
-        index_schema := index_details.schema
-    ):
+    if index_details.is_direct_access_index() and (index_schema := index_details.schema):
         if missing_columns := [c for c in columns if c not in index_schema]:
             raise ValueError(
                 "Some columns specified in `columns` are not "
@@ -782,9 +753,7 @@ def _validate_and_get_return_columns(
     return columns
 
 
-def _validate_embedding(
-    embedding: Optional[Embeddings], index_details: IndexDetails
-) -> None:
+def _validate_embedding(embedding: Optional[Embeddings], index_details: IndexDetails) -> None:
     if index_details.is_databricks_managed_embeddings():
         if embedding is not None:
             raise ValueError(
@@ -800,9 +769,7 @@ def _validate_embedding(
         _validate_embedding_dimension(embedding, index_details)
 
 
-def _validate_embedding_dimension(
-    embeddings: Embeddings, index_details: IndexDetails
-) -> None:
+def _validate_embedding_dimension(embeddings: Embeddings, index_details: IndexDetails) -> None:
     """validate if the embedding dimension matches with the index's configuration."""
     if index_embedding_dimension := index_details.embedding_vector_column.get(
         "embedding_dimension"
@@ -865,7 +832,4 @@ class IndexDetails:
         return self._index_details["index_type"] == IndexType.DIRECT_ACCESS.value
 
     def is_databricks_managed_embeddings(self) -> bool:
-        return (
-            self.is_delta_sync_index()
-            and self.embedding_source_column.get("name") is not None
-        )
+        return self.is_delta_sync_index() and self.embedding_source_column.get("name") is not None

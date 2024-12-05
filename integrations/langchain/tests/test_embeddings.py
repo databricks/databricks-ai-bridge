@@ -56,9 +56,7 @@ def test_embed_documents(
     )
 
 
-def test_embed_query(
-    mock_client: BaseDeploymentClient, embeddings: DatabricksEmbeddings
-) -> None:
+def test_embed_query(mock_client: BaseDeploymentClient, embeddings: DatabricksEmbeddings) -> None:
     query = "foo bar"
     output = embeddings.embed_query(query)
     assert len(output) == 1536

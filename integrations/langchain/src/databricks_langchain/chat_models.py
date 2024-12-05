@@ -94,6 +94,7 @@ class ChatDatabricks(BaseChatModel):
         .. code-block:: python
 
             from langchain_databricks import ChatDatabricks
+
             llm = ChatDatabricks(
                 endpoint="databricks-meta-llama-3-1-405b-instruct",
                 temperature=0,
@@ -113,12 +114,8 @@ class ChatDatabricks(BaseChatModel):
 
             AIMessage(
                 content="J'adore la programmation.",
-                response_metadata={
-                    'prompt_tokens': 32,
-                    'completion_tokens': 9,
-                    'total_tokens': 41
-                },
-                id='run-64eebbdd-88a8-4a25-b508-21e9a5f146c5-0'
+                response_metadata={"prompt_tokens": 32, "completion_tokens": 9, "total_tokens": 41},
+                id="run-64eebbdd-88a8-4a25-b508-21e9a5f146c5-0",
             )
 
     Stream:
@@ -151,10 +148,8 @@ class ChatDatabricks(BaseChatModel):
 
             AIMessageChunk(
                 content="J'adore la programmation.",
-                response_metadata={
-                    'finish_reason': 'stop'
-                },
-                id='run-4cef851f-6223-424f-ad26-4a54e5852aa5'
+                response_metadata={"finish_reason": "stop"},
+                id="run-4cef851f-6223-424f-ad26-4a54e5852aa5",
             )
 
         To get token usage returned when streaming, pass the ``stream_usage`` kwarg:
@@ -176,8 +171,7 @@ class ChatDatabricks(BaseChatModel):
         .. code-block:: python
 
             llm = ChatDatabricks(
-                endpoint="databricks-meta-llama-3-1-405b-instruct",
-                stream_usage=True
+                endpoint="databricks-meta-llama-3-1-405b-instruct", stream_usage=True
             )
             structured_llm = llm.with_structured_output(...)
 
@@ -196,12 +190,8 @@ class ChatDatabricks(BaseChatModel):
 
             AIMessage(
                 content="J'adore la programmation.",
-                response_metadata={
-                    'prompt_tokens': 32,
-                    'completion_tokens': 9,
-                    'total_tokens': 41
-                },
-                id='run-e4bb043e-772b-4e1d-9f98-77ccc00c0271-0'
+                response_metadata={"prompt_tokens": 32, "completion_tokens": 9, "total_tokens": 41},
+                id="run-e4bb043e-772b-4e1d-9f98-77ccc00c0271-0",
             )
 
     Tool calling:
@@ -209,30 +199,33 @@ class ChatDatabricks(BaseChatModel):
 
             from pydantic import BaseModel, Field
 
+
             class GetWeather(BaseModel):
                 '''Get the current weather in a given location'''
 
                 location: str = Field(..., description="The city and state, e.g. San Francisco, CA")
+
 
             class GetPopulation(BaseModel):
                 '''Get the current population in a given location'''
 
                 location: str = Field(..., description="The city and state, e.g. San Francisco, CA")
 
+
             llm_with_tools = llm.bind_tools([GetWeather, GetPopulation])
-            ai_msg = llm_with_tools.invoke("Which city is hotter today and which is bigger: LA or NY?")
+            ai_msg = llm_with_tools.invoke(
+                "Which city is hotter today and which is bigger: LA or NY?"
+            )
             ai_msg.tool_calls
 
         .. code-block:: python
 
             [
                 {
-                    'name': 'GetWeather',
-                    'args': {
-                        'location': 'Los Angeles, CA'
-                    },
-                    'id': 'call_ea0a6004-8e64-4ae8-a192-a40e295bfa24',
-                    'type': 'tool_call'
+                    "name": "GetWeather",
+                    "args": {"location": "Los Angeles, CA"},
+                    "id": "call_ea0a6004-8e64-4ae8-a192-a40e295bfa24",
+                    "type": "tool_call",
                 }
             ]
 
@@ -258,9 +251,7 @@ class ChatDatabricks(BaseChatModel):
     """
     stream_usage: bool = False
     """Any extra parameters to pass to the endpoint."""
-    client: Optional[BaseDeploymentClient] = Field(
-        default=None, exclude=True
-    )  #: :meta private:
+    client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
@@ -311,9 +302,7 @@ class ChatDatabricks(BaseChatModel):
 
         return data
 
-    def _convert_response_to_chat_result(
-        self, response: Mapping[str, Any]
-    ) -> ChatResult:
+    def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         generations = [
             ChatGeneration(
                 message=_convert_dict_to_message(choice["message"]),
@@ -371,9 +360,7 @@ class ChatDatabricks(BaseChatModel):
                 )
 
                 if run_manager:
-                    run_manager.on_llm_new_token(
-                        chunk.text, chunk=chunk, logprobs=logprobs
-                    )
+                    run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
 
                 yield chunk
             else:
@@ -428,12 +415,10 @@ class ChatDatabricks(BaseChatModel):
                     tool_choice = "required"
             elif isinstance(tool_choice, dict):
                 tool_names = [
-                    formatted_tool["function"]["name"]
-                    for formatted_tool in formatted_tools
+                    formatted_tool["function"]["name"] for formatted_tool in formatted_tools
                 ]
                 if not any(
-                    tool_name == tool_choice["function"]["name"]
-                    for tool_name in tool_names
+                    tool_name == tool_choice["function"]["name"] for tool_name in tool_names
                 ):
                     raise ValueError(
                         f"Tool choice {tool_choice} was specified, but the only "
@@ -510,9 +495,7 @@ class ChatDatabricks(BaseChatModel):
                 llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification)
 
-                structured_llm.invoke(
-                    "What weighs more a pound of bricks or a pound of feathers"
-                )
+                structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
 
                 # -> AnswerWithJustification(
                 #     answer='They weigh the same',
@@ -534,13 +517,9 @@ class ChatDatabricks(BaseChatModel):
 
 
                 llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
-                structured_llm = llm.with_structured_output(
-                    AnswerWithJustification, include_raw=True
-                )
+                structured_llm = llm.with_structured_output(AnswerWithJustification, include_raw=True)
 
-                structured_llm.invoke(
-                    "What weighs more a pound of bricks or a pound of feathers"
-                )
+                structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
                 # -> {
                 #     'raw': AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_Ao02pnFYXD6GN1yzc0uXPsvF', 'function': {'arguments': '{"answer":"They weigh the same.","justification":"Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume or density of the objects may differ."}', 'name': 'AnswerWithJustification'}, 'type': 'function'}]}),
                 #     'parsed': AnswerWithJustification(answer='They weigh the same.', justification='Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume or density of the objects may differ.'),
@@ -566,9 +545,7 @@ class ChatDatabricks(BaseChatModel):
                 llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(dict_schema)
 
-                structured_llm.invoke(
-                    "What weighs more a pound of bricks or a pound of feathers"
-                )
+                structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
                 # -> {
                 #     'answer': 'They weigh the same',
                 #     'justification': 'Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume and density of the two substances differ.'
@@ -629,8 +606,7 @@ class ChatDatabricks(BaseChatModel):
         if method == "function_calling":
             if schema is None:
                 raise ValueError(
-                    "schema must be specified when method is 'function_calling'. "
-                    "Received None."
+                    "schema must be specified when method is 'function_calling'. " "Received None."
                 )
             tool_name = convert_to_openai_tool(schema)["function"]["name"]
             llm = self.bind_tools([schema], tool_choice=tool_name)
@@ -640,9 +616,7 @@ class ChatDatabricks(BaseChatModel):
                     first_tool_only=True,  # type: ignore[list-item]
                 )
             else:
-                output_parser = JsonOutputKeyToolsParser(
-                    key_name=tool_name, first_tool_only=True
-                )
+                output_parser = JsonOutputKeyToolsParser(key_name=tool_name, first_tool_only=True)
         elif method == "json_mode":
             llm = self.bind(response_format={"type": "json_object"})
             output_parser = (
@@ -717,10 +691,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
             "tool_call_id": message.tool_call_id,
             **message_dict,
         }
-    elif (
-        isinstance(message, FunctionMessage)
-        or "function_call" in message.additional_kwargs
-    ):
+    elif isinstance(message, FunctionMessage) or "function_call" in message.additional_kwargs:
         raise ValueError(
             "Function messages are not supported by Databricks. Please"
             " create a feature request at https://github.com/mlflow/mlflow/issues."
@@ -787,9 +758,7 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
                 try:
                     tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
                 except Exception as e:
-                    invalid_tool_calls.append(
-                        make_invalid_tool_call(raw_tool_call, str(e))
-                    )
+                    invalid_tool_calls.append(make_invalid_tool_call(raw_tool_call, str(e)))
         return AIMessage(
             content=content,
             additional_kwargs=additional_kwargs,

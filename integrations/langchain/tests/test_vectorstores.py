@@ -23,8 +23,7 @@ class FakeEmbeddings(Embeddings):
     def embed_documents(self, embedding_texts: List[str]) -> List[List[float]]:
         """Return simple embeddings."""
         return [
-            [float(1.0)] * (self.dimension - 1) + [float(i)]
-            for i in range(len(embedding_texts))
+            [float(1.0)] * (self.dimension - 1) + [float(i)] for i in range(len(embedding_texts))
         ]
 
     def embed_query(self, text: str) -> List[float]:
@@ -51,9 +50,7 @@ EXAMPLE_SEARCH_RESPONSE = {
         "data_array": sorted(
             [
                 [str(uuid.uuid4()), s, e, 0.5]
-                for s, e in zip(
-                    INPUT_TEXTS, EMBEDDING_MODEL.embed_documents(INPUT_TEXTS)
-                )
+                for s, e in zip(INPUT_TEXTS, EMBEDDING_MODEL.embed_documents(INPUT_TEXTS))
             ],
             key=lambda x: x[2],  # type: ignore
             reverse=True,
@@ -183,9 +180,7 @@ def test_init_with_endpoint_name() -> None:
     assert vectorsearch.index.describe() == INDEX_DETAILS[DELTA_SYNC_INDEX]
 
 
-@pytest.mark.parametrize(
-    "index_name", [None, "invalid", 123, MagicMock(spec=VectorSearchIndex)]
-)
+@pytest.mark.parametrize("index_name", [None, "invalid", 123, MagicMock(spec=VectorSearchIndex)])
 def test_init_fail_invalid_index_name(index_name) -> None:
     with pytest.raises(ValueError, match="The `index_name` parameter must be"):
         DatabricksVectorSearch(index_name=index_name)
@@ -233,9 +228,7 @@ def test_init_fail_embedding_already_specified_in_source() -> None:
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES - {DELTA_SYNC_INDEX})
 def test_init_fail_embedding_dim_mismatch(index_name: str) -> None:
-    with pytest.raises(
-        ValueError, match="embedding model's dimension '1000' does not match"
-    ):
+    with pytest.raises(ValueError, match="embedding model's dimension '1000' does not match"):
         DatabricksVectorSearch(
             index_name=index_name,
             text_column="text",
@@ -338,9 +331,7 @@ def test_add_texts_with_metadata() -> None:
                 "text_vector": vector,
                 **metadata,  # type: ignore[arg-type]
             }
-            for text, vector, id_, metadata in zip(
-                INPUT_TEXTS, vectors, added_ids, metadatas
-            )
+            for text, vector, id_, metadata in zip(INPUT_TEXTS, vectors, added_ids, metadatas)
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
@@ -368,9 +359,7 @@ def test_delete_fail_no_ids() -> None:
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES - {DIRECT_ACCESS_INDEX})
 def test_delete_not_supported_for_delta_sync_index(index_name: str) -> None:
     vectorsearch = init_vector_search(index_name)
-    with pytest.raises(
-        NotImplementedError, match="`delete` is only supported for direct-access"
-    ):
+    with pytest.raises(NotImplementedError, match="`delete` is only supported for direct-access"):
         vectorsearch.delete(["some id"])
 
 
@@ -476,9 +465,7 @@ def test_mmr_search(
     filters = {"some filter": True}
     limit = 1
 
-    search_result = vectorsearch.max_marginal_relevance_search(
-        query, k=limit, filters=filters
-    )
+    search_result = vectorsearch.max_marginal_relevance_search(query, k=limit, filters=filters)
     assert [doc.page_content for doc in search_result] == [INPUT_TEXTS[0]]
     assert [set(doc.metadata.keys()) for doc in search_result] == [expected_columns]
 
@@ -493,9 +480,7 @@ def test_mmr_parameters(index_name: str) -> None:
     lambda_mult = 0.25
     filters = {"some filter": True}
 
-    with patch(
-        "databricks_langchain.vectorstores.maximal_marginal_relevance"
-    ) as mock_mmr:
+    with patch("databricks_langchain.vectorstores.maximal_marginal_relevance") as mock_mmr:
         mock_mmr.return_value = [2]
         retriever = vectorsearch.as_retriever(
             search_type="mmr",
@@ -554,9 +539,7 @@ def test_standard_params() -> None:
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES - {DELTA_SYNC_INDEX})
 @pytest.mark.parametrize("query_type", [None, "ANN"])
-def test_similarity_search_by_vector(
-    index_name: str, query_type: Optional[str]
-) -> None:
+def test_similarity_search_by_vector(index_name: str, query_type: Optional[str]) -> None:
     vectorsearch = init_vector_search(index_name)
     query_embedding = EMBEDDING_MODEL.embed_query("foo")
     filters = {"some filter": True}
@@ -630,9 +613,5 @@ def test_similarity_search_by_vector_not_supported_for_managed_embedding() -> No
     filters = {"some filter": True}
     limit = 7
 
-    with pytest.raises(
-        NotImplementedError, match="`similarity_search_by_vector` is not supported"
-    ):
-        vectorsearch.similarity_search_by_vector(
-            query_embedding, k=limit, filters=filters
-        )
+    with pytest.raises(NotImplementedError, match="`similarity_search_by_vector` is not supported"):
+        vectorsearch.similarity_search_by_vector(query_embedding, k=limit, filters=filters)

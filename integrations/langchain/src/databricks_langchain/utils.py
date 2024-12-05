@@ -6,9 +6,7 @@ import numpy as np
 
 def get_deployment_client(target_uri: str) -> Any:
     if (target_uri != "databricks") and (urlparse(target_uri).scheme != "databricks"):
-        raise ValueError(
-            "Invalid target URI. The target URI must be a valid databricks URI."
-        )
+        raise ValueError("Invalid target URI. The target URI must be a valid databricks URI.")
 
     try:
         from mlflow.deployments import get_deploy_client  # type: ignore[import-untyped]
@@ -63,9 +61,7 @@ def maximal_marginal_relevance(
             if i in idxs:
                 continue
             redundant_score = max(similarity_to_selected[i])
-            equation_score = (
-                lambda_mult * query_score - (1 - lambda_mult) * redundant_score
-            )
+            equation_score = lambda_mult * query_score - (1 - lambda_mult) * redundant_score
             if equation_score > best_score:
                 best_score = equation_score
                 idx_to_add = i

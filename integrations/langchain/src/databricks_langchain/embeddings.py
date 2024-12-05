@@ -36,6 +36,7 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
     Instantiate:
         .. code-block:: python
             from langchain_databricks import DatabricksEmbeddings
+
             embed = DatabricksEmbeddings(
                 endpoint="databricks-bge-large-en",
             )
@@ -46,11 +47,7 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
             embed.embed_query(input_text)
 
         .. code-block:: python
-            [
-                0.01605224609375,
-                -0.0298309326171875,
-                ...
-            ]
+            [0.01605224609375, -0.0298309326171875, ...]
 
     """
 
