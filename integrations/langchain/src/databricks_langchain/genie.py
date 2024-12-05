@@ -40,7 +40,9 @@ def GenieAgent(genie_space_id, genie_agent_name="Genie", description=""):
 
     # Create a partial function with the genie_space_id pre-filled
     partial_genie_agent = partial(
-        _query_genie_as_agent, genie_space_id=genie_space_id, genie_agent_name=genie_agent_name
+        _query_genie_as_agent,
+        genie_space_id=genie_space_id,
+        genie_agent_name=genie_agent_name,
     )
 
     # Use the partial function in the RunnableLambda

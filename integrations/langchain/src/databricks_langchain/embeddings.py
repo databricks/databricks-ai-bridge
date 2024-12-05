@@ -1,9 +1,8 @@
 from typing import Any, Dict, Iterator, List
 
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, PrivateAttr
-
 from langchain_databricks.utils import get_deployment_client
+from pydantic import BaseModel, PrivateAttr
 
 
 class DatabricksEmbeddings(Embeddings, BaseModel):
