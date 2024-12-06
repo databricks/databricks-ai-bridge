@@ -6,6 +6,7 @@ from langchain_databricks import (
 )
 
 from .genie import GenieAgent
+from .vector_search import VectorSearchRetrieverTool
 
 # Expose all integrations to users under databricks-langchain
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "DatabricksEmbeddings",
     "DatabricksVectorSearch",
     "GenieAgent",
+    "VectorSearchRetrieverTool"
 ]
