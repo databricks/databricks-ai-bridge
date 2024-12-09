@@ -22,6 +22,7 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VST, VectorStore
+
 from databricks_langchain.utils import maximal_marginal_relevance
 
 logger = logging.getLogger(__name__)

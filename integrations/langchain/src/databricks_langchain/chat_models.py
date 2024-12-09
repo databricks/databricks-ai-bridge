@@ -50,9 +50,10 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from databricks_langchain.utils import get_deployment_client
 from mlflow.deployments import BaseDeploymentClient  # type: ignore
 from pydantic import BaseModel, Field
+
+from databricks_langchain.utils import get_deployment_client
 
 logger = logging.getLogger(__name__)
 
