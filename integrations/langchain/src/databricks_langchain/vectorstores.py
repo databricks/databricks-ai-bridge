@@ -22,7 +22,7 @@ import numpy as np
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VST, VectorStore
-from langchain_databricks.utils import maximal_marginal_relevance
+from databricks_langchain.utils import maximal_marginal_relevance
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,11 @@ class DatabricksVectorSearch(VectorStore):
     """Databricks vector store integration.
 
     Setup:
-        Install ``langchain-databricks`` and ``databricks-vectorsearch`` python packages.
+        Install ``databricks-langchain`` and ``databricks-vectorsearch`` python packages.
 
         .. code-block:: bash
 
-            pip install -U langchain-databricks databricks-vectorsearch
+            pip install -U databricks-langchain databricks-vectorsearch
 
         If you don't have a Databricks Vector Search endpoint already, you can create one by following the instructions here: https://docs.databricks.com/en/generative-ai/create-query-vector-search.html
 
@@ -100,7 +100,7 @@ class DatabricksVectorSearch(VectorStore):
 
         .. code-block:: python
 
-            from langchain_databricks.vectorstores import DatabricksVectorSearch
+            from databricks_langchain.vectorstores import DatabricksVectorSearch
 
             vector_store = DatabricksVectorSearch(index_name="<your-index-name>")
 

@@ -11,7 +11,6 @@ requires-python = ">=3.9"
 dependencies = [
     "langchain>=0.2.0",
     "langchain-community>=0.2.0",
-    "langchain-databricks>=0.1.1",
     "databricks-ai-bridge",
 ]
 

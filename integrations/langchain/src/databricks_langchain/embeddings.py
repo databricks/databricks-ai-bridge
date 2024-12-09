@@ -1,7 +1,7 @@
 from typing import Any, Dict, Iterator, List
 
 from langchain_core.embeddings import Embeddings
-from langchain_databricks.utils import get_deployment_client
+from databricks_langchain.utils import get_deployment_client
 from pydantic import BaseModel, PrivateAttr
 
 
@@ -9,11 +9,11 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
     """Databricks embedding model integration.
 
     Setup:
-        Install ``langchain-databricks``.
+        Install ``databricks-langchain``.
 
         .. code-block:: bash
 
-            pip install -U langchain-databricks
+            pip install -U databricks-langchain
 
         If you are outside Databricks, set the Databricks workspace
         hostname and personal access token to environment variables:
@@ -35,7 +35,7 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
 
     Instantiate:
         .. code-block:: python
-            from langchain_databricks import DatabricksEmbeddings
+            from databricks_langchain import DatabricksEmbeddings
 
             embed = DatabricksEmbeddings(
                 endpoint="databricks-bge-large-en",

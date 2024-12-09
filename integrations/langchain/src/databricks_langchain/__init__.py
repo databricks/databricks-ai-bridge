@@ -1,4 +1,3 @@
-# Import modules from langchain-databricks
 from databricks_langchain.chat_models import ChatDatabricks
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent

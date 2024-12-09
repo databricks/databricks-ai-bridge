@@ -50,7 +50,7 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from langchain_databricks.utils import get_deployment_client
+from databricks_langchain.utils import get_deployment_client
 from mlflow.deployments import BaseDeploymentClient  # type: ignore
 from pydantic import BaseModel, Field
 
@@ -61,11 +61,11 @@ class ChatDatabricks(BaseChatModel):
     """Databricks chat model integration.
 
     Setup:
-        Install ``langchain-databricks``.
+        Install ``databricks-langchain``.
 
         .. code-block:: bash
 
-            pip install -U langchain-databricks
+            pip install -U databricks-langchain
 
         If you are outside Databricks, set the Databricks workspace hostname and personal access token to environment variables:
 
@@ -93,7 +93,7 @@ class ChatDatabricks(BaseChatModel):
     Instantiate:
         .. code-block:: python
 
-            from langchain_databricks import ChatDatabricks
+            from databricks_langchain import ChatDatabricks
 
             llm = ChatDatabricks(
                 endpoint="databricks-meta-llama-3-1-405b-instruct",
@@ -481,7 +481,7 @@ class ChatDatabricks(BaseChatModel):
         Example: Function-calling, Pydantic schema (method="function_calling", include_raw=False):
             .. code-block:: python
 
-                from langchain_databricks import ChatDatabricks
+                from databricks_langchain import ChatDatabricks
                 from pydantic import BaseModel
 
 
@@ -505,7 +505,7 @@ class ChatDatabricks(BaseChatModel):
         Example: Function-calling, Pydantic schema (method="function_calling", include_raw=True):
             .. code-block:: python
 
-                from langchain_databricks import ChatDatabricks
+                from databricks_langchain import ChatDatabricks
                 from pydantic import BaseModel
 
 
@@ -529,7 +529,7 @@ class ChatDatabricks(BaseChatModel):
         Example: Function-calling, dict schema (method="function_calling", include_raw=False):
             .. code-block:: python
 
-                from langchain_databricks import ChatDatabricks
+                from databricks_langchain import ChatDatabricks
                 from langchain_core.utils.function_calling import convert_to_openai_tool
                 from pydantic import BaseModel
 
@@ -554,7 +554,7 @@ class ChatDatabricks(BaseChatModel):
         Example: JSON mode, Pydantic schema (method="json_mode", include_raw=True):
             .. code-block::
 
-                from langchain_databricks import ChatDatabricks
+                from databricks_langchain import ChatDatabricks
                 from pydantic import BaseModel
 
                 class AnswerWithJustification(BaseModel):
