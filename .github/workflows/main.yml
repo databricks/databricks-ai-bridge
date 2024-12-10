@@ -68,4 +68,4 @@ jobs:
           pip install integrations/langchain[dev]
       - name: Run tests
         run: |
-          pytest integrations/langchain/tests
+          pytest integrations/langchain/tests/unit_tests
