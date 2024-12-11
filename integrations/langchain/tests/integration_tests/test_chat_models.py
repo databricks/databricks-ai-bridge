@@ -25,13 +25,14 @@ from langchain_core.messages import (
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
-from databricks_langchain.chat_models import ChatDatabricks
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, create_react_agent, tools_condition
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
+
+from databricks_langchain.chat_models import ChatDatabricks
 
 _TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
