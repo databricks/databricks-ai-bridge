@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
+from databricks_ai_bridge.genie import Genie, GenieResult, _count_tokens, _parse_query_result
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
         {"status": "COMPLETED", "attachments": [{"text": {"content": "Result"}}]},
     ]
     result = genie.poll_for_result("123", "456")
-    assert result == "Result"
+    assert result.response == "Result"
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
@@ -65,7 +65,7 @@ def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
         },
     ]
     result = genie.poll_for_result("123", "456")
-    assert result == pd.DataFrame().to_markdown()
+    assert result.response == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_executing_query(genie, mock_workspace_client):
@@ -85,7 +85,7 @@ def test_poll_for_result_executing_query(genie, mock_workspace_client):
         },
     ]
     result = genie.poll_for_result("123", "456")
-    assert result == pd.DataFrame().to_markdown()
+    assert result.response == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
@@ -140,7 +140,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
             },
         ]
         result = genie.poll_for_result("123", "456")
-        assert result is None
+        assert result.response is None
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -150,6 +150,16 @@ def test_ask_question(genie, mock_workspace_client):
     ]
     result = genie.ask_question("What is the meaning of life?")
     assert result == "Answer"
+
+
+def test_ask_question_with_details(genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"conversation_id": "123", "message_id": "456"},
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "Answer"}}]},
+    ]
+    result = genie.ask_question_with_details("What is the meaning of life?")
+    assert isinstance(result, GenieResult)
+    assert result.response == "Answer"
 
 
 def test_parse_query_result_empty():
