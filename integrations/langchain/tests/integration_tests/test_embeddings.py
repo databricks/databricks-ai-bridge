@@ -9,7 +9,7 @@ that you need to update the corresponding integration test, please contact to
 the maintainers of the repository to verify the changes.
 """
 
-from langchain_databricks import DatabricksEmbeddings
+from databricks_langchain import DatabricksEmbeddings
 
 _TEST_ENDPOINT = "databricks-bge-large-en"
 
