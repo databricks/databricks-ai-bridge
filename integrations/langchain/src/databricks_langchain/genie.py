@@ -1,6 +1,7 @@
 from databricks_ai_bridge.genie import Genie
+import mlflow
 
-
+@mlflow.trace()
 def _concat_messages_array(messages):
     concatenated_message = "\n".join(
         [
@@ -12,7 +13,7 @@ def _concat_messages_array(messages):
     )
     return concatenated_message
 
-
+@mlflow.trace()
 def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
     from langchain_core.messages import AIMessage
 

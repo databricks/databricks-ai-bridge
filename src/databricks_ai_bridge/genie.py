@@ -7,6 +7,8 @@ import pandas as pd
 import tiktoken
 from databricks.sdk import WorkspaceClient
 
+import mlflow
+
 MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
 MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
 
@@ -16,7 +18,7 @@ def _count_tokens(text):
     encoding = tiktoken.encoding_for_model("gpt-4o")
     return len(encoding.encode(text))
 
-
+@mlflow.trace()
 def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     columns = resp["manifest"]["schema"]["columns"]
     header = [str(col["name"]) for col in columns]
@@ -92,6 +94,7 @@ class Genie:
         return resp
 
     def poll_for_result(self, conversation_id, message_id):
+        @mlflow.trace()
         def poll_result():
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
