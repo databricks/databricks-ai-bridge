@@ -1,6 +1,7 @@
 ### base_chat_models.py ###
 
-from typing import List, Dict, Any, Optional, Union
+from typing import Any, Dict, List, Optional
+
 from databricks_ai_bridge.utils import get_deployment_client
 
 
@@ -38,7 +39,9 @@ class BaseChatDatabricks:
             "extra_params": self.extra_params,
         }
 
-    def _prepare_inputs(self, messages: List[Dict[str, Any]], stop: Optional[List[str]] = None, **kwargs: Any) -> Dict[str, Any]:
+    def _prepare_inputs(
+        self, messages: List[Dict[str, Any]], stop: Optional[List[str]] = None, **kwargs: Any
+    ) -> Dict[str, Any]:
         data = {
             "messages": messages,
             "temperature": self.temperature,
@@ -63,7 +66,9 @@ class BaseChatDatabricks:
         usage = response.get("usage", {})
         return {"generations": generations, "llm_output": usage}
 
-    def _stream(self, messages: List[Dict[str, Any]], stop: Optional[List[str]] = None, **kwargs: Any):
+    def _stream(
+        self, messages: List[Dict[str, Any]], stop: Optional[List[str]] = None, **kwargs: Any
+    ):
         data = self._prepare_inputs(messages, stop, **kwargs)
         for chunk in self.client.predict_stream(endpoint=self.endpoint, inputs=data):
             if chunk["choices"]:

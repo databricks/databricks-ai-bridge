@@ -1,6 +1,7 @@
 from typing import Any
 from urllib.parse import urlparse
 
+
 def get_deployment_client(target_uri: str) -> Any:
     if (target_uri != "databricks") and (urlparse(target_uri).scheme != "databricks"):
         raise ValueError("Invalid target URI. The target URI must be a valid databricks URI.")
