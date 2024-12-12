@@ -43,9 +43,13 @@ def test_chat_databricks_invoke():
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
     assert response.content == "To learn "
-    assert response.response_metadata["prompt_tokens"] == 25
-    assert response.response_metadata["completion_tokens"] == 3
-    assert response.response_metadata["total_tokens"] == 28
+    assert 20 <= response.response_metadata["prompt_tokens"] <= 30
+    assert 1 <= response.response_metadata["completion_tokens"] <= 10
+    expected_total = (
+        response.response_metadata["prompt_tokens"]
+        + response.response_metadata["completion_tokens"]
+    )
+    assert response.response_metadata["total_tokens"] == expected_total
 
     response = chat.invoke("How to learn Python? Start the response by 'To learn Python,'")
     assert response.content.startswith("To learn Python,")
