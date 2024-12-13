@@ -16,10 +16,10 @@ pip install git+ssh://git@github.com/databricks/databricks-ai-bridge.git#subdire
 
 ## Key Features
 
-- **🤖 LLMs Integration:** Use Databricks-hosted large language models (LLMs) like Llama and Mixtral through `ChatDatabricks`.
-- **📐 Vector Search:** Store and query vector representations using `DatabricksVectorSearch`.
-- **🔢 Embeddings:** Generate embeddings with `DatabricksEmbeddings`.
-- **📊 MLflow Support:** Track experiments, manage models, and use MLflow features.
+- **LLMs Integration:** Use Databricks-hosted large language models (LLMs) like Llama and Mixtral through `ChatDatabricks`.
+- **Vector Search:** Store and query vector representations using `DatabricksVectorSearch`.
+- **Embeddings:** Generate embeddings with `DatabricksEmbeddings`.
+- **Genie:** Use [Genie](https://www.databricks.com/product/ai-bi/genie) in Langchain.
 
 ## Getting Started
 
