@@ -1,10 +1,10 @@
 from unittest.mock import MagicMock, patch
 
-from databricks_ai_bridge import http_request
+from databricks_ai_bridge.external_tools import http_request
 
 
-@patch("databricks_ai_bridge.external_tool_request.WorkspaceClient")
-@patch("databricks_ai_bridge.external_tool_request.requests.post")
+@patch("databricks_ai_bridge.external_tools.WorkspaceClient")
+@patch("databricks_ai_bridge.external_tools.requests.post")
 def test_http_request_success(mock_post, mock_workspace_client):
     # Mock the WorkspaceClient config
     mock_workspace_config = MagicMock()
@@ -49,8 +49,8 @@ def test_http_request_success(mock_post, mock_workspace_client):
     )
 
 
-@patch("databricks_ai_bridge.external_tool_request.WorkspaceClient")
-@patch("databricks_ai_bridge.external_tool_request.requests.post")
+@patch("databricks_ai_bridge.external_tools.WorkspaceClient")
+@patch("databricks_ai_bridge.external_tools.requests.post")
 def test_http_request_error_response(mock_post, mock_workspace_client):
     # Mock the WorkspaceClient config
     mock_workspace_config = MagicMock()

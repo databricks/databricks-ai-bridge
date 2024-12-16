@@ -1,3 +1,5 @@
+# This code is copied from MLflow: https://github.com/mlflow/mlflow/blob/v2.19.0/mlflow/utils/annotations.py#L31
+
 import inspect
 import re
 import types

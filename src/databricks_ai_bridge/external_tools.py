@@ -18,7 +18,7 @@ def http_request(
     params: Optional[Dict[str, Any]] = None,
 ) -> requests.Response:
     """
-    Makes an HTTP request to an external function through the Databricks Workspace.
+    Makes an HTTP request to a remote API using authentication from a Unity Catalog HTTP connection.
 
     Args:
         conn (str): The connection name to use. This is required to identify the external connection.
