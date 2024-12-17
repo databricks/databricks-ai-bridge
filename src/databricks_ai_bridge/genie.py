@@ -3,11 +3,10 @@ import time
 from datetime import datetime
 from typing import Union
 
+import mlflow
 import pandas as pd
 import tiktoken
 from databricks.sdk import WorkspaceClient
-
-import mlflow
 
 MAX_TOKENS_OF_DATA = 20000  # max tokens of data in markdown format
 MAX_ITERATIONS = 50  # max times to poll the API when polling for either result or the query results, each iteration is ~1 second, so max latency == 2 * MAX_ITERATIONS
@@ -75,6 +74,7 @@ class Genie:
             "Content-Type": "application/json",
         }
 
+    @mlflow.trace()
     def start_conversation(self, content):
         resp = self.genie._api.do(
             "POST",
@@ -84,6 +84,7 @@ class Genie:
         )
         return resp
 
+    @mlflow.trace()
     def create_message(self, conversation_id, content):
         resp = self.genie._api.do(
             "POST",
@@ -93,6 +94,7 @@ class Genie:
         )
         return resp
 
+    @mlflow.trace()
     def poll_for_result(self, conversation_id, message_id):
         @mlflow.trace()
         def poll_result():
@@ -139,6 +141,7 @@ class Genie:
                     logging.debug(f"Waiting...: {resp['status']}")
                     time.sleep(5)
 
+        @mlflow.trace()
         def poll_query_results():
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:

@@ -1,5 +1,6 @@
-from databricks_ai_bridge.genie import Genie
 import mlflow
+from databricks_ai_bridge.genie import Genie
+
 
 @mlflow.trace()
 def _concat_messages_array(messages):
