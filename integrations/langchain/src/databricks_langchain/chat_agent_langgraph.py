@@ -15,8 +15,11 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.runnables.utils import Input
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.store.base import BaseStore
+from mlflow.pyfunc.model import ChatAgent
 from mlflow.types.llm import (
     ChatAgentMessage,
+    ChatAgentParams,
+    ChatAgentResponse,
     FunctionToolCallArguments,
     ToolCall,
 )
@@ -170,3 +173,31 @@ class ChatAgentToolNode(ToolNode):
             raise ValueError("No message found in input")
         tool_calls = [self._inject_tool_args(call, input, store) for call in message["tool_calls"]]
         return tool_calls, output_type
+
+
+class MyChatAgent(ChatAgent):
+    def __init__(self, agent):
+        self.agent = agent
+
+    def _convert_messages_to_dict(self, messages: List[ChatAgentMessage]):
+        return [m.to_dict() for m in messages]
+
+    def predict(self, messages: List[ChatAgentMessage], params: Optional[ChatAgentParams] = None):
+        response = ChatAgentResponse(messages=[])
+        for event in self.agent.stream(
+            {"messages": self._convert_messages_to_dict(messages)}, stream_mode="updates"
+        ):
+            for node in event:
+                response.messages.extend(event[node]["messages"])
+                if "custom_outputs" in event[node]:
+                    response.custom_outputs = event[node]["custom_outputs"]
+        return response.to_dict()
+
+    def predict_stream(
+        self, messages: List[ChatAgentMessage], params: Optional[ChatAgentParams] = None
+    ):
+        for event in self.agent.stream(
+            {"messages": self._convert_messages_to_dict(messages)}, stream_mode="updates"
+        ):
+            for node in event:
+                yield ChatAgentResponse(**event[node]).to_dict()
