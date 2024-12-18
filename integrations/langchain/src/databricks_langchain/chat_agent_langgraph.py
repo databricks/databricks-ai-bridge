@@ -175,7 +175,7 @@ class ChatAgentToolNode(ToolNode):
         return tool_calls, output_type
 
 
-class MyChatAgent(ChatAgent):
+class LangGraphChatAgent(ChatAgent):
     def __init__(self, agent):
         self.agent = agent
 
