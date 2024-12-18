@@ -238,8 +238,6 @@ class DatabricksVectorSearch(VectorStore):
             self.index = VectorSearchClient(**(client_args or {})).get_index(
                 endpoint_name=endpoint, index_name=index_name
             )
-                endpoint_name=endpoint, index_name=index_name
-            )
         except Exception as e:
             if endpoint is None and "Wrong vector search endpoint" in str(e):
                 raise ValueError(
