@@ -14,6 +14,7 @@ def _concat_messages_array(messages):
     )
     return concatenated_message
 
+
 @mlflow.trace()
 def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
     from langchain_core.messages import AIMessage
@@ -28,8 +29,8 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
     # Send the message and wait for a response
     genie_response = genie.ask_question(message)
 
-    if genie_response:
-        return {"messages": [AIMessage(content=genie_response)]}
+    if query_result := genie_response.result:
+        return {"messages": [AIMessage(content=query_result)]}
     else:
         return {"messages": [AIMessage(content="")]}
 

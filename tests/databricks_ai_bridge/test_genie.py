@@ -47,8 +47,8 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "COMPLETED", "attachments": [{"text": {"content": "Result"}}]},
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result == "Result"
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result == "Result"
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
@@ -64,8 +64,8 @@ def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
             }
         },
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result == pd.DataFrame().to_markdown()
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_executing_query(genie, mock_workspace_client):
@@ -84,32 +84,32 @@ def test_poll_for_result_executing_query(genie, mock_workspace_client):
             }
         },
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result == pd.DataFrame().to_markdown()
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "FAILED"},
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result is None
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result is None
 
 
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "CANCELLED"},
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result is None
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result is None
 
 
 def test_poll_for_result_expired(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
         {"status": "QUERY_RESULT_EXPIRED"},
     ]
-    result = genie.poll_for_result("123", "456")
-    assert result is None
+    genie_result = genie.poll_for_result("123", "456")
+    assert genie_result.result is None
 
 
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
@@ -148,8 +148,8 @@ def test_ask_question(genie, mock_workspace_client):
         {"conversation_id": "123", "message_id": "456"},
         {"status": "COMPLETED", "attachments": [{"text": {"content": "Answer"}}]},
     ]
-    result = genie.ask_question("What is the meaning of life?")
-    assert result == "Answer"
+    genie_result = genie.ask_question("What is the meaning of life?")
+    assert genie_result.result == "Answer"
 
 
 def test_parse_query_result_empty():

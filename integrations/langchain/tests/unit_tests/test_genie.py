@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from databricks_ai_bridge.genie import GenieResponse
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
@@ -44,7 +45,7 @@ def test_concat_messages_array():
 def test_query_genie_as_agent(MockGenie):
     # Mock the Genie class and its response
     mock_genie = MockGenie.return_value
-    mock_genie.ask_question.return_value = "It is sunny."
+    mock_genie.ask_question.return_value = GenieResponse(result="It is sunny.")
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     result = _query_genie_as_agent(input_data, "space-id", "Genie")
@@ -53,7 +54,7 @@ def test_query_genie_as_agent(MockGenie):
     assert result == expected_message
 
     # Test the case when genie_response is empty
-    mock_genie.ask_question.return_value = None
+    mock_genie.ask_question.return_value = GenieResponse(result=None)
     result = _query_genie_as_agent(input_data, "space-id", "Genie")
 
     expected_message = {"messages": [AIMessage(content="")]}
