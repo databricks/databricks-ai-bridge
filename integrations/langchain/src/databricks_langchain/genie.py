@@ -35,6 +35,7 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
         return {"messages": [AIMessage(content="")]}
 
 
+@mlflow.trace(type="AGENT")
 def GenieAgent(genie_space_id, genie_agent_name="Genie", description=""):
     """Create a genie agent that can be used to query the API"""
     from functools import partial
