@@ -1,5 +1,6 @@
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
 
@@ -18,16 +19,11 @@ def _count_tokens(text):
     return len(encoding.encode(text))
 
 
+@dataclass
 class GenieResponse:
-    def __init__(
-        self,
-        result: Union[str, pd.DataFrame],
-        query: Optional[str] = "",
-        description: Optional[str] = "",
-    ):
-        self.result = result
-        self.query = query
-        self.description = description
+    result: Union[str, pd.DataFrame]
+    query: Optional[str] = ""
+    description: Optional[str] = ""
 
 
 @mlflow.trace(type="PARSER")
