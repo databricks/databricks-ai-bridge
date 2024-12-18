@@ -14,7 +14,7 @@ dependencies = [
   "pandas",
   "tiktoken>=0.8.0",
   "tabulate",
-  "mlflow-skinny",
+  "mlflow-skinny>=2.19.0",
 ]
 
 [project.license]
