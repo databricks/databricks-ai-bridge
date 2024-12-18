@@ -15,4 +15,4 @@ class LangChainChatAgent(ChatAgent):
         self, messages: list[ChatAgentMessage], params: Optional[ChatAgentParams] = None
     ):
         for event in self.agent.stream({"messages": self._convert_messages_to_dict(messages)}):
-            yield ChatAgentResponse(**event).to_dict()
+            yield ChatAgentResponse(**event)
