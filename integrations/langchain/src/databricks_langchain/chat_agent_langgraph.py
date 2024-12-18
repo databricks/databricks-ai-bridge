@@ -8,7 +8,6 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     HumanMessage,
-    MessageLikeRepresentation,
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
