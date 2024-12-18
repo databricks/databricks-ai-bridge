@@ -26,7 +26,7 @@ class GenieResponse:
     description: Optional[str] = ""
 
 
-@mlflow.trace(type="PARSER")
+@mlflow.trace(span_type="PARSER")
 def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     columns = resp["manifest"]["schema"]["columns"]
     header = [str(col["name"]) for col in columns]
