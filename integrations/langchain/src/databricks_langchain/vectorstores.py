@@ -235,7 +235,9 @@ class DatabricksVectorSearch(VectorStore):
             ) from e
 
         try:
-            self.index = VectorSearchClient(**client_args).get_index(
+            self.index = VectorSearchClient(**(client_args or {})).get_index(
+                endpoint_name=endpoint, index_name=index_name
+            )
                 endpoint_name=endpoint, index_name=index_name
             )
         except Exception as e:
