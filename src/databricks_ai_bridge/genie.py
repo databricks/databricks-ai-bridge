@@ -157,6 +157,7 @@ class Genie:
 
         return poll_result()
 
+    @mlflow.trace()
     def ask_question(self, question):
         resp = self.start_conversation(question)
         return self.poll_for_result(resp["conversation_id"], resp["message_id"])
