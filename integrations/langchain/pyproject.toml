@@ -13,7 +13,7 @@ dependencies = [
     "langchain-community>=0.2.0",
     "mlflow",
     "databricks-vectorsearch>=0.40",
-    "databricks-ai-bridge",
+    "databricks-ai-bridge>=0.1.0",
 ]
 
 [project.optional-dependencies]
