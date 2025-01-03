@@ -437,7 +437,9 @@ class ChatDatabricks(BaseChatModel):
         self,
         schema: Optional[Union[Dict, Type]] = None,
         *,
-        method: Literal["function_calling", "json_mode"] = "function_calling",
+        method: Literal[
+            "function_calling", "json_mode", "json_schema"
+        ] = "function_calling",
         include_raw: bool = False,
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, Union[Dict, BaseModel]]:
@@ -625,10 +627,32 @@ class ChatDatabricks(BaseChatModel):
                 if is_pydantic_schema
                 else JsonOutputParser()
             )
+        elif method == "json_schema":
+            if schema is None:
+                raise ValueError(
+                    "schema must be specified when method is 'json_schema'. "
+                    "Received None."
+                )
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "strict": True,
+                    "schema": (
+                        schema.model_json_schema() if is_pydantic_schema else schema  # type: ignore[union-attr]
+                    ),
+                },
+            }
+            llm = self.bind(response_format=response_format)
+            output_parser = (
+                PydanticOutputParser(pydantic_object=schema)  # type: ignore[arg-type]
+                if is_pydantic_schema
+                else JsonOutputParser()
+            )
+
         else:
             raise ValueError(
-                f"Unrecognized method argument. Expected one of 'function_calling' or "
-                f"'json_mode'. Received: '{method}'"
+                f"Unrecognized method argument. Expected one of 'function_calling', "
+                f"'json_mode' or 'json_schema'. Received: '{method}'"
             )
 
         if include_raw:
