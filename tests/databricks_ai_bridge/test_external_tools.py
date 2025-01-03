@@ -41,10 +41,8 @@ def test_http_request_success(mock_post, mock_workspace_client):
             "method": "POST",
             "path": "/mock-path",
             "json": '{"key": "value"}',
-            "header": {
-                "Custom-Header": "HeaderValue",
-            },
-            "params": {"query": "test"},
+            "headers": '{"Custom-Header": "HeaderValue"}',
+            "params": '{"query": "test"}',
         },
     )
 
@@ -83,7 +81,7 @@ def test_http_request_error_response(mock_post, mock_workspace_client):
             "method": "POST",
             "path": "/mock-path",
             "json": '{"key": "value"}',
-            "header": None,
-            "params": None,
+            "headers": "null",
+            "params": "null",
         },
     )

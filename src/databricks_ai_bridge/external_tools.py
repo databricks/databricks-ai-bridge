@@ -50,8 +50,8 @@ def http_request(
         "method": method,
         "path": path,
         "json": js.dumps(json),
-        "header": headers,
-        "params": params,
+        "headers": js.dumps(headers),
+        "params": js.dumps(params),
     }
 
     return requests.post(url, headers=request_headers, json=payload)
