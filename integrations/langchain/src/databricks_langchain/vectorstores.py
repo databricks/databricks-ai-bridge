@@ -21,7 +21,8 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VST, VectorStore
 
-from databricks_langchain.utils import IndexDetails, maximal_marginal_relevance
+from databricks_langchain.utils import maximal_marginal_relevance
+from databricks_ai_bridge.utils.vector_search import IndexDetails, parse_vector_search_response, validate_and_get_text_column, validate_and_get_return_columns
 
 logger = logging.getLogger(__name__)
 
@@ -246,8 +247,8 @@ class DatabricksVectorSearch(VectorStore):
 
         _validate_embedding(embedding, self._index_details)
         self._embeddings = embedding
-        self._text_column = _validate_and_get_text_column(text_column, self._index_details)
-        self._columns = _validate_and_get_return_columns(
+        self._text_column = validate_and_get_text_column(text_column, self._index_details)
+        self._columns = validate_and_get_return_columns(
             columns or [], self._text_column, self._index_details
         )
         self._primary_key = self._index_details.primary_key
@@ -430,7 +431,12 @@ class DatabricksVectorSearch(VectorStore):
             num_results=k,
             query_type=query_type,
         )
-        return self._parse_search_response(search_resp)
+        return parse_vector_search_response(
+            search_resp,
+            self._index_details,
+            self._text_column,
+            document_class=Document
+        )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
         """
@@ -540,7 +546,12 @@ class DatabricksVectorSearch(VectorStore):
             num_results=k,
             query_type=query_type,
         )
-        return self._parse_search_response(search_resp)
+        return parse_vector_search_response(
+            search_resp,
+            self._index_details,
+            self._text_column,
+            document_class=Document
+        )
 
     def max_marginal_relevance_search(
         self,
@@ -673,7 +684,13 @@ class DatabricksVectorSearch(VectorStore):
         )
 
         ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
-        candidates = self._parse_search_response(search_resp, ignore_cols=ignore_cols)
+        candidates = parse_vector_search_response(
+            search_resp,
+            self._index_details,
+            self._text_column,
+            ignore_cols=ignore_cols,
+            document_class=Document
+        )
         selected_results = [r[0] for i, r in enumerate(candidates) if i in mmr_selected]
         return selected_results
 
@@ -686,70 +703,6 @@ class DatabricksVectorSearch(VectorStore):
         **kwargs: Any,
     ) -> List[Document]:
         raise NotImplementedError
-
-    def _parse_search_response(
-        self, search_resp: Dict, ignore_cols: Optional[List[str]] = None
-    ) -> List[Tuple[Document, float]]:
-        """Parse the search response into a list of Documents with score."""
-        if ignore_cols is None:
-            ignore_cols = []
-
-        columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
-        docs_with_score = []
-        for result in search_resp.get("result", dict()).get("data_array", []):
-            doc_id = result[columns.index(self._primary_key)]
-            text_content = result[columns.index(self._text_column)]
-            ignore_cols = [self._primary_key, self._text_column] + ignore_cols
-            metadata = {
-                col: value
-                for col, value in zip(columns[:-1], result[:-1])
-                if col not in ignore_cols
-            }
-            metadata[self._primary_key] = doc_id
-            score = result[-1]
-            doc = Document(page_content=text_content, metadata=metadata)
-            docs_with_score.append((doc, score))
-        return docs_with_score
-
-
-def _validate_and_get_text_column(text_column: Optional[str], index_details: IndexDetails) -> str:
-    if index_details.is_databricks_managed_embeddings():
-        index_source_column: str = index_details.embedding_source_column["name"]
-        # check if input text column matches the source column of the index
-        if text_column is not None:
-            raise ValueError(
-                f"The index '{index_details.name}' has the source column configured as "
-                f"'{index_source_column}'. Do not pass the `text_column` parameter."
-            )
-        return index_source_column
-    else:
-        if text_column is None:
-            raise ValueError("The `text_column` parameter is required for this index.")
-        return text_column
-
-
-def _validate_and_get_return_columns(
-    columns: List[str], text_column: str, index_details: IndexDetails
-) -> List[str]:
-    """
-    Get a list of columns to retrieve from the index.
-
-    If the index is direct-access index, validate the given columns against the schema.
-    """
-    # add primary key column and source column if not in columns
-    if index_details.primary_key not in columns:
-        columns.append(index_details.primary_key)
-    if text_column and text_column not in columns:
-        columns.append(text_column)
-
-    # Validate specified columns are in the index
-    if index_details.is_direct_access_index() and (index_schema := index_details.schema):
-        if missing_columns := [c for c in columns if c not in index_schema]:
-            raise ValueError(
-                "Some columns specified in `columns` are not "
-                f"in the index schema: {missing_columns}"
-            )
-    return columns
 
 
 def _validate_embedding(embedding: Optional[Embeddings], index_details: IndexDetails) -> None:
