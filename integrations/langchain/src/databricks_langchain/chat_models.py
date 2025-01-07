@@ -437,9 +437,7 @@ class ChatDatabricks(BaseChatModel):
         self,
         schema: Optional[Union[Dict, Type]] = None,
         *,
-        method: Literal[
-            "function_calling", "json_mode", "json_schema"
-        ] = "function_calling",
+        method: Literal["function_calling", "json_mode", "json_schema"] = "function_calling",
         include_raw: bool = False,
         **kwargs: Any,
     ) -> Runnable[LanguageModelInput, Union[Dict, BaseModel]]:
@@ -630,8 +628,7 @@ class ChatDatabricks(BaseChatModel):
         elif method == "json_schema":
             if schema is None:
                 raise ValueError(
-                    "schema must be specified when method is 'json_schema'. "
-                    "Received None."
+                    "schema must be specified when method is 'json_schema'. " "Received None."
                 )
             response_format = {
                 "type": "json_schema",
