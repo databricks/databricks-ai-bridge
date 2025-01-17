@@ -1,6 +1,6 @@
 [project]
 name = "databricks-langchain"
-version = "0.1.1.dev0"
+version = "0.2.0"
 description = "Support for Databricks AI support in LangChain"
 authors = [
     { name="Prithvi Kannan", email="prithvi.kannan@databricks.com" },
@@ -13,7 +13,7 @@ dependencies = [
     "langchain-community>=0.2.0",
     "mlflow",
     "databricks-vectorsearch>=0.40",
-    "databricks-ai-bridge>=0.1.0",
+    "databricks-ai-bridge>=0.2.0",
 ]
 
 [project.optional-dependencies]
