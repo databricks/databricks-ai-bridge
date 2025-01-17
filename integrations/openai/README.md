@@ -64,5 +64,5 @@ We welcome contributions! Please see our [contribution guidelines](https://githu
 ## License
 This project is licensed under the [MIT License](LICENSE).
 
-Thank you for using Databricks LangChain!
+Thank you for using Databricks OpenAI!
 
