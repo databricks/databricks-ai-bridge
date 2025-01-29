@@ -44,7 +44,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )
-    num_results: int = Field(10, description="The number of results to return.")
+    num_results: int = Field(5, description="The number of results to return.")
     columns: Optional[List[str]] = Field(
         None, description="Columns to return when doing the search."
     )
