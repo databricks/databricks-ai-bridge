@@ -125,6 +125,15 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
+
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
+            self.resources = self._get_resources(self.index_name, self.embedding_model_name)
+        except ResourceDoesNotExist:
+            self.resources = self._get_resources(self.index_name, None)
+
         return self
 
     @vector_search_retriever_tool_trace

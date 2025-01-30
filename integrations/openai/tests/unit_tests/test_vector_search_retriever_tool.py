@@ -14,6 +14,10 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     mock_workspace_client,
 )
 from mlflow.entities import SpanType
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
+)
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessage,
@@ -34,6 +38,13 @@ def mock_openai_client():
     mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3, 0.4])]
     mock_client.embeddings.create.return_value = mock_response
     with patch("openai.OpenAI", return_value=mock_client):
+        yield mock_client
+
+
+@pytest.fixture(autouse=True)
+def mock_workspace_client():
+    with patch("databricks_openai.vector_search_retriever_tool") as MockWorkspaceClient:
+        mock_client = MockWorkspaceClient.return_value
         yield mock_client
 
 
@@ -134,6 +145,14 @@ def test_vector_search_retriever_tool_init(
         embedding_model_name=self_managed_embeddings_test.embedding_model_name,
     )
     assert isinstance(vector_search_tool, BaseModel)
+
+    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
+        [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
+        if self_managed_embeddings_test.embedding_model_name
+        else []
+    )
+    assert vector_search_tool.resources == expected_resources
+
     # simulate call to openai.chat.completions.create
     chat_completion_resp = get_chat_completion_response(tool_name, index_name)
     tool_call = chat_completion_resp.choices[0].message.tool_calls[0]

@@ -13,10 +13,23 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from mlflow.entities import SpanType
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
+)
 
-from databricks_langchain import ChatDatabricks, VectorSearchRetrieverTool
+from databricks_langchain import (
+    ChatDatabricks,
+    VectorSearchRetrieverTool,
+)
 from tests.utils.chat_models import llm, mock_client  # noqa: F401
-from tests.utils.vector_search import EMBEDDING_MODEL
+from tests.utils.vector_search import (
+    EMBEDDING_MODEL,
+    embeddings,  # noqa: F401
+)
+from tests.utils.vector_search import (
+    mock_client as mock_embeddings_client,  # noqa: F401
+)
 
 
 def init_vector_search_tool(
@@ -121,3 +134,25 @@ def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
     assert inputs["query"] == "Databricks Agent Framework"
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
     assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+
+
+@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
+def test_vector_search_retriever_tool_resources(
+    mock_embeddings_client,
+    embeddings,
+    index_name: str,
+) -> None:
+    text_column = "text"
+    if index_name == DELTA_SYNC_INDEX:
+        embeddings = None
+        text_column = None
+
+    vector_search_tool = VectorSearchRetrieverTool(
+        index_name=index_name, embedding=embeddings, text_column=text_column
+    )
+    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
+        [DatabricksServingEndpoint(endpoint_name=embeddings.endpoint)] if embeddings else []
+    )
+    assert [res.to_dict() for res in vector_search_tool.resources] == [
+        res.to_dict() for res in expected_resources
+    ]

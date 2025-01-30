@@ -10,6 +10,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from databricks_langchain import DatabricksEmbeddings
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
@@ -51,6 +52,10 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         self.name = self.tool_name or self.index_name
         self.description = self.tool_description or self._get_default_tool_description(
             IndexDetails(dbvs.index)
+        )
+        self.resources = self._get_resources(
+            self.index_name,
+            (self.embedding.endpoint if isinstance(self.embedding, DatabricksEmbeddings) else None),
         )
 
         return self

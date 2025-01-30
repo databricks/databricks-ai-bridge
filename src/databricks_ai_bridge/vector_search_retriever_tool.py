@@ -3,6 +3,11 @@ from typing import Any, Dict, List, Optional
 
 import mlflow
 from mlflow.entities import SpanType
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
+    Resource,
+)
 from pydantic import BaseModel, Field
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
@@ -54,6 +59,9 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     )
     tool_name: Optional[str] = Field(None, description="The name of the retrieval tool.")
     tool_description: Optional[str] = Field(None, description="A description of the tool.")
+    resources: Optional[List[dict]] = Field(
+        None, description="Resources required to log a model that uses this tool."
+    )
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
@@ -74,3 +82,10 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                     + f" The queried index uses the source table {source_table}"
                 )
         return DEFAULT_TOOL_DESCRIPTION
+
+    def _get_resources(self, index_name: str, embedding_endpoint: str) -> List[Resource]:
+        return ([DatabricksVectorSearchIndex(index_name=index_name)] if index_name else []) + (
+            [DatabricksServingEndpoint(endpoint_name=embedding_endpoint)]
+            if embedding_endpoint
+            else []
+        )
