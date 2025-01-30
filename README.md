@@ -1,6 +1,6 @@
 # Databricks AI Bridge library
 
-The Databricks AI Bridge library provides a shared layer of APIs to interact with Databricks AI features, such as [Databricks AI/BI Genie ](https://www.databricks.com/product/ai-bi/genie), [External Tools](https://docs.databricks.com/en/generative-ai/agent-framework/external-connection-tools.html), and [Vector Search](https://docs.databricks.com/en/generative-ai/vector-search.html).
+The Databricks AI Bridge library provides a shared layer of APIs to interact with Databricks AI features, such as [Databricks AI/BI Genie ](https://www.databricks.com/product/ai-bi/genie) and [Vector Search](https://docs.databricks.com/en/generative-ai/vector-search.html).
 
 ## Integrations
 
