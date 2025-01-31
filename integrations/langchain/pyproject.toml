@@ -14,6 +14,7 @@ dependencies = [
     "mlflow",
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.1.0",
+    "unitycatalog-langchain[databricks]",
 ]
 
 [project.optional-dependencies]
