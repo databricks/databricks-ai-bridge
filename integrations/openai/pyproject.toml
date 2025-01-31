@@ -12,7 +12,7 @@ dependencies = [
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.1.0",
     "openai>=1.46.1",
-    "unitycatalog-openai[databricks]",
+    "unitycatalog-openai",
 ]
 
 [project.optional-dependencies]
