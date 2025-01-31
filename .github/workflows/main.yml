@@ -69,3 +69,24 @@ jobs:
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
+
+  openai_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10']
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+          pip install integrations/openai[dev]
+      - name: Run tests
+        run: |
+          pytest integrations/openai/tests/unit_tests
