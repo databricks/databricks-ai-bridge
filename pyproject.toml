@@ -15,6 +15,7 @@ dependencies = [
   "tiktoken>=0.8.0",
   "tabulate",
   "mlflow-skinny>=2.19.0",
+  "unitycatalog-ai[databricks]"
 ]
 
 [project.license]
