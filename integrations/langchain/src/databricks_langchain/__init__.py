@@ -3,7 +3,7 @@ from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
 from databricks_langchain.vectorstores import DatabricksVectorSearch
-from unitycatalog.ai.langchain import UCFunctionToolkit
+from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
 
 # Expose all integrations to users under databricks-langchain
 __all__ = [
