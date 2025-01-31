@@ -1,6 +1,6 @@
 [project]
 name = "databricks-ai-bridge"
-version = "0.1.1.dev0"
+version = "0.3.0.dev0"
 description = "Official Python library for Databricks AI support"
 authors = [
     { name="Prithvi Kannan", email="prithvi.kannan@databricks.com" },

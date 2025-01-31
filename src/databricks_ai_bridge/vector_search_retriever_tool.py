@@ -65,22 +65,11 @@ class VectorSearchRetrieverToolMixin(BaseModel):
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
-            from databricks.sdk import WorkspaceClient
-
             source_table = index_details.index_spec.get("source_table", "")
-            w = WorkspaceClient()
-            source_table_comment = w.tables.get(full_name=source_table).comment
-            if source_table_comment:
-                return (
-                    DEFAULT_TOOL_DESCRIPTION
-                    + f" The queried index uses the source table {source_table} with the description: "
-                    + source_table_comment
-                )
-            else:
-                return (
-                    DEFAULT_TOOL_DESCRIPTION
-                    + f" The queried index uses the source table {source_table}"
-                )
+            return (
+                DEFAULT_TOOL_DESCRIPTION
+                + f" The queried index uses the source table {source_table}"
+            )
         return DEFAULT_TOOL_DESCRIPTION
 
     def _get_resources(self, index_name: str, embedding_endpoint: str) -> List[Resource]:
