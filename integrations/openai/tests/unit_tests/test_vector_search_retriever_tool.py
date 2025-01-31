@@ -41,13 +41,6 @@ def mock_openai_client():
         yield mock_client
 
 
-@pytest.fixture(autouse=True)
-def mock_workspace_client():
-    with patch("databricks_openai.vector_search_retriever_tool") as MockWorkspaceClient:
-        mock_client = MockWorkspaceClient.return_value
-        yield mock_client
-
-
 def get_chat_completion_response(tool_name: str, index_name: str):
     return ChatCompletion(
         id="chatcmpl-AlSTQf3qIjeEOdoagPXUYhuWZkwme",
@@ -151,7 +144,9 @@ def test_vector_search_retriever_tool_init(
         if self_managed_embeddings_test.embedding_model_name
         else []
     )
-    assert vector_search_tool.resources == expected_resources
+    assert [res.to_dict() for res in vector_search_tool.resources] == [
+        res.to_dict() for res in expected_resources
+    ]
 
     # simulate call to openai.chat.completions.create
     chat_completion_resp = get_chat_completion_response(tool_name, index_name)

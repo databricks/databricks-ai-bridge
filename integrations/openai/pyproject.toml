@@ -1,6 +1,6 @@
 [project]
 name = "databricks-openai"
-version = "0.1.0"
+version = "0.2.0.dev"
 description = "Support for Databricks AI support with OpenAI"
 authors = [
     { name="Leon Bi", email="leon.bi@databricks.com" },
@@ -9,9 +9,9 @@ readme = "README.md"
 license = { text="Apache-2.0" }
 requires-python = ">=3.9"
 dependencies = [
+    "openai>=1.46.1",
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.1.0",
-    "openai>=1.46.1",
 ]
 
 [project.optional-dependencies]
