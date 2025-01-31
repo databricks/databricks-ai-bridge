@@ -133,6 +133,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         try:
             from databricks.sdk import WorkspaceClient
+            from databricks.sdk.errors.platform import ResourceDoesNotExist
 
             WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
             self.resources = self._get_resources(self.index_name, self.embedding_model_name)
@@ -183,7 +184,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 )
             ) and len(query_vector) != index_embedding_dimension:
                 raise ValueError(
-                    f"Expected embedding dimension {index_embedding_dimension} but got {len(vector)}"
+                    f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
         search_resp = self._index.similarity_search(
