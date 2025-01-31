@@ -35,7 +35,9 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
             The parameters to use for documents.
 
     Instantiate:
+
         .. code-block:: python
+
             from databricks_langchain import DatabricksEmbeddings
 
             embed = DatabricksEmbeddings(
@@ -43,11 +45,14 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
             )
 
     Embed single text:
+
         .. code-block:: python
+
             input_text = "The meaning of life is 42"
             embed.embed_query(input_text)
 
         .. code-block:: python
+
             [0.01605224609375, -0.0298309326171875, ...]
 
     """

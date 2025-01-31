@@ -61,7 +61,7 @@ class DatabricksVectorSearch(VectorStore):
 
         index_name: The name of the index to use. Format: "catalog.schema.index".
         endpoint: The name of the Databricks Vector Search endpoint. If not specified,
-            the endpoint name is automatically inferred based on the index name.
+                  the endpoint name is automatically inferred based on the index name.
 
             .. note::
 
@@ -123,7 +123,9 @@ class DatabricksVectorSearch(VectorStore):
             )
 
     Add Documents:
+
         .. code-block:: python
+
             from langchain_core.documents import Document
 
             document_1 = Document(page_content="foo", metadata={"baz": "bar"})
@@ -134,7 +136,9 @@ class DatabricksVectorSearch(VectorStore):
             vector_store.add_documents(documents=documents, ids=ids)
 
     Delete Documents:
+
         .. code-block:: python
+
             vector_store.delete(ids=["3"])
 
         .. note::
@@ -142,11 +146,15 @@ class DatabricksVectorSearch(VectorStore):
             The `delete` method is only supported for direct-access index.
 
     Search:
+
         .. code-block:: python
-            results = vector_store.similarity_search(query="thud",k=1)
+
+            results = vector_store.similarity_search(query="thud", k=1)
             for doc in results:
                 print(f"* {doc.page_content} [{doc.metadata}]")
+
         .. code-block:: python
+
             *thud[{"id": "2"}]
 
         .. note:
@@ -167,44 +175,60 @@ class DatabricksVectorSearch(VectorStore):
                 # Output: * thud [{'bar': 'baz', 'baz': None, 'id': '2'}]
 
     Search with filter:
+
         .. code-block:: python
-            results = vector_store.similarity_search(query="thud",k=1,filter={"bar": "baz"})
+
+            results = vector_store.similarity_search(query="thud", k=1, filter={"bar": "baz"})
             for doc in results:
                 print(f"* {doc.page_content} [{doc.metadata}]")
+
         .. code-block:: python
+
             *thud[{"id": "2"}]
 
     Search with score:
+
         .. code-block:: python
-            results = vector_store.similarity_search_with_score(query="qux",k=1)
+
+            results = vector_store.similarity_search_with_score(query="qux", k=1)
             for doc, score in results:
                 print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+
         .. code-block:: python
+
             * [SIM=0.748804] foo [{'id': '1'}]
 
     Async:
+
         .. code-block:: python
+
             # add documents
             await vector_store.aadd_documents(documents=documents, ids=ids)
             # delete documents
             await vector_store.adelete(ids=["3"])
             # search
-            results = vector_store.asimilarity_search(query="thud",k=1)
+            results = vector_store.asimilarity_search(query="thud", k=1)
             # search with score
-            results = await vector_store.asimilarity_search_with_score(query="qux",k=1)
-            for doc,score in results:
+            results = await vector_store.asimilarity_search_with_score(query="qux", k=1)
+            for doc, score in results:
                 print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+
         .. code-block:: python
+
             * [SIM=0.748807] foo [{'id': '1'}]
 
     Use as Retriever:
+
         .. code-block:: python
+
             retriever = vector_store.as_retriever(
                 search_type="mmr",
                 search_kwargs={"k": 1, "fetch_k": 2, "lambda_mult": 0.5},
             )
             retriever.invoke("thud")
+
         .. code-block:: python
+
             [Document(metadata={"id": "2"}, page_content="thud")]
     """  # noqa: E501
 

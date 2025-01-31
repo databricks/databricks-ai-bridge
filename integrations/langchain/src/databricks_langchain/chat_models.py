@@ -92,6 +92,7 @@ class ChatDatabricks(BaseChatModel):
             Any extra parameters to pass to the endpoint.
 
     Instantiate:
+
         .. code-block:: python
 
             from databricks_langchain import ChatDatabricks
@@ -103,6 +104,7 @@ class ChatDatabricks(BaseChatModel):
             )
 
     Invoke:
+
         .. code-block:: python
 
             messages = [
@@ -120,6 +122,7 @@ class ChatDatabricks(BaseChatModel):
             )
 
     Stream:
+
         .. code-block:: python
 
             for chunk in llm.stream(messages):
@@ -177,6 +180,7 @@ class ChatDatabricks(BaseChatModel):
             structured_llm = llm.with_structured_output(...)
 
     Async:
+
         .. code-block:: python
 
             await llm.ainvoke(messages)
@@ -196,6 +200,7 @@ class ChatDatabricks(BaseChatModel):
             )
 
     Tool calling:
+
         .. code-block:: python
 
             from pydantic import BaseModel, Field
@@ -391,12 +396,10 @@ class ChatDatabricks(BaseChatModel):
                 name of the tool (str): calls corresponding tool;
                 "auto": automatically selects a tool (including no tool);
                 "none": model does not generate any tool calls and instead must
-                    generate a standard assistant message;
+                        generate a standard assistant message
                 "required": the model picks the most relevant tool in tools and
-                    must generate a tool call;
-
-                or a dict of the form:
-                {"type": "function", "function": {"name": <<tool_name>>}}.
+                            must generate a tool call or a dict of the form:
+                            {"type": "function", "function": {"name": <<tool_name>>}}.
             **kwargs: Any additional parameters to pass to the
                 :class:`~langchain.runnable.Runnable` constructor.
         """
@@ -479,7 +482,10 @@ class ChatDatabricks(BaseChatModel):
                 - ``"parsed"``: None if there was a parsing error, otherwise the type depends on the ``schema`` as described above.
                 - ``"parsing_error"``: Optional[BaseException]
 
-        Example: Function-calling, Pydantic schema (method="function_calling", include_raw=False):
+        Example:
+
+        Function-calling, Pydantic schema (method="function_calling", include_raw=False)
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -503,7 +509,8 @@ class ChatDatabricks(BaseChatModel):
                 #     justification='Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume or density of the objects may differ.'
                 # )
 
-        Example: Function-calling, Pydantic schema (method="function_calling", include_raw=True):
+        Function-calling, Pydantic schema (method="function_calling", include_raw=True):
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -527,7 +534,8 @@ class ChatDatabricks(BaseChatModel):
                 #     'parsing_error': None
                 # }
 
-        Example: Function-calling, dict schema (method="function_calling", include_raw=False):
+        Function-calling, dict schema (method="function_calling", include_raw=False):
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -552,7 +560,8 @@ class ChatDatabricks(BaseChatModel):
                 #     'justification': 'Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume and density of the two substances differ.'
                 # }
 
-        Example: JSON mode, Pydantic schema (method="json_mode", include_raw=True):
+        JSON mode, Pydantic schema (method="json_mode", include_raw=True):
+
             .. code-block::
 
                 from databricks_langchain import ChatDatabricks
@@ -571,27 +580,28 @@ class ChatDatabricks(BaseChatModel):
 
                 structured_llm.invoke(
                     "Answer the following question. "
-                    "Make sure to return a JSON blob with keys 'answer' and 'justification'.\n\n"
+                    "Make sure to return a JSON blob with keys 'answer' and 'justification'."
                     "What's heavier a pound of bricks or a pound of feathers?"
                 )
                 # -> {
-                #     'raw': AIMessage(content='{\n    "answer": "They are both the same weight.",\n    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." \n}'),
+                #     'raw': AIMessage(content='{    "answer": "They are both the same weight.",    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." }'),
                 #     'parsed': AnswerWithJustification(answer='They are both the same weight.', justification='Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight.'),
                 #     'parsing_error': None
                 # }
 
-        Example: JSON mode, no schema (schema=None, method="json_mode", include_raw=True):
+        JSON mode, no schema (schema=None, method="json_mode", include_raw=True):
+
             .. code-block::
 
                 structured_llm = llm.with_structured_output(method="json_mode", include_raw=True)
 
                 structured_llm.invoke(
                     "Answer the following question. "
-                    "Make sure to return a JSON blob with keys 'answer' and 'justification'.\n\n"
+                    "Make sure to return a JSON blob with keys 'answer' and 'justification'."
                     "What's heavier a pound of bricks or a pound of feathers?"
                 )
                 # -> {
-                #     'raw': AIMessage(content='{\n    "answer": "They are both the same weight.",\n    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." \n}'),
+                #     'raw': AIMessage(content='{    "answer": "They are both the same weight.",    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." }'),
                 #     'parsed': {
                 #         'answer': 'They are both the same weight.',
                 #         'justification': 'Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight.'
