@@ -13,6 +13,7 @@ dependencies = [
     "databricks-ai-bridge>=0.1.0",
     "openai>=1.46.1",
     "pydantic>2.10.0",
+    "mlflow>=2.20.1",
     "unitycatalog-openai",
 ]
 
