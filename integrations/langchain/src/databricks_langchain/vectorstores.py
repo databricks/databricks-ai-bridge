@@ -40,28 +40,12 @@ _INDEX_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$
 class DatabricksVectorSearch(VectorStore):
     """Databricks vector store integration.
 
-    Setup:
-        Install ``databricks-langchain`` and ``databricks-vectorsearch`` python packages.
-
-        .. code-block:: bash
-
-            pip install -U databricks-langchain databricks-vectorsearch
-
-        If you don't have a Databricks Vector Search endpoint already, you can create one by following the instructions here: https://docs.databricks.com/en/generative-ai/create-query-vector-search.html
-
-        If you are outside Databricks, set the Databricks workspace
-        hostname and personal access token to environment variables:
-
-        .. code-block:: bash
-
-            export DATABRICKS_HOSTNAME="https://your-databricks-workspace"
-            export DATABRICKS_TOKEN="your-personal-access-token"
-
-    Key init args — indexing params:
+    Args:
 
         index_name: The name of the index to use. Format: "catalog.schema.index".
-        endpoint: The name of the Databricks Vector Search endpoint. If not specified,
-                  the endpoint name is automatically inferred based on the index name.
+
+        endpoint: The name of the Databricks Vector Search index ``endpoint``.
+            If not specified, the endpoint name is automatically inferred based on the index name.
 
             .. note::
 
@@ -86,11 +70,11 @@ class DatabricksVectorSearch(VectorStore):
         columns: The list of column names to get when doing the search.
                 Defaults to ``[primary_key, text_column]``.
         client_args: Additional arguments to pass to the VectorSearchClient.
-                    Allows you to pass in values like `service_principal_client_id`
-                    and `service_principal_client_secret` for to allow for
+                    Allows you to pass in values like ``service_principal_client_id``
+                    and ``service_principal_client_secret`` for to allow for
                     service principal authentication instead of personal access token authentication.
 
-    Instantiate:
+    **Instantiate**:
 
         `DatabricksVectorSearch` supports two types of indexes:
 
@@ -122,7 +106,7 @@ class DatabricksVectorSearch(VectorStore):
                 text_column="document_content",
             )
 
-    Add Documents:
+    **Add Documents**:
 
         .. code-block:: python
 
@@ -135,7 +119,7 @@ class DatabricksVectorSearch(VectorStore):
             ids = ["1", "2", "3"]
             vector_store.add_documents(documents=documents, ids=ids)
 
-    Delete Documents:
+    **Delete Documents**:
 
         .. code-block:: python
 
@@ -145,7 +129,7 @@ class DatabricksVectorSearch(VectorStore):
 
             The `delete` method is only supported for direct-access index.
 
-    Search:
+    **Search**:
 
         .. code-block:: python
 
@@ -174,7 +158,7 @@ class DatabricksVectorSearch(VectorStore):
                 vector_store.similarity_search(query="thud", k=1)
                 # Output: * thud [{'bar': 'baz', 'baz': None, 'id': '2'}]
 
-    Search with filter:
+    **Search with filter**:
 
         .. code-block:: python
 
@@ -186,7 +170,7 @@ class DatabricksVectorSearch(VectorStore):
 
             *thud[{"id": "2"}]
 
-    Search with score:
+    **Search with score**:
 
         .. code-block:: python
 
@@ -198,7 +182,7 @@ class DatabricksVectorSearch(VectorStore):
 
             * [SIM=0.748804] foo [{'id': '1'}]
 
-    Async:
+    **Async**:
 
         .. code-block:: python
 
@@ -217,7 +201,7 @@ class DatabricksVectorSearch(VectorStore):
 
             * [SIM=0.748807] foo [{'id': '1'}]
 
-    Use as Retriever:
+    **Use as Retriever**:
 
         .. code-block:: python
 

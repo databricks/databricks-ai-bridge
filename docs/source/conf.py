@@ -46,6 +46,7 @@ extensions = [
     "sphinx.ext.todo",
     "myst_parser",
     "sphinx_rtd_theme",
+    "sphinxcontrib.autodoc_pydantic",
 ]
 
 myst_enable_extensions = ["attrs_block", "attrs_inline"]
@@ -76,6 +77,13 @@ intersphinx_mapping = {
         None,
     ),
     "pydantic": ("https://docs.pydantic.dev/latest/", None),
+}
+
+extlinks = {
+    "langchain-core": (
+        "https://api.python.langchain.com/en/latest/core_api_reference.html#module-%s",
+        "langchain_core.%s",
+    ),
 }
 
 # The suffix(es) of source filenames.

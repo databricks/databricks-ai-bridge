@@ -9,32 +9,7 @@ from databricks_langchain.utils import get_deployment_client
 class DatabricksEmbeddings(Embeddings, BaseModel):
     """Databricks embedding model integration.
 
-    Setup:
-        Install ``databricks-langchain``.
-
-        .. code-block:: bash
-
-            pip install -U databricks-langchain
-
-        If you are outside Databricks, set the Databricks workspace
-        hostname and personal access token to environment variables:
-
-        .. code-block:: bash
-
-            export DATABRICKS_HOSTNAME="https://your-databricks-workspace"
-            export DATABRICKS_TOKEN="your-personal-access-token"
-
-    Key init args — completion params:
-        endpoint: str
-            Name of Databricks Model Serving endpoint to query.
-        target_uri: str
-            The target URI to use. Defaults to ``databricks``.
-        query_params: Dict[str, str]
-            The parameters to use for queries.
-        documents_params: Dict[str, str]
-            The parameters to use for documents.
-
-    Instantiate:
+    **Instantiate**:
 
         .. code-block:: python
 
@@ -44,7 +19,7 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
                 endpoint="databricks-bge-large-en",
             )
 
-    Embed single text:
+    **Embed single text**:
 
         .. code-block:: python
 
@@ -58,13 +33,13 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
     """
 
     endpoint: str
-    """The endpoint to use."""
+    """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
-    """The parameters to use for queries."""
+    """The target URI to use. Defaults to ``databricks``"""
     query_params: Dict[str, Any] = {}
     """The parameters to use for documents."""
     documents_params: Dict[str, Any] = {}
-    """The target URI to use."""
+    """The parameters to use for documents."""
     _client: Any = PrivateAttr()
 
     def __init__(self, **kwargs: Any):

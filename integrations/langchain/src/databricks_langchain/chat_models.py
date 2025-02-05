@@ -62,41 +62,7 @@ logger = logging.getLogger(__name__)
 class ChatDatabricks(BaseChatModel):
     """Databricks chat model integration.
 
-    Setup:
-        Install ``databricks-langchain``.
-
-        .. code-block:: bash
-
-            pip install -U databricks-langchain
-
-        If you are outside Databricks, set the Databricks workspace hostname and personal access token to environment variables:
-
-        .. code-block:: bash
-
-            export DATABRICKS_HOSTNAME="https://your-databricks-workspace"
-            export DATABRICKS_TOKEN="your-personal-access-token"
-
-    Key init args — completion params:
-        model: str
-            Name of the Databricks Model Serving endpoint to query. Alias to endpoint.
-            Only use one of ``model`` or ``endpoint``.
-        endpoint: str
-            Name of Databricks Model Serving endpoint to query.
-            Only use one of ``model`` or ``endpoint``.
-        target_uri: str
-            The target URI to use. Defaults to ``databricks``.
-        temperature: float
-            Sampling temperature. Higher values make the model more creative.
-        n: Optional[int]
-            The number of completion choices to generate.
-        stop: Optional[List[str]]
-            List of strings to stop generation at.
-        max_tokens: Optional[int]
-            Max number of tokens to generate.
-        extra_params: Optional[Dict[str, Any]]
-            Any extra parameters to pass to the endpoint.
-
-    Instantiate:
+    **Instantiate**:
 
         .. code-block:: python
 
@@ -108,7 +74,7 @@ class ChatDatabricks(BaseChatModel):
                 max_tokens=500,
             )
 
-    Invoke:
+    **Invoke**:
 
         .. code-block:: python
 
@@ -126,7 +92,7 @@ class ChatDatabricks(BaseChatModel):
                 id="run-64eebbdd-88a8-4a25-b508-21e9a5f146c5-0",
             )
 
-    Stream:
+    **Stream**:
 
         .. code-block:: python
 
@@ -182,7 +148,7 @@ class ChatDatabricks(BaseChatModel):
             llm = ChatDatabricks(model="databricks-meta-llama-3-1-405b-instruct", stream_usage=True)
             structured_llm = llm.with_structured_output(...)
 
-    Async:
+    **Async**:
 
         .. code-block:: python
 
@@ -202,7 +168,7 @@ class ChatDatabricks(BaseChatModel):
                 id="run-e4bb043e-772b-4e1d-9f98-77ccc00c0271-0",
             )
 
-    Tool calling:
+    **Tool calling**:
 
         .. code-block:: python
 
@@ -416,17 +382,24 @@ class ChatDatabricks(BaseChatModel):
                 Can be  a dictionary, pydantic model, callable, or BaseTool. Pydantic
                 models, callables, and BaseTools will be automatically converted to
                 their schema dictionary representation.
-            tool_choice: Which tool to require the model to call.
-                Options are:
-                name of the tool (str): calls corresponding tool;
-                "auto": automatically selects a tool (including no tool);
-                "none": model does not generate any tool calls and instead must
-                        generate a standard assistant message
-                "required": the model picks the most relevant tool in tools and
-                            must generate a tool call or a dict of the form:
-                            {"type": "function", "function": {"name": <<tool_name>>}}.
+            tool_choice: Which tool to require the model to call. Options are:
+
+                - name of the tool (str): Calls corresponding tool.
+                - **"auto"**: Automatically selects a tool (including no tool).
+                - **"none"**: Model does not generate any tool calls and instead must generate a standard assistant message.
+                - **"required"**: The model picks the most relevant tool in tools and must generate a tool call or a dictionary of the form:
+
+                    .. code-block:: json
+
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "<<tool_name>>"
+                            }
+                        }
+
             **kwargs: Any additional parameters to pass to the
-                :class:`~langchain.runnable.Runnable` constructor.
+                `Runnable <langchain-core:Runnable>`__ constructor.
         """
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
         if tool_choice:
@@ -495,7 +468,7 @@ class ChatDatabricks(BaseChatModel):
                 with keys "raw", "parsed", and "parsing_error".
 
         Returns:
-            A Runnable that takes any ChatModel input and returns as output:
+            A `Runnable <langchain-core:Runnable>`__ that takes any ChatModel input and returns as output:
 
             If ``include_raw`` is False and ``schema`` is a Pydantic class, Runnable outputs
             an instance of ``schema`` (i.e., a Pydantic object).
@@ -507,7 +480,7 @@ class ChatDatabricks(BaseChatModel):
                 - ``"parsed"``: None if there was a parsing error, otherwise the type depends on the ``schema`` as described above.
                 - ``"parsing_error"``: Optional[BaseException]
 
-        Example:
+        **Examples**:
 
         Function-calling, Pydantic schema (method="function_calling", include_raw=False)
 

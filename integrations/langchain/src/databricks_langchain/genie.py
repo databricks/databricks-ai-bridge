@@ -36,7 +36,7 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
 
 
 @mlflow.trace(span_type="AGENT")
-def GenieAgent(genie_space_id, genie_agent_name="Genie", description=""):
+def GenieAgent(genie_space_id, genie_agent_name: str = "Genie", description: str = ""):
     """Create a genie agent that can be used to query the API"""
     from functools import partial
 
