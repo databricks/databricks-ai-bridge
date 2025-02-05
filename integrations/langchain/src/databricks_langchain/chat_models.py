@@ -2,6 +2,7 @@
 
 import json
 import logging
+import warnings
 from operator import itemgetter
 from typing import (
     Any,
@@ -51,7 +52,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from mlflow.deployments import BaseDeploymentClient  # type: ignore
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from databricks_langchain.utils import get_deployment_client
 
@@ -76,8 +77,12 @@ class ChatDatabricks(BaseChatModel):
             export DATABRICKS_TOKEN="your-personal-access-token"
 
     Key init args — completion params:
+        model: str
+            Name of the Databricks Model Serving endpoint to query. Alias to endpoint.
+            Only use one of ``model`` or ``endpoint``.
         endpoint: str
             Name of Databricks Model Serving endpoint to query.
+            Only use one of ``model`` or ``endpoint``.
         target_uri: str
             The target URI to use. Defaults to ``databricks``.
         temperature: float
@@ -98,7 +103,7 @@ class ChatDatabricks(BaseChatModel):
             from databricks_langchain import ChatDatabricks
 
             llm = ChatDatabricks(
-                endpoint="databricks-meta-llama-3-1-405b-instruct",
+                model="databricks-meta-llama-3-1-405b-instruct",
                 temperature=0,
                 max_tokens=500,
             )
@@ -174,9 +179,7 @@ class ChatDatabricks(BaseChatModel):
 
         .. code-block:: python
 
-            llm = ChatDatabricks(
-                endpoint="databricks-meta-llama-3-1-405b-instruct", stream_usage=True
-            )
+            llm = ChatDatabricks(model="databricks-meta-llama-3-1-405b-instruct", stream_usage=True)
             structured_llm = llm.with_structured_output(...)
 
     Async:
@@ -239,7 +242,9 @@ class ChatDatabricks(BaseChatModel):
 
     """  # noqa: E501
 
-    endpoint: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
@@ -259,6 +264,26 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
 
+    @property
+    def endpoint(self) -> str:
+        warnings.warn(
+            "The `endpoint` attribute is deprecated and will be removed in a future version. "
+            "Use `model` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.model
+
+    @endpoint.setter
+    def endpoint(self, value: str) -> None:
+        warnings.warn(
+            "The `endpoint` attribute is deprecated and will be removed in a future version. "
+            "Use `model` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.model = value
+
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         self.client = get_deployment_client(self.target_uri)
@@ -268,7 +293,7 @@ class ChatDatabricks(BaseChatModel):
     def _default_params(self) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "target_uri": self.target_uri,
-            "endpoint": self.endpoint,
+            "model": self.model,
             "temperature": self.temperature,
             "n": self.n,
             "stop": self.stop,
@@ -285,7 +310,7 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
-        resp = self.client.predict(endpoint=self.endpoint, inputs=data)  # type: ignore
+        resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
         return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -332,7 +357,7 @@ class ChatDatabricks(BaseChatModel):
             stream_usage = self.stream_usage
         data = self._prepare_inputs(messages, stop, **kwargs)
         first_chunk_role = None
-        for chunk in self.client.predict_stream(endpoint=self.endpoint, inputs=data):  # type: ignore
+        for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
             if chunk["choices"]:
                 choice = chunk["choices"][0]
 
@@ -499,7 +524,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -524,7 +549,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification, include_raw=True)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -551,7 +576,7 @@ class ChatDatabricks(BaseChatModel):
 
 
                 dict_schema = convert_to_openai_tool(AnswerWithJustification)
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(dict_schema)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -571,7 +596,7 @@ class ChatDatabricks(BaseChatModel):
                     answer: str
                     justification: str
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(
                     AnswerWithJustification,
                     method="json_mode",
