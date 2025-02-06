@@ -3,7 +3,7 @@ name = "databricks-ai-bridge"
 version = "0.3.0.dev0"
 description = "Official Python library for Databricks AI support"
 authors = [
-    { name="Prithvi Kannan", email="prithvi.kannan@databricks.com" },
+    { name="Databricks", email="agent-feedback@databricks.com" },
 ]
 readme = "README.md"
 requires-python = ">=3.9"
