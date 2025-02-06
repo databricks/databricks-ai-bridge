@@ -44,7 +44,7 @@ class DatabricksVectorSearch(VectorStore):
 
         index_name: The name of the index to use. Format: "catalog.schema.index".
 
-        endpoint: The name of the Databricks Vector Search index ``endpoint``.
+        endpoint: The name of the Databricks Vector Search ``endpoint``.
             If not specified, the endpoint name is automatically inferred based on the index name.
 
             .. note::
@@ -71,7 +71,7 @@ class DatabricksVectorSearch(VectorStore):
                 Defaults to ``[primary_key, text_column]``.
         client_args: Additional arguments to pass to the VectorSearchClient.
                     Allows you to pass in values like ``service_principal_client_id``
-                    and ``service_principal_client_secret`` for to allow for
+                    and ``service_principal_client_secret`` to allow for
                     service principal authentication instead of personal access token authentication.
 
     **Instantiate**:

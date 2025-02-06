@@ -37,7 +37,7 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``"""
     query_params: Dict[str, Any] = {}
-    """The parameters to use for documents."""
+    """The parameters to use for the query."""
     documents_params: Dict[str, Any] = {}
     """The parameters to use for documents."""
     _client: Any = PrivateAttr()
