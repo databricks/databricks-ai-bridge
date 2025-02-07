@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.3.0 (2025-02-07)
+
+### Highlights
+- Adding integration with databricks-openai
+- Introducing [api docs](https://api-docs.databricks.com/python/databricks-ai-bridge/index.html)
+
+### Improvements
+- Improving `VectorSearchRetrieverTool` API in both langchain and openai by introducing automatic description and resources needed to log the model
+- Introducing model as an argument to be passed to ChatDatabricks in Langchain and deprecating notice endpoint to confer with the schema in Langchain.
+
+
 ## 0.0.3 (2024-11-12)
 This is a patch release that includes bugfixes.
 
