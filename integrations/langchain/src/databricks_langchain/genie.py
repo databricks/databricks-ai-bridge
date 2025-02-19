@@ -8,7 +8,6 @@ from langchain_core.runnables import RunnableLambda
 from typing import Dict, Any
 
 
-@mlflow.trace(span_type="AGENT")
 class GenieAgent(RunnableLambda):
     def __init__(self, genie_space_id,
                  genie_agent_name: str = "Genie",
@@ -19,7 +18,7 @@ class GenieAgent(RunnableLambda):
         self.description = description
         self.return_metadata = return_metadata
         self.genie = Genie(genie_space_id)
-        super().__init__(self._query_genie_as_agent)
+        super().__init__(self._query_genie_as_agent, name="Genie_Agent")
 
     @mlflow.trace()
     def _concat_messages_array(self, messages):
