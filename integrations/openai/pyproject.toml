@@ -14,7 +14,7 @@ dependencies = [
     "openai>=1.46.1",
     "pydantic>2.10.0",
     "mlflow>=2.20.1",
-    "unitycatalog-openai>=0.1.0",
+    "unitycatalog-openai[databricks]>=0.1.0",
 ]
 
 [project.optional-dependencies]
