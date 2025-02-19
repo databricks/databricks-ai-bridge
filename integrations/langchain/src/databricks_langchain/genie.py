@@ -1,53 +1,63 @@
 import mlflow
+from langchain_core.messages import AIMessage, BaseMessage
+
 from databricks_ai_bridge.genie import Genie
 
+from langchain_core.runnables import RunnableLambda
 
-@mlflow.trace()
-def _concat_messages_array(messages):
-    concatenated_message = "\n".join(
-        [
-            f"{message.get('role', message.get('name', 'unknown'))}: {message.get('content', '')}"
-            if isinstance(message, dict)
-            else f"{getattr(message, 'role', getattr(message, 'name', 'unknown'))}: {getattr(message, 'content', '')}"
-            for message in messages
-        ]
-    )
-    return concatenated_message
-
-
-@mlflow.trace()
-def _query_genie_as_agent(input, genie_space_id, genie_agent_name):
-    from langchain_core.messages import AIMessage
-
-    genie = Genie(genie_space_id)
-
-    message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
-
-    # Concatenate messages to form the chat history
-    message += _concat_messages_array(input.get("messages"))
-
-    # Send the message and wait for a response
-    genie_response = genie.ask_question(message)
-
-    if query_result := genie_response.result:
-        return {"messages": [AIMessage(content=query_result)]}
-    else:
-        return {"messages": [AIMessage(content="")]}
+from typing import Dict, Any
 
 
 @mlflow.trace(span_type="AGENT")
-def GenieAgent(genie_space_id, genie_agent_name: str = "Genie", description: str = ""):
-    """Create a genie agent that can be used to query the API"""
-    from functools import partial
+class GenieAgent(RunnableLambda):
+    def __init__(self, genie_space_id,
+                 genie_agent_name: str = "Genie",
+                 description: str = "",
+                 return_metadata: bool = False):
+        self.genie_space_id = genie_space_id
+        self.genie_agent_name = genie_agent_name
+        self.description = description
+        self.return_metadata = return_metadata
+        self.genie = Genie(genie_space_id)
+        super().__init__(self._query_genie_as_agent)
 
-    from langchain_core.runnables import RunnableLambda
+    @mlflow.trace()
+    def _concat_messages_array(self, messages):
 
-    # Create a partial function with the genie_space_id pre-filled
-    partial_genie_agent = partial(
-        _query_genie_as_agent,
-        genie_space_id=genie_space_id,
-        genie_agent_name=genie_agent_name,
-    )
+        data = []
 
-    # Use the partial function in the RunnableLambda
-    return RunnableLambda(partial_genie_agent)
+        for message in messages:
+            if isinstance(message, dict):
+                data.append(f"{message.get('role', 'unknown')}: {message.get('content', '')}")
+            elif isinstance(message, BaseMessage):
+                data.append(f"{message.type}: {message.content}")
+            else:
+                data.append(f"{getattr(message, 'role', getattr(message, 'name', 'unknown'))}: {getattr(message, 'content', '')}")
+
+        concatenated_message = "\n".join([e for e in data if e])
+
+        return concatenated_message
+
+    @mlflow.trace()
+    def _query_genie_as_agent(self, state: Dict[str, Any]):
+        message = (f"I will provide you a chat history, where your name is {self.genie_agent_name}. "
+                   f"Please help with the described information in the chat history.\n")
+
+        # Concatenate messages to form the chat history
+        message += self._concat_messages_array(state.get("messages"))
+
+        # Send the message and wait for a response
+        genie_response = self.genie.ask_question(message)
+
+        content = ""
+        metadata = None
+
+        if genie_response.result:
+            content = genie_response.result
+            metadata = genie_response
+
+        if self.return_metadata:
+            return {"messages": [AIMessage(content=content)], "metadata": metadata}
+
+        return {"messages": [AIMessage(content=content)]}
+
