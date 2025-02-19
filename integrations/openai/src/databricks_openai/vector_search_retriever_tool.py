@@ -97,7 +97,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             raise ValueError(
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
-        self._index = VectorSearchClient().get_index(index_name=self.index_name)
+        self._index = VectorSearchClient(disable_notice=True).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(

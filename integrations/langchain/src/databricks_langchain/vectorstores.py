@@ -242,7 +242,9 @@ class DatabricksVectorSearch(VectorStore):
             ) from e
 
         try:
-            self.index = VectorSearchClient(**(client_args or {})).get_index(
+            client_args = client_args or {}
+            client_args["disable_notice"] = True
+            self.index = VectorSearchClient(**client_args).get_index(
                 endpoint_name=endpoint, index_name=index_name
             )
         except Exception as e:
@@ -280,8 +282,7 @@ class DatabricksVectorSearch(VectorStore):
         **kwargs: Any,
     ) -> VST:
         raise NotImplementedError(
-            "`from_texts` is not supported. "
-            "Use `add_texts` to add to existing direct-access index."
+            "`from_texts` is not supported. Use `add_texts` to add to existing direct-access index."
         )
 
     def add_texts(
@@ -544,7 +545,7 @@ class DatabricksVectorSearch(VectorStore):
         else:
             if query is not None:
                 raise ValueError(
-                    ("Cannot specify both `embedding` and " '`query` unless `query_type="HYBRID"')
+                    ('Cannot specify both `embedding` and `query` unless `query_type="HYBRID"')
                 )
             query_text = None
 
