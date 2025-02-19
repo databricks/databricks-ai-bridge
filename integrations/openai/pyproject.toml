@@ -7,14 +7,14 @@ authors = [
 ]
 readme = "README.md"
 license = { text="Apache-2.0" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.1.0",
     "openai>=1.46.1",
     "pydantic>2.10.0",
     "mlflow>=2.20.1",
-    "unitycatalog-openai",
+    "unitycatalog-openai>=0.1.0",
 ]
 
 [project.optional-dependencies]
