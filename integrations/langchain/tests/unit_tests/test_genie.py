@@ -68,7 +68,7 @@ def test_query_genie_as_agent(mock_ask_question, agent):
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
 
-    result = agent._query_genie_as_agent(input_data)
+    result = agent._call_genie_api(input_data)
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
 
@@ -79,7 +79,7 @@ def test_query_genie_as_agent(mock_ask_question, agent):
 
     mock_ask_question.return_value = genie_empty_response
 
-    result = agent._query_genie_as_agent(input_data)
+    result = agent._call_genie_api(input_data)
 
     expected_message = {"messages": [AIMessage(content="")]}
 
@@ -95,7 +95,7 @@ def test_query_genie_as_agent_with_metadata(mock_ask_question, agent_with_metada
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
 
-    result = agent_with_metadata._query_genie_as_agent(input_data)
+    result = agent_with_metadata._call_genie_api(input_data)
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")], "metadata": genie_response}
 
@@ -106,7 +106,7 @@ def test_query_genie_as_agent_with_metadata(mock_ask_question, agent_with_metada
 
     mock_ask_question.return_value = genie_empty_response
 
-    result = agent_with_metadata._query_genie_as_agent(input_data)
+    result = agent_with_metadata._call_genie_api(input_data)
 
     expected_message = {"messages": [AIMessage(content="")], "metadata": None}
 

@@ -53,7 +53,7 @@ class GenieAgent(RunnableLambda):
         self.description = description
         self.return_metadata = return_metadata
         self.genie = Genie(genie_space_id)
-        super().__init__(self._query_genie_as_agent, name=genie_agent_name)
+        super().__init__(self._call_genie_api, name=genie_agent_name)
 
     @mlflow.trace()
     def _concat_messages_array(self, messages):
@@ -73,7 +73,7 @@ class GenieAgent(RunnableLambda):
         return concatenated_message
 
     @mlflow.trace()
-    def _query_genie_as_agent(self, state: Dict[str, Any]):
+    def _call_genie_api(self, state: Dict[str, Any]):
         message = (f"I will provide you a chat history, where your name is {self.genie_agent_name}. "
                    f"Please help with the described information in the chat history.\n")
 
