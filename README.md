@@ -6,12 +6,12 @@ The Databricks AI Bridge library provides a shared layer of APIs to interact wit
 
 This library also contains the source code for the following integration packages. These integration packages provide seamless integration of Databricks AI features to use in AI authoring frameworks.
 
-- [`databricks-langchain` README](./integrations/langchain/README.md)
-- [`databricks-openai` README](./integrations/openai/README.md)
+- [`databricks-langchain`](./integrations/langchain/README.md) README
+- [`databricks-openai`](./integrations/openai/README.md) README
 
 ## Installation
 
-If you are using langchain or openai, you should install `databricks-langchain` or `databricks-openai`. You can find more details in the READMEs linked above. For frameworks that we don't have integration packages for yet, install `databricks-ai-bridge`.
+If you are using LangChain or OpenAI, you should install `databricks-langchain` or `databricks-openai`. Refer to the linked READMEs for more details. For other frameworks without dedicated integration packages, use `databricks-ai-bridge` instead.
 
 ### Install from PyPI
 
