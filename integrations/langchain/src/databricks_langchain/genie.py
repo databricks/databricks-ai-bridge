@@ -18,7 +18,7 @@ class GenieAgent(RunnableLambda):
         self.description = description
         self.return_metadata = return_metadata
         self.genie = Genie(genie_space_id)
-        super().__init__(self._query_genie_as_agent, name="Genie_Agent")
+        super().__init__(self._query_genie_as_agent, name=genie_agent_name)
 
     @mlflow.trace()
     def _concat_messages_array(self, messages):
