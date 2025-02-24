@@ -243,7 +243,7 @@ class DatabricksVectorSearch(VectorStore):
 
         try:
             client_args = client_args or {}
-            client_args["disable_notice"] = True
+            client_args.setdefault("disable_notice", True)
             self.index = VectorSearchClient(**client_args).get_index(
                 endpoint_name=endpoint, index_name=index_name
             )
