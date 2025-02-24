@@ -303,7 +303,10 @@ class ChatDatabricks(BaseChatModel):
         generations = [
             ChatGeneration(
                 message=_convert_dict_to_message(choice["message"]),
-                generation_info=choice.get("usage", {}),
+                generation_info={
+                    **choice.get("usage", {}),
+                    "logprobs": choice.get("logprobs"),
+                },
             )
             for choice in response["choices"]
         ]
