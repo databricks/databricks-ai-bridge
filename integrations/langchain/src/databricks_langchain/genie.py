@@ -46,6 +46,9 @@ def GenieAgent(
     client: Optional["WorkspaceClient"] = None,
 ):
     """Create a genie agent that can be used to query the API"""
+    if not genie_space_id:
+        raise ValueError("genie_space_id is required to create a GenieAgent")
+
     from functools import partial
 
     from langchain_core.runnables import RunnableLambda

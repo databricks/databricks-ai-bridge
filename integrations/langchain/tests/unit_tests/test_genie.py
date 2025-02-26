@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import pytest
 from databricks_ai_bridge.genie import GenieResponse
 from langchain_core.messages import AIMessage
 
@@ -84,3 +85,8 @@ def test_query_genie_with_client(mock_workspace_client):
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
     assert result == expected_message
+
+
+def test_create_genie_agent_no_space_id():
+    with pytest.raises(ValueError):
+        GenieAgent("", "Genie")
