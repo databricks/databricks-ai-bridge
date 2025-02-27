@@ -1,7 +1,9 @@
-import mlflow
-from databricks_ai_bridge.genie import Genie
-from databricks.sdk import WorkspaceClient
 from typing import Optional
+
+import mlflow
+from databricks.sdk import WorkspaceClient
+from databricks_ai_bridge.genie import Genie
+
 
 @mlflow.trace()
 def _concat_messages_array(messages):
@@ -37,7 +39,12 @@ def _query_genie_as_agent(input, genie_space_id, genie_agent_name, client):
 
 
 @mlflow.trace(span_type="AGENT")
-def GenieAgent(genie_space_id, genie_agent_name: str = "Genie", description: str = "", client: Optional["WorkspaceClient"] = None):
+def GenieAgent(
+    genie_space_id,
+    genie_agent_name: str = "Genie",
+    description: str = "",
+    client: Optional["WorkspaceClient"] = None,
+):
     """Create a genie agent that can be used to query the API"""
     from functools import partial
 
@@ -48,7 +55,7 @@ def GenieAgent(genie_space_id, genie_agent_name: str = "Genie", description: str
         _query_genie_as_agent,
         genie_space_id=genie_space_id,
         genie_agent_name=genie_agent_name,
-        client=client
+        client=client,
     )
 
     # Use the partial function in the RunnableLambda
