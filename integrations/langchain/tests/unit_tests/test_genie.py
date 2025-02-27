@@ -48,14 +48,14 @@ def test_query_genie_as_agent(MockGenie):
     mock_genie.ask_question.return_value = GenieResponse(result="It is sunny.")
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie")
+    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
     assert result == expected_message
 
     # Test the case when genie_response is empty
     mock_genie.ask_question.return_value = GenieResponse(result=None)
-    result = _query_genie_as_agent(input_data, "space-id", "Genie")
+    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
 
     expected_message = {"messages": [AIMessage(content="")]}
     assert result == expected_message

@@ -71,9 +71,9 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
 
 
 class Genie:
-    def __init__(self, space_id):
+    def __init__(self, space_id, client: Optional["WorkspaceClient"] = None):
         self.space_id = space_id
-        workspace_client = WorkspaceClient()
+        workspace_client = client or WorkspaceClient()
         self.genie = workspace_client.genie
         self.headers = {
             "Accept": "application/json",
