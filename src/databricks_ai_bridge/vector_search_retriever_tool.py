@@ -31,6 +31,8 @@ def vector_search_retriever_tool_trace(func):
 
     return wrapper
 
+class CredentialStrategy(Enum):
+    MODEL_SERVING_USER_CREDENTIALS = 1
 
 class VectorSearchRetrieverToolInput(BaseModel):
     query: str = Field(
@@ -62,6 +64,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     resources: Optional[List[dict]] = Field(
         None, description="Resources required to log a model that uses this tool."
     )
+    credential_strategy: Optional[CredentialStrategy] = Field(default=None, description="When set to MODEL_SERVING_USER_CREDENTIALS, the tool will be authorized with invokers rights")
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
