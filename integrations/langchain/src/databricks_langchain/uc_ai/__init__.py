@@ -2,9 +2,8 @@ import warnings
 
 warnings.warn(
     "Imports from this module are deprecated and will be removed in a future release. "
-    "Please update the code to import directly from databricks_langchain.",
-    "",
-    "For example, replace imports like `from databricks_langchain.uc_ai import UCFunctionToolkit`",
+    "Please update the code to import directly from databricks_langchain.\n"
+    "For example, replace imports like `from databricks_langchain.uc_ai import UCFunctionToolkit`"
     "with: `from databricks_langchain import UCFunctionToolkit`",
     DeprecationWarning,
     stacklevel=3,
