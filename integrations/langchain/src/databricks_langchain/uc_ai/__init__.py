@@ -5,7 +5,7 @@ warnings.warn(
     "Please update the code to import directly from databricks_langchain.",
     "",
     "For example, replace imports like `from databricks_langchain.uc_ai import UCFunctionToolkit`",
-    "with: `from databricks_langchain import UCFunctionToolkit`"
+    "with: `from databricks_langchain import UCFunctionToolkit`",
     DeprecationWarning,
     stacklevel=3,
 )
