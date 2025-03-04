@@ -2,7 +2,10 @@ import warnings
 
 warnings.warn(
     "Imports from this module are deprecated and will be removed in a future release. "
-    "Please update your imports to import directly from databricks_openai",
+    "Please update the code to import directly from databricks_openai.",
+    "",
+    "For example, replace imports like `from databricks_openai.uc_ai import UCFunctionToolkit`",
+    "with: `from databricks_openai import UCFunctionToolkit`"
     DeprecationWarning,
     stacklevel=3,
 )
