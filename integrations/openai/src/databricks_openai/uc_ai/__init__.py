@@ -4,7 +4,7 @@ warnings.warn(
     "Imports from this module are deprecated and will be removed in a future release. "
     "Please update your imports to import directly from databricks_openai",
     DeprecationWarning,
-    stacklevel=2,
+    stacklevel=3,
 )
 
 from unitycatalog.ai.core.base import set_uc_function_client
