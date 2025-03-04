@@ -11,6 +11,7 @@ dependencies = [
   "typing_extensions",
   "pydantic",
   "databricks-sdk>=0.34.0",
+  "databricks-vectorsearch>=0.50",
   "pandas",
   "tiktoken>=0.8.0",
   "tabulate",

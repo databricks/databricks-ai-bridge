@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
 import pytest
+from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
@@ -84,6 +85,7 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     text_column: Optional[str] = None,
     embedding_model_name: Optional[str] = None,
+    credential_strategy: Optional[CredentialStrategy] = None
 ) -> VectorSearchRetrieverTool:
     kwargs: Dict[str, Any] = {
         "index_name": index_name,
@@ -92,6 +94,7 @@ def init_vector_search_tool(
         "tool_description": tool_description,
         "text_column": text_column,
         "embedding_model_name": embedding_model_name,
+        "credential_strategy": credential_strategy
     }
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
@@ -114,11 +117,13 @@ class SelfManagedEmbeddingsTest:
 @pytest.mark.parametrize("columns", [None, ["id", "text"]])
 @pytest.mark.parametrize("tool_name", [None, "test_tool"])
 @pytest.mark.parametrize("tool_description", [None, "Test tool for vector search"])
+@pytest.mark.parametrize("credential_strategy", [None, CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS])
 def test_vector_search_retriever_tool_init(
     index_name: str,
     columns: Optional[List[str]],
     tool_name: Optional[str],
     tool_description: Optional[str],
+    credential_strategy: Optional[CredentialStrategy]
 ) -> None:
     if index_name == DELTA_SYNC_INDEX:
         self_managed_embeddings_test = SelfManagedEmbeddingsTest()

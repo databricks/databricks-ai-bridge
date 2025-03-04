@@ -133,9 +133,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         try:
             from databricks.sdk import WorkspaceClient
+            from databricks.sdk.credentials_provider import ModelServingUserCredentials
             from databricks.sdk.errors.platform import ResourceDoesNotExist
+            from databricks.vector_search.utils import CredentialStrategy
 
-            WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
+            if self.credential_strategy is not None and self.credential_strategy == CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS:
+                WorkspaceClient(credentials_strategy = ModelServingUserCredentials()).serving_endpoints.get(self.embedding_model_name)
+            else:
+                WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
             self.resources = self._get_resources(self.index_name, self.embedding_model_name)
         except ResourceDoesNotExist:
             self.resources = self._get_resources(self.index_name, None)

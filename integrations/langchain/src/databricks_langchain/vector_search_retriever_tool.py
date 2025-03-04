@@ -45,7 +45,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             "embedding": self.embedding,
             "text_column": self.text_column,
             "columns": self.columns,
-            "credential_strategy": self.credential_strategy
+            "client_args": {"credential_strategy" : self.credential_strategy}
         }
         dbvs = DatabricksVectorSearch(**kwargs)
         self._vector_store = dbvs
