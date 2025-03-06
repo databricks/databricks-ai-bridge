@@ -90,10 +90,10 @@ def test_poll_for_result_executing_query(genie, mock_workspace_client):
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "FAILED"},
+        {"status": "FAILED", "error": "Test error"},
     ]
     genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result is None
+    assert genie_result.result == "Genie query failed with error: Test error"
 
 
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
@@ -101,7 +101,7 @@ def test_poll_for_result_cancelled(genie, mock_workspace_client):
         {"status": "CANCELLED"},
     ]
     genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result is None
+    assert genie_result.result == "Genie query cancelled."
 
 
 def test_poll_for_result_expired(genie, mock_workspace_client):
@@ -109,7 +109,7 @@ def test_poll_for_result_expired(genie, mock_workspace_client):
         {"status": "QUERY_RESULT_EXPIRED"},
     ]
     genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result is None
+    assert genie_result.result == "Genie query query_result_expired."
 
 
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
@@ -140,7 +140,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
             },
         ]
         result = genie.poll_for_result("123", "456")
-        assert result is None
+        assert result.result == "Genie query timed out after 2 iterations of 5 seconds"
 
 
 def test_ask_question(genie, mock_workspace_client):

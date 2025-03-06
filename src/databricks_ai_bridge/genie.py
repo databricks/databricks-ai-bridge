@@ -120,8 +120,12 @@ class Genie:
                     logging.debug("Waiting for query result...")
                     time.sleep(5)
                 else:
-                    logging.debug(f"No query result: {resp['state']}")
-                    return GenieResponse(None, query, description)
+                    return GenieResponse(f"No query result: {resp['state']}", query, description)
+            return GenieResponse(
+                f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds",
+                query,
+                description,
+            )
 
         @mlflow.trace()
         def poll_result():
@@ -133,7 +137,7 @@ class Genie:
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
                     headers=self.headers,
                 )
-                if resp["status"] == "EXECUTING_QUERY" or resp["status"] == "COMPLETED":
+                if resp["status"] in ["EXECUTING_QUERY", "COMPLETED"]:
                     query_attachment = next((r for r in resp["attachments"] if "query" in r), None)
                     if query_attachment:
                         query = query_attachment["query"]["query"]
@@ -144,12 +148,20 @@ class Genie:
                             "content"
                         ]
                         return GenieResponse(result=text_content)
-                elif resp["status"] in ["FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"]:
-                    logging.debug(f"Genie query {resp['status'].lower()}.")
-                    return GenieResponse(result=None)
+                elif resp["status"] in ["CANCELLED", "QUERY_RESULT_EXPIRED"]:
+                    return GenieResponse(result=f"Genie query {resp['status'].lower()}.")
+                elif resp["status"] == "FAILED":
+                    return GenieResponse(
+                        result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
+                    )
                 else:
                     logging.debug(f"Waiting...: {resp['status']}")
                     time.sleep(5)
+            return GenieResponse(
+                f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds",
+                query,
+                description,
+            )
 
         return poll_result()
 
