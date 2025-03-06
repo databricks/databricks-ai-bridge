@@ -140,7 +140,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
             },
         ]
         result = genie.poll_for_result("123", "456")
-        assert result.result == "Genie query timed out after 2 iterations of 5 seconds"
+        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
 
 
 def test_ask_question(genie, mock_workspace_client):

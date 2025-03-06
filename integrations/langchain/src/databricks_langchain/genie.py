@@ -19,7 +19,9 @@ def _concat_messages_array(messages):
 
 
 @mlflow.trace()
-def _query_genie_as_agent(input, genie_space_id, genie_agent_name, client):
+def _query_genie_as_agent(
+    input, genie_space_id, genie_agent_name, client: Optional[WorkspaceClient] = None
+):
     from langchain_core.messages import AIMessage
 
     genie = Genie(genie_space_id, client=client)
