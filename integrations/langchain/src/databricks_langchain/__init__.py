@@ -1,3 +1,7 @@
+from unitycatalog.ai.core.base import set_uc_function_client
+from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
+
 from databricks_langchain.chat_models import ChatDatabricks
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
@@ -11,4 +15,7 @@ __all__ = [
     "DatabricksVectorSearch",
     "GenieAgent",
     "VectorSearchRetrieverTool",
+    "UCFunctionToolkit",
+    "DatabricksFunctionClient",
+    "set_uc_function_client",
 ]

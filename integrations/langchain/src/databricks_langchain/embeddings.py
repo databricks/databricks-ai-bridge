@@ -9,57 +9,37 @@ from databricks_langchain.utils import get_deployment_client
 class DatabricksEmbeddings(Embeddings, BaseModel):
     """Databricks embedding model integration.
 
-    Setup:
-        Install ``databricks-langchain``.
+    **Instantiate**:
 
-        .. code-block:: bash
-
-            pip install -U databricks-langchain
-
-        If you are outside Databricks, set the Databricks workspace
-        hostname and personal access token to environment variables:
-
-        .. code-block:: bash
-
-            export DATABRICKS_HOSTNAME="https://your-databricks-workspace"
-            export DATABRICKS_TOKEN="your-personal-access-token"
-
-    Key init args — completion params:
-        endpoint: str
-            Name of Databricks Model Serving endpoint to query.
-        target_uri: str
-            The target URI to use. Defaults to ``databricks``.
-        query_params: Dict[str, str]
-            The parameters to use for queries.
-        documents_params: Dict[str, str]
-            The parameters to use for documents.
-
-    Instantiate:
         .. code-block:: python
+
             from databricks_langchain import DatabricksEmbeddings
 
             embed = DatabricksEmbeddings(
                 endpoint="databricks-bge-large-en",
             )
 
-    Embed single text:
+    **Embed single text**:
+
         .. code-block:: python
+
             input_text = "The meaning of life is 42"
             embed.embed_query(input_text)
 
         .. code-block:: python
+
             [0.01605224609375, -0.0298309326171875, ...]
 
     """
 
     endpoint: str
-    """The endpoint to use."""
+    """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
-    """The parameters to use for queries."""
+    """The target URI to use. Defaults to ``databricks``"""
     query_params: Dict[str, Any] = {}
-    """The parameters to use for documents."""
+    """The parameters to use for the query."""
     documents_params: Dict[str, Any] = {}
-    """The target URI to use."""
+    """The parameters to use for documents."""
     _client: Any = PrivateAttr()
 
     def __init__(self, **kwargs: Any):

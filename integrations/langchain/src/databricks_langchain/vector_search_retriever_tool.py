@@ -4,11 +4,13 @@ from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
+    vector_search_retriever_tool_trace,
 )
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from databricks_langchain import DatabricksEmbeddings
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
@@ -51,9 +53,14 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         self.description = self.tool_description or self._get_default_tool_description(
             IndexDetails(dbvs.index)
         )
+        self.resources = self._get_resources(
+            self.index_name,
+            (self.embedding.endpoint if isinstance(self.embedding, DatabricksEmbeddings) else None),
+        )
 
         return self
 
+    @vector_search_retriever_tool_trace
     def _run(self, query: str) -> str:
         return self._vector_store.similarity_search(
             query, k=self.num_results, filter=self.filters, query_type=self.query_type

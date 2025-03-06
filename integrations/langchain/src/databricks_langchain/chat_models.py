@@ -2,6 +2,7 @@
 
 import json
 import logging
+import warnings
 from operator import itemgetter
 from typing import (
     Any,
@@ -51,7 +52,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from mlflow.deployments import BaseDeploymentClient  # type: ignore
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from databricks_langchain.utils import get_deployment_client
 
@@ -61,48 +62,20 @@ logger = logging.getLogger(__name__)
 class ChatDatabricks(BaseChatModel):
     """Databricks chat model integration.
 
-    Setup:
-        Install ``databricks-langchain``.
+    **Instantiate**:
 
-        .. code-block:: bash
-
-            pip install -U databricks-langchain
-
-        If you are outside Databricks, set the Databricks workspace hostname and personal access token to environment variables:
-
-        .. code-block:: bash
-
-            export DATABRICKS_HOSTNAME="https://your-databricks-workspace"
-            export DATABRICKS_TOKEN="your-personal-access-token"
-
-    Key init args — completion params:
-        endpoint: str
-            Name of Databricks Model Serving endpoint to query.
-        target_uri: str
-            The target URI to use. Defaults to ``databricks``.
-        temperature: float
-            Sampling temperature. Higher values make the model more creative.
-        n: Optional[int]
-            The number of completion choices to generate.
-        stop: Optional[List[str]]
-            List of strings to stop generation at.
-        max_tokens: Optional[int]
-            Max number of tokens to generate.
-        extra_params: Optional[Dict[str, Any]]
-            Any extra parameters to pass to the endpoint.
-
-    Instantiate:
         .. code-block:: python
 
             from databricks_langchain import ChatDatabricks
 
             llm = ChatDatabricks(
-                endpoint="databricks-meta-llama-3-1-405b-instruct",
+                model="databricks-meta-llama-3-1-405b-instruct",
                 temperature=0,
                 max_tokens=500,
             )
 
-    Invoke:
+    **Invoke**:
+
         .. code-block:: python
 
             messages = [
@@ -119,7 +92,8 @@ class ChatDatabricks(BaseChatModel):
                 id="run-64eebbdd-88a8-4a25-b508-21e9a5f146c5-0",
             )
 
-    Stream:
+    **Stream**:
+
         .. code-block:: python
 
             for chunk in llm.stream(messages):
@@ -171,12 +145,11 @@ class ChatDatabricks(BaseChatModel):
 
         .. code-block:: python
 
-            llm = ChatDatabricks(
-                endpoint="databricks-meta-llama-3-1-405b-instruct", stream_usage=True
-            )
+            llm = ChatDatabricks(model="databricks-meta-llama-3-1-405b-instruct", stream_usage=True)
             structured_llm = llm.with_structured_output(...)
 
-    Async:
+    **Async**:
+
         .. code-block:: python
 
             await llm.ainvoke(messages)
@@ -195,7 +168,8 @@ class ChatDatabricks(BaseChatModel):
                 id="run-e4bb043e-772b-4e1d-9f98-77ccc00c0271-0",
             )
 
-    Tool calling:
+    **Tool calling**:
+
         .. code-block:: python
 
             from pydantic import BaseModel, Field
@@ -234,7 +208,9 @@ class ChatDatabricks(BaseChatModel):
 
     """  # noqa: E501
 
-    endpoint: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
@@ -254,6 +230,26 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
 
+    @property
+    def endpoint(self) -> str:
+        warnings.warn(
+            "The `endpoint` attribute is deprecated and will be removed in a future version. "
+            "Use `model` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.model
+
+    @endpoint.setter
+    def endpoint(self, value: str) -> None:
+        warnings.warn(
+            "The `endpoint` attribute is deprecated and will be removed in a future version. "
+            "Use `model` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.model = value
+
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
         self.client = get_deployment_client(self.target_uri)
@@ -263,7 +259,7 @@ class ChatDatabricks(BaseChatModel):
     def _default_params(self) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "target_uri": self.target_uri,
-            "endpoint": self.endpoint,
+            "model": self.model,
             "temperature": self.temperature,
             "n": self.n,
             "stop": self.stop,
@@ -280,7 +276,7 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
-        resp = self.client.predict(endpoint=self.endpoint, inputs=data)  # type: ignore
+        resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
         return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -327,7 +323,7 @@ class ChatDatabricks(BaseChatModel):
             stream_usage = self.stream_usage
         data = self._prepare_inputs(messages, stop, **kwargs)
         first_chunk_role = None
-        for chunk in self.client.predict_stream(endpoint=self.endpoint, inputs=data):  # type: ignore
+        for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
             if chunk["choices"]:
                 choice = chunk["choices"][0]
 
@@ -386,19 +382,24 @@ class ChatDatabricks(BaseChatModel):
                 Can be  a dictionary, pydantic model, callable, or BaseTool. Pydantic
                 models, callables, and BaseTools will be automatically converted to
                 their schema dictionary representation.
-            tool_choice: Which tool to require the model to call.
-                Options are:
-                name of the tool (str): calls corresponding tool;
-                "auto": automatically selects a tool (including no tool);
-                "none": model does not generate any tool calls and instead must
-                    generate a standard assistant message;
-                "required": the model picks the most relevant tool in tools and
-                    must generate a tool call;
+            tool_choice: Which tool to require the model to call. Options are:
 
-                or a dict of the form:
-                {"type": "function", "function": {"name": <<tool_name>>}}.
+                - name of the tool (str): Calls corresponding tool.
+                - **"auto"**: Automatically selects a tool (including no tool).
+                - **"none"**: Model does not generate any tool calls and instead must generate a standard assistant message.
+                - **"required"**: The model picks the most relevant tool in tools and must generate a tool call or a dictionary of the form:
+
+                    .. code-block:: json
+
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "<<tool_name>>"
+                            }
+                        }
+
             **kwargs: Any additional parameters to pass to the
-                :class:`~langchain.runnable.Runnable` constructor.
+                `Runnable <langchain-core:Runnable>`__ constructor.
         """
         formatted_tools = [convert_to_openai_tool(tool) for tool in tools]
         if tool_choice:
@@ -467,7 +468,7 @@ class ChatDatabricks(BaseChatModel):
                 with keys "raw", "parsed", and "parsing_error".
 
         Returns:
-            A Runnable that takes any ChatModel input and returns as output:
+            A `Runnable <langchain-core:Runnable>`__ that takes any ChatModel input and returns as output:
 
             If ``include_raw`` is False and ``schema`` is a Pydantic class, Runnable outputs
             an instance of ``schema`` (i.e., a Pydantic object).
@@ -479,7 +480,10 @@ class ChatDatabricks(BaseChatModel):
                 - ``"parsed"``: None if there was a parsing error, otherwise the type depends on the ``schema`` as described above.
                 - ``"parsing_error"``: Optional[BaseException]
 
-        Example: Function-calling, Pydantic schema (method="function_calling", include_raw=False):
+        **Examples**:
+
+        Function-calling, Pydantic schema (method="function_calling", include_raw=False)
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -493,7 +497,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -503,7 +507,8 @@ class ChatDatabricks(BaseChatModel):
                 #     justification='Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume or density of the objects may differ.'
                 # )
 
-        Example: Function-calling, Pydantic schema (method="function_calling", include_raw=True):
+        Function-calling, Pydantic schema (method="function_calling", include_raw=True):
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -517,7 +522,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification, include_raw=True)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -527,7 +532,8 @@ class ChatDatabricks(BaseChatModel):
                 #     'parsing_error': None
                 # }
 
-        Example: Function-calling, dict schema (method="function_calling", include_raw=False):
+        Function-calling, dict schema (method="function_calling", include_raw=False):
+
             .. code-block:: python
 
                 from databricks_langchain import ChatDatabricks
@@ -543,7 +549,7 @@ class ChatDatabricks(BaseChatModel):
 
 
                 dict_schema = convert_to_openai_tool(AnswerWithJustification)
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(dict_schema)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -552,7 +558,8 @@ class ChatDatabricks(BaseChatModel):
                 #     'justification': 'Both a pound of bricks and a pound of feathers weigh one pound. The weight is the same, but the volume and density of the two substances differ.'
                 # }
 
-        Example: JSON mode, Pydantic schema (method="json_mode", include_raw=True):
+        JSON mode, Pydantic schema (method="json_mode", include_raw=True):
+
             .. code-block::
 
                 from databricks_langchain import ChatDatabricks
@@ -562,7 +569,7 @@ class ChatDatabricks(BaseChatModel):
                     answer: str
                     justification: str
 
-                llm = ChatDatabricks(endpoint="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(
                     AnswerWithJustification,
                     method="json_mode",
@@ -571,27 +578,28 @@ class ChatDatabricks(BaseChatModel):
 
                 structured_llm.invoke(
                     "Answer the following question. "
-                    "Make sure to return a JSON blob with keys 'answer' and 'justification'.\n\n"
+                    "Make sure to return a JSON blob with keys 'answer' and 'justification'."
                     "What's heavier a pound of bricks or a pound of feathers?"
                 )
                 # -> {
-                #     'raw': AIMessage(content='{\n    "answer": "They are both the same weight.",\n    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." \n}'),
+                #     'raw': AIMessage(content='{    "answer": "They are both the same weight.",    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." }'),
                 #     'parsed': AnswerWithJustification(answer='They are both the same weight.', justification='Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight.'),
                 #     'parsing_error': None
                 # }
 
-        Example: JSON mode, no schema (schema=None, method="json_mode", include_raw=True):
+        JSON mode, no schema (schema=None, method="json_mode", include_raw=True):
+
             .. code-block::
 
                 structured_llm = llm.with_structured_output(method="json_mode", include_raw=True)
 
                 structured_llm.invoke(
                     "Answer the following question. "
-                    "Make sure to return a JSON blob with keys 'answer' and 'justification'.\n\n"
+                    "Make sure to return a JSON blob with keys 'answer' and 'justification'."
                     "What's heavier a pound of bricks or a pound of feathers?"
                 )
                 # -> {
-                #     'raw': AIMessage(content='{\n    "answer": "They are both the same weight.",\n    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." \n}'),
+                #     'raw': AIMessage(content='{    "answer": "They are both the same weight.",    "justification": "Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight." }'),
                 #     'parsed': {
                 #         'answer': 'They are both the same weight.',
                 #         'justification': 'Both a pound of bricks and a pound of feathers weigh one pound. The difference lies in the volume and density of the materials, not the weight.'

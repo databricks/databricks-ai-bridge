@@ -38,7 +38,7 @@ _TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
 
 def test_chat_databricks_invoke():
-    chat = ChatDatabricks(endpoint=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
+    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
 
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
@@ -78,7 +78,7 @@ def test_chat_databricks_invoke():
 
 def test_chat_databricks_invoke_multiple_completions():
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0.5,
         n=3,
         max_tokens=10,
@@ -98,7 +98,7 @@ def test_chat_databricks_stream():
     callback = FakeCallbackHandler()
 
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         stop=["Python"],
         max_tokens=100,
@@ -125,7 +125,7 @@ def test_chat_databricks_stream_with_usage():
     callback = FakeCallbackHandler()
 
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         stop=["Python"],
         max_tokens=100,
@@ -149,7 +149,7 @@ def test_chat_databricks_stream_with_usage():
 @pytest.mark.asyncio
 async def test_chat_databricks_ainvoke():
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
     )
@@ -161,7 +161,7 @@ async def test_chat_databricks_ainvoke():
 
 async def test_chat_databricks_astream():
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
     )
@@ -175,7 +175,7 @@ async def test_chat_databricks_astream():
 @pytest.mark.asyncio
 async def test_chat_databricks_abatch():
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
     )
@@ -194,7 +194,7 @@ async def test_chat_databricks_abatch():
 @pytest.mark.parametrize("tool_choice", [None, "auto", "required", "any", "none"])
 def test_chat_databricks_tool_calls(tool_choice):
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
     )
@@ -274,7 +274,7 @@ JSON_SCHEMA = {
 @pytest.mark.parametrize("schema", [AnswerWithJustification, JSON_SCHEMA, None])
 @pytest.mark.parametrize("method", ["function_calling", "json_mode"])
 def test_chat_databricks_with_structured_output(schema, method):
-    llm = ChatDatabricks(endpoint=_TEST_ENDPOINT)
+    llm = ChatDatabricks(model=_TEST_ENDPOINT)
 
     if schema is None and method == "function_calling":
         pytest.skip("Cannot use function_calling without schema")
@@ -306,7 +306,7 @@ def test_chat_databricks_with_structured_output(schema, method):
 
 def test_chat_databricks_runnable_sequence():
     chat = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
     )
@@ -342,7 +342,7 @@ def multiply(a: int, b: int) -> int:
 
 def test_chat_databricks_agent_executor():
     model = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
     )
@@ -364,7 +364,7 @@ def test_chat_databricks_agent_executor():
 
 def test_chat_databricks_langgraph():
     model = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
     )
@@ -381,7 +381,7 @@ def test_chat_databricks_langgraph_with_memory():
 
     tools = [add, multiply]
     llm = ChatDatabricks(
-        endpoint=_TEST_ENDPOINT,
+        model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
     )

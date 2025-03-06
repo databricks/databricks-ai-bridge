@@ -1,0 +1,28 @@
+/** css/yourtheme.css **/
+
+/* for Alabaster */
+@import 'theme.css'; /* for the Read the Docs theme */
+
+/* SVG logo sizing */
+a > img.logo {
+    width: 100% !important;
+}
+
+/* Uniform background */
+.wy-nav-side, .wy-menu-vertical a:hover  {
+    background-color: #fcfcfc;
+}
+
+.wy-menu-vertical a {
+    color: #404040;
+}
+
+div.wy-side-nav-search > .version {
+    color: #0a0a0a;
+}
+
+@media screen and (min-width: 1100px) {
+    .wy-nav-content-wrap {
+        background: #fcfcfc;
+    }
+}

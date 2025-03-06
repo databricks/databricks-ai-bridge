@@ -48,14 +48,14 @@ def test_query_genie_as_agent(MockGenie):
     mock_genie.ask_question.return_value = GenieResponse(result="It is sunny.")
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie")
+    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
     assert result == expected_message
 
     # Test the case when genie_response is empty
     mock_genie.ask_question.return_value = GenieResponse(result=None)
-    result = _query_genie_as_agent(input_data, "space-id", "Genie")
+    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
 
     expected_message = {"messages": [AIMessage(content="")]}
     assert result == expected_message
@@ -70,3 +70,17 @@ def test_create_genie_agent(MockRunnableLambda):
 
     # Check that the partial function is created with the correct arguments
     MockRunnableLambda.assert_called()
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_query_genie_with_client(mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"conversation_id": "123", "message_id": "abc"},
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "It is sunny."}}]},
+    ]
+
+    input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
+    result = _query_genie_as_agent(input_data, "space-id", "Genie", mock_workspace_client)
+
+    expected_message = {"messages": [AIMessage(content="It is sunny.")]}
+    assert result == expected_message

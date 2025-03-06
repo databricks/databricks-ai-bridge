@@ -38,7 +38,25 @@ from tests.utils.chat_models import (  # noqa: F401
 def test_dict(llm: ChatDatabricks) -> None:
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
-    assert d["endpoint"] == "databricks-meta-llama-3-3-70b-instruct"
+    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
+    assert d["target_uri"] == "databricks"
+
+
+def test_dict_with_endpoint() -> None:
+    llm = ChatDatabricks(endpoint="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
+    d = llm.dict()
+    assert d["_type"] == "chat-databricks"
+    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
+    assert d["target_uri"] == "databricks"
+
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct",
+        endpoint="databricks-meta-llama-3-3-70b-instruct",
+        target_uri="databricks",
+    )
+    d = llm.dict()
+    assert d["_type"] == "chat-databricks"
+    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
     assert d["target_uri"] == "databricks"
 
 

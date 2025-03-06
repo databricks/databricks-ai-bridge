@@ -1,45 +1,10 @@
 """Test Together AI embeddings."""
 
-from typing import Any, Dict, Generator
-from unittest import mock
-
-import pytest
+from databricks_ai_bridge.test_utils.vector_search import DEFAULT_VECTOR_DIMENSION
 from mlflow.deployments import BaseDeploymentClient  # type: ignore[import-untyped]
 
 from databricks_langchain import DatabricksEmbeddings
-
-
-def _mock_embeddings(endpoint: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "object": "list",
-        "data": [
-            {
-                "object": "embedding",
-                "embedding": list(range(1536)),
-                "index": 0,
-            }
-            for _ in inputs["input"]
-        ],
-        "model": "text-embedding-3-small",
-        "usage": {"prompt_tokens": 8, "total_tokens": 8},
-    }
-
-
-@pytest.fixture
-def mock_client() -> Generator:
-    client = mock.MagicMock()
-    client.predict.side_effect = _mock_embeddings
-    with mock.patch("mlflow.deployments.get_deploy_client", return_value=client):
-        yield client
-
-
-@pytest.fixture
-def embeddings() -> DatabricksEmbeddings:
-    return DatabricksEmbeddings(
-        endpoint="text-embedding-3-small",
-        documents_params={"fruit": "apple"},
-        query_params={"fruit": "banana"},
-    )
+from tests.utils.vector_search import embeddings, mock_client  # noqa: F401
 
 
 def test_embed_documents(
@@ -48,7 +13,7 @@ def test_embed_documents(
     documents = ["foo"] * 30
     output = embeddings.embed_documents(documents)
     assert len(output) == 30
-    assert len(output[0]) == 1536
+    assert len(output[0]) == DEFAULT_VECTOR_DIMENSION
     assert mock_client.predict.call_count == 2
     assert all(
         call_arg[1]["inputs"]["fruit"] == "apple"
@@ -59,7 +24,7 @@ def test_embed_documents(
 def test_embed_query(mock_client: BaseDeploymentClient, embeddings: DatabricksEmbeddings) -> None:
     query = "foo bar"
     output = embeddings.embed_query(query)
-    assert len(output) == 1536
+    assert len(output) == DEFAULT_VECTOR_DIMENSION
     mock_client.predict.assert_called_once()
     assert mock_client.predict.call_args[1] == {
         "endpoint": "text-embedding-3-small",

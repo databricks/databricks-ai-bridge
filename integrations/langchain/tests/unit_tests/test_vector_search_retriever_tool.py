@@ -1,18 +1,35 @@
+import json
 from typing import Any, Dict, List, Optional
 
+import mlflow
 import pytest
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
+    INPUT_TEXTS,
     mock_vs_client,
     mock_workspace_client,
 )
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
+from mlflow.entities import SpanType
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
+)
 
-from databricks_langchain import ChatDatabricks, VectorSearchRetrieverTool
+from databricks_langchain import (
+    ChatDatabricks,
+    VectorSearchRetrieverTool,
+)
 from tests.utils.chat_models import llm, mock_client  # noqa: F401
-from tests.utils.vector_search import EMBEDDING_MODEL
+from tests.utils.vector_search import (
+    EMBEDDING_MODEL,
+    embeddings,  # noqa: F401
+)
+from tests.utils.vector_search import (
+    mock_client as mock_embeddings_client,  # noqa: F401
+)
 
 
 def init_vector_search_tool(
@@ -103,3 +120,39 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
         "The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
     )
+
+
+@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
+@pytest.mark.parametrize("tool_name", [None, "test_tool"])
+def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
+    vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
+    vector_search_tool._run("Databricks Agent Framework")
+    trace = mlflow.get_last_active_trace()
+    spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
+    assert len(spans) == 1
+    inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
+    assert inputs["query"] == "Databricks Agent Framework"
+    outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
+    assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+
+
+@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
+def test_vector_search_retriever_tool_resources(
+    mock_embeddings_client,
+    embeddings,
+    index_name: str,
+) -> None:
+    text_column = "text"
+    if index_name == DELTA_SYNC_INDEX:
+        embeddings = None
+        text_column = None
+
+    vector_search_tool = VectorSearchRetrieverTool(
+        index_name=index_name, embedding=embeddings, text_column=text_column
+    )
+    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
+        [DatabricksServingEndpoint(endpoint_name=embeddings.endpoint)] if embeddings else []
+    )
+    assert [res.to_dict() for res in vector_search_tool.resources] == [
+        res.to_dict() for res in expected_resources
+    ]

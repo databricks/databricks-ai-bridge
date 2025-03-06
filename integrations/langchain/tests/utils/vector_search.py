@@ -1,7 +1,11 @@
-from typing import List
+from typing import Any, Dict, Generator, List
+from unittest import mock
 
+import pytest
 from databricks_ai_bridge.test_utils.vector_search import DEFAULT_VECTOR_DIMENSION
 from langchain_core.embeddings import Embeddings
+
+from databricks_langchain import DatabricksEmbeddings
 
 
 class FakeEmbeddings(Embeddings):
@@ -23,3 +27,36 @@ class FakeEmbeddings(Embeddings):
 
 
 EMBEDDING_MODEL = FakeEmbeddings()
+
+
+def _mock_embeddings(endpoint: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "object": "embedding",
+                "embedding": list(range(DEFAULT_VECTOR_DIMENSION)),
+                "index": 0,
+            }
+            for _ in inputs["input"]
+        ],
+        "model": "text-embedding-3-small",
+        "usage": {"prompt_tokens": 8, "total_tokens": 8},
+    }
+
+
+@pytest.fixture
+def mock_client() -> Generator:
+    client = mock.MagicMock()
+    client.predict.side_effect = _mock_embeddings
+    with mock.patch("mlflow.deployments.get_deploy_client", return_value=client):
+        yield client
+
+
+@pytest.fixture
+def embeddings() -> DatabricksEmbeddings:
+    return DatabricksEmbeddings(
+        endpoint="text-embedding-3-small",
+        documents_params={"fruit": "apple"},
+        query_params={"fruit": "banana"},
+    )
