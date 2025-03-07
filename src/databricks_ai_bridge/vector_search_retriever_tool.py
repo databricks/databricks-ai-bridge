@@ -66,7 +66,6 @@ class VectorSearchRetrieverToolMixin(BaseModel):
 
     @validator("tool_name")
     def validate_tool_name(cls, tool_name):
-        # Only validate if a tool_name is provided
         if tool_name is not None:
             pattern = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
             if not pattern.fullmatch(tool_name):
