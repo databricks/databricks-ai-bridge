@@ -200,7 +200,7 @@ def test_open_ai_client_from_env(
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
-def test_vector_search_retriever_long_idex_name_rewrite(
+def test_vector_search_retriever_index_name_rewrite(
     index_name: str,
 ) -> None:
     if index_name == DELTA_SYNC_INDEX:
@@ -220,27 +220,9 @@ def test_vector_search_retriever_long_idex_name_rewrite(
     assert vector_search_tool.tool["function"]["name"] == index_name.replace(".", "__")
 
 
-@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
-@pytest.mark.parametrize(
-    "tool_name", [None, "really_really_really_long_tool_name_that_should_be_truncated_to_64_chars"]
-)
-def test_vector_search_retriever_long_tool_name(
+@pytest.mark.parametrize("index_name", "catalog.schema.really_really_really_long_tool_name_that_should_be_truncated_to_64_chars")
+def test_vector_search_retriever_long_index_name(
     index_name: str,
-    tool_name: Optional[str],
 ) -> None:
-    if index_name == DELTA_SYNC_INDEX:
-        self_managed_embeddings_test = SelfManagedEmbeddingsTest()
-    else:
-        from openai import OpenAI
-
-        self_managed_embeddings_test = SelfManagedEmbeddingsTest(
-            "text", "text-embedding-3-small", OpenAI(api_key="your-api-key")
-        )
-
-    vector_search_tool = init_vector_search_tool(
-        index_name=index_name,
-        tool_name=tool_name,
-        text_column=self_managed_embeddings_test.text_column,
-        embedding_model_name=self_managed_embeddings_test.embedding_model_name,
-    )
+    vector_search_tool = init_vector_search_tool(index_name=index_name)
     assert len(vector_search_tool.tool["function"]["name"]) <= 64
