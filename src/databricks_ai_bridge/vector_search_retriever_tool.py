@@ -8,7 +8,7 @@ from mlflow.models.resources import (
     DatabricksVectorSearchIndex,
     Resource,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 import re
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
