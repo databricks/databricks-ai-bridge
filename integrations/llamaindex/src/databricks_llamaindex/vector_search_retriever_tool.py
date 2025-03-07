@@ -96,7 +96,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
 
         # Create tool metadata
         metadata = ToolMetadata(
-            name=self.tool_name or self.index_name,
+            name=self._get_tool_name(),
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
             fn_schema=VectorSearchRetrieverToolInput,

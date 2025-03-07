@@ -117,7 +117,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         self.tool = pydantic_function_tool(
             VectorSearchRetrieverToolInput,
-            name=get_tool_name(),
+            name=tool_name,
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
