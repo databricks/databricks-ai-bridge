@@ -1,6 +1,11 @@
-from databricks_openai import *
+from databricks_openai import (
+    DatabricksFunctionClient,
+    UCFunctionToolkit,
+    VectorSearchRetrieverTool,
+    set_uc_function_client,
+)
 
-assert VectorSearchRetrieverTool
-assert UCFunctionToolkit
 assert DatabricksFunctionClient
+assert UCFunctionToolkit
+assert VectorSearchRetrieverTool
 assert set_uc_function_client
