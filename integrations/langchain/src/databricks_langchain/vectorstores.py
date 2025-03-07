@@ -17,6 +17,7 @@ from typing import (
 )
 
 import numpy as np
+from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
     parse_vector_search_response,
@@ -223,6 +224,7 @@ class DatabricksVectorSearch(VectorStore):
         embedding: Optional[Embeddings] = None,
         text_column: Optional[str] = None,
         columns: Optional[List[str]] = None,
+        workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
     ):
         if not (isinstance(index_name, str) and _INDEX_NAME_PATTERN.match(index_name)):
@@ -235,6 +237,7 @@ class DatabricksVectorSearch(VectorStore):
             from databricks.vector_search.client import (  # type: ignore[import]
                 VectorSearchClient,
             )
+            from databricks.vector_search.utils import CredentialStrategy
         except ImportError as e:
             raise ImportError(
                 "Could not import databricks-vectorsearch python package. "
@@ -244,6 +247,13 @@ class DatabricksVectorSearch(VectorStore):
         try:
             client_args = client_args or {}
             client_args.setdefault("disable_notice", True)
+            if (
+                workspace_client is not None
+                and workspace_client.config.auth_type == "model_serving_user_credentials"
+            ):
+                client_args.setdefault(
+                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                )
             self.index = VectorSearchClient(**client_args).get_index(
                 endpoint_name=endpoint, index_name=index_name
             )
