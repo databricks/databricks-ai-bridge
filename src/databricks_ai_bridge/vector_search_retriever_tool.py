@@ -67,7 +67,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     @validator("tool_name")
     def validate_tool_name(cls, tool_name):
         if tool_name is not None:
-            pattern = re.compile(r"^[a-zA-Z0-9_-]$")
+            pattern = re.compile(r"^[a-zA-Z0-9_-]+$")
             if not pattern.fullmatch(tool_name):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]$'")
         return tool_name
