@@ -1,6 +1,6 @@
+import logging
 import re
 from functools import wraps
-import logging
 from typing import Any, Dict, List, Optional
 
 import mlflow
@@ -89,7 +89,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             if embedding_endpoint
             else []
         )
-    
+
     def _get_tool_name(self) -> str:
         tool_name = self.tool_name or self.index_name.replace(".", "__")
 

@@ -112,7 +112,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 "The embedding model name is required for non-Databricks-managed "
                 "embeddings Vector Search indexes in order to generate embeddings for retrieval queries."
             )
-        
+
         tool_name = self._get_tool_name()
 
         self.tool = pydantic_function_tool(
