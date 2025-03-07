@@ -120,6 +120,8 @@ def mock_vs_client() -> Generator:
         index_name: str = None,  # type: ignore
     ) -> MagicMock:
         index = MagicMock(spec=VectorSearchIndex)
+        if index_name not in INDEX_DETAILS:
+            index_name = DIRECT_ACCESS_INDEX
         index.describe.return_value = INDEX_DETAILS[index_name]
         index.similarity_search.return_value = EXAMPLE_SEARCH_RESPONSE
         return index
