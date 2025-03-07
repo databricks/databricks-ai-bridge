@@ -220,7 +220,10 @@ def test_vector_search_retriever_index_name_rewrite(
     assert vector_search_tool.tool["function"]["name"] == index_name.replace(".", "__")
 
 
-@pytest.mark.parametrize("index_name", ["catalog.schema.really_really_really_long_tool_name_that_should_be_truncated_to_64_chars"])
+@pytest.mark.parametrize(
+    "index_name",
+    ["catalog.schema.really_really_really_long_tool_name_that_should_be_truncated_to_64_chars"],
+)
 def test_vector_search_retriever_long_index_name(
     index_name: str,
 ) -> None:
