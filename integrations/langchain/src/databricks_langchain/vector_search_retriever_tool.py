@@ -45,6 +45,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             "embedding": self.embedding,
             "text_column": self.text_column,
             "columns": self.columns,
+            "workspace_client": self.workspace_client,
         }
         dbvs = DatabricksVectorSearch(**kwargs)
         self._vector_store = dbvs

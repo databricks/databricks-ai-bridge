@@ -91,13 +91,22 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         from databricks.vector_search.client import (
             VectorSearchClient,  # import here so we can mock in tests
         )
+        from databricks.vector_search.utils import CredentialStrategy
 
         splits = self.index_name.split(".")
         if len(splits) != 3:
             raise ValueError(
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
-        self._index = VectorSearchClient(disable_notice=True).get_index(index_name=self.index_name)
+        credential_strategy = None
+        if (
+            self.workspace_client is not None
+            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
+        ):
+            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+        self._index = VectorSearchClient(
+            disable_notice=True, credential_strategy=credential_strategy
+        ).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(
@@ -121,12 +130,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
-
         try:
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.errors.platform import ResourceDoesNotExist
 
-            WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
+            if self.workspace_client is not None:
+                self.workspace_client.serving_endpoints.get(self.embedding_model_name)
+            else:
+                WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
             self.resources = self._get_resources(self.index_name, self.embedding_model_name)
         except ResourceDoesNotExist:
             self.resources = self._get_resources(self.index_name, None)

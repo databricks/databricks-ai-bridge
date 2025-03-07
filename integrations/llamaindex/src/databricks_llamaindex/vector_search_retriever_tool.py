@@ -42,8 +42,17 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
 
         # Initialize private attributes
         from databricks.vector_search.client import VectorSearchClient
+        from databricks.vector_search.utils import CredentialStrategy
 
-        self._index = VectorSearchClient().get_index(index_name=self.index_name)
+        credential_strategy = None
+        if (
+            self.workspace_client is not None
+            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
+        ):
+            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+        self._index = VectorSearchClient(
+            disable_notice=True, credential_strategy=credential_strategy
+        ).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
 
         # Validate columns

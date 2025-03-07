@@ -1,10 +1,14 @@
 import json
 import os
+import threading
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
 import pytest
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.credentials_provider import ModelServingUserCredentials
+from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
@@ -229,3 +233,55 @@ def test_vector_search_retriever_long_index_name(
 ) -> None:
     vector_search_tool = init_vector_search_tool(index_name=index_name)
     assert len(vector_search_tool.tool["function"]["name"]) <= 64
+
+
+def test_vector_search_client_model_serving_environment():
+    with patch("os.path.isfile", return_value=True):
+        # Simulate Model Serving Environment
+        os.environ["IS_IN_DB_MODEL_SERVING_ENV"] = "true"
+
+        # Fake credential token
+        current_thread = threading.current_thread()
+        thread_data = current_thread.__dict__
+        thread_data["invokers_token"] = "abc"
+
+        w = WorkspaceClient(
+            host="testDogfod.com", credentials_strategy=ModelServingUserCredentials()
+        )
+
+        with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+            with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+                vsTool = VectorSearchRetrieverTool(
+                    index_name="catalog.schema.my_index_name",
+                    text_column="abc",
+                    embedding_model_name="text-embedding-3-small",
+                    tool_description="desc",
+                    workspace_client=w,
+                )
+                mockVSClient.assert_called_once_with(
+                    disable_notice=True,
+                    credential_strategy=CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS,
+                )
+
+
+def test_vector_search_client_non_model_serving_environment():
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        vsTool = VectorSearchRetrieverTool(
+            index_name="catalog.schema.my_index_name",
+            text_column="abc",
+            embedding_model_name="text-embedding-3-small",
+            tool_description="desc",
+        )
+        mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+
+    w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+            vsTool = VectorSearchRetrieverTool(
+                index_name="catalog.schema.my_index_name",
+                text_column="abc",
+                embedding_model_name="text-embedding-3-small",
+                tool_description="desc",
+                workspace_client=w,
+            )
+            mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)

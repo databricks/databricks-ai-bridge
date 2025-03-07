@@ -4,13 +4,14 @@ from functools import wraps
 from typing import Any, Dict, List, Optional
 
 import mlflow
+from databricks.sdk import WorkspaceClient
 from mlflow.entities import SpanType
 from mlflow.models.resources import (
     DatabricksServingEndpoint,
     DatabricksVectorSearchIndex,
     Resource,
 )
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, validator
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
@@ -49,6 +50,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     implementations should follow.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )
@@ -64,6 +66,10 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     tool_description: Optional[str] = Field(None, description="A description of the tool.")
     resources: Optional[List[dict]] = Field(
         None, description="Resources required to log a model that uses this tool."
+    )
+    workspace_client: Optional[WorkspaceClient] = Field(
+        default=None,
+        description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient",
     )
 
     @validator("tool_name")
