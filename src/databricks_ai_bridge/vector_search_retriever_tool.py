@@ -1,3 +1,4 @@
+import re
 from functools import wraps
 from typing import Any, Dict, List, Optional
 
@@ -9,7 +10,6 @@ from mlflow.models.resources import (
     Resource,
 )
 from pydantic import BaseModel, Field, validator
-import re
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
