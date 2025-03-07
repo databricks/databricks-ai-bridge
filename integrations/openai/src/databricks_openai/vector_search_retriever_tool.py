@@ -112,17 +112,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 "The embedding model name is required for non-Databricks-managed "
                 "embeddings Vector Search indexes in order to generate embeddings for retrieval queries."
             )
-
-        # OpenAI tool names must match the pattern '^[a-zA-Z0-9_-]+$'."
-        # The '.' from the index name are not allowed
-        def get_tool_name():
-            tool_name = self.tool_name or self.index_name.replace(".", "__")
-            if len(tool_name) > 64:
-                _logger.warning(
-                    f"Tool name {tool_name} is too long, truncating to 64 characters {tool_name[-64:]}."
-                )
-                return tool_name[-64:]
-            return tool_name
+        
+        tool_name = self._get_tool_name()
 
         self.tool = pydantic_function_tool(
             VectorSearchRetrieverToolInput,

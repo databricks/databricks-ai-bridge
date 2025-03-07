@@ -49,7 +49,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         dbvs = DatabricksVectorSearch(**kwargs)
         self._vector_store = dbvs
 
-        self.name = self.tool_name or self._index_name_to_tool_name(self.index_name)
+        self.name = self._get_tool_name()
         self.description = self.tool_description or self._get_default_tool_description(
             IndexDetails(dbvs.index)
         )

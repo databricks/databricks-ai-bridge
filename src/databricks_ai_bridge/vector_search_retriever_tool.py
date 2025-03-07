@@ -1,5 +1,6 @@
 import re
 from functools import wraps
+import logging
 from typing import Any, Dict, List, Optional
 
 import mlflow
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field, validator
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
+_logger = logging.getLogger(__name__)
 DEFAULT_TOOL_DESCRIPTION = "A vector search-based retrieval tool for querying indexed embeddings."
 
 
@@ -87,6 +89,15 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             if embedding_endpoint
             else []
         )
+    
+    def _get_tool_name(self) -> str:
+        tool_name = self.tool_name or self.index_name.replace(".", "__")
 
-    def _index_name_to_tool_name(self, index_name) -> str:
-        return str(index_name).replace(".", "__")
+        # Tool names must match the pattern '^[a-zA-Z0-9_-]+$'."
+        # The '.' from the index name are not allowed
+        if len(tool_name) > 64:
+            _logger.warning(
+                f"Tool name {tool_name} is too long, truncating to 64 characters {tool_name[-64:]}."
+            )
+            return tool_name[-64:]
+        return tool_name
