@@ -45,7 +45,10 @@ def test_create_message(genie, mock_workspace_client):
 
 def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "Result"}}]},
+        {
+            "status": "COMPLETED",
+            "attachments": [{"attachment_id": "123", "text": {"content": "Result"}}],
+        },
     ]
     genie_result = genie.poll_for_result("123", "456")
     assert genie_result.result == "Result"
@@ -53,33 +56,16 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "COMPLETED", "attachments": [{"query": {"query": "SELECT *"}}]},
         {
-            "statement_response": {
-                "status": {"state": "SUCCEEDED"},
-                "manifest": {"schema": {"columns": []}},
-                "result": {
-                    "data_typed_array": [],
-                },
-            }
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == pd.DataFrame().to_markdown()
-
-
-def test_poll_for_result_executing_query(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {
-            "status": "EXECUTING_QUERY",
-            "attachments": [{"query": {"query": "SELECT *"}}],
+            "status": "COMPLETED",
+            "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
         },
         {
             "statement_response": {
                 "status": {"state": "SUCCEEDED"},
                 "manifest": {"schema": {"columns": []}},
                 "result": {
-                    "data_typed_array": [],
+                    "data_array": [],
                 },
             }
         },
@@ -119,28 +105,12 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
         patch("time.sleep", return_value=None),
     ):
         mock_workspace_client.genie._api.do.side_effect = [
-            {
-                "status": "EXECUTING_QUERY",
-                "attachments": [{"query": {"query": "SELECT *"}}],
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
         ]
         result = genie.poll_for_result("123", "456")
-        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
+        assert result.result == "Genie query timed out after 2 iterations of 5 seconds"
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -170,7 +140,7 @@ def test_parse_query_result_with_data():
             }
         },
         "result": {
-            "data_typed_array": [
+            "data_array": [
                 {
                     "values": [
                         {"str": "1"},
@@ -211,7 +181,7 @@ def test_parse_query_result_with_null_values():
             }
         },
         "result": {
-            "data_typed_array": [
+            "data_array": [
                 {
                     "values": [
                         {"str": "1"},
@@ -248,7 +218,7 @@ def test_parse_query_result_trims_large_data():
                 }
             },
             "result": {
-                "data_typed_array": [
+                "data_array": [
                     {
                         "values": [
                             {"str": "1"},
@@ -338,3 +308,22 @@ def test_parse_query_result_trims_large_data():
             ).to_markdown()
         )
         assert _count_tokens(result) <= 100
+
+
+def test_poll_query_results_max_iterations(genie, mock_workspace_client):
+    # patch MAX_ITERATIONS to 2 for this test and sleep to avoid delays
+    with (
+        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
+        patch("time.sleep", return_value=None),
+    ):
+        mock_workspace_client.genie._api.do.side_effect = [
+            {
+                "status": "SUCCEEDED",
+                "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
+            },
+            {"statement_response": {"status": {"state": "PENDING"}}},
+            {"statement_response": {"status": {"state": "PENDING"}}},
+            {"statement_response": {"status": {"state": "PENDING"}}},
+        ]
+        result = genie.poll_for_result("123", "456")
+        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
