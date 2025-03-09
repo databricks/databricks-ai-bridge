@@ -40,6 +40,9 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
         row = []
         for column, value in zip(columns, item):
             type_name = column["type_name"]
+            if value is None:
+                row.append(None)
+                continue
 
             if type_name in ["INT", "LONG", "SHORT", "BYTE"]:
                 row.append(int(value))

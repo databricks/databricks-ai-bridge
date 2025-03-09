@@ -141,20 +141,8 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                {
-                    "values": [
-                        {"str": "1"},
-                        {"str": "Alice"},
-                        {"str": "2023-10-01T00:00:00Z"},
-                    ]
-                },
-                {
-                    "values": [
-                        {"str": "2"},
-                        {"str": "Bob"},
-                        {"str": "2023-10-02T00:00:00Z"},
-                    ]
-                },
+                ["1", "Alice", "2023-10-01T00:00:00Z"],
+                ["2", "Bob", "2023-10-02T00:00:00Z"],
             ]
         },
     }
@@ -182,14 +170,8 @@ def test_parse_query_result_with_null_values():
         },
         "result": {
             "data_array": [
-                {
-                    "values": [
-                        {"str": "1"},
-                        {"str": None},
-                        {"str": "2023-10-01T00:00:00Z"},
-                    ]
-                },
-                {"values": [{"str": "2"}, {"str": "Bob"}, {"str": None}]},
+                ["1", None, "2023-10-01T00:00:00Z"],
+                ["2", "Bob", None],
             ]
         },
     }
@@ -219,76 +201,16 @@ def test_parse_query_result_trims_large_data():
             },
             "result": {
                 "data_array": [
-                    {
-                        "values": [
-                            {"str": "1"},
-                            {"str": "Alice"},
-                            {"str": "2023-10-01T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "2"},
-                            {"str": "Bob"},
-                            {"str": "2023-10-02T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "3"},
-                            {"str": "Charlie"},
-                            {"str": "2023-10-03T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "4"},
-                            {"str": "David"},
-                            {"str": "2023-10-04T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "5"},
-                            {"str": "Eve"},
-                            {"str": "2023-10-05T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "6"},
-                            {"str": "Frank"},
-                            {"str": "2023-10-06T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "7"},
-                            {"str": "Grace"},
-                            {"str": "2023-10-07T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "8"},
-                            {"str": "Hank"},
-                            {"str": "2023-10-08T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "9"},
-                            {"str": "Ivy"},
-                            {"str": "2023-10-09T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "10"},
-                            {"str": "Jack"},
-                            {"str": "2023-10-10T00:00:00Z"},
-                        ]
-                    },
+                    ["1", "Alice", "2023-10-01T00:00:00Z"],
+                    ["2", "Bob", "2023-10-02T00:00:00Z"],
+                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
+                    ["4", "David", "2023-10-04T00:00:00Z"],
+                    ["5", "Eve", "2023-10-05T00:00:00Z"],
+                    ["6", "Frank", "2023-10-06T00:00:00Z"],
+                    ["7", "Grace", "2023-10-07T00:00:00Z"],
+                    ["8", "Hank", "2023-10-08T00:00:00Z"],
+                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
+                    ["10", "Jack", "2023-10-10T00:00:00Z"],
                 ]
             },
         }
@@ -318,7 +240,7 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
     ):
         mock_workspace_client.genie._api.do.side_effect = [
             {
-                "status": "SUCCEEDED",
+                "status": "COMPLETED",
                 "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
             },
             {"statement_response": {"status": {"state": "PENDING"}}},
