@@ -45,7 +45,10 @@ def test_create_message(genie, mock_workspace_client):
 
 def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "Result"}}]},
+        {
+            "status": "COMPLETED",
+            "attachments": [{"attachment_id": "123", "text": {"content": "Result"}}],
+        },
     ]
     genie_result = genie.poll_for_result("123", "456")
     assert genie_result.result == "Result"
@@ -53,33 +56,16 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "COMPLETED", "attachments": [{"query": {"query": "SELECT *"}}]},
         {
-            "statement_response": {
-                "status": {"state": "SUCCEEDED"},
-                "manifest": {"schema": {"columns": []}},
-                "result": {
-                    "data_typed_array": [],
-                },
-            }
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == pd.DataFrame().to_markdown()
-
-
-def test_poll_for_result_executing_query(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {
-            "status": "EXECUTING_QUERY",
-            "attachments": [{"query": {"query": "SELECT *"}}],
+            "status": "COMPLETED",
+            "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
         },
         {
             "statement_response": {
                 "status": {"state": "SUCCEEDED"},
                 "manifest": {"schema": {"columns": []}},
                 "result": {
-                    "data_typed_array": [],
+                    "data_array": [],
                 },
             }
         },
@@ -119,28 +105,12 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
         patch("time.sleep", return_value=None),
     ):
         mock_workspace_client.genie._api.do.side_effect = [
-            {
-                "status": "EXECUTING_QUERY",
-                "attachments": [{"query": {"query": "SELECT *"}}],
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
-            {
-                "statement_response": {
-                    "status": {"state": "RUNNING"},
-                }
-            },
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
+            {"status": "EXECUTING_QUERY"},
         ]
         result = genie.poll_for_result("123", "456")
-        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
+        assert result.result == "Genie query timed out after 2 iterations of 5 seconds"
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -170,21 +140,9 @@ def test_parse_query_result_with_data():
             }
         },
         "result": {
-            "data_typed_array": [
-                {
-                    "values": [
-                        {"str": "1"},
-                        {"str": "Alice"},
-                        {"str": "2023-10-01T00:00:00Z"},
-                    ]
-                },
-                {
-                    "values": [
-                        {"str": "2"},
-                        {"str": "Bob"},
-                        {"str": "2023-10-02T00:00:00Z"},
-                    ]
-                },
+            "data_array": [
+                ["1", "Alice", "2023-10-01T00:00:00Z"],
+                ["2", "Bob", "2023-10-02T00:00:00Z"],
             ]
         },
     }
@@ -211,15 +169,9 @@ def test_parse_query_result_with_null_values():
             }
         },
         "result": {
-            "data_typed_array": [
-                {
-                    "values": [
-                        {"str": "1"},
-                        {"str": None},
-                        {"str": "2023-10-01T00:00:00Z"},
-                    ]
-                },
-                {"values": [{"str": "2"}, {"str": "Bob"}, {"str": None}]},
+            "data_array": [
+                ["1", None, "2023-10-01T00:00:00Z"],
+                ["2", "Bob", None],
             ]
         },
     }
@@ -248,77 +200,17 @@ def test_parse_query_result_trims_large_data():
                 }
             },
             "result": {
-                "data_typed_array": [
-                    {
-                        "values": [
-                            {"str": "1"},
-                            {"str": "Alice"},
-                            {"str": "2023-10-01T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "2"},
-                            {"str": "Bob"},
-                            {"str": "2023-10-02T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "3"},
-                            {"str": "Charlie"},
-                            {"str": "2023-10-03T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "4"},
-                            {"str": "David"},
-                            {"str": "2023-10-04T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "5"},
-                            {"str": "Eve"},
-                            {"str": "2023-10-05T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "6"},
-                            {"str": "Frank"},
-                            {"str": "2023-10-06T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "7"},
-                            {"str": "Grace"},
-                            {"str": "2023-10-07T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "8"},
-                            {"str": "Hank"},
-                            {"str": "2023-10-08T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "9"},
-                            {"str": "Ivy"},
-                            {"str": "2023-10-09T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"str": "10"},
-                            {"str": "Jack"},
-                            {"str": "2023-10-10T00:00:00Z"},
-                        ]
-                    },
+                "data_array": [
+                    ["1", "Alice", "2023-10-01T00:00:00Z"],
+                    ["2", "Bob", "2023-10-02T00:00:00Z"],
+                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
+                    ["4", "David", "2023-10-04T00:00:00Z"],
+                    ["5", "Eve", "2023-10-05T00:00:00Z"],
+                    ["6", "Frank", "2023-10-06T00:00:00Z"],
+                    ["7", "Grace", "2023-10-07T00:00:00Z"],
+                    ["8", "Hank", "2023-10-08T00:00:00Z"],
+                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
+                    ["10", "Jack", "2023-10-10T00:00:00Z"],
                 ]
             },
         }
@@ -338,3 +230,22 @@ def test_parse_query_result_trims_large_data():
             ).to_markdown()
         )
         assert _count_tokens(result) <= 100
+
+
+def test_poll_query_results_max_iterations(genie, mock_workspace_client):
+    # patch MAX_ITERATIONS to 2 for this test and sleep to avoid delays
+    with (
+        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
+        patch("time.sleep", return_value=None),
+    ):
+        mock_workspace_client.genie._api.do.side_effect = [
+            {
+                "status": "COMPLETED",
+                "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
+            },
+            {"statement_response": {"status": {"state": "PENDING"}}},
+            {"statement_response": {"status": {"state": "PENDING"}}},
+            {"statement_response": {"status": {"state": "PENDING"}}},
+        ]
+        result = genie.poll_for_result("123", "456")
+        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"

@@ -28,34 +28,34 @@ class GenieResponse:
 
 @mlflow.trace(span_type="PARSER")
 def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
-    columns = resp["manifest"]["schema"]["columns"]
-    header = [str(col["name"]) for col in columns]
-    rows = []
     output = resp["result"]
     if not output:
         return "EMPTY"
 
-    for item in resp["result"]["data_typed_array"]:
+    columns = resp["manifest"]["schema"]["columns"]
+    header = [str(col["name"]) for col in columns]
+    rows = []
+
+    for item in output["data_array"]:
         row = []
-        for column, value in zip(columns, item["values"]):
+        for column, value in zip(columns, item):
             type_name = column["type_name"]
-            str_value = value.get("str", None)
-            if str_value is None:
+            if value is None:
                 row.append(None)
                 continue
 
             if type_name in ["INT", "LONG", "SHORT", "BYTE"]:
-                row.append(int(str_value))
+                row.append(int(value))
             elif type_name in ["FLOAT", "DOUBLE", "DECIMAL"]:
-                row.append(float(str_value))
+                row.append(float(value))
             elif type_name == "BOOLEAN":
-                row.append(str_value.lower() == "true")
+                row.append(value.lower() == "true")
             elif type_name == "DATE" or type_name == "TIMESTAMP":
-                row.append(datetime.strptime(str_value[:10], "%Y-%m-%d").date())
+                row.append(datetime.strptime(value[:10], "%Y-%m-%d").date())
             elif type_name == "BINARY":
-                row.append(bytes(str_value, "utf-8"))
+                row.append(bytes(value, "utf-8"))
             else:
-                row.append(str_value)
+                row.append(value)
 
         rows.append(row)
 
@@ -103,27 +103,29 @@ class Genie:
     @mlflow.trace()
     def poll_for_result(self, conversation_id, message_id):
         @mlflow.trace()
-        def poll_query_results(query, description):
+        def poll_query_results(attachment_id, query_str, description):
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
                 iteration_count += 1
                 resp = self.genie._api.do(
                     "GET",
-                    f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/query-result",
+                    f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result",
                     headers=self.headers,
                 )["statement_response"]
                 state = resp["status"]["state"]
                 if state == "SUCCEEDED":
                     result = _parse_query_result(resp)
-                    return GenieResponse(result, query, description)
+                    return GenieResponse(result, query_str, description)
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
                     time.sleep(5)
                 else:
-                    return GenieResponse(f"No query result: {resp['state']}", query, description)
+                    return GenieResponse(
+                        f"No query result: {resp['state']}", query_str, description
+                    )
             return GenieResponse(
                 f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
-                query,
+                query_str,
                 description,
             )
 
@@ -137,12 +139,14 @@ class Genie:
                     f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
                     headers=self.headers,
                 )
-                if resp["status"] in {"EXECUTING_QUERY", "COMPLETED"}:
-                    query_attachment = next((r for r in resp["attachments"] if "query" in r), None)
-                    if query_attachment:
-                        query = query_attachment["query"]["query"]
-                        description = query_attachment["query"].get("description", "")
-                        return poll_query_results(query, description)
+                if resp["status"] == "COMPLETED":
+                    attachment = next((r for r in resp["attachments"] if "query" in r), None)
+                    if attachment:
+                        query_obj = attachment["query"]
+                        description = query_obj.get("description", "")
+                        query_str = query_obj.get("query", "")
+                        attachment_id = attachment["attachment_id"]
+                        return poll_query_results(attachment_id, query_str, description)
                     if resp["status"] == "COMPLETED":
                         text_content = next(r for r in resp["attachments"] if "text" in r)["text"][
                             "content"
@@ -154,13 +158,12 @@ class Genie:
                     return GenieResponse(
                         result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
                     )
+                # includes EXECUTING_QUERY, Genie can retry after this status
                 else:
                     logging.debug(f"Waiting...: {resp['status']}")
                     time.sleep(5)
             return GenieResponse(
-                f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds",
-                query,
-                description,
+                f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds"
             )
 
         return poll_result()
