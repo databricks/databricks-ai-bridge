@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.4.0 (2025-03-10)
+## databrick-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
 
 ### Highlights
 - Support On Behalf Of User rights with genie and VectorSearch Tool
