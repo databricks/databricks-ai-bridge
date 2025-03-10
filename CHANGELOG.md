@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.4.0 (2025-03-10)
+
+### Highlights
+- Support On Behalf Of User rights with genie and VectorSearch Tool
+- Update Genie Integration for PuPr APIs
+
+### Improvements
+- Improve `VectorSearchRetrieverTool` by disabling unwanted notices
+- Updated documentation for installing integration packages
+- Update inline unitycatalog imports
+- Better validation of VectorSearchRetrieverTools
+
 ## 0.3.0 (2025-02-07)
 
 ### Highlights
