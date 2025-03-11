@@ -1,4 +1,3 @@
-from datetime import datetime
 from unittest.mock import patch
 
 import pandas as pd
@@ -151,7 +150,7 @@ def test_parse_query_result_with_data():
         {
             "id": [1, 2],
             "name": ["Alice", "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), datetime(2023, 10, 2).date()],
+            "created_at": ["2023-10-01T00:00:00Z", "2023-10-02T00:00:00Z"],
         }
     )
     assert result == expected_df.to_markdown()
@@ -180,7 +179,7 @@ def test_parse_query_result_with_null_values():
         {
             "id": [1, 2],
             "name": [None, "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), None],
+            "created_at": ["2023-10-01T00:00:00Z", None],
         }
     )
     assert result == expected_df.to_markdown()
@@ -219,12 +218,11 @@ def test_parse_query_result_trims_large_data():
             result
             == pd.DataFrame(
                 {
-                    "id": [1, 2, 3],
-                    "name": ["Alice", "Bob", "Charlie"],
+                    "id": [1, 2],
+                    "name": ["Alice", "Bob"],
                     "created_at": [
-                        datetime(2023, 10, 1).date(),
-                        datetime(2023, 10, 2).date(),
-                        datetime(2023, 10, 3).date(),
+                        "2023-10-01T00:00:00Z",
+                        "2023-10-02T00:00:00Z",
                     ],
                 }
             ).to_markdown()

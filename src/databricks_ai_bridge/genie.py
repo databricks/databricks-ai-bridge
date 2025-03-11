@@ -1,7 +1,6 @@
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional, Union
 
 import mlflow
@@ -36,34 +35,17 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     header = [str(col["name"]) for col in columns]
     rows = []
 
+    # array of array of strings https://openapi.dev.databricks.com/api/workspace/genie/getmessageattachmentqueryresult#statement_response-result-data_array
+    # per https://github.com/databricks-eng/universe/pull/909250#discussion_r1957024118, all values are strings
     for item in output["data_array"]:
-        row = []
-        for column, value in zip(columns, item):
-            type_name = column["type_name"]
-            if value is None:
-                row.append(None)
-                continue
-
-            if type_name in ["INT", "LONG", "SHORT", "BYTE"]:
-                row.append(int(value))
-            elif type_name in ["FLOAT", "DOUBLE", "DECIMAL"]:
-                row.append(float(value))
-            elif type_name == "BOOLEAN":
-                row.append(value.lower() == "true")
-            elif type_name == "DATE" or type_name == "TIMESTAMP":
-                row.append(datetime.strptime(value[:10], "%Y-%m-%d").date())
-            elif type_name == "BINARY":
-                row.append(bytes(value, "utf-8"))
-            else:
-                row.append(value)
-
-        rows.append(row)
+        rows.append(item)
 
     query_result = pd.DataFrame(rows, columns=header).to_markdown()
 
     tokens_used = _count_tokens(query_result)
     while tokens_used > MAX_TOKENS_OF_DATA:
         rows.pop()
+        print(rows, header)
         query_result = pd.DataFrame(rows, columns=header).to_markdown()
         tokens_used = _count_tokens(query_result)
 
