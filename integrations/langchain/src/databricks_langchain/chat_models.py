@@ -307,8 +307,12 @@ class ChatDatabricks(BaseChatModel):
             )
             for choice in response["choices"]
         ]
-        usage = response.get("usage", {})
-        return ChatResult(generations=generations, llm_output=usage)
+        llm_output = {
+            "token_usage": response.get("usage", {}),
+            "model_name": response.get("model", self.model),
+            "system_fingerprint": response.get("system_fingerprint", ""),
+        }
+        return ChatResult(generations=generations, llm_output=llm_output)
 
     def _stream(
         self,
