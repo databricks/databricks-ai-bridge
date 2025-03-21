@@ -214,7 +214,7 @@ class ChatDatabricks(BaseChatModel):
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
-    temperature: float
+    temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
     """The number of completion choices to generate."""
