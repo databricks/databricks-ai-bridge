@@ -257,14 +257,18 @@ class ChatDatabricks(BaseChatModel):
 
     @property
     def _default_params(self) -> Dict[str, Any]:
-        params: Dict[str, Any] = {
-            "target_uri": self.target_uri,
-            "model": self.model,
+        exclude_if_none = {
             "temperature": self.temperature,
             "n": self.n,
             "stop": self.stop,
             "max_tokens": self.max_tokens,
             "extra_params": self.extra_params,
+        }
+
+        params = {
+            "model": self.model,
+            "target_uri": self.target_uri,
+            **{k: v for k, v in exclude_if_none.items() if v is not None},
         }
         return params
 
@@ -287,11 +291,12 @@ class ChatDatabricks(BaseChatModel):
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
             "messages": [_convert_message_to_dict(msg) for msg in messages],
-            "temperature": self.temperature,
             "n": self.n,
             **self.extra_params,  # type: ignore
             **kwargs,
         }
+        if self.temperature is not None:
+            data["temperature"] = self.temperature
         if stop := self.stop or stop:
             data["stop"] = stop
         if self.max_tokens is not None:
