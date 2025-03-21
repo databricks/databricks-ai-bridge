@@ -215,6 +215,7 @@ class ChatDatabricks(BaseChatModel):
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
     temperature: Optional[float] = 0.0
+    # TODO: bbqiu log a deprecated warning when temperature is not set
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
     """The number of completion choices to generate."""
