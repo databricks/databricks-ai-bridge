@@ -214,7 +214,7 @@ class ChatDatabricks(BaseChatModel):
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
-    temperature: float = 0.0
+    temperature: float
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
     """The number of completion choices to generate."""
@@ -620,7 +620,7 @@ class ChatDatabricks(BaseChatModel):
         if method == "function_calling":
             if schema is None:
                 raise ValueError(
-                    "schema must be specified when method is 'function_calling'. " "Received None."
+                    "schema must be specified when method is 'function_calling'. Received None."
                 )
             tool_name = convert_to_openai_tool(schema)["function"]["name"]
             llm = self.bind_tools([schema], tool_choice=tool_name)
@@ -641,7 +641,7 @@ class ChatDatabricks(BaseChatModel):
         elif method == "json_schema":
             if schema is None:
                 raise ValueError(
-                    "schema must be specified when method is 'json_schema'. " "Received None."
+                    "schema must be specified when method is 'json_schema'. Received None."
                 )
             response_format = {
                 "type": "json_schema",
