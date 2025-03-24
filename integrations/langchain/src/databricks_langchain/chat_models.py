@@ -253,6 +253,14 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
+        if "temperature" not in kwargs:
+            warnings.warn(
+                "Currently, temperature defaults to 0.0 if not specified. "
+                "In the next release, temperature will need to be explicitly set. "
+                "Please update your code to specify a temperature value.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.client = get_deployment_client(self.target_uri)
         self.extra_params = self.extra_params or {}
 
