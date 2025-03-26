@@ -256,7 +256,8 @@ class ChatDatabricks(BaseChatModel):
             warnings.warn(
                 "Currently, temperature defaults to 0.0 if not specified. "
                 "In the next release, temperature will need to be explicitly set. "
-                "Please update your code to specify a temperature value.",
+                "Please update your code to specify a temperature value. "
+                "Note: If you are using an o1 or o3 model, you need to set temperature=None.",
                 DeprecationWarning,
                 stacklevel=2,
             )
