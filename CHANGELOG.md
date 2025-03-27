@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## databrick-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
+
+### Improvements
+- Fix Databricks Connect and Tabulate Dependencies
+- Remove default temperature for ChatDatabricks
+
 ## databrick-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
 
 ### Highlights
