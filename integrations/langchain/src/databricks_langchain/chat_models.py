@@ -214,7 +214,7 @@ class ChatDatabricks(BaseChatModel):
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: str = "databricks"
     """The target URI to use. Defaults to ``databricks``."""
-    temperature: Optional[float] = 0.0
+    temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
     """The number of completion choices to generate."""
@@ -252,15 +252,6 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        if "temperature" not in kwargs:
-            warnings.warn(
-                "Currently, temperature defaults to 0.0 if not specified. "
-                "In the next release, temperature will need to be explicitly set. "
-                "Please update your code to specify a temperature value. "
-                "Note: If you are using an o1 or o3 model, you need to set temperature=None.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         self.client = get_deployment_client(self.target_uri)
         self.extra_params = self.extra_params or {}
 
