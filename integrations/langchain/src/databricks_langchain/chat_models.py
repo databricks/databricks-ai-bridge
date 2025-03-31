@@ -302,7 +302,6 @@ class ChatDatabricks(BaseChatModel):
         if self.max_tokens is not None:
             data["max_tokens"] = self.max_tokens
 
-        print("request data", data)
         return data
 
     def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
