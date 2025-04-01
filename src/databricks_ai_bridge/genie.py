@@ -75,6 +75,7 @@ class Genie:
         self.space_id = space_id
         workspace_client = client or WorkspaceClient()
         self.genie = workspace_client.genie
+        self.description = self.genie.get_space(space_id).description
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
