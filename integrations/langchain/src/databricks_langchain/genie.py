@@ -19,12 +19,8 @@ def _concat_messages_array(messages):
 
 
 @mlflow.trace()
-def _query_genie_as_agent(
-    input, genie_space_id, genie_agent_name, client: Optional[WorkspaceClient] = None
-):
+def _query_genie_as_agent(input, genie: Genie, genie_agent_name):
     from langchain_core.messages import AIMessage
-
-    genie = Genie(genie_space_id, client=client)
 
     message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
 
@@ -44,7 +40,6 @@ def _query_genie_as_agent(
 def GenieAgent(
     genie_space_id,
     genie_agent_name: str = "Genie",
-    description: str = "",
     client: Optional["WorkspaceClient"] = None,
 ):
     """Create a genie agent that can be used to query the API"""
@@ -55,13 +50,15 @@ def GenieAgent(
 
     from langchain_core.runnables import RunnableLambda
 
+    genie = Genie(genie_space_id, client=client)
+
     # Create a partial function with the genie_space_id pre-filled
     partial_genie_agent = partial(
         _query_genie_as_agent,
-        genie_space_id=genie_space_id,
+        genie=genie,
         genie_agent_name=genie_agent_name,
-        client=client,
     )
 
-    # Use the partial function in the RunnableLambda
-    return RunnableLambda(partial_genie_agent)
+    runnable = RunnableLambda(partial_genie_agent)
+    runnable.description = genie.description
+    return runnable

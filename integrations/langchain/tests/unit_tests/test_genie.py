@@ -1,7 +1,8 @@
 from unittest.mock import patch
 
 import pytest
-from databricks_ai_bridge.genie import GenieResponse
+from databricks.sdk.service.dashboards import GenieSpace
+from databricks_ai_bridge.genie import Genie
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
@@ -42,46 +43,59 @@ def test_concat_messages_array():
     assert result == expected
 
 
-@patch("databricks_langchain.genie.Genie")
-def test_query_genie_as_agent(MockGenie):
-    # Mock the Genie class and its response
-    mock_genie = MockGenie.return_value
-    mock_genie.ask_question.return_value = GenieResponse(result="It is sunny.")
+@patch("databricks.sdk.WorkspaceClient")
+def test_query_genie_as_agent(MockWorkspaceClient):
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+    MockWorkspaceClient.genie._api.do.side_effect = [
+        {"conversation_id": "123", "message_id": "abc"},
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "It is sunny."}}]},
+    ]
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
+    genie = Genie("space-id", MockWorkspaceClient)
+    result = _query_genie_as_agent(input_data, genie, "Genie")
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
     assert result == expected_message
 
-    # Test the case when genie_response is empty
-    mock_genie.ask_question.return_value = GenieResponse(result=None)
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
 
-    expected_message = {"messages": [AIMessage(content="")]}
-    assert result == expected_message
-
-
+@patch("databricks.sdk.WorkspaceClient")
 @patch("langchain_core.runnables.RunnableLambda")
-def test_create_genie_agent(MockRunnableLambda):
-    mock_runnable = MockRunnableLambda.return_value
+def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
 
-    agent = GenieAgent("space-id", "Genie")
-    assert agent == mock_runnable
+    agent = GenieAgent("space-id", "Genie", MockWorkspaceClient)
+    assert agent.description == "description"
 
-    # Check that the partial function is created with the correct arguments
-    MockRunnableLambda.assert_called()
+    MockWorkspaceClient.genie.get_space.assert_called_once()
+    assert agent == MockRunnableLambda.return_value
 
 
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_with_client(mock_workspace_client):
+    mock_workspace_client.genie.get_space.return_value = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
     mock_workspace_client.genie._api.do.side_effect = [
         {"conversation_id": "123", "message_id": "abc"},
         {"status": "COMPLETED", "attachments": [{"text": {"content": "It is sunny."}}]},
     ]
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", mock_workspace_client)
+    genie = Genie("space-id", mock_workspace_client)
+    result = _query_genie_as_agent(input_data, genie, "Genie")
 
     expected_message = {"messages": [AIMessage(content="It is sunny.")]}
     assert result == expected_message
