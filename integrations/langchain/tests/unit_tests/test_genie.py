@@ -67,7 +67,6 @@ def test_query_genie_as_agent(MockWorkspaceClient):
 @patch("databricks.sdk.WorkspaceClient")
 @patch("langchain_core.runnables.RunnableLambda")
 def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
-    # Create a mock space with a description
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -75,16 +74,11 @@ def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
     )
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
-    # Create the agent
     agent = GenieAgent("space-id", "Genie", MockWorkspaceClient)
     assert agent.description == "description"
 
-    # Verify RunnableLambda was created with correct arguments
     MockWorkspaceClient.genie.get_space.assert_called_once()
-    mock_runnable = MockRunnableLambda.return_value
-
-    # Verify the agent is the same as the mock runnable
-    assert agent == mock_runnable
+    assert agent == MockRunnableLambda.return_value
 
 
 @patch("databricks.sdk.WorkspaceClient")
