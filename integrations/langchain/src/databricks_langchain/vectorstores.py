@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from functools import partial
 from typing import (
@@ -35,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 _DIRECT_ACCESS_ONLY_MSG = "`%s` is only supported for direct-access index."
 _NON_MANAGED_EMB_ONLY_MSG = "`%s` is not supported for index with Databricks-managed embeddings."
-_INDEX_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
 
 
 class DatabricksVectorSearch(VectorStore):
@@ -227,10 +225,9 @@ class DatabricksVectorSearch(VectorStore):
         workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
     ):
-        if not (isinstance(index_name, str) and _INDEX_NAME_PATTERN.match(index_name)):
+        if not isinstance(index_name, str):
             raise ValueError(
-                "The `index_name` parameter must be a string in the format "
-                f"'catalog.schema.index'. Received: {index_name}"
+                f"The `index_name` parameter must be a string, but got {type(index_name).__name__}."
             )
 
         try:
