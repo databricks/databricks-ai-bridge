@@ -52,7 +52,9 @@ def test_init_with_endpoint_name() -> None:
     assert vectorsearch.index.describe() == INDEX_DETAILS[DELTA_SYNC_INDEX]
 
 
-@pytest.mark.parametrize("index_name", [None, 123, MagicMock(spec=VectorSearchIndex)])
+@pytest.mark.parametrize(
+    "index_name", [None, 123, "invalid.name", MagicMock(spec=VectorSearchIndex)]
+)
 def test_init_fail_invalid_index_name(index_name) -> None:
     with pytest.raises(ValueError, match="The `index_name` parameter must be"):
         DatabricksVectorSearch(index_name=index_name)

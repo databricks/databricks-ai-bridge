@@ -230,6 +230,11 @@ class DatabricksVectorSearch(VectorStore):
                 f"The `index_name` parameter must be a string, but got {type(index_name).__name__}."
             )
 
+        if index_name.count(".") != 2:
+            raise ValueError(
+                f"The `index_name` parameter must be in the format 'catalog.schema.name', but got {index_name!r}."
+            )
+
         try:
             from databricks.vector_search.client import (  # type: ignore[import]
                 VectorSearchClient,
