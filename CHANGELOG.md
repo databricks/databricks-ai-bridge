@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## databricks-langchain 0.4.2, (2025-04-08)
+
+### Bugfix
+- Improve validation for `index_name` for vectorIndex
+
 ## databrick-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
 
 ### Improvements
@@ -43,6 +48,6 @@ Initial version of databricks-ai-bridge and databricks-langchain packages
 Features:
 
 - Support for Databricks AI/BI Genie via the `databricks_langchain.GenieAgent` API in `databricks-langchain`
-- Support for most functionality in the existing `langchain-databricks` under `databricks-langchain`. Specifically, this 
+- Support for most functionality in the existing `langchain-databricks` under `databricks-langchain`. Specifically, this
   release introduces `databricks_langchain.ChatDatabricks`, `databricks_langchain.DatabricksEmbeddings`, and
-  `databricks_langchain.DatabricksVectorSearch` APIs. 
+  `databricks_langchain.DatabricksVectorSearch` APIs.
