@@ -138,7 +138,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 self.workspace_client.serving_endpoints.get(self.embedding_model_name)
             else:
                 WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
-            self.resources = self._get_resources(self.index_name, self.embedding_model_name, self._index_details)
+            self.resources = self._get_resources(
+                self.index_name, self.embedding_model_name, self._index_details
+            )
         except ResourceDoesNotExist:
             self.resources = self._get_resources(self.index_name, None, self._index_details)
 

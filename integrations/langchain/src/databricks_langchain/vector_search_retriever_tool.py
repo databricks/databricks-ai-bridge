@@ -57,7 +57,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         self.resources = self._get_resources(
             self.index_name,
             (self.embedding.endpoint if isinstance(self.embedding, DatabricksEmbeddings) else None),
-            IndexDetails(dbvs.index)
+            IndexDetails(dbvs.index),
         )
 
         return self
