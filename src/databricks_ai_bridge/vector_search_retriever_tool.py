@@ -54,22 +54,38 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )
-    num_results: int = Field(5, description="The number of results to return.")
+    num_results: int = Field(
+        5, description="The number of results to return."
+    )
     columns: Optional[List[str]] = Field(
         None, description="Columns to return when doing the search."
     )
-    filters: Optional[Dict[str, Any]] = Field(None, description="Filters to apply to the search.")
+    filters: Optional[Dict[str, Any]] = Field(
+        None, description="Filters to apply to the search."
+    )
     query_type: str = Field(
         "ANN", description="The type of this query. Supported values are 'ANN' and 'HYBRID'."
     )
-    tool_name: Optional[str] = Field(None, description="The name of the retrieval tool.")
-    tool_description: Optional[str] = Field(None, description="A description of the tool.")
+    tool_name: Optional[str] = Field(
+        None, description="The name of the retrieval tool."
+    )
+    tool_description: Optional[str] = Field(
+        None, description="A description of the tool."
+    )
     resources: Optional[List[dict]] = Field(
         None, description="Resources required to log a model that uses this tool."
     )
     workspace_client: Optional[WorkspaceClient] = Field(
-        default=None,
-        description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient",
+        None,
+        description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient"
+    )
+    doc_uri: Optional[str] = Field(
+        None,
+        description="The URI for the document, used for rendering a link in the UI."
+    )
+    chunk_id: Optional[str] = Field(
+        None,
+        description="Identifies the chunk that the document is a part of. This is used by some evaluation metrics."
     )
 
     @validator("tool_name")
