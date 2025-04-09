@@ -145,7 +145,7 @@ def test_vector_search_retriever_tool_init(
     assert isinstance(vector_search_tool, BaseModel)
 
     expected_resources = (
-        ([DatabricksVectorSearchIndex(index_name=index_name)])
+        [DatabricksVectorSearchIndex(index_name=index_name)]
         + (
             [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
             if self_managed_embeddings_test.embedding_model_name

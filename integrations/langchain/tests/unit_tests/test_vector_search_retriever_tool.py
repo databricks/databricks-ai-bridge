@@ -159,7 +159,7 @@ def test_vector_search_retriever_tool_resources(
         index_name=index_name, embedding=embeddings, text_column=text_column
     )
     expected_resources = (
-        ([DatabricksVectorSearchIndex(index_name=index_name)])
+        [DatabricksVectorSearchIndex(index_name=index_name)]
         + ([DatabricksServingEndpoint(endpoint_name=embeddings.endpoint)] if embeddings else [])
         + (
             [
