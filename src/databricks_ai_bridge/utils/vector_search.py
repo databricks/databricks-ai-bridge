@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,10 +61,32 @@ class IndexDetails:
         return self.is_delta_sync_index() and self.embedding_source_column.get("name") is not None
 
 
+@dataclass
+class RetrieverSchema:
+    text_column: str = None
+    doc_uri: Optional[str] = None
+    chunk_id: Optional[str] = None
+    other_columns: Optional[List[str]] = None
+
+
+def get_metadata(columns: List[str], result: List[], doc_uri, chunk_id, other_columns, ignore_cols):
+    metadata = {}
+    for col, value in zip(columns[:-1], result[:-1]):
+        if col == doc_uri:
+            metadata["doc_uri"] = value
+        elif col == chunk_id:
+            metadata["chunk_id"] = value
+        elif other_columns and col in other_columns:
+            metadata[col] = value
+        elif col not in ignore_cols:
+            metadata[col] = value
+    return metadata
+
+
 def parse_vector_search_response(
     search_resp: Dict,
     index_details: IndexDetails,
-    text_column: str,
+    retriever_schema: RetrieverSchema,
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
 ) -> List[Tuple[Dict, float]]:
@@ -73,20 +96,29 @@ def parse_vector_search_response(
     """
     if ignore_cols is None:
         ignore_cols = []
+    
+    primary_key = index_details.primary_key
+    text_column = retriever_schema.text_column
+    doc_uri = retriever_schema.doc_uri
+    chunk_id = retriever_schema.chunk_id
+    other_columns = retriever_schema.other_columns
+
+    ignore_cols.extend([primary_key, text_column])
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
     docs_with_score = []
+    
     for result in search_resp.get("result", dict()).get("data_array", []):
-        doc_id = result[columns.index(index_details.primary_key)]
-        text_content = result[columns.index(text_column)]
-        ignore_cols = [index_details.primary_key, text_column] + ignore_cols
-        metadata = {
-            col: value for col, value in zip(columns[:-1], result[:-1]) if col not in ignore_cols
-        }
-        metadata[index_details.primary_key] = doc_id
+        page_content = result[columns.index(text_column)]
+        
+        metadata = get_metadata(columns, result, doc_uri, chunk_id, other_columns, ignore_cols)
+        if doc_uri != primary_key:
+            metadata[primary_key] = result[columns.index(primary_key)]
+        
         score = result[-1]
-        doc = document_class(page_content=text_content, metadata=metadata)
+        doc = document_class(page_content=page_content, metadata=metadata)
         docs_with_score.append((doc, score))
+    
     return docs_with_score
 
 
