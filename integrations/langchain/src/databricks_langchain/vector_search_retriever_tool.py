@@ -44,6 +44,8 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             "index_name": self.index_name,
             "embedding": self.embedding,
             "text_column": self.text_column,
+            "doc_uri": self.doc_uri,
+            "chunk_id": self.chunk_id,
             "columns": self.columns,
             "workspace_client": self.workspace_client,
         }

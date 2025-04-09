@@ -76,8 +76,9 @@ def get_metadata(columns: List[str], result: List[], doc_uri, chunk_id, other_co
             metadata["doc_uri"] = value
         elif col == chunk_id:
             metadata["chunk_id"] = value
-        elif other_columns and col in other_columns:
-            metadata[col] = value
+        elif other_columns:
+            if col in other_columns:
+                metadata[col] = value
         elif col not in ignore_cols:
             metadata[col] = value
     return metadata
