@@ -69,24 +69,25 @@ class RetrieverSchema:
     other_columns: Optional[List[str]] = None
 
 
-def get_metadata(columns: List[str], result: List[], doc_uri, chunk_id, other_columns, ignore_cols):
+def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore_cols):
     metadata = {}
     for col, value in zip(columns[:-1], result[:-1]):
-        if col == doc_uri:
+        if col == retriever_schema.doc_uri:
             metadata["doc_uri"] = value
-        elif col == chunk_id:
+        elif col == retriever_schema.chunk_id:
             metadata["chunk_id"] = value
-        elif other_columns:
-            if col in other_columns:
+        elif col in ignore_cols:  # ignore_cols has precedence over other_columns
+            continue
+        elif retriever_schema.other_columns:
+            if col in retriever_schema.other_columns:
                 metadata[col] = value
-        elif col not in ignore_cols:
+        else:
             metadata[col] = value
     return metadata
 
 
 def parse_vector_search_response(
     search_resp: Dict,
-    index_details: IndexDetails,
     retriever_schema: RetrieverSchema,
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
@@ -97,29 +98,22 @@ def parse_vector_search_response(
     """
     if ignore_cols is None:
         ignore_cols = []
-    
-    primary_key = index_details.primary_key
-    text_column = retriever_schema.text_column
-    doc_uri = retriever_schema.doc_uri
-    chunk_id = retriever_schema.chunk_id
-    other_columns = retriever_schema.other_columns
 
-    ignore_cols.extend([primary_key, text_column])
+    text_column = retriever_schema.text_column
+    ignore_cols.extend([text_column])
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
     docs_with_score = []
-    
+
     for result in search_resp.get("result", dict()).get("data_array", []):
         page_content = result[columns.index(text_column)]
-        
-        metadata = get_metadata(columns, result, doc_uri, chunk_id, other_columns, ignore_cols)
-        if doc_uri != primary_key:
-            metadata[primary_key] = result[columns.index(primary_key)]
-        
+
+        metadata = get_metadata(columns, result, retriever_schema, ignore_cols)
+
         score = result[-1]
         doc = document_class(page_content=page_content, metadata=metadata)
         docs_with_score.append((doc, score))
-    
+
     return docs_with_score
 
 

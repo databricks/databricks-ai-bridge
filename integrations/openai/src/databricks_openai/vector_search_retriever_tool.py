@@ -117,7 +117,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             text_column=self.text_column,
             doc_uri=self.doc_uri,
             chunk_id=self.chunk_id,
-            other_columns=self.columns
+            other_columns=self.columns,
         )
 
         if (
@@ -206,7 +206,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         )
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,
-            index_details=self._index_details,
             retriever_schema=self.retriever_schema,
             document_class=dict,
         )

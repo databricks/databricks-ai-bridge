@@ -65,7 +65,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             text_column=self.text_column,
             doc_uri=self.doc_uri,
             chunk_id=self.chunk_id,
-            other_columns=self.columns
+            other_columns=self.columns,
         )
 
         # Define the similarity search function
@@ -107,7 +107,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 query_type=self.query_type,
             )
             return parse_vector_search_response(
-                search_resp, self._index_details, self.retriever_schema, document_class=dict
+                search_resp, self.retriever_schema, document_class=dict
             )
 
         # Create tool metadata

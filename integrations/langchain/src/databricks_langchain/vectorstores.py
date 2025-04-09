@@ -283,10 +283,7 @@ class DatabricksVectorSearch(VectorStore):
         )
         self._primary_key = self._index_details.primary_key
         self._retriever_schema = RetrieverSchema(
-            text_column=self._text_column,
-            doc_uri=doc_uri,
-            chunk_id=chunk_id,
-            other_columns=columns
+            text_column=self._text_column, doc_uri=doc_uri, chunk_id=chunk_id, other_columns=columns
         )
 
     @property
@@ -467,7 +464,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type=query_type,
         )
         return parse_vector_search_response(
-            search_resp, self._index_details, self._retriever_schema, document_class=Document
+            search_resp, self._retriever_schema, document_class=Document
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -579,7 +576,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type=query_type,
         )
         return parse_vector_search_response(
-            search_resp, self._index_details, self._retriever_schema, document_class=Document
+            search_resp, self._retriever_schema, document_class=Document
         )
 
     def max_marginal_relevance_search(
@@ -715,7 +712,6 @@ class DatabricksVectorSearch(VectorStore):
         ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
         candidates = parse_vector_search_response(
             search_resp,
-            self._index_details,
             self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
