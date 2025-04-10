@@ -112,7 +112,7 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
     assert vector_search_tool.metadata.name != ""
     assert vector_search_tool.metadata.description != ""
     assert vector_search_tool.metadata.fn_schema == VectorSearchRetrieverToolInput
-    assert vector_search_tool.metadata.name == index_name
+    assert vector_search_tool.metadata.name == index_name.replace(".", "__")
     assert (
         "A vector search-based retrieval tool for querying indexed embeddings."
         in vector_search_tool.metadata.description
