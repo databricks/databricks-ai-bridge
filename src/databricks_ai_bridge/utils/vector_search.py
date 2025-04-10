@@ -138,7 +138,7 @@ def validate_and_get_text_column(text_column: Optional[str], index_details: Inde
 
 
 def validate_and_get_return_columns(
-    columns: List[str], text_column: str, index_details: IndexDetails
+    columns: List[str], text_column: str, index_details: IndexDetails, doc_uri: str, primary_key: str
 ) -> List[str]:
     """
     Get a list of columns to retrieve from the index.
@@ -149,6 +149,10 @@ def validate_and_get_return_columns(
         columns.append(index_details.primary_key)
     if text_column and text_column not in columns:
         columns.append(text_column)
+    if doc_uri and doc_uri not in columns:
+        columns.append(doc_uri)
+    if primary_key and primary_key not in columns:
+        columns.append(primary_key)
 
     # Validate specified columns are in the index
     if index_details.is_direct_access_index() and (index_schema := index_details.schema):

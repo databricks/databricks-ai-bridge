@@ -279,7 +279,7 @@ class DatabricksVectorSearch(VectorStore):
         self._embeddings = embedding
         self._text_column = validate_and_get_text_column(text_column, self._index_details)
         self._columns = validate_and_get_return_columns(
-            columns or [], self._text_column, self._index_details
+            columns or [], self._text_column, self._index_details, doc_uri, primary_key
         )
         self._primary_key = self._index_details.primary_key
         self._retriever_schema = RetrieverSchema(
