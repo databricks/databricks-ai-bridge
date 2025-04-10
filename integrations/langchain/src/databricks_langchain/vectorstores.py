@@ -283,7 +283,10 @@ class DatabricksVectorSearch(VectorStore):
         )
         self._primary_key = self._index_details.primary_key
         self._retriever_schema = RetrieverSchema(
-            text_column=self._text_column, doc_uri=doc_uri, primary_key=primary_key, other_columns=columns
+            text_column=self._text_column,
+            doc_uri=doc_uri,
+            primary_key=primary_key,
+            other_columns=columns,
         )
 
     @property
