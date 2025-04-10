@@ -78,7 +78,7 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
             metadata["chunk_id"] = value
         elif col in ignore_cols:  # ignore_cols has precedence over other_columns
             continue
-        elif retriever_schema.other_columns:
+        elif retriever_schema.other_columns is not None:
             if col in retriever_schema.other_columns:
                 metadata[col] = value
         else:

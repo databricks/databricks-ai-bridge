@@ -61,7 +61,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
         self.columns = validate_and_get_return_columns(
             self.columns or [], self.text_column, self._index_details
         )
-        self.retriever_schema = RetrieverSchema(
+        self._retriever_schema = RetrieverSchema(
             text_column=self.text_column,
             doc_uri=self.doc_uri,
             chunk_id=self.chunk_id,
@@ -107,7 +107,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 query_type=self.query_type,
             )
             return parse_vector_search_response(
-                search_resp, self.retriever_schema, document_class=dict
+                search_resp, self._retriever_schema, document_class=dict
             )
 
         # Create tool metadata
