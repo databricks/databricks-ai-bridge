@@ -1,5 +1,4 @@
 import pytest
-from langchain_core.documents import Document
 
 from databricks_ai_bridge.utils.vector_search import RetrieverSchema, parse_vector_search_response
 
@@ -73,96 +72,67 @@ def construct_docs_with_score(
     ]
 
 
-def generate_parse_vector_search_response_test_cases():
-    test_cases = []
-    for document_class in [dict, Document]:
-        test_cases.extend(
-            [
-                (  # Simple test case, only setting text_column
-                    document_class,
-                    RetrieverSchema(text_column="column_1"),
-                    None,
-                    construct_docs_with_score(
-                        page_content="column_1", column_1=None, document_class=document_class
-                    ),
-                ),
-                (  # Ensure that "ignore_cols" works
-                    document_class,
-                    RetrieverSchema(text_column="column_1"),
-                    ["column_3"],
-                    construct_docs_with_score(
-                        page_content="column_1",
-                        column_1=None,
-                        column_3=None,
-                        document_class=document_class,
-                    ),
-                ),
-                (  # ignore_cols takes precedence over other_cols
-                    document_class,
-                    RetrieverSchema(text_column="column_1", other_columns=["column_3", "column_4"]),
-                    ["column_3"],
-                    construct_docs_with_score(
-                        page_content="column_1",
-                        column_1=None,
-                        column_2=None,
-                        column_3=None,
-                        document_class=document_class,
-                    ),
-                ),
-                (  # page_content takes precedence over other_cols (shouldn't be included in metadata)
-                    document_class,
-                    RetrieverSchema(text_column="column_1", other_columns=["column_1"]),
-                    None,
-                    construct_docs_with_score(
-                        page_content="column_1",
-                        column_1=None,
-                        column_2=None,
-                        column_3=None,
-                        column_4=None,
-                        document_class=document_class,
-                    ),
-                ),
-                (  # Test mapping doc_uri and chunk_id
-                    document_class,
-                    RetrieverSchema(
-                        text_column="column_1", doc_uri="column_2", chunk_id="column_3"
-                    ),
-                    None,
-                    construct_docs_with_score(
-                        page_content="column_1",
-                        column_1=None,
-                        column_2="doc_uri",
-                        column_3="chunk_id",
-                        document_class=document_class,
-                    ),
-                ),
-                (  # doc_uri and chunk_id takes precendence over ignore_cols
-                    document_class,
-                    RetrieverSchema(
-                        text_column="column_2", doc_uri="column_1", chunk_id="column_3"
-                    ),
-                    ["column_1", "column_3"],
-                    construct_docs_with_score(
-                        page_content="column_2",
-                        column_1="doc_uri",
-                        column_2=None,
-                        column_3="chunk_id",
-                        document_class=document_class,
-                    ),
-                ),
-            ]
-        )
-    return test_cases
-
-
 @pytest.mark.parametrize(
     "document_class,retriever_schema,ignore_cols,docs_with_score",
-    generate_parse_vector_search_response_test_cases(),
+    [
+        (  # Simple test case, only setting text_column
+            RetrieverSchema(text_column="column_1"),
+            None,
+            construct_docs_with_score(page_content="column_1", column_1=None),
+        ),
+        (  # Ensure that "ignore_cols" works
+            RetrieverSchema(text_column="column_1"),
+            ["column_3"],
+            construct_docs_with_score(
+                page_content="column_1",
+                column_1=None,
+                column_3=None,
+            ),
+        ),
+        (  # ignore_cols takes precedence over other_cols
+            RetrieverSchema(text_column="column_1", other_columns=["column_3", "column_4"]),
+            ["column_3"],
+            construct_docs_with_score(
+                page_content="column_1",
+                column_1=None,
+                column_2=None,
+                column_3=None,
+            ),
+        ),
+        (  # page_content takes precedence over other_cols (shouldn't be included in metadata)
+            RetrieverSchema(text_column="column_1", other_columns=["column_1"]),
+            None,
+            construct_docs_with_score(
+                page_content="column_1",
+                column_1=None,
+                column_2=None,
+                column_3=None,
+                column_4=None,
+            ),
+        ),
+        (  # Test mapping doc_uri and chunk_id
+            RetrieverSchema(text_column="column_1", doc_uri="column_2", chunk_id="column_3"),
+            None,
+            construct_docs_with_score(
+                page_content="column_1",
+                column_1=None,
+                column_2="doc_uri",
+                column_3="chunk_id",
+            ),
+        ),
+        (  # doc_uri and chunk_id takes precendence over ignore_cols
+            RetrieverSchema(text_column="column_2", doc_uri="column_1", chunk_id="column_3"),
+            ["column_1", "column_3"],
+            construct_docs_with_score(
+                page_content="column_2",
+                column_1="doc_uri",
+                column_2=None,
+                column_3="chunk_id",
+            ),
+        ),
+    ],
 )
-def test_parse_vector_search_response(
-    retriever_schema, ignore_cols, document_class, docs_with_score
-):
+def test_parse_vector_search_response(retriever_schema, ignore_cols, docs_with_score):
     assert (
-        parse_vector_search_response(search_resp, retriever_schema, ignore_cols, document_class)
-        == docs_with_score
+        parse_vector_search_response(search_resp, retriever_schema, ignore_cols) == docs_with_score
     )
