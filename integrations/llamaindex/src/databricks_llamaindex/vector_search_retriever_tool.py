@@ -19,6 +19,9 @@ from pydantic import Field, PrivateAttr
 class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
     """Vector search retriever tool implementation."""
 
+    class Config:
+        extra = "allow"  # allow FunctionTool to set unknown attributes
+
     text_column: Optional[str] = Field(
         None,
         description="The name of the text column to use for the embeddings. "
