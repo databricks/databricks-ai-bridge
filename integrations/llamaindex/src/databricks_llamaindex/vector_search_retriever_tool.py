@@ -13,14 +13,14 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.tools import FunctionTool
 from llama_index.core.tools.types import ToolMetadata
-from pydantic import Field, PrivateAttr
+from pydantic import Extra, Field, PrivateAttr
 
 
 class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
     """Vector search retriever tool implementation."""
 
     class Config:
-        extra = "allow"  # allow FunctionTool to set unknown attributes
+        extra = Extra.allow  # allow FunctionTool to set unknown attributes
 
     text_column: Optional[str] = Field(
         None,
