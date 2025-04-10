@@ -76,6 +76,10 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
             metadata["doc_uri"] = value
         elif col == retriever_schema.primary_key:
             metadata["chunk_id"] = value
+        elif col == "doc_uri" and retriever_schema.doc_uri:
+            continue
+        elif col == "chunk_id" and retriever_schema.primary_key:
+            continue
         elif col in ignore_cols:  # ignore_cols has precedence over other_columns
             continue
         elif retriever_schema.other_columns is not None:
