@@ -73,7 +73,7 @@ def construct_docs_with_score(
 
 
 @pytest.mark.parametrize(
-    "document_class,retriever_schema,ignore_cols,docs_with_score",
+    "retriever_schema,ignore_cols,docs_with_score",
     [
         (  # Simple test case, only setting text_column
             RetrieverSchema(text_column="column_1"),
