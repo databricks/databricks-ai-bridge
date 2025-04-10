@@ -91,3 +91,24 @@ jobs:
       - name: Run tests
         run: |
           pytest integrations/openai/tests/unit_tests
+
+  llamaindex_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+          pip install integrations/llamaindex[dev]
+      - name: Run tests
+        run: |
+          pytest integrations/llamaindex/tests/unit_tests
