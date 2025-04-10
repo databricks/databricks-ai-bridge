@@ -138,7 +138,11 @@ def validate_and_get_text_column(text_column: Optional[str], index_details: Inde
 
 
 def validate_and_get_return_columns(
-    columns: List[str], text_column: str, index_details: IndexDetails, doc_uri: str, primary_key: str
+    columns: List[str],
+    text_column: str,
+    index_details: IndexDetails,
+    doc_uri: str,
+    primary_key: str,
 ) -> List[str]:
     """
     Get a list of columns to retrieve from the index.

@@ -111,7 +111,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(
-            self.columns or [], self.text_column, self._index_details, self.doc_uri, self.primary_key
+            self.columns or [],
+            self.text_column,
+            self._index_details,
+            self.doc_uri,
+            self.primary_key,
         )
         self._retriever_schema = RetrieverSchema(
             text_column=self.text_column,
