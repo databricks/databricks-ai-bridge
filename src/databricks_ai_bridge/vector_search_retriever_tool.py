@@ -74,7 +74,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     doc_uri: Optional[str] = Field(
         None, description="The URI for the document, used for rendering a link in the UI."
     )
-    chunk_id: Optional[str] = Field(
+    primary_key: Optional[str] = Field(
         None,
         description="Identifies the chunk that the document is a part of. This is used by some evaluation metrics.",
     )

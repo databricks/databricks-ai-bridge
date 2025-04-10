@@ -223,7 +223,7 @@ class DatabricksVectorSearch(VectorStore):
         embedding: Optional[Embeddings] = None,
         text_column: Optional[str] = None,
         doc_uri: Optional[str] = None,
-        chunk_id: Optional[str] = None,
+        primary_key: Optional[str] = None,
         columns: Optional[List[str]] = None,
         workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
@@ -283,7 +283,7 @@ class DatabricksVectorSearch(VectorStore):
         )
         self._primary_key = self._index_details.primary_key
         self._retriever_schema = RetrieverSchema(
-            text_column=self._text_column, doc_uri=doc_uri, chunk_id=chunk_id, other_columns=columns
+            text_column=self._text_column, doc_uri=doc_uri, primary_key=primary_key, other_columns=columns
         )
 
     @property

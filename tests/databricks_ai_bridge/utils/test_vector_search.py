@@ -110,8 +110,8 @@ def construct_docs_with_score(
                 column_4=None,
             ),
         ),
-        (  # Test mapping doc_uri and chunk_id
-            RetrieverSchema(text_column="column_1", doc_uri="column_2", chunk_id="column_3"),
+        (  # Test mapping doc_uri and primary_key
+            RetrieverSchema(text_column="column_1", doc_uri="column_2", primary_key="column_3"),
             None,
             construct_docs_with_score(
                 page_content="column_1",
@@ -120,8 +120,8 @@ def construct_docs_with_score(
                 column_3="chunk_id",
             ),
         ),
-        (  # doc_uri and chunk_id takes precendence over ignore_cols
-            RetrieverSchema(text_column="column_2", doc_uri="column_1", chunk_id="column_3"),
+        (  # doc_uri and primary_key takes precendence over ignore_cols
+            RetrieverSchema(text_column="column_2", doc_uri="column_1", primary_key="column_3"),
             ["column_1", "column_3"],
             construct_docs_with_score(
                 page_content="column_2",

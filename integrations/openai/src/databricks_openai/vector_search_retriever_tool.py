@@ -116,7 +116,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._retriever_schema = RetrieverSchema(
             text_column=self.text_column,
             doc_uri=self.doc_uri,
-            chunk_id=self.chunk_id,
+            primary_key=self.primary_key,
             other_columns=self.columns,
         )
 

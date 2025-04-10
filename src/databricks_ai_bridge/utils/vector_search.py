@@ -65,7 +65,7 @@ class IndexDetails:
 class RetrieverSchema:
     text_column: str = None
     doc_uri: Optional[str] = None
-    chunk_id: Optional[str] = None
+    primary_key: Optional[str] = None
     other_columns: Optional[List[str]] = None
 
 
@@ -74,7 +74,7 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
     for col, value in zip(columns[:-1], result[:-1]):
         if col == retriever_schema.doc_uri:
             metadata["doc_uri"] = value
-        elif col == retriever_schema.chunk_id:
+        elif col == retriever_schema.primary_key:
             metadata["chunk_id"] = value
         elif col in ignore_cols:  # ignore_cols has precedence over other_columns
             continue
