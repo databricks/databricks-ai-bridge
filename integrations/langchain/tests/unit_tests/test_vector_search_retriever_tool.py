@@ -124,7 +124,7 @@ def test_vector_search_retriever_tool_combinations() -> None:
     )
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
-    assert all(item.metadata.keys() == {"doc_uri", "chunk_id", "text_vector"} for item in result)
+    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
     assert all(item.page_content for item in result)
 
 
