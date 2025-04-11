@@ -286,7 +286,7 @@ class DatabricksVectorSearch(VectorStore):
             text_column=self._text_column,
             doc_uri=doc_uri,
             primary_key=primary_key,
-            other_columns=columns,
+            other_columns=self._columns,
         )
 
     @property
