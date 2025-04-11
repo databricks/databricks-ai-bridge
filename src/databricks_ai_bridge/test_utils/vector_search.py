@@ -26,6 +26,7 @@ EXAMPLE_SEARCH_RESPONSE = {
             {"name": "id"},
             {"name": "text"},
             {"name": "text_vector"},
+            {"name": "uri"},
             {"name": "score"},
         ],
     },
@@ -33,7 +34,7 @@ EXAMPLE_SEARCH_RESPONSE = {
         "row_count": len(INPUT_TEXTS),
         "data_array": sorted(
             [
-                [str(uuid.uuid4()), s, e, 0.5]
+                [str(uuid.uuid4()), s, e, "doc_uri", 0.5]
                 for s, e in zip(INPUT_TEXTS, embed_documents(INPUT_TEXTS))
             ],
             key=lambda x: x[2],  # type: ignore

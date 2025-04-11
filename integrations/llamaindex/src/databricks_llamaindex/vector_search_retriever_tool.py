@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
+    RetrieverSchema,
     parse_vector_search_response,
     validate_and_get_return_columns,
     validate_and_get_text_column,
@@ -61,7 +62,17 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
         # Validate columns
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(
-            self.columns or [], self.text_column, self._index_details
+            self.columns or [],
+            self.text_column,
+            self._index_details,
+            self.doc_uri,
+            self.primary_key,
+        )
+        self._retriever_schema = RetrieverSchema(
+            text_column=self.text_column,
+            doc_uri=self.doc_uri,
+            primary_key=self.primary_key,
+            other_columns=self.columns,
         )
 
         # Define the similarity search function
@@ -103,7 +114,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 query_type=self.query_type,
             )
             return parse_vector_search_response(
-                search_resp, self._index_details, self.text_column, document_class=dict
+                search_resp, self._retriever_schema, document_class=dict
             )
 
         # Create tool metadata

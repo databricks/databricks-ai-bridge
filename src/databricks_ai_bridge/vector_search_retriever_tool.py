@@ -68,8 +68,15 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         None, description="Resources required to log a model that uses this tool."
     )
     workspace_client: Optional[WorkspaceClient] = Field(
-        default=None,
+        None,
         description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient",
+    )
+    doc_uri: Optional[str] = Field(
+        None, description="The URI for the document, used for rendering a link in the UI."
+    )
+    primary_key: Optional[str] = Field(
+        None,
+        description="Identifies the chunk that the document is a part of. This is used by some evaluation metrics.",
     )
 
     @validator("tool_name")
