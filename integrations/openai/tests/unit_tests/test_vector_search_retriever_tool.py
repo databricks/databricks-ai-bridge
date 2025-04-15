@@ -12,6 +12,7 @@ from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
+    DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
     DIRECT_ACCESS_INDEX,
     INPUT_TEXTS,
     mock_vs_client,
@@ -143,10 +144,22 @@ def test_vector_search_retriever_tool_init(
     )
     assert isinstance(vector_search_tool, BaseModel)
 
-    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
-        [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
-        if self_managed_embeddings_test.embedding_model_name
-        else []
+    expected_resources = (
+        [DatabricksVectorSearchIndex(index_name=index_name)]
+        + (
+            [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
+            if self_managed_embeddings_test.embedding_model_name
+            else []
+        )
+        + (
+            [
+                DatabricksServingEndpoint(
+                    endpoint_name=DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME
+                )
+            ]
+            if index_name == DELTA_SYNC_INDEX
+            else []
+        )
     )
     assert [res.to_dict() for res in vector_search_tool.resources] == [
         res.to_dict() for res in expected_resources

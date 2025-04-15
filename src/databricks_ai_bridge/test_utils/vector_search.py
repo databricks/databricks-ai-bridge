@@ -56,6 +56,8 @@ ALL_INDEX_NAMES = {
     DELTA_SYNC_SELF_MANAGED_EMBEDDINGS_INDEX,
 }
 
+DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME = "openai-text-embedding"
+
 INDEX_DETAILS = {
     DELTA_SYNC_INDEX: {
         "name": DELTA_SYNC_INDEX,
@@ -68,7 +70,7 @@ INDEX_DETAILS = {
             "embedding_source_columns": [
                 {
                     "name": "text",
-                    "embedding_model_endpoint_name": "openai-text-embedding",
+                    "embedding_model_endpoint_name": DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
                 }
             ],
         },
