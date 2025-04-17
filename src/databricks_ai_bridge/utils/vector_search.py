@@ -70,17 +70,37 @@ class RetrieverSchema:
 
 
 def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore_cols):
+    """
+    This function constructs a metadata dictionary by mapping column names to their corresponding values
+    from the result row, with special handling for the provided retriever schema.
+
+    Args:
+        columns (List[str]): The list of column names in the result, including a final score column.
+        result (List[Any]): The row of data values corresponding to the columns.
+        retriever_schema: An object that defines which columns represent `doc_uri`, `primary_key`,
+                          and optionally other columns to include.
+        ignore_cols (List[str]): List of column names to exclude from the metadata. Usually contains
+                                 the text column or embedding vector column.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing extracted metadata.
+    """
     metadata = {}
+    
+    # Skipping the last column, which is always the score
     for col, value in zip(columns[:-1], result[:-1]):
         if col == retriever_schema.doc_uri:
             metadata["doc_uri"] = value
         elif col == retriever_schema.primary_key:
             metadata["chunk_id"] = value
         elif col == "doc_uri" and retriever_schema.doc_uri:
+            # Prioritize retriever_schema.doc_uri, don't override with the actual "doc_uri" column
             continue
         elif col == "chunk_id" and retriever_schema.primary_key:
+            # Prioritize retriever_schema.primary_key, don't override with the actual "chunk_id" column
             continue
-        elif col in ignore_cols:  # ignore_cols has precedence over other_columns
+        elif col in ignore_cols:
+            # ignore_cols has precedence over other_columns
             continue
         elif retriever_schema.other_columns is not None:
             if col in retriever_schema.other_columns:
