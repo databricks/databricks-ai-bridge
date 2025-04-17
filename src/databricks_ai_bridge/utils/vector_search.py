@@ -86,7 +86,7 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
         Dict[str, Any]: A dictionary containing extracted metadata.
     """
     metadata = {}
-    
+
     # Skipping the last column, which is always the score
     for col, value in zip(columns[:-1], result[:-1]):
         if col == retriever_schema.doc_uri:
