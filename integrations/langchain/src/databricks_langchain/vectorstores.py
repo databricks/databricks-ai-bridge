@@ -19,6 +19,7 @@ import numpy as np
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
+    RetrieverSchema,
     parse_vector_search_response,
     validate_and_get_return_columns,
     validate_and_get_text_column,
@@ -221,6 +222,8 @@ class DatabricksVectorSearch(VectorStore):
         endpoint: Optional[str] = None,
         embedding: Optional[Embeddings] = None,
         text_column: Optional[str] = None,
+        doc_uri: Optional[str] = None,
+        primary_key: Optional[str] = None,
         columns: Optional[List[str]] = None,
         workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
@@ -276,9 +279,15 @@ class DatabricksVectorSearch(VectorStore):
         self._embeddings = embedding
         self._text_column = validate_and_get_text_column(text_column, self._index_details)
         self._columns = validate_and_get_return_columns(
-            columns or [], self._text_column, self._index_details
+            columns or [], self._text_column, self._index_details, doc_uri, primary_key
         )
         self._primary_key = self._index_details.primary_key
+        self._retriever_schema = RetrieverSchema(
+            text_column=self._text_column,
+            doc_uri=doc_uri,
+            primary_key=primary_key,
+            other_columns=self._columns,
+        )
 
     @property
     def embeddings(self) -> Optional[Embeddings]:
@@ -458,7 +467,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type=query_type,
         )
         return parse_vector_search_response(
-            search_resp, self._index_details, self._text_column, document_class=Document
+            search_resp, self._retriever_schema, document_class=Document
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -570,7 +579,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type=query_type,
         )
         return parse_vector_search_response(
-            search_resp, self._index_details, self._text_column, document_class=Document
+            search_resp, self._retriever_schema, document_class=Document
         )
 
     def max_marginal_relevance_search(
@@ -706,8 +715,7 @@ class DatabricksVectorSearch(VectorStore):
         ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
         candidates = parse_vector_search_response(
             search_resp,
-            self._index_details,
-            self._text_column,
+            self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
         )

@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,10 +61,58 @@ class IndexDetails:
         return self.is_delta_sync_index() and self.embedding_source_column.get("name") is not None
 
 
+@dataclass
+class RetrieverSchema:
+    text_column: str = None
+    doc_uri: Optional[str] = None
+    primary_key: Optional[str] = None
+    other_columns: Optional[List[str]] = None
+
+
+def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore_cols):
+    """
+    This function constructs a metadata dictionary by mapping column names to their corresponding values
+    from the result row, with special handling for the provided retriever schema.
+
+    Args:
+        columns (List[str]): The list of column names in the result, including a final score column.
+        result (List[Any]): The row of data values corresponding to the columns.
+        retriever_schema: An object that defines which columns represent `doc_uri`, `primary_key`,
+                          and optionally other columns to include.
+        ignore_cols (List[str]): List of column names to exclude from the metadata. Usually contains
+                                 the text column or embedding vector column.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing extracted metadata.
+    """
+    metadata = {}
+
+    # Skipping the last column, which is always the score
+    for col, value in zip(columns[:-1], result[:-1]):
+        if col == retriever_schema.doc_uri:
+            metadata["doc_uri"] = value
+        elif col == retriever_schema.primary_key:
+            metadata["chunk_id"] = value
+        elif col == "doc_uri" and retriever_schema.doc_uri:
+            # Prioritize retriever_schema.doc_uri, don't override with the actual "doc_uri" column
+            continue
+        elif col == "chunk_id" and retriever_schema.primary_key:
+            # Prioritize retriever_schema.primary_key, don't override with the actual "chunk_id" column
+            continue
+        elif col in ignore_cols:
+            # ignore_cols has precedence over other_columns
+            continue
+        elif retriever_schema.other_columns is not None:
+            if col in retriever_schema.other_columns:
+                metadata[col] = value
+        else:
+            metadata[col] = value
+    return metadata
+
+
 def parse_vector_search_response(
     search_resp: Dict,
-    index_details: IndexDetails,
-    text_column: str,
+    retriever_schema: RetrieverSchema,
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
 ) -> List[Tuple[Dict, float]]:
@@ -74,19 +123,21 @@ def parse_vector_search_response(
     if ignore_cols is None:
         ignore_cols = []
 
+    text_column = retriever_schema.text_column
+    ignore_cols.extend([text_column])
+
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
     docs_with_score = []
+
     for result in search_resp.get("result", dict()).get("data_array", []):
-        doc_id = result[columns.index(index_details.primary_key)]
-        text_content = result[columns.index(text_column)]
-        ignore_cols = [index_details.primary_key, text_column] + ignore_cols
-        metadata = {
-            col: value for col, value in zip(columns[:-1], result[:-1]) if col not in ignore_cols
-        }
-        metadata[index_details.primary_key] = doc_id
+        page_content = result[columns.index(text_column)]
+
+        metadata = get_metadata(columns, result, retriever_schema, ignore_cols)
+
         score = result[-1]
-        doc = document_class(page_content=text_content, metadata=metadata)
+        doc = document_class(page_content=page_content, metadata=metadata)
         docs_with_score.append((doc, score))
+
     return docs_with_score
 
 
@@ -107,7 +158,11 @@ def validate_and_get_text_column(text_column: Optional[str], index_details: Inde
 
 
 def validate_and_get_return_columns(
-    columns: List[str], text_column: str, index_details: IndexDetails
+    columns: List[str],
+    text_column: str,
+    index_details: IndexDetails,
+    doc_uri: str,
+    primary_key: str,
 ) -> List[str]:
     """
     Get a list of columns to retrieve from the index.
@@ -118,6 +173,10 @@ def validate_and_get_return_columns(
         columns.append(index_details.primary_key)
     if text_column and text_column not in columns:
         columns.append(text_column)
+    if doc_uri and doc_uri not in columns:
+        columns.append(doc_uri)
+    if primary_key and primary_key not in columns:
+        columns.append(primary_key)
 
     # Validate specified columns are in the index
     if index_details.is_direct_access_index() and (index_schema := index_details.schema):

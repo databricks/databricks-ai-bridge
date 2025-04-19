@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
+    RetrieverSchema,
     parse_vector_search_response,
     validate_and_get_return_columns,
     validate_and_get_text_column,
@@ -110,7 +111,17 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(
-            self.columns or [], self.text_column, self._index_details
+            self.columns or [],
+            self.text_column,
+            self._index_details,
+            self.doc_uri,
+            self.primary_key,
+        )
+        self._retriever_schema = RetrieverSchema(
+            text_column=self.text_column,
+            doc_uri=self.doc_uri,
+            primary_key=self.primary_key,
+            other_columns=self.columns,
         )
 
         if (
@@ -201,8 +212,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         )
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,
-            index_details=self._index_details,
-            text_column=self.text_column,
+            retriever_schema=self._retriever_schema,
             document_class=dict,
         )
         return [doc for doc, _ in docs_with_score]

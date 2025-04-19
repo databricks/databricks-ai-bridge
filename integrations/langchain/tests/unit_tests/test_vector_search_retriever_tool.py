@@ -47,6 +47,8 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     embedding: Optional[Embeddings] = None,
     text_column: Optional[str] = None,
+    doc_uri: Optional[str] = None,
+    primary_key: Optional[str] = None,
 ) -> VectorSearchRetrieverTool:
     kwargs: Dict[str, Any] = {
         "index_name": index_name,
@@ -55,6 +57,8 @@ def init_vector_search_tool(
         "tool_description": tool_description,
         "embedding": embedding,
         "text_column": text_column,
+        "doc_uri": doc_uri,
+        "primary_key": primary_key,
     }
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
@@ -111,6 +115,18 @@ def test_vector_search_retriever_tool_combinations(
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
     assert result is not None
+
+
+def test_vector_search_retriever_tool_combinations() -> None:
+    vector_search_tool = init_vector_search_tool(
+        index_name=DELTA_SYNC_INDEX,
+        doc_uri="uri",
+        primary_key="id",
+    )
+    assert isinstance(vector_search_tool, BaseTool)
+    result = vector_search_tool.invoke("Databricks Agent Framework")
+    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
+    assert all(item.page_content for item in result)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
