@@ -87,20 +87,19 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]{1,64}$'")
         return tool_name
 
-    def _describe_columns(self, columns: List[Tuple[str, str]]) -> str:
-        description_lines = [f" - {name}: {col_type}" for name, col_type in columns]
-        description = "\n".join(description_lines)
+    def _describe_columns(self, columns) -> str:
+        description = "\n".join(f" - {name}: {col_type}" for name, col_type in columns)
 
         return (
             "This vector search index includes the following columns:\n\n"
             f"{description}\n\n"
-            "You can refine vector search results by passing a `filters` dictionary when invoking the tool. "
-            "Supported operators include:\n\n"
-            "Equality: {\"column\": value}, {\"column\": [value1, value2]}\n\n"
-            "Inequality: {\"column NOT\": value}\n\n"
-            "Comparisons: {\"column <\": value}, {\"column >=\": value}, etc.\n\n"
-            "Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n\n"
-            "OR: {\"column OR column2\": [value1, value2]}"
+            "You can refine results by passing a `filters` dictionary when calling this tool. "
+            "Supported filters include:\n\n"
+            "Equality: {\"column\": value} or {\"column\": [value1, value2]}\n"
+            "Inequality: {\"column NOT\": value}\n"
+            "Comparisons: {\"column <\": value}, {\"column >=\": value}, etc.\n"
+            "Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n"
+            "OR condition: {\"column1 OR column2\": [value1, value2]}"
         )
 
     def _get_index_columns(self):
