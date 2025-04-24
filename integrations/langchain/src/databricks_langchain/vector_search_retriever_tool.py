@@ -65,7 +65,8 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         return self
 
     @vector_search_retriever_tool_trace
-    def _run(self, query: str, filters: Optional[Dict[str, Any]] = None) -> str:
+    def _run(self, query: str, filters: Dict[str, Any] = None) -> str:
+        combined_filters = {**(filters or {}), **(self.filters or {})}
         return self._vector_store.similarity_search(
-            query, k=self.num_results, filter=filters or self.filters, query_type=self.query_type
+            query, k=self.num_results, filter=combined_filters, query_type=self.query_type
         )

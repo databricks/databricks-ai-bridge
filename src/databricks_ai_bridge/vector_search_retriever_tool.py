@@ -41,6 +41,18 @@ class VectorSearchRetrieverToolInput(BaseModel):
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
     )
+    filters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional filters to refine vector search results. "
+            "Supports:\n\n"
+            "- Equality: {\"column\": value} or {\"column\": [value1, value2]}\n"
+            "- Inequality: {\"column NOT\": value}\n"
+            "- Comparisons: {\"column <\": value}, {\"column >=\": value}\n"
+            "- Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n"
+            "- OR logic: {\"column OR column2\": [value1, value2]}"
+        )
+    )
 
 
 class VectorSearchRetrieverToolMixin(BaseModel):
@@ -87,22 +99,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]{1,64}$'")
         return tool_name
 
-    def _describe_columns(self, columns) -> str:
-        description = "\n".join(f" - {name}: {col_type}" for name, col_type in columns)
-
-        return (
-            "This vector search index includes the following columns:\n\n"
-            f"{description}\n\n"
-            "You can refine results by passing a `filters` dictionary when calling this tool. "
-            "Supported filters include:\n\n"
-            "Equality: {\"column\": value} or {\"column\": [value1, value2]}\n"
-            "Inequality: {\"column NOT\": value}\n"
-            "Comparisons: {\"column <\": value}, {\"column >=\": value}, etc.\n"
-            "Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n"
-            "OR condition: {\"column1 OR column2\": [value1, value2]}"
-        )
-
-    def _get_index_columns(self):
+    def _describe_columns(self) -> str:
         try:
             from databricks.sdk import WorkspaceClient
             import json
@@ -115,25 +112,30 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             columns = []
 
             for column_info in table_info.columns:
-                column_name = column_info.name
-                column_type = json.loads(column_info.type_json).get("type", None)
-                columns.append((column_name, column_type))
+                name, comment = column_info.name, column_info.comment
+                if comment == None:
+                    comment = "No description provided"
+                col_type = json.loads(column_info.type_json).get("type", None)
+                if not name.startswith("__"):
+                    columns.append((name, col_type, comment))
             
-            return columns
+            return (
+                "The vector search index includes the following columns:\n\n" +
+                "\n".join(f"{name} ({col_type}): {comment}" for name, col_type, comment in columns)
+            )
         except:
-            # log a warning
-            pass
+            _logger.warning("Unable to retrieve column information automatically. Please manually specify column names, types, and descriptions in the tool description to help LLMs apply filters correctly.")
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
-        
         if index_details.is_delta_sync_index():
             source_table = index_details.index_spec.get("source_table", "")
             description = (
                 DEFAULT_TOOL_DESCRIPTION
                 + f" The queried index uses the source table {source_table}"
             )
-        description = DEFAULT_TOOL_DESCRIPTION
-        return description + self._describe_columns(self._get_index_columns())
+        else:
+            description = DEFAULT_TOOL_DESCRIPTION
+        return description + self._describe_columns()
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
