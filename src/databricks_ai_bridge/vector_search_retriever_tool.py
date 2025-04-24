@@ -87,14 +87,53 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]{1,64}$'")
         return tool_name
 
+    def _describe_columns(self, columns: List[Tuple[str, str]]) -> str:
+        description_lines = [f" - {name}: {col_type}" for name, col_type in columns]
+        description = "\n".join(description_lines)
+
+        return (
+            "This vector search index includes the following columns:\n\n"
+            f"{description}\n\n"
+            "You can refine vector search results by passing a `filters` dictionary when invoking the tool. "
+            "Supported operators include:\n\n"
+            "Equality: {\"column\": value}, {\"column\": [value1, value2]}\n\n"
+            "Inequality: {\"column NOT\": value}\n\n"
+            "Comparisons: {\"column <\": value}, {\"column >=\": value}, etc.\n\n"
+            "Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n\n"
+            "OR: {\"column OR column2\": [value1, value2]}"
+        )
+
+    def _get_index_columns(self):
+        try:
+            from databricks.sdk import WorkspaceClient
+            import json
+
+            if self.workspace_client:
+                table_info = self.workspace_client.tables.get(full_name = self.index_name)
+            else:
+                table_info = WorkspaceClient().tables.get(full_name = self.index_name)
+
+            columns = []
+
+            for column_info in table_info.columns:
+                column_name = column_info.name
+                column_type = json.loads(column_info.type_json).get("type", None)
+                columns.append((column_name, column_type))
+            
+            return columns
+        except:
+            pass
+
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
+        
         if index_details.is_delta_sync_index():
             source_table = index_details.index_spec.get("source_table", "")
-            return (
+            description = (
                 DEFAULT_TOOL_DESCRIPTION
                 + f" The queried index uses the source table {source_table}"
             )
-        return DEFAULT_TOOL_DESCRIPTION
+        description = DEFAULT_TOOL_DESCRIPTION
+        return description + self._describe_columns(self._get_index_columns())
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
