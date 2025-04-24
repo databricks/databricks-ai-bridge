@@ -1,4 +1,4 @@
-from typing import Optional, Type
+from typing import Optional, Type, Dict, Any
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
@@ -65,8 +65,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         return self
 
     @vector_search_retriever_tool_trace
-    def _run(self, query: str, **kwargs) -> str:
-        filter = kwargs.get("filters", self.filters)
+    def _run(self, query: str, filters: Optional[Dict[str, Any]] = None) -> str:
         return self._vector_store.similarity_search(
-            query, k=self.num_results, filter=filter, query_type=self.query_type
+            query, k=self.num_results, filter=filters or self.filters, query_type=self.query_type
         )

@@ -121,6 +121,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             
             return columns
         except:
+            # log a warning
             pass
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
