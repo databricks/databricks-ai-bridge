@@ -44,13 +44,13 @@ class VectorSearchRetrieverToolInput(BaseModel):
     filters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "Optional filters to refine vector search results. "
-            "Supports:\n\n"
-            "- Equality: {\"column\": value} or {\"column\": [value1, value2]}\n"
-            "- Inequality: {\"column NOT\": value}\n"
-            "- Comparisons: {\"column <\": value}, {\"column >=\": value}\n"
-            "- Pattern match: {\"column LIKE\": \"word\"} (matches full tokens)\n"
-            "- OR logic: {\"column OR column2\": [value1, value2]}"
+            "Optional filters to refine vector search results. Supports the following operators:\n\n"
+            "- Inclusion: {\"column\": value} or {\"column\": [value1, value2]} (matches if the column equals any of the provided values)\n"
+            "- Exclusion: {\"column NOT\": value}\n"
+            "- Comparisons: {\"column <\": value}, {\"column >=\": value}, etc.\n"
+            "- Pattern match: {\"column LIKE\": \"word\"} (matches full tokens separated by whitespace)\n"
+            "- OR logic: {\"column1 OR column2\": [value1, value2]} "
+            "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
         )
     )
 
@@ -102,7 +102,6 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     def _describe_columns(self) -> str:
         try:
             from databricks.sdk import WorkspaceClient
-            import json
 
             if self.workspace_client:
                 table_info = self.workspace_client.tables.get(full_name = self.index_name)
@@ -112,15 +111,14 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             columns = []
 
             for column_info in table_info.columns:
-                name, comment = column_info.name, column_info.comment
-                if comment == None:
-                    comment = "No description provided"
-                col_type = json.loads(column_info.type_json).get("type", None)
+                name = column_info.name
+                comment = column_info.comment or "No description provided"
+                col_type = column_info.type_name.name
                 if not name.startswith("__"):
                     columns.append((name, col_type, comment))
-            
+                    
             return (
-                "The vector search index includes the following columns:\n\n" +
+                "The vector search index includes the following columns:\n" +
                 "\n".join(f"{name} ({col_type}): {comment}" for name, col_type, comment in columns)
             )
         except:
@@ -131,11 +129,11 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             source_table = index_details.index_spec.get("source_table", "")
             description = (
                 DEFAULT_TOOL_DESCRIPTION
-                + f" The queried index uses the source table {source_table}"
+                + f" The queried index uses the source table {source_table}."
             )
         else:
             description = DEFAULT_TOOL_DESCRIPTION
-        return description + self._describe_columns()
+        return f"{description}\n\n{self._describe_columns}()"
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
