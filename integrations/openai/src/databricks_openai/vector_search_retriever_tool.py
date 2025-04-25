@@ -52,7 +52,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             tool_call = first_response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             result = dbvs_tool.execute(
-                query=args["query"], filters=args.get("filters", None)
+                query=args["query"],
+                filters=args.get("filters", None)
             )  # For self-managed embeddings, optionally pass in openai_client=client
 
         Step 3: Supply model with results – so it can incorporate them into its final response.
@@ -141,6 +142,10 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
+        # We need to remove strict: True from the tool in order to support arbitrary filters
+        if "function" in self.tool and "strict" in self.tool["function"]:
+            del self.tool["function"]["strict"]
+        
         try:
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.errors.platform import ResourceDoesNotExist

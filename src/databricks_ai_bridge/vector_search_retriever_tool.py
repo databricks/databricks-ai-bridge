@@ -41,7 +41,7 @@ class VectorSearchRetrieverToolInput(BaseModel):
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
     )
-    filters: Optional[Dict[str, Any]] = Field(
+    filters: Dict[str, Any] = Field(
         default=None,
         description=(
             "Optional filters to refine vector search results. Supports the following operators:\n\n"
@@ -51,7 +51,7 @@ class VectorSearchRetrieverToolInput(BaseModel):
             '- Pattern match: {"column LIKE": "word"} (matches full tokens separated by whitespace)\n'
             '- OR logic: {"column1 OR column2": [value1, value2]} '
             "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
-        ),
+        )
     )
 
 
@@ -134,7 +134,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             )
         else:
             description = DEFAULT_TOOL_DESCRIPTION
-        return f"{description}\n\n{self._describe_columns}()"
+        return f"{description}\n\n{self._describe_columns()}"
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
