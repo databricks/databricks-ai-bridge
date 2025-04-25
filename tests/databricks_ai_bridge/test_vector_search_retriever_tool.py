@@ -1,11 +1,12 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from mlflow.models.resources import DatabricksServingEndpoint, DatabricksVectorSearchIndex
 
+from databricks_ai_bridge.test_utils.vector_search import mock_workspace_client  # noqa: F401
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import VectorSearchRetrieverToolMixin
-from databricks_ai_bridge.test_utils.vector_search import mock_workspace_client
+
 
 class DummyVectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     pass

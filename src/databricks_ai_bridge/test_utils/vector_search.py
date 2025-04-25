@@ -171,10 +171,7 @@ def mock_workspace_client() -> Generator:
             ("description", "STRING", "Detailed description of the city"),
             ("__db_description_vector", "ARRAY", None),
         ]
-        return MagicMock(
-            full_name=full_name,
-            columns=[_construct_column(*col) for col in columns]
-        )
+        return MagicMock(full_name=full_name, columns=[_construct_column(*col) for col in columns])
 
     mock_client = MagicMock()
     mock_client.serving_endpoints.get.side_effect = _get_serving_endpoint
