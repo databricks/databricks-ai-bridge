@@ -51,7 +51,7 @@ class VectorSearchRetrieverToolInput(BaseModel):
             '- Pattern match: {"column LIKE": "word"} (matches full tokens separated by whitespace)\n'
             '- OR logic: {"column1 OR column2": [value1, value2]} '
             "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
-        )
+        ),
     )
 
 
@@ -134,7 +134,12 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             )
         else:
             description = DEFAULT_TOOL_DESCRIPTION
-        return f"{description}\n\n{self._describe_columns()}"
+
+        column_description = self._describe_columns()
+        if column_description:
+            return f"{description}\n\n{column_description}"
+        else:
+            return description
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
