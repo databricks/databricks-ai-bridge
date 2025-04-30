@@ -465,6 +465,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=k,
             query_type=query_type,
+            **kwargs,
         )
         return parse_vector_search_response(
             search_resp, self._retriever_schema, document_class=Document
@@ -577,6 +578,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=k,
             query_type=query_type,
+            **kwargs,
         )
         return parse_vector_search_response(
             search_resp, self._retriever_schema, document_class=Document
@@ -696,6 +698,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=fetch_k,
             query_type=query_type,
+            **kwargs
         )
 
         embeddings_result_index = (

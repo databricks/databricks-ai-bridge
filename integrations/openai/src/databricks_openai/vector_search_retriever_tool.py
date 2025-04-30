@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
@@ -162,6 +162,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self,
         query: str,
         openai_client: OpenAI = None,
+        **kwargs: Any
     ) -> List[Dict]:
         """
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
@@ -202,6 +203,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
+        combined_kwargs = {**kwargs, **(self.model_extra or {})}
+
         search_resp = self._index.similarity_search(
             columns=self.columns,
             query_text=query_text,
@@ -209,6 +212,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             filters=self.filters,
             num_results=self.num_results,
             query_type=self.query_type,
+            **combined_kwargs
         )
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,

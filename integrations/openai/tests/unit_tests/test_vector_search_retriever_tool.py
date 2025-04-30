@@ -298,3 +298,7 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+
+
+def test_pass_in_kwargs():
+    pass

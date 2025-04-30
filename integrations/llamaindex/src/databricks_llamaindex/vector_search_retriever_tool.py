@@ -76,7 +76,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
         )
 
         # Define the similarity search function
-        def similarity_search(query: str) -> List[Dict[str, Any]]:
+        def similarity_search(query: str, **kwargs: Any) -> List[Dict[str, Any]]:
             def get_query_text_vector(query: str) -> Tuple[Optional[str], Optional[List[float]]]:
                 if self._index_details.is_databricks_managed_embeddings():
                     if self.embedding:
@@ -105,6 +105,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
+            combined_kwargs = {**kwargs, **(self.model_extra or {})}
             search_resp = self._index.similarity_search(
                 columns=self.columns,
                 query_text=query_text,
@@ -112,6 +113,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 filters=self.filters,
                 num_results=self.num_results,
                 query_type=self.query_type,
+                **combined_kwargs,
             )
             return parse_vector_search_response(
                 search_resp, self._retriever_schema, document_class=dict

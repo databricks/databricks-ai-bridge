@@ -50,7 +50,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     implementations should follow.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )
