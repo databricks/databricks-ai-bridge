@@ -77,6 +77,7 @@ intersphinx_mapping = {
         None,
     ),
     "pydantic": ("https://docs.pydantic.dev/latest/", None),
+    "unitycatalog": ("https://docs.unitycatalog.io/", None),
 }
 
 extlinks = {

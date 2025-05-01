@@ -20,3 +20,5 @@ Setup:
    :undoc-members:
    :show-inheritance:
    :exclude-members: model_post_init
+
+See also: :class:`unitycatalog.ai.langchain.toolkit.UnityCatalogTool`
