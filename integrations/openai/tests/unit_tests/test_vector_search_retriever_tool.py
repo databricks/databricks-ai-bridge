@@ -324,11 +324,11 @@ def test_filters_are_combined() -> None:
     vector_search_tool._index.similarity_search = MagicMock()
 
     vector_search_tool.execute(
-        {"query": "what cities are in Germany"}, filters={"country": "Germany"}
+        query="what cities are in Germany", filters={"country": "Germany"}
     )
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
-        query_text={"query": "what cities are in Germany"},
+        query_text="what cities are in Germany",
         filters={"city LIKE": "Berlin", "country": "Germany"},
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
