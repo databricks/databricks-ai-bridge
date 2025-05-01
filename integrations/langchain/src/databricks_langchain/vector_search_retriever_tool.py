@@ -66,11 +66,12 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
 
     @vector_search_retriever_tool_trace
     def _run(self, query: str, **kwargs) -> str:
-        combined_kwargs = {**kwargs, **(self.model_extra or {})}
-        return self._vector_store.similarity_search(
-            query,
-            k=self.num_results,
-            filter=self.filters,
-            query_type=self.query_type,
-            **combined_kwargs,
-        )
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        # Ensure that we don't have duplicate keys
+        kwargs.update({
+            "query": query,
+            "k": self.num_results,
+            "filter": self.filters,
+            "query_type": self.query_type
+        })
+        return self._vector_store.similarity_search(**kwargs)

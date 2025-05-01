@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
 from functools import partial
@@ -458,15 +459,17 @@ class DatabricksVectorSearch(VectorStore):
                 query_text = None
             query_vector = self._embeddings.embed_query(query)  # type: ignore[union-attr]
 
-        search_resp = self.index.similarity_search(
-            columns=self._columns,
-            query_text=query_text,
-            query_vector=query_vector,
-            filters=filter,
-            num_results=k,
-            query_type=query_type,
-            **kwargs,
-        )
+        signature = inspect.signature(self.index.similarity_search)
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+        kwargs.update({
+            "columns": self._columns,
+            "query_text": query_text,
+            "query_vector": query_vector,
+            "filters": filter,
+            "num_results": k,
+            "query_type": query_type,
+        })
+        search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
             search_resp, self._retriever_schema, document_class=Document
         )
