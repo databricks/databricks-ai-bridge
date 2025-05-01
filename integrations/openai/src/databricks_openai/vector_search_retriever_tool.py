@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
@@ -158,12 +158,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         return self
 
     @vector_search_retriever_tool_trace
-    def execute(
-        self,
-        query: str,
-        openai_client: OpenAI = None,
-        **kwargs: Any
-    ) -> List[Dict]:
+    def execute(self, query: str, openai_client: OpenAI = None, **kwargs: Any) -> List[Dict]:
         """
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
         self.tool VectorSearchRetrieverToolInput and attach the retrieved documents into tool call messages.
@@ -212,7 +207,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             filters=self.filters,
             num_results=self.num_results,
             query_type=self.query_type,
-            **combined_kwargs
+            **combined_kwargs,
         )
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,

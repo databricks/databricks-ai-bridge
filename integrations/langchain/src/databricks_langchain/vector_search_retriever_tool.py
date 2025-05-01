@@ -68,5 +68,9 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     def _run(self, query: str, **kwargs) -> str:
         combined_kwargs = {**kwargs, **(self.model_extra or {})}
         return self._vector_store.similarity_search(
-            query, k=self.num_results, filter=self.filters, query_type=self.query_type, **combined_kwargs
+            query,
+            k=self.num_results,
+            filter=self.filters,
+            query_type=self.query_type,
+            **combined_kwargs,
         )

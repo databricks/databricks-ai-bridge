@@ -37,6 +37,7 @@ def vector_search_retriever_tool_trace(func):
 
 
 class VectorSearchRetrieverToolInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     query: str = Field(
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."

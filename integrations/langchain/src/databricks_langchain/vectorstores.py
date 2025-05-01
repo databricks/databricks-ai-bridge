@@ -698,7 +698,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=fetch_k,
             query_type=query_type,
-            **kwargs
+            **kwargs,
         )
 
         embeddings_result_index = (

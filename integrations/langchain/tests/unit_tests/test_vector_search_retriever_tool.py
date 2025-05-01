@@ -1,8 +1,8 @@
 import json
 import os
 import threading
-from typing import Any, Dict, List, Optional
-from unittest.mock import patch
+from typing import Any, List, Optional
+from unittest.mock import MagicMock, patch
 
 import mlflow
 import pytest
@@ -49,17 +49,20 @@ def init_vector_search_tool(
     text_column: Optional[str] = None,
     doc_uri: Optional[str] = None,
     primary_key: Optional[str] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "embedding": embedding,
-        "text_column": text_column,
-        "doc_uri": doc_uri,
-        "primary_key": primary_key,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "embedding": embedding,
+            "text_column": text_column,
+            "doc_uri": doc_uri,
+            "primary_key": primary_key,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -270,3 +273,20 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True)
+
+
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "extra_param": "something random"},
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        "what cities are in Germany",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter=None,
+        score_threshold=0.5,
+        extra_param="something random",
+    )

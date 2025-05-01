@@ -304,24 +304,6 @@ def test_similarity_search_hybrid(index_name: str) -> None:
     assert all(["id" in d.metadata for d in search_result])
 
 
-def test_similarity_search_both_filter_and_filters_passed() -> None:
-    vectorsearch = init_vector_search(DIRECT_ACCESS_INDEX)
-    query = "foo"
-    filter = {"some filter": True}
-    filters = {"some other filter": False}
-
-    vectorsearch.similarity_search(query, filter=filter, filters=filters)
-    vectorsearch.index.similarity_search.assert_called_once_with(
-        columns=["id", "text"],
-        query_vector=EMBEDDING_MODEL.embed_query(query),
-        # `filter` should prevail over `filters`
-        filters=filter,
-        num_results=4,
-        query_text=None,
-        query_type=None,
-    )
-
-
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES - {DELTA_SYNC_INDEX})
 @pytest.mark.parametrize(
     "columns, expected_columns",

@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
@@ -89,15 +89,18 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     text_column: Optional[str] = None,
     embedding_model_name: Optional[str] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "text_column": text_column,
-        "embedding_model_name": embedding_model_name,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "text_column": text_column,
+            "embedding_model_name": embedding_model_name,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -300,5 +303,18 @@ def test_vector_search_client_non_model_serving_environment():
             mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
 
 
-def test_pass_in_kwargs():
-    pass
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.execute(query="what cities are in Germany", extra_param="something random")
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+        filters=None,
+        score_threshold=0.5,
+        extra_param="something random",
+    )
