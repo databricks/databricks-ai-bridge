@@ -24,5 +24,5 @@ __all__ = [
     "VectorSearchRetrieverTool",
     "set_uc_function_client",
     "DatabricksFunctionClient",
-    "UCFunctionToolkit"
+    "UCFunctionToolkit",
 ]
