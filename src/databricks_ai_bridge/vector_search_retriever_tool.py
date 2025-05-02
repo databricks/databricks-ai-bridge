@@ -41,6 +41,18 @@ class VectorSearchRetrieverToolInput(BaseModel):
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
     )
+    filters: Dict[str, Any] = Field(
+        default=None,
+        description=(
+            "Optional filters to refine vector search results. Supports the following operators:\n\n"
+            '- Inclusion: {"column": value} or {"column": [value1, value2]} (matches if the column equals any of the provided values)\n'
+            '- Exclusion: {"column NOT": value}\n'
+            '- Comparisons: {"column <": value}, {"column >=": value}, etc.\n'
+            '- Pattern match: {"column LIKE": "word"} (matches full tokens separated by whitespace)\n'
+            '- OR logic: {"column1 OR column2": [value1, value2]} '
+            "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
+        ),
+    )
 
 
 class VectorSearchRetrieverToolMixin(BaseModel):
@@ -87,14 +99,47 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]{1,64}$'")
         return tool_name
 
+    def _describe_columns(self) -> str:
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            if self.workspace_client:
+                table_info = self.workspace_client.tables.get(full_name=self.index_name)
+            else:
+                table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
+            columns = []
+
+            for column_info in table_info.columns:
+                name = column_info.name
+                comment = column_info.comment or "No description provided"
+                col_type = column_info.type_name.name
+                if not name.startswith("__"):
+                    columns.append((name, col_type, comment))
+
+            return "The vector search index includes the following columns:\n" + "\n".join(
+                f"{name} ({col_type}): {comment}" for name, col_type, comment in columns
+            )
+        except Exception:
+            _logger.warning(
+                "Unable to retrieve column information automatically. Please manually specify column names, types, and descriptions in the tool description to help LLMs apply filters correctly."
+            )
+
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
             source_table = index_details.index_spec.get("source_table", "")
-            return (
+            description = (
                 DEFAULT_TOOL_DESCRIPTION
-                + f" The queried index uses the source table {source_table}"
+                + f" The queried index uses the source table {source_table}."
             )
-        return DEFAULT_TOOL_DESCRIPTION
+        else:
+            description = DEFAULT_TOOL_DESCRIPTION
+
+        column_description = self._describe_columns()
+        if column_description:
+            return f"{description}\n\n{column_description}"
+        else:
+            return description
 
     def _get_resources(
         self, index_name: str, embedding_endpoint: str, index_details: IndexDetails

@@ -2,7 +2,7 @@ import json
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import mlflow
 import pytest
@@ -49,6 +49,7 @@ def init_vector_search_tool(
     text_column: Optional[str] = None,
     doc_uri: Optional[str] = None,
     primary_key: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> VectorSearchRetrieverTool:
     kwargs: Dict[str, Any] = {
         "index_name": index_name,
@@ -59,6 +60,7 @@ def init_vector_search_tool(
         "text_column": text_column,
         "doc_uri": doc_uri,
         "primary_key": primary_key,
+        "filters": filters,
     }
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
@@ -84,6 +86,36 @@ def test_chat_model_bind_tools(llm: ChatDatabricks, index_name: str) -> None:
     llm_with_tools = llm.bind_tools([vector_search_tool])
     response = llm_with_tools.invoke("Which city is hotter today and which is bigger: LA or NY?")
     assert isinstance(response, AIMessage)
+
+
+def test_filters_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        "what cities are in Germany",
+        k=vector_search_tool.num_results,
+        filter={"country": "Germany"},
+        query_type=vector_search_tool.query_type,
+    )
+
+
+def test_filters_are_combined() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        "what cities are in Germany",
+        k=vector_search_tool.num_results,
+        filter={"city LIKE": "Berlin", "country": "Germany"},
+        query_type=vector_search_tool.query_type,
+    )
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)

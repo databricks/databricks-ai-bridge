@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
@@ -52,7 +52,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             tool_call = first_response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             result = dbvs_tool.execute(
-                query=args["query"]
+                query=args["query"], filters=args.get("filters", None)
             )  # For self-managed embeddings, optionally pass in openai_client=client
 
         Step 3: Supply model with results – so it can incorporate them into its final response.
@@ -141,6 +141,10 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
+        # We need to remove strict: True from the tool in order to support arbitrary filters
+        if "function" in self.tool and "strict" in self.tool["function"]:
+            del self.tool["function"]["strict"]
+
         try:
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.errors.platform import ResourceDoesNotExist
@@ -161,6 +165,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def execute(
         self,
         query: str,
+        filters: Optional[Dict[str, Any]] = None,
         openai_client: OpenAI = None,
     ) -> List[Dict]:
         """
@@ -202,11 +207,12 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
+        combined_filters = {**(filters or {}), **(self.filters or {})}
         search_resp = self._index.similarity_search(
             columns=self.columns,
             query_text=query_text,
             query_vector=query_vector,
-            filters=self.filters,
+            filters=combined_filters,
             num_results=self.num_results,
             query_type=self.query_type,
         )
