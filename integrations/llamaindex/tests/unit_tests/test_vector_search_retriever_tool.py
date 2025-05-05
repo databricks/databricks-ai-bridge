@@ -1,6 +1,6 @@
 import os
 import threading
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -52,6 +52,7 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     embedding: Optional[BaseEmbedding] = None,
     text_column: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
     kwargs.update(
@@ -62,6 +63,7 @@ def init_vector_search_tool(
             "tool_description": tool_description,
             "embedding": embedding,
             "text_column": text_column,
+            "filters": filters,
         }
     )
     if index_name != DELTA_SYNC_INDEX:
@@ -196,4 +198,34 @@ def test_kwargs_are_passed_through() -> None:
         score_threshold=0.5,
         extra_param="something random",
         requires_context=False,
+    )
+
+    
+def test_filters_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.call(query="what cities are in Germany", filters={"country": "Germany"})
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={"country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+    )
+
+
+def test_filters_are_combined() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.call(query="what cities are in Germany", filters={"country": "Germany"})
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={"city LIKE": "Berlin", "country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
     )

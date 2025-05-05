@@ -37,6 +37,7 @@ dev = [
   "hatch",
   "pytest",
   "ruff==0.6.4",
+  "databricks-vectorsearch>=0.50",
 ]
 
 [tool.ruff]

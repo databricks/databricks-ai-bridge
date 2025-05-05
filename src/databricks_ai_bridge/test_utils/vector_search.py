@@ -155,8 +155,28 @@ def mock_workspace_client() -> Generator:
         endpoint.name = full_name
         return endpoint
 
+    def _construct_column(name, col_type, comment):
+        mock_column = MagicMock()
+        mock_column.name = name
+        mock_column.type_name = MagicMock()
+        mock_column.type_name.name = col_type
+        mock_column.comment = comment
+        return mock_column
+
+    def _get_table(full_name: str) -> MagicMock:
+        columns = [
+            ("city_id", "INT", None),
+            ("city", "STRING", "Name of the city"),
+            ("country", "STRING", "Name of the country"),
+            ("description", "STRING", "Detailed description of the city"),
+            ("__db_description_vector", "ARRAY", None),
+        ]
+        return MagicMock(full_name=full_name, columns=[_construct_column(*col) for col in columns])
+
     mock_client = MagicMock()
     mock_client.serving_endpoints.get.side_effect = _get_serving_endpoint
+    mock_client.tables.get.side_effect = _get_table
+
     with patch(
         "databricks.sdk.WorkspaceClient",
         return_value=mock_client,
