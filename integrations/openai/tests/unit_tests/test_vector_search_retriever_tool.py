@@ -2,12 +2,13 @@ import json
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, create_autospec, patch
 
 import mlflow
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
+from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
@@ -307,9 +308,12 @@ def test_vector_search_client_non_model_serving_environment():
 
 def test_kwargs_are_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
-    vector_search_tool._index.similarity_search = MagicMock()
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
 
-    vector_search_tool.execute(query="what cities are in Germany", extra_param="something random")
+    # extra_param is ignored because it isn't part of the signature for similarity_search
+    vector_search_tool.execute(
+        query="what cities are in Germany", debug_level=2, extra_param="something random"
+    )
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
         query_text="what cities are in Germany",
@@ -318,7 +322,7 @@ def test_kwargs_are_passed_through() -> None:
         query_vector=None,
         filters={},
         score_threshold=0.5,
-        extra_param="something random",
+        debug_level=2,
     )
 
 

@@ -109,11 +109,11 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
 
             query_text, query_vector = get_query_text_vector(query)
             combined_filters = {**(filters or {}), **(self.filters or {})}
-            
-            signature = inspect.signature(self.index.similarity_search)
+
+            signature = inspect.signature(self._index.similarity_search)
             kwargs = {**kwargs, **(self.model_extra or {})}
             kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
-            
+
             # Ensure that we don't have duplicate keys
             kwargs.update(
                 {
