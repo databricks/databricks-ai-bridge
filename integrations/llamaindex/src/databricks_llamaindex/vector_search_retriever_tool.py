@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Dict, List, Optional, Tuple
 
 from databricks_ai_bridge.utils.vector_search import (
@@ -107,13 +108,12 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
-            filtered_model_extra = {
-                k: v
-                for k, v in (self.model_extra or {}).items()
-                if k != "requires_context"  # don't include extra parameters set by FunctionTool
-            }
-            kwargs = {**kwargs, **filtered_model_extra}
             combined_filters = {**(filters or {}), **(self.filters or {})}
+            
+            signature = inspect.signature(self.index.similarity_search)
+            kwargs = {**kwargs, **(self.model_extra or {})}
+            kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+            
             # Ensure that we don't have duplicate keys
             kwargs.update(
                 {

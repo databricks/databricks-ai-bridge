@@ -1,3 +1,4 @@
+import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -208,8 +209,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
-        kwargs = {**kwargs, **(self.model_extra or {})}
         combined_filters = {**(filters or {}), **(self.filters or {})}
+        
+        signature = inspect.signature(self.index.similarity_search)
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
         kwargs.update(
             {
                 "query_text": query_text,
