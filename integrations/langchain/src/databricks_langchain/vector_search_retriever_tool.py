@@ -69,10 +69,12 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         kwargs = {**kwargs, **(self.model_extra or {})}
         combined_filters = {**(filters or {}), **(self.filters or {})}
         # Ensure that we don't have duplicate keys
-        kwargs.update({
-            "query": query,
-            "k": self.num_results,
-            "filter": combined_filters,
-            "query_type": self.query_type
-        })
+        kwargs.update(
+            {
+                "query": query,
+                "k": self.num_results,
+                "filter": combined_filters,
+                "query_type": self.query_type,
+            }
+        )
         return self._vector_store.similarity_search(**kwargs)

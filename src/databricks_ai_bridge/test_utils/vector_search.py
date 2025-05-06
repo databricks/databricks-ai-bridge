@@ -1,7 +1,7 @@
 import uuid
 from typing import Generator, List, Optional
 from unittest import mock
-from unittest.mock import create_autospec, MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 from databricks.vector_search.client import VectorSearchIndex  # type: ignore

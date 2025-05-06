@@ -167,7 +167,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         query: str,
         filters: Optional[Dict[str, Any]] = None,
         openai_client: OpenAI = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> List[Dict]:
         """
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the

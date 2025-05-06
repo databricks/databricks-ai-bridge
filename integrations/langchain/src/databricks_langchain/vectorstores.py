@@ -461,14 +461,16 @@ class DatabricksVectorSearch(VectorStore):
 
         signature = inspect.signature(self.index.similarity_search)
         kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
-        kwargs.update({
-            "columns": self._columns,
-            "query_text": query_text,
-            "query_vector": query_vector,
-            "filters": filter,
-            "num_results": k,
-            "query_type": query_type,
-        })
+        kwargs.update(
+            {
+                "columns": self._columns,
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "filters": filter,
+                "num_results": k,
+                "query_type": query_type,
+            }
+        )
         search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
             search_resp, self._retriever_schema, document_class=Document

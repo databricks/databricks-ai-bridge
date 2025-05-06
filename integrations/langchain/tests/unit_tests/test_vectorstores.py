@@ -308,7 +308,7 @@ def test_similarity_search_passing_kwargs() -> None:
     vectorsearch = init_vector_search(DELTA_SYNC_INDEX)
     query = "foo"
     filters = {"some filter": True}
-    query_type="ANN"
+    query_type = "ANN"
 
     search_result = vectorsearch.similarity_search(
         query,
@@ -317,7 +317,7 @@ def test_similarity_search_passing_kwargs() -> None:
         query_type=query_type,
         score_threshold=0.5,
         num_results=10,
-        random_parameters="not included"
+        random_parameters="not included",
     )
     vectorsearch.index.similarity_search.assert_called_once_with(
         columns=["id", "text"],
@@ -325,8 +325,8 @@ def test_similarity_search_passing_kwargs() -> None:
         query_vector=None,
         filters=filters,
         query_type=query_type,
-        num_results=5, # maintained
-        score_threshold=0.5 # passed
+        num_results=5,  # maintained
+        score_threshold=0.5,  # passed
     )
 
 
