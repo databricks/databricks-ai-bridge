@@ -107,7 +107,11 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
-            kwargs = {**kwargs, **(self.model_extra or {})}
+            filtered_model_extra = {
+                k: v for k, v in (self.model_extra or {}).items()
+                if k != "requires_context" # don't include extra parameters set by FunctionTool
+            }
+            kwargs = {**kwargs, **filtered_model_extra}
             combined_filters = {**(filters or {}), **(self.filters or {})}
             # Ensure that we don't have duplicate keys
             kwargs.update({
@@ -118,7 +122,6 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 "num_results": self.num_results,
                 "query_type": self.query_type
             })
-            print(kwargs)
             search_resp = self._index.similarity_search(**kwargs)
             return parse_vector_search_response(
                 search_resp, self._retriever_schema, document_class=dict
