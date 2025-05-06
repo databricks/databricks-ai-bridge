@@ -60,5 +60,6 @@ def GenieAgent(
     )
 
     runnable = RunnableLambda(partial_genie_agent)
+    runnable.name = genie_agent_name
     runnable.description = genie.description
     return runnable
