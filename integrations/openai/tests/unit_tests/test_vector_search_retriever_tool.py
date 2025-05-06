@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
@@ -316,7 +316,7 @@ def test_kwargs_are_passed_through() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
-        filters=None,
+        filters={},
         score_threshold=0.5,
         extra_param="something random",
     )

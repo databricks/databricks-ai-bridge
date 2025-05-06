@@ -99,7 +99,7 @@ def test_filters_are_passed_through() -> None:
         {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        "what cities are in Germany",
+        query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"country": "Germany"},
         query_type=vector_search_tool.query_type,
@@ -114,7 +114,7 @@ def test_filters_are_combined() -> None:
         {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        "what cities are in Germany",
+        query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"city LIKE": "Berlin", "country": "Germany"},
         query_type=vector_search_tool.query_type,
@@ -315,10 +315,10 @@ def test_kwargs_are_passed_through() -> None:
         {"query": "what cities are in Germany", "extra_param": "something random"},
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        "what cities are in Germany",
+        query="what cities are in Germany",
         k=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
-        filter=None,
+        filter={},
         score_threshold=0.5,
         extra_param="something random",
     )

@@ -107,17 +107,19 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
-            combined_kwargs = {**kwargs, **(self.model_extra or {})}
+            kwargs = {**kwargs, **(self.model_extra or {})}
             combined_filters = {**(filters or {}), **(self.filters or {})}
-            search_resp = self._index.similarity_search(
-                columns=self.columns,
-                query_text=query_text,
-                query_vector=query_vector,
-                filters=combined_filters,
-                num_results=self.num_results,
-                query_type=self.query_type,
-                **combined_kwargs,
-            )
+            # Ensure that we don't have duplicate keys
+            kwargs.update({
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "columns": self.columns,
+                "filters": combined_filters,
+                "num_results": self.num_results,
+                "query_type": self.query_type
+            })
+            print(kwargs)
+            search_resp = self._index.similarity_search(**kwargs)
             return parse_vector_search_response(
                 search_resp, self._retriever_schema, document_class=dict
             )

@@ -194,13 +194,13 @@ def test_kwargs_are_passed_through() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
-        filters=None,
+        filters={},
         score_threshold=0.5,
         extra_param="something random",
         requires_context=False,
     )
 
-    
+
 def test_filters_are_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
     vector_search_tool._index.similarity_search = MagicMock()
@@ -213,6 +213,7 @@ def test_filters_are_passed_through() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
+        requires_context=False,
     )
 
 
@@ -228,4 +229,5 @@ def test_filters_are_combined() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
+        requires_context=False,
     )
