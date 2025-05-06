@@ -1,3 +1,4 @@
+import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -167,6 +168,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         query: str,
         filters: Optional[Dict[str, Any]] = None,
         openai_client: OpenAI = None,
+        **kwargs: Any,
     ) -> List[Dict]:
         """
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
@@ -208,14 +210,21 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 )
 
         combined_filters = {**(filters or {}), **(self.filters or {})}
-        search_resp = self._index.similarity_search(
-            columns=self.columns,
-            query_text=query_text,
-            query_vector=query_vector,
-            filters=combined_filters,
-            num_results=self.num_results,
-            query_type=self.query_type,
+
+        signature = inspect.signature(self._index.similarity_search)
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+        kwargs.update(
+            {
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "columns": self.columns,
+                "filters": combined_filters,
+                "num_results": self.num_results,
+                "query_type": self.query_type,
+            }
         )
+        search_resp = self._index.similarity_search(**kwargs)
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,
             retriever_schema=self._retriever_schema,

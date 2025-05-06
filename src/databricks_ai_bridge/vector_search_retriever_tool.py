@@ -37,6 +37,7 @@ def vector_search_retriever_tool_trace(func):
 
 
 class VectorSearchRetrieverToolInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     query: str = Field(
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
@@ -62,7 +63,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     implementations should follow.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )

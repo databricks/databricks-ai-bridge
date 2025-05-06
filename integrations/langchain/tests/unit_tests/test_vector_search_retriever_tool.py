@@ -50,18 +50,21 @@ def init_vector_search_tool(
     doc_uri: Optional[str] = None,
     primary_key: Optional[str] = None,
     filters: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "embedding": embedding,
-        "text_column": text_column,
-        "doc_uri": doc_uri,
-        "primary_key": primary_key,
-        "filters": filters,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "embedding": embedding,
+            "text_column": text_column,
+            "doc_uri": doc_uri,
+            "primary_key": primary_key,
+            "filters": filters,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -96,7 +99,7 @@ def test_filters_are_passed_through() -> None:
         {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        "what cities are in Germany",
+        query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"country": "Germany"},
         query_type=vector_search_tool.query_type,
@@ -111,7 +114,7 @@ def test_filters_are_combined() -> None:
         {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        "what cities are in Germany",
+        query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"city LIKE": "Berlin", "country": "Germany"},
         query_type=vector_search_tool.query_type,
@@ -302,3 +305,20 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True)
+
+
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "extra_param": "something random"},
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what cities are in Germany",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter={},
+        score_threshold=0.5,
+        extra_param="something random",
+    )

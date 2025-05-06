@@ -1,7 +1,7 @@
 import uuid
 from typing import Generator, List, Optional
 from unittest import mock
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 from databricks.vector_search.client import VectorSearchIndex  # type: ignore
@@ -132,7 +132,7 @@ def mock_vs_client() -> Generator:
         endpoint_name: Optional[str] = None,
         index_name: str = None,  # type: ignore
     ) -> MagicMock:
-        index = MagicMock(spec=VectorSearchIndex)
+        index = create_autospec(VectorSearchIndex, instance=True)
         if index_name not in INDEX_DETAILS:
             index_name = DIRECT_ACCESS_INDEX
         index.describe.return_value = INDEX_DETAILS[index_name]

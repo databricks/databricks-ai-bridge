@@ -1,11 +1,12 @@
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
+from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
@@ -53,16 +54,19 @@ def init_vector_search_tool(
     embedding: Optional[BaseEmbedding] = None,
     text_column: Optional[str] = None,
     filters: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "embedding": embedding,
-        "text_column": text_column,
-        "filters": filters,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "embedding": embedding,
+            "text_column": text_column,
+            "filters": filters,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -178,6 +182,26 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+
+
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
+
+    # extra_param is ignored because it isn't part of the signature for similarity_search
+    vector_search_tool.call(
+        query="what cities are in Germany", debug_level=2, extra_param="something random"
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+        filters={},
+        score_threshold=0.5,
+        debug_level=2,
+    )
 
 
 def test_filters_are_passed_through() -> None:
