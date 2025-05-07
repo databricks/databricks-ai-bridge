@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 from mlflow.models.resources import DatabricksServingEndpoint, DatabricksVectorSearchIndex
 
+from databricks_ai_bridge.test_utils.vector_search import mock_workspace_client  # noqa: F401
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import VectorSearchRetrieverToolMixin
 
@@ -66,3 +67,14 @@ def make_mock_index_details(is_databricks_managed_embeddings=False, embedding_so
 def test_get_resources(embedding_endpoint, index_details, resources):
     tool = DummyVectorSearchRetrieverTool(index_name=index_name)
     assert tool._get_resources(index_name, embedding_endpoint, index_details) == resources
+
+
+def test_describe_columns():
+    tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+    assert tool._describe_columns() == (
+        "The vector search index includes the following columns:\n"
+        "city_id (INT): No description provided\n"
+        "city (STRING): Name of the city\n"
+        "country (STRING): Name of the country\n"
+        "description (STRING): Detailed description of the city"
+    )
