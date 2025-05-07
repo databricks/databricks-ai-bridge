@@ -1,12 +1,20 @@
 # CHANGELOG
 
-## databrick-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
+## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.2, databricks-openai 0.3.2 (2025-05-07)
+
+### Improvements
+- Allow backticked vector search index names
+- Include embedding model as a resource for VectorSearchRetrieverTool
+- Support setting retriever schema (doc_uri, chunk_id) for VectorSearchRetrieverTool
+- Support for passing filters at query time and forwarding arbitrary kwargs through VectorSearchRetrieverTool
+
+## databricks-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
 
 ### Improvements
 - Fix Databricks Connect and Tabulate Dependencies
 - Remove default temperature for ChatDatabricks
 
-## databrick-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
+## databricks-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
 
 ### Highlights
 - Support On Behalf Of User rights with genie and VectorSearch Tool
