@@ -67,16 +67,38 @@ jobs:
       - name: Install core package
         run: |
           pip install .[dev]
-      - name: Install databricks-langchain version ${{ matrix.databricks-langchain-version }}
+      # Cache the downloaded and extracted langchain package
+      - name: Cache langchain package
+        id: cache-langchain
+        uses: actions/cache@v3
+        with:
+          path: /tmp/langchain-tests/databricks-langchain-${{ matrix.databricks-langchain-version }}
+          key: ${{ runner.os }}-langchain-${{ matrix.databricks-langchain-version }}-v1
+      - name: Download specific langchain version tests
         run: |
-          if [ "${{ matrix.databricks-langchain-version }}" = "dev" ]; then
-            pip install integrations/langchain[dev]
-          else
-            pip install "databricks-langchain==${{ matrix.databricks-langchain-version }}"
+          # Create temp directory for tests
+          mkdir -p /tmp/langchain-tests
+          cd /tmp/langchain-tests
+          
+          # Download the package
+          pip download databricks-langchain==${{ matrix.databricks-langchain-version }} --no-deps --no-binary=:all:
+          
+          # Extract it
+          tar -xzf databricks-langchain-${{ matrix.databricks-langchain-version }}.tar.gz
+      - name: Install test dependencies
+        run: |
+          cd /tmp/langchain-tests/databricks-langchain-${{ matrix.databricks-langchain-version }}
+          pip install pytest pytest-cov
+          
+          # Install remaining dependencies (excluding ai-bridge which we have from our PR)
+          if [ -f requirements.txt ]; then
+            grep -v "databricks-ai-bridge" requirements.txt > filtered_requirements.txt
+            pip install -r filtered_requirements.txt
           fi
-      - name: Run langchain integration tests
+      - name: Run databricks-langchain tests
         run: |
-          pytest integrations/langchain/tests/unit_tests
+          cd /tmp/langchain-tests/databricks-langchain-${{ matrix.databricks-langchain-version }}
+          python -m pytest tests -v
 
   openai_test:
     runs-on: ubuntu-latest
