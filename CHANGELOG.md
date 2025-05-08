@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.2, databricks-openai 0.3.2 (2025-05-07)
+## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.3, databricks-openai 0.3.2 (2025-05-07)
 
 ### Improvements
 - Allow backticked vector search index names
