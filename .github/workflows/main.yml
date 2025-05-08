@@ -55,6 +55,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10"]
+        databricks-langchain-version: ["0.1.0", "0.2.0", "0.3.0", "0.4.0", "dev"]  # Include whatever past versions you need
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -63,11 +64,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Install core package
         run: |
           pip install .
-          pip install integrations/langchain[dev]
-      - name: Run tests
+      - name: Install databricks-langchain version ${{ matrix.databricks-langchain-version }}
+        run: |
+          if [ "${{ matrix.databricks-langchain-version }}" = "dev" ]; then
+            pip install -e integrations/langchain[dev]
+          else
+            pip install "databricks-langchain==${{ matrix.databricks-langchain-version }}"
+          fi
+      - name: Run langchain integration tests
         run: |
           pytest integrations/langchain/tests/unit_tests
 
