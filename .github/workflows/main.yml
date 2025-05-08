@@ -66,11 +66,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install core package
         run: |
-          pip install .
+          pip install .[dev]
       - name: Install databricks-langchain version ${{ matrix.databricks-langchain-version }}
         run: |
           if [ "${{ matrix.databricks-langchain-version }}" = "dev" ]; then
-            pip install -e integrations/langchain[dev]
+            pip install integrations/langchain[dev]
           else
             pip install "databricks-langchain==${{ matrix.databricks-langchain-version }}"
           fi

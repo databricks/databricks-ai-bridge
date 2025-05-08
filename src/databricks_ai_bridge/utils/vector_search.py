@@ -161,8 +161,8 @@ def validate_and_get_return_columns(
     columns: List[str],
     text_column: str,
     index_details: IndexDetails,
-    doc_uri: str = None,
-    primary_key: str = None,
+    doc_uri: str,
+    primary_key: str,
 ) -> List[str]:
     """
     Get a list of columns to retrieve from the index.
