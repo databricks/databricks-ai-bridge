@@ -87,35 +87,40 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
     """
     metadata = {}
 
-    # Skipping the last column, which is always the score
-    for col, value in zip(columns[:-1], result[:-1]):
-        if col == retriever_schema.doc_uri:
-            metadata["doc_uri"] = value
-        elif col == retriever_schema.primary_key:
-            metadata["chunk_id"] = value
-        elif col == "doc_uri" and retriever_schema.doc_uri:
-            # Prioritize retriever_schema.doc_uri, don't override with the actual "doc_uri" column
-            continue
-        elif col == "chunk_id" and retriever_schema.primary_key:
-            # Prioritize retriever_schema.primary_key, don't override with the actual "chunk_id" column
-            continue
-        elif col in ignore_cols:
-            # ignore_cols has precedence over other_columns
-            continue
-        elif retriever_schema.other_columns is not None:
-            if col in retriever_schema.other_columns:
+    if retriever_schema:
+        # Skipping the last column, which is always the score
+        for col, value in zip(columns[:-1], result[:-1]):
+            if col == retriever_schema.doc_uri:
+                metadata["doc_uri"] = value
+            elif col == retriever_schema.primary_key:
+                metadata["chunk_id"] = value
+            elif col == "doc_uri" and retriever_schema.doc_uri:
+                # Prioritize retriever_schema.doc_uri, don't override with the actual "doc_uri" column
+                continue
+            elif col == "chunk_id" and retriever_schema.primary_key:
+                # Prioritize retriever_schema.primary_key, don't override with the actual "chunk_id" column
+                continue
+            elif col in ignore_cols:
+                # ignore_cols has precedence over other_columns
+                continue
+            elif retriever_schema.other_columns is not None:
+                if col in retriever_schema.other_columns:
+                    metadata[col] = value
+            else:
                 metadata[col] = value
-        else:
-            metadata[col] = value
+    else:
+        for col, value in zip(columns[:-1], result[:-1]):
+            if col not in ignore_cols:
+                metadata[col] = value
     return metadata
 
 
 def parse_vector_search_response(
     search_resp: Dict,
-    index_details: IndexDetails = None, # deprecated
-    text_column: str = None, # deprecated
+    index_details: IndexDetails = None,  # deprecated
+    text_column: str = None,  # deprecated
     *,
-    retriever_schema: RetrieverSchema = None, # required as of 0.5.0
+    retriever_schema: RetrieverSchema = None,
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
 ) -> List[Tuple[Dict, float]]:
@@ -123,13 +128,11 @@ def parse_vector_search_response(
     Parse the search response into a list of Documents with score.
     The document_class parameter is used to specify the class of the document to be created.
     """
-    if retriever_schema is None:
-        raise ValueError("retriever_schema is required as of v0.5.0")
-
     if ignore_cols is None:
         ignore_cols = []
 
-    text_column = retriever_schema.text_column
+    if retriever_schema:
+        text_column = retriever_schema.text_column
     ignore_cols.extend([text_column])
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
