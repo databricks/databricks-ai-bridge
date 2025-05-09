@@ -111,5 +111,5 @@ def construct_docs_with_score(
 )
 def test_parse_vector_search_response(retriever_schema, ignore_cols, docs_with_score):
     assert (
-        parse_vector_search_response(search_resp, retriever_schema, ignore_cols) == docs_with_score
+        parse_vector_search_response(search_resp, retriever_schema=retriever_schema, ignore_cols=ignore_cols) == docs_with_score
     )

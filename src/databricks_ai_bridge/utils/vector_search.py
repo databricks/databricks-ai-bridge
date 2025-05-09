@@ -112,8 +112,9 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
 
 def parse_vector_search_response(
     search_resp: Dict,
-    index_details: IndexDetails, # deprecated
-    text_column: str, # deprecated
+    index_details: IndexDetails = None, # deprecated
+    text_column: str = None, # deprecated
+    *,
     retriever_schema: RetrieverSchema = None, # required as of 0.5.0
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
