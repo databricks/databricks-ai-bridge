@@ -473,7 +473,7 @@ class DatabricksVectorSearch(VectorStore):
         )
         search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
-            search_resp, self._retriever_schema, document_class=Document
+            search_resp, retriever_schema=self._retriever_schema, document_class=Document
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -586,7 +586,7 @@ class DatabricksVectorSearch(VectorStore):
             **kwargs,
         )
         return parse_vector_search_response(
-            search_resp, self._retriever_schema, document_class=Document
+            search_resp, retriever_schema=self._retriever_schema, document_class=Document
         )
 
     def max_marginal_relevance_search(
@@ -723,7 +723,7 @@ class DatabricksVectorSearch(VectorStore):
         ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
         candidates = parse_vector_search_response(
             search_resp,
-            self._retriever_schema,
+            retriever_schema=self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
         )
