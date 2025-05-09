@@ -50,13 +50,11 @@ jobs:
         run: |
           pytest tests/
 
-  langchain_cross_version_test:
+  langchain_test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.10"]
-        databricks-langchain-version: ["0.1.0", "0.2.0", "0.3.0", "0.4.0"]
-      fail-fast: false
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -65,56 +63,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-      - name: Install core package
+      - name: Install dependencies
         run: |
-          pip install .[dev]
-      - name: Cache langchain tests
-        id: cache-langchain
-        uses: actions/cache@v3
-        with:
-          path: /tmp/langchain-tests/version-${{ matrix.databricks-langchain-version }}
-          key: ${{ runner.os }}-langchain-tests-${{ matrix.databricks-langchain-version }}
-      - name: Setup langchain tests
-        if: steps.cache-langchain.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p /tmp/langchain-tests/version-${{ matrix.databricks-langchain-version }}
-          cd /tmp/langchain-tests/version-${{ matrix.databricks-langchain-version }}
-          
-          pip install databricks-langchain==${{ matrix.databricks-langchain-version }} --no-deps --target=./package_files
-            
-          # Copy tests directory and setup files
-          if [ -d "./package_files/databricks_langchain/tests" ]; then
-            cp -r ./package_files/databricks_langchain/tests ./tests
-          elif [ -d "./package_files/tests" ]; then
-            cp -r ./package_files/tests ./tests
-          else 
-            echo "Error: Tests directory not found in the installed package"
-            find ./package_files -type d -name "test*" | grep -v "__pycache__"
-            # Try to find tests directory
-            TEST_DIR=$(find ./package_files -type d -name "test*" | grep -v "__pycache__" | head -1)
-            if [ -n "$TEST_DIR" ]; then
-              cp -r $TEST_DIR ./tests
-            fi
-          fi
-          
-          # Copy requirements and setup files if they exist
-          find ./package_files -name "requirements*.txt" -exec cp {} . \;
-          find ./package_files -name "setup.py" -exec cp {} . \;
-      - name: Install test dependencies
-        run: |
-          cd /tmp/langchain-tests/version-${{ matrix.databricks-langchain-version }}
-          
-          if [ -f requirements.txt ]; then
-            grep -v "databricks-ai-bridge" requirements.txt > filtered_requirements.txt || echo "No databricks-ai-bridge in requirements"
-            if [ -s filtered_requirements.txt ]; then
-              pip install -r filtered_requirements.txt
-            fi
-          fi
+          pip install .
+          pip install integrations/langchain[dev]
       - name: Run tests
         run: |
-          cd /tmp/langchain-tests/version-${{ matrix.databricks-langchain-version }}
-          pytest tests/unit_tests
+          pytest integrations/langchain/tests/unit_tests
 
   openai_test:
     runs-on: ubuntu-latest

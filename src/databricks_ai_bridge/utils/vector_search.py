@@ -112,7 +112,9 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
 
 def parse_vector_search_response(
     search_resp: Dict,
-    retriever_schema: RetrieverSchema,
+    index_details: IndexDetails, # deprecated
+    text_column: str, # deprecated
+    retriever_schema: RetrieverSchema = None, # required as of 0.5.0
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
 ) -> List[Tuple[Dict, float]]:
@@ -120,6 +122,9 @@ def parse_vector_search_response(
     Parse the search response into a list of Documents with score.
     The document_class parameter is used to specify the class of the document to be created.
     """
+    if retriever_schema is None:
+        raise ValueError("retriever_schema is required as of v0.5.0")
+
     if ignore_cols is None:
         ignore_cols = []
 
