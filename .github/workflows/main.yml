@@ -52,12 +52,14 @@ jobs:
 
   langchain_test:
     runs-on: ubuntu-latest
+    name: langchain_test (${{ matrix.python-version }}, ${{ matrix.version.name }})
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10"]
         version: 
         - {ref: "", name: "current"}
+        - {ref: "databricks-ai-v0.4.0", name: "v0.4.0"}
         - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
         - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
         - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
@@ -82,13 +84,24 @@ jobs:
 
   openai_test:
     runs-on: ubuntu-latest
+    name: openai_test (${{ matrix.python-version }}, ${{ matrix.version.name }})
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10"]
+        version:
+        - {ref: "", name: "current"}
+        - {ref: "databricks-ai-v0.4.0", name: "v0.4.0"}
+        - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
+        - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
+        - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.version.ref == '' && github.sha || matrix.version.ref }}
+          fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
