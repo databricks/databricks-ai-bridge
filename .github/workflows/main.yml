@@ -113,6 +113,9 @@ jobs:
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests/test_vector_search_retriever_tool.py::test_init
+          pytest integrations/langchain/tests/unit_tests/test_genie.py
+          pytest integrations/langchain/tests/unit_tests/test_embeddings.py
+          pytest integrations/langchain/tests/unit_tests/test_chat_models.py
 
   openai_test:
     runs-on: ubuntu-latest
@@ -145,8 +148,6 @@ jobs:
         version:
         - {ref: "databricks-ai-v0.4.0", name: "v0.4.0"}
         - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
-        - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
-        - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
     timeout-minutes: 20
     steps:
       - name: Checkout code
