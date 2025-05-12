@@ -1,6 +1,14 @@
 # CHANGELOG
 
-## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.3, databricks-openai 0.3.2 (2025-05-07)
+## databricks-ai-bridge 0.5.0, databricks-langchain 0.5.0, databricks-openai 0.4.0 (2025-05-12)
+
+### Improvements
+- Allow backticked vector search index names
+- Include embedding model as a resource for VectorSearchRetrieverTool
+- Support setting retriever schema (doc_uri, chunk_id) for VectorSearchRetrieverTool
+- Support for passing filters at query time and forwarding arbitrary kwargs through VectorSearchRetrieverTool
+
+## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.3, databricks-openai 0.3.2 (2025-05-07) - YANKED
 
 ### Improvements
 - Allow backticked vector search index names
