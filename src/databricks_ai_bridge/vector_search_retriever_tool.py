@@ -143,7 +143,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             return description
 
     def _get_resources(
-        self, index_name: str, embedding_endpoint: str, index_details: IndexDetails
+        self, index_name: str, embedding_endpoint: str, index_details: IndexDetails = None
     ) -> List[Resource]:
         resources = []
         if index_name:

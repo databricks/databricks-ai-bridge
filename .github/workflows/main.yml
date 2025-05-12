@@ -67,9 +67,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.version.ref == '' && github.sha || matrix.version.ref }}
-          fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -77,6 +74,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install .
+      - name: Checkout langchain version
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.version.ref == '' && github.sha || matrix.version.ref }}
+          fetch-depth: 1
+          path: old-version
+      - name: Replace current langchain with older version
+        run: |
           pip install integrations/langchain[dev]
       - name: Run tests
         run: |
