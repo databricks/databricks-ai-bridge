@@ -79,10 +79,14 @@ jobs:
         with:
           ref: ${{ matrix.version.ref == '' && github.sha || matrix.version.ref }}
           fetch-depth: 1
-          path: old-version
-      - name: Replace current langchain with older version
+          path: older-version
+      - name: Replace langchain with older version
         run: |
-          pip install integrations/langchain[dev]
+          # Remove current langchain if it exists to avoid conflicts
+          rm -rf integrations/langchain
+          
+          # Copy older version of langchain to the main repo
+          cp -r older-version/integrations/langchain integrations/
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
