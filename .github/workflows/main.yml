@@ -57,7 +57,10 @@ jobs:
         python-version: ["3.10"]
         version: 
         - {ref: "HEAD", name: "current"}
-        - {ref: "databricks-ai-bridge-0.3.0", name: "v0.3.0"}
+        - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
+        - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
+        - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
+        - {ref: "databricks-ai-v0.0", name: "v0.0"}
     timeout-minutes: 20
     steps:
       - name: Checkout code
