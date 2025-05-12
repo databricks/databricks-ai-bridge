@@ -56,7 +56,7 @@ jobs:
       matrix:
         python-version: ["3.10"]
         version: 
-        - {ref: "HEAD", name: "current"}
+        - {ref: "", name: "current"}
         - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
         - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
         - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
@@ -66,7 +66,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.version.ref }}
+          ref: ${{ matrix.version.ref == '' && github.sha || matrix.version.ref }}
+          fetch-depth: 1
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
