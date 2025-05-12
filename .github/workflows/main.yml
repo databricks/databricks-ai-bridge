@@ -82,7 +82,6 @@ jobs:
         - {ref: "databricks-ai-v0.4.0", name: "v0.4.0"}
         - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
         - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
-        - {ref: "databricks-ai-v0.1.0", name: "v0.1.0"}
     timeout-minutes: 20
     steps:
       - name: Checkout code
