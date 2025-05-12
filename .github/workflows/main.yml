@@ -111,6 +111,7 @@ jobs:
           pip install integrations/langchain[dev]
       - name: Run tests
         run: |
+          # Only testing initialization since functionality can change
           pytest integrations/langchain/tests/unit_tests/test_vector_search_retriever_tool.py::test_init
           pytest integrations/langchain/tests/unit_tests/test_genie.py
           pytest integrations/langchain/tests/unit_tests/test_embeddings.py
@@ -176,6 +177,7 @@ jobs:
           pip install integrations/openai[dev]
       - name: Run tests
         run: |
+          # Only testing initialization since functionality can change
           pytest integrations/openai/tests/unit_tests/test_vector_search_retriever_tool.py::test_vector_search_retriever_tool_init
 
 
