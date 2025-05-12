@@ -87,6 +87,9 @@ jobs:
           
           # Copy older version of langchain to the main repo
           cp -r older-version/integrations/langchain integrations/
+      - name: Install langchain dependency
+        run: |
+          pip install integrations/langchain[dev]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
