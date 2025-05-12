@@ -116,3 +116,14 @@ def test_parse_vector_search_response(retriever_schema, ignore_cols, docs_with_s
         )
         == docs_with_score
     )
+
+
+def test_parse_vector_search_response_without_retriever_schema():
+    assert (
+        parse_vector_search_response(search_resp, text_column="column_1", ignore_cols=["column_2"])
+        == construct_docs_with_score(
+            page_content_column="column_2",
+            column_3="column_3",
+            column_4="column_4",
+        ),
+    )
