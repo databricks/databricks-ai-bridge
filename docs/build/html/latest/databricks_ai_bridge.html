@@ -1,0 +1,312 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Databricks AI Bridge Python API &mdash; DatabricksAIBridge 0.5 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/sphinx_rtd_theme-tweaks.css?v=a45d9d10" />
+      <link rel="stylesheet" type="text/css" href="../_static/autodoc_pydantic.css?v=a0a71c94" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=16c547dc"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Databricks Langchain Integrations Python API" href="databricks_langchain.html" />
+    <link rel="prev" title="Databricks AI Python API" href="../index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #FFF" >
+
+          
+          
+          <a href="../index.html">
+            
+              <img src="../_static/databricks-logo.svg" class="logo" alt="Logo"/>
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Databricks AI Bridge Python API</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#databricks_ai_bridge.genie.GenieResponse"><code class="docutils literal notranslate"><span class="pre">GenieResponse</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.GenieResponse.result"><code class="docutils literal notranslate"><span class="pre">GenieResponse.result</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.GenieResponse.query"><code class="docutils literal notranslate"><span class="pre">GenieResponse.query</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.GenieResponse.description"><code class="docutils literal notranslate"><span class="pre">GenieResponse.description</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#databricks_ai_bridge.genie.Genie"><code class="docutils literal notranslate"><span class="pre">Genie</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.Genie.start_conversation"><code class="docutils literal notranslate"><span class="pre">Genie.start_conversation()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.Genie.create_message"><code class="docutils literal notranslate"><span class="pre">Genie.create_message()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.Genie.poll_for_result"><code class="docutils literal notranslate"><span class="pre">Genie.poll_for_result()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.genie.Genie.ask_question"><code class="docutils literal notranslate"><span class="pre">Genie.ask_question()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.vector_search_retriever_tool_trace"><code class="docutils literal notranslate"><span class="pre">vector_search_retriever_tool_trace()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolInput</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.filters"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolInput.filters</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.query"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolInput.query</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.columns"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.columns</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.doc_uri"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.doc_uri</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.filters"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.filters</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.index_name"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.index_name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.num_results"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.num_results</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.primary_key"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.primary_key</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.query_type"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.query_type</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.resources"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.resources</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_description"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.tool_description</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_name"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.tool_name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.workspace_client"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.workspace_client</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.validate_tool_name"><code class="docutils literal notranslate"><span class="pre">VectorSearchRetrieverToolMixin.validate_tool_name()</span></code></a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="databricks_langchain.html">Databricks Langchain Integrations Python API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="databricks_openai.html">Databricks OpenAI Integrations Python API</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu"  style="background: #FFF" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">DatabricksAIBridge</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content style-external-links">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Databricks AI Bridge Python API</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-databricks_ai_bridge.genie">
+<span id="databricks-ai-bridge-python-api"></span><h1>Databricks AI Bridge Python API<a class="headerlink" href="#module-databricks_ai_bridge.genie" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.GenieResponse">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">databricks_ai_bridge.genie.</span></span><span class="sig-name descname"><span class="pre">GenieResponse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">result</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.2.3)"><span class="pre">pandas.core.frame.DataFrame</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">query</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.GenieResponse" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/functions.html#object" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></a></p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.GenieResponse.result">
+<span class="sig-name descname"><span class="pre">result</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.2.3)"><span class="pre">DataFrame</span></a></em><a class="headerlink" href="#databricks_ai_bridge.genie.GenieResponse.result" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.GenieResponse.query">
+<span class="sig-name descname"><span class="pre">query</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">''</span></em><a class="headerlink" href="#databricks_ai_bridge.genie.GenieResponse.query" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.GenieResponse.description">
+<span class="sig-name descname"><span class="pre">description</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">''</span></em><a class="headerlink" href="#databricks_ai_bridge.genie.GenieResponse.description" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.Genie">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">databricks_ai_bridge.genie.</span></span><span class="sig-name descname"><span class="pre">Genie</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">space_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">client</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">WorkspaceClient</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.Genie" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/functions.html#object" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></a></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.Genie.start_conversation">
+<span class="sig-name descname"><span class="pre">start_conversation</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">content</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.Genie.start_conversation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.Genie.create_message">
+<span class="sig-name descname"><span class="pre">create_message</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conversation_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">content</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.Genie.create_message" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.Genie.poll_for_result">
+<span class="sig-name descname"><span class="pre">poll_for_result</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">conversation_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">message_id</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.Genie.poll_for_result" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="databricks_ai_bridge.genie.Genie.ask_question">
+<span class="sig-name descname"><span class="pre">ask_question</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">question</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.genie.Genie.ask_question" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py function" id="module-databricks_ai_bridge.vector_search_retriever_tool">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.vector_search_retriever_tool_trace">
+<span class="sig-prename descclassname"><span class="pre">databricks_ai_bridge.vector_search_retriever_tool.</span></span><span class="sig-name descname"><span class="pre">vector_search_retriever_tool_trace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">func</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.vector_search_retriever_tool_trace" title="Link to this definition"></a></dt>
+<dd><p>Decorator factory to trace VectorSearchRetrieverTool with the tool name</p>
+</dd></dl>
+
+<dl class="py class pydantic_model">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">databricks_ai_bridge.vector_search_retriever_tool.</span></span><span class="sig-name descname"><span class="pre">VectorSearchRetrieverToolInput</span></span><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.pydantic.dev/latest/api/base_model/#pydantic.BaseModel" title="(in Pydantic v0.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseModel</span></code></a></p>
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.filters">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">filters</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.13)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.13)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.filters" title="Link to this definition"></a></dt>
+<dd><p>Optional filters to refine vector search results. Supports the following operators:</p>
+<ul class="simple">
+<li><p>Inclusion: {“column”: value} or {“column”: [value1, value2]} (matches if the column equals any of the provided values)</p></li>
+<li><p>Exclusion: {“column NOT”: value}</p></li>
+<li><p>Comparisons: {“column &lt;”: value}, {“column &gt;=”: value}, etc.</p></li>
+<li><p>Pattern match: {“column LIKE”: “word”} (matches full tokens separated by whitespace)</p></li>
+<li><p>OR logic: {“column1 OR column2”: [value1, value2]} (matches if column1 equals value1 or column2 equals value2; matches are position-specific)</p></li>
+</ul>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.query">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">query</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><em class="property"> <span class="pre">[Required]</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolInput.query" title="Link to this definition"></a></dt>
+<dd><p>The string used to query the index with and identify the most similar vectors and return the associated documents.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class pydantic_model">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">databricks_ai_bridge.vector_search_retriever_tool.</span></span><span class="sig-name descname"><span class="pre">VectorSearchRetrieverToolMixin</span></span><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.pydantic.dev/latest/api/base_model/#pydantic.BaseModel" title="(in Pydantic v0.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">BaseModel</span></code></a></p>
+<p>Mixin class for Databricks Vector Search retrieval tools.
+This class provides the common structure and interface that framework-specific
+implementations should follow.</p>
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.columns">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">columns</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.columns" title="Link to this definition"></a></dt>
+<dd><p>Columns to return when doing the search.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.doc_uri">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">doc_uri</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.doc_uri" title="Link to this definition"></a></dt>
+<dd><p>The URI for the document, used for rendering a link in the UI.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.filters">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">filters</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.13)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.13)"><span class="pre">Any</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.filters" title="Link to this definition"></a></dt>
+<dd><p>Filters to apply to the search.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.index_name">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">index_name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><em class="property"> <span class="pre">[Required]</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.index_name" title="Link to this definition"></a></dt>
+<dd><p>The name of the index to use, format: ‘catalog.schema.index’.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.num_results">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">num_results</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">5</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.num_results" title="Link to this definition"></a></dt>
+<dd><p>The number of results to return.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.primary_key">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">primary_key</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.primary_key" title="Link to this definition"></a></dt>
+<dd><p>Identifies the chunk that the document is a part of. This is used by some evaluation metrics.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.query_type">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">query_type</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'ANN'</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.query_type" title="Link to this definition"></a></dt>
+<dd><p>The type of this query. Supported values are ‘ANN’ and ‘HYBRID’.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.resources">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">resources</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.13)"><span class="pre">dict</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.resources" title="Link to this definition"></a></dt>
+<dd><p>Resources required to log a model that uses this tool.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_description">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">tool_description</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_description" title="Link to this definition"></a></dt>
+<dd><p>A description of the tool.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_name">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">tool_name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.tool_name" title="Link to this definition"></a></dt>
+<dd><p>The name of the retrieval tool.</p>
+</dd></dl>
+
+<dl class="py attribute pydantic_field">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.workspace_client">
+<em class="property"><span class="pre">param</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">workspace_client</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">WorkspaceClient</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.13)"><span class="pre">None</span></a></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.workspace_client" title="Link to this definition"></a></dt>
+<dd><p>When specified, will use workspace client credential strategy to instantiate VectorSearchClient</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.validate_tool_name">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">validate_tool_name</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tool_name</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin.validate_tool_name" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../index.html" class="btn btn-neutral float-left" title="Databricks AI Python API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="databricks_langchain.html" class="btn btn-neutral float-right" title="Databricks Langchain Integrations Python API" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Databricks.</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+ 
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-44077918-9"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-44077918-9');
+</script>
+
+
+</body>
+</html>
