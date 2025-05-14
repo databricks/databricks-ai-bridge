@@ -2,6 +2,7 @@ import inspect
 from typing import Any, Dict, List, Optional, Tuple
 
 from databricks_ai_bridge.utils.vector_search import (
+    FilterItem,
     IndexDetails,
     RetrieverSchema,
     parse_vector_search_response,
@@ -78,7 +79,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
 
         # Define the similarity search function
         def similarity_search(
-            query: str, filters: Optional[Dict[str, Any]] = None, **kwargs: Any
+            query: str, filters: Optional[List[FilterItem]] = None, **kwargs: Any
         ) -> List[Dict[str, Any]]:
             def get_query_text_vector(query: str) -> Tuple[Optional[str], Optional[List[float]]]:
                 if self._index_details.is_databricks_managed_embeddings():
@@ -108,7 +109,8 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
-            combined_filters = {**(filters or {}), **(self.filters or {})}
+            filters_dict = {item["key"]: item["value"] for item in (filters or [])}
+            combined_filters = {**filters_dict, **(self.filters or {})}
 
             signature = inspect.signature(self._index.similarity_search)
             kwargs = {**kwargs, **(self.model_extra or {})}

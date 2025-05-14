@@ -11,6 +11,7 @@ from databricks_ai_bridge.utils.vector_search import (
     validate_and_get_text_column,
 )
 from databricks_ai_bridge.vector_search_retriever_tool import (
+    FilterItem,
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
@@ -166,7 +167,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def execute(
         self,
         query: str,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[List[FilterItem]] = None,
         openai_client: OpenAI = None,
         **kwargs: Any,
     ) -> List[Dict]:
@@ -209,7 +210,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
-        combined_filters = {**(filters or {}), **(self.filters or {})}
+        filters_dict = {item["key"]: item["value"] for item in (filters or [])}
+        combined_filters = {**filters_dict, **(self.filters or {})}
 
         signature = inspect.signature(self._index.similarity_search)
         kwargs = {**kwargs, **(self.model_extra or {})}

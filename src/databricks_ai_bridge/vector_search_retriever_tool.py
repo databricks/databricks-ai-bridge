@@ -36,21 +36,26 @@ def vector_search_retriever_tool_trace(func):
     return wrapper
 
 
+class FilterItem(BaseModel):
+    key: str = Field(description="The filter key, which includes the column name and can include operators like 'NOT', '<', '>=', 'LIKE', 'OR'")
+    value: Any = Field(description="The filter value, which can be a single value or an array of values")
+
+
 class VectorSearchRetrieverToolInput(BaseModel):
     model_config = ConfigDict(extra="allow")
     query: str = Field(
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
     )
-    filters: Dict[str, Any] = Field(
+    filters: Optional[List[FilterItem]] = Field(
         default=None,
         description=(
-            "Optional filters to refine vector search results. Supports the following operators:\n\n"
-            '- Inclusion: {"column": value} or {"column": [value1, value2]} (matches if the column equals any of the provided values)\n'
-            '- Exclusion: {"column NOT": value}\n'
-            '- Comparisons: {"column <": value}, {"column >=": value}, etc.\n'
-            '- Pattern match: {"column LIKE": "word"} (matches full tokens separated by whitespace)\n'
-            '- OR logic: {"column1 OR column2": [value1, value2]} '
+            "Optional filters to refine vector search results as an array of key-value pairs. Supports the following operators:\n\n"
+            '- Inclusion: [{"key": "column", "value": value}] or [{"key": "column", "value": [value1, value2]}] (matches if the column equals any of the provided values)\n'
+            '- Exclusion: [{"key": "column NOT", "value": value}]\n'
+            '- Comparisons: [{"key": "column <", "value": value}], [{"key": "column >=", "value": value}], etc.\n'
+            '- Pattern match: [{"key": "column LIKE", "value": "word"}] (matches full tokens separated by whitespace)\n'
+            '- OR logic: [{"key": "column1 OR column2", "value": [value1, value2]}] '
             "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
         ),
     )
