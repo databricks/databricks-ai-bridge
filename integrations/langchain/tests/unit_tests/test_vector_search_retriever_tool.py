@@ -79,6 +79,8 @@ def init_vector_search_tool(
 def test_init(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
     assert isinstance(vector_search_tool, BaseTool)
+    schema_str = json.dumps(vector_search_tool.args_schema.model_json_schema())
+    assert '"additionalProperties": true' not in schema_str
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -96,7 +98,7 @@ def test_filters_are_passed_through() -> None:
     vector_search_tool._vector_store.similarity_search = MagicMock()
 
     vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
+        {"query": "what cities are in Germany", "filters": [{"key": "country", "value": "Germany"}]}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
         query="what cities are in Germany",
@@ -111,7 +113,7 @@ def test_filters_are_combined() -> None:
     vector_search_tool._vector_store.similarity_search = MagicMock()
 
     vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "filters": {"country": "Germany"}}
+        {"query": "what cities are in Germany", "filters": [{"key": "country", "value": "Germany"}]}
     )
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
         query="what cities are in Germany",

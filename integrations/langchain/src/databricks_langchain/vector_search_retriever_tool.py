@@ -68,7 +68,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     @vector_search_retriever_tool_trace
     def _run(self, query: str, filters: Optional[List[FilterItem]] = None, **kwargs) -> str:
         kwargs = {**kwargs, **(self.model_extra or {})}
-        filters_dict = {item["key"]: item["value"] for item in (filters or [])}
+        filters_dict = {item.key: item.value for item in (filters or [])}
         combined_filters = {**filters_dict, **(self.filters or {})}
         # Ensure that we don't have duplicate keys
         kwargs.update(

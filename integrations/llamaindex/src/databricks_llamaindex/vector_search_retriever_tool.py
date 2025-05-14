@@ -109,7 +109,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
-            filters_dict = {item["key"]: item["value"] for item in (filters or [])}
+            filters_dict = {item.key: item.value for item in (filters or [])}
             combined_filters = {**filters_dict, **(self.filters or {})}
 
             signature = inspect.signature(self._index.similarity_search)
