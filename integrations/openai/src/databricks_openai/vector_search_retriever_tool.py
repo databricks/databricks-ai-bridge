@@ -146,6 +146,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         # We need to remove strict: True from the tool in order to support arbitrary filters
         if "function" in self.tool and "strict" in self.tool["function"]:
             del self.tool["function"]["strict"]
+        # We need to remove additionalProperties from the tool in order to support arbitrary kwargs
+        if "function" in self.tool and "parameters" in self.tool["function"] and "additionalProperties" in self.tool["function"]["parameters"]:
+            del self.tool["function"]["parameters"]["additionalProperties"]
 
         try:
             from databricks.sdk import WorkspaceClient

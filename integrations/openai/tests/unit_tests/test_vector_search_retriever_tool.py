@@ -192,7 +192,7 @@ def test_vector_search_retriever_tool_init(
     assert [d["page_content"] in INPUT_TEXTS for d in outputs]
 
     # Ensure that there aren't additional properties (not compatible with llama)
-    assert '"additionalProperties": true' not in str(vector_search_tool.dict())
+    assert "'additionalProperties': True" not in str(vector_search_tool.tool)
 
 
 @pytest.mark.parametrize("columns", [None, ["id", "text"]])
