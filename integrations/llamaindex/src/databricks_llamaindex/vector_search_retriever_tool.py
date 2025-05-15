@@ -109,6 +109,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                 return text, vector
 
             query_text, query_vector = get_query_text_vector(query)
+            # Since LLM can generate either a dict or FilterItem, convert to dict always
             filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
             combined_filters = {**filters_dict, **(self.filters or {})}
 

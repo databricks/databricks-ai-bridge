@@ -217,8 +217,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
-        if isinstance(filters, dict):
-            filters = FilterItem(filters)
+        # Since LLM can generate either a dict or FilterItem, convert to dict always
         filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
         combined_filters = {**filters_dict, **(self.filters or {})}
 
