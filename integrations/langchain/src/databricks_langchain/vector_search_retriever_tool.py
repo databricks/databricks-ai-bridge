@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Type, List
+from typing import List, Optional, Type
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (

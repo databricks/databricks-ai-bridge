@@ -10,7 +10,6 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
 from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.utils import CredentialStrategy
-from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
@@ -20,6 +19,7 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     mock_vs_client,
     mock_workspace_client,
 )
+from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
 from mlflow.entities import SpanType
 from mlflow.models.resources import (
     DatabricksServingEndpoint,
@@ -335,7 +335,8 @@ def test_filters_are_passed_through() -> None:
     vector_search_tool._index.similarity_search = MagicMock()
 
     vector_search_tool.execute(
-        {"query": "what cities are in Germany"}, filters=[FilterItem(key="country", value="Germany")]
+        {"query": "what cities are in Germany"},
+        filters=[FilterItem(key="country", value="Germany")],
     )
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
@@ -351,7 +352,9 @@ def test_filters_are_combined() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
     vector_search_tool._index.similarity_search = MagicMock()
 
-    vector_search_tool.execute(query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")])
+    vector_search_tool.execute(
+        query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
+    )
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
         query_text="what cities are in Germany",

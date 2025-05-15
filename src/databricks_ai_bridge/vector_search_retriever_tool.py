@@ -37,8 +37,12 @@ def vector_search_retriever_tool_trace(func):
 
 
 class FilterItem(BaseModel):
-    key: str = Field(description="The filter key, which includes the column name and can include operators like 'NOT', '<', '>=', 'LIKE', 'OR'")
-    value: Any = Field(description="The filter value, which can be a single value or an array of values")
+    key: str = Field(
+        description="The filter key, which includes the column name and can include operators like 'NOT', '<', '>=', 'LIKE', 'OR'"
+    )
+    value: Any = Field(
+        description="The filter value, which can be a single value or an array of values"
+    )
 
 
 class VectorSearchRetrieverToolInput(BaseModel):

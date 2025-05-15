@@ -10,6 +10,7 @@ license = { text="Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "databricks-vectorsearch>=0.50",
+    "langchain>=0.3.0",
     "databricks-ai-bridge>=0.4.2",
     "openai>=1.66.0",
     "pydantic>2.10.0",
