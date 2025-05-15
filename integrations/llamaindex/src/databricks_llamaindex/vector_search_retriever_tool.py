@@ -2,7 +2,6 @@ import inspect
 from typing import Any, Dict, List, Optional, Tuple
 
 from databricks_ai_bridge.utils.vector_search import (
-    FilterItem,
     IndexDetails,
     RetrieverSchema,
     parse_vector_search_response,
@@ -10,6 +9,7 @@ from databricks_ai_bridge.utils.vector_search import (
     validate_and_get_text_column,
 )
 from databricks_ai_bridge.vector_search_retriever_tool import (
+    FilterItem,
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
 )
