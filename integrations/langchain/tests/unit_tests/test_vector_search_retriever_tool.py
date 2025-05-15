@@ -80,7 +80,7 @@ def init_vector_search_tool(
 def test_init(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
     assert isinstance(vector_search_tool, BaseTool)
-    assert '"additionalProperties": true' not in str(vector_search_tool.args)
+    assert "'additionalProperties': true" not in str(vector_search_tool.args)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
