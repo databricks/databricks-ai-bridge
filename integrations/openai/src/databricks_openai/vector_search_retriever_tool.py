@@ -217,6 +217,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
+        if isinstance(filters, dict):
+            filters = FilterItem(filters)
         filters_dict = {item.key: item.value for item in (filters or [])}
         combined_filters = {**filters_dict, **(self.filters or {})}
 
