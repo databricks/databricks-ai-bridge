@@ -1,3 +1,4 @@
+import bisect
 import logging
 import time
 from dataclasses import dataclass
@@ -59,15 +60,35 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
 
         rows.append(row)
 
-    query_result = pd.DataFrame(rows, columns=header).to_markdown()
-
+    dataframe = pd.DataFrame(rows, columns=header)
+    query_result = dataframe.to_markdown()
     tokens_used = _count_tokens(query_result)
-    while tokens_used > MAX_TOKENS_OF_DATA:
-        rows.pop()
-        query_result = pd.DataFrame(rows, columns=header).to_markdown()
-        tokens_used = _count_tokens(query_result)
 
-    return query_result.strip() if query_result else query_result
+    # If the full result fits, return it
+    if tokens_used <= MAX_TOKENS_OF_DATA:
+        return query_result.strip()
+
+    def is_too_big(n):
+        return _count_tokens(dataframe.iloc[:n].to_markdown()) > MAX_TOKENS_OF_DATA
+
+    # Use bisect_left to find the cutoff point of rows within the max token data limit in a O(log n) complexity
+    # Passing True, as this is the target value we are looking for when _is_too_big returns
+    cutoff = bisect.bisect_left(range(len(dataframe) + 1), True, key=is_too_big)
+
+    # Slice to the found limit
+    truncated_df = dataframe.iloc[:cutoff]
+
+    # Edge case: Cannot return any rows because of tokens so return an empty string
+    if len(truncated_df) == 0:
+        return ""
+
+    truncated_result = truncated_df.to_markdown()
+
+    # Double-check edge case if we overshot by one
+    if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
+        truncated_result = truncated_df.iloc[:-1].to_markdown()
+
+    return truncated_result.strip()
 
 
 class Genie:
