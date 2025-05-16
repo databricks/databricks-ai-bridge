@@ -6,7 +6,7 @@ authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "typing_extensions",
   "pydantic",
