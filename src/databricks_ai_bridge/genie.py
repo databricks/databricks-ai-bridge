@@ -59,15 +59,33 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
 
         rows.append(row)
 
-    query_result = pd.DataFrame(rows, columns=header).to_markdown()
-
+    dataframe = pd.DataFrame(rows, columns=header)
+    query_result = dataframe.to_markdown()
     tokens_used = _count_tokens(query_result)
-    while tokens_used > MAX_TOKENS_OF_DATA:
-        rows.pop()
-        query_result = pd.DataFrame(rows, columns=header).to_markdown()
-        tokens_used = _count_tokens(query_result)
 
-    return query_result.strip() if query_result else query_result
+    # If the full result fits, return it
+    if tokens_used <= MAX_TOKENS_OF_DATA:
+        return query_result.strip()
+
+    # Binary search to find the maximum number of rows that fit within the token limit
+    lo, hi = 0, len(dataframe)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        candidate = dataframe.iloc[:mid].to_markdown()
+        if _count_tokens(candidate) > MAX_TOKENS_OF_DATA:
+            hi = mid
+        else:
+            lo = mid + 1
+
+    # Slice to the found limit
+    truncated_df = dataframe.iloc[:lo]
+    truncated_result = truncated_df.to_markdown()
+
+    # Double-check edge case if we overshot by one
+    if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
+        truncated_result = truncated_df.iloc[:-1].to_markdown()
+
+    return truncated_result.strip()
 
 
 class Genie:
