@@ -235,6 +235,9 @@ def test_parse_query_result_trims_data():
 
 
 def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
+    if markdown_str == "":
+        return pd.DataFrame()
+
     lines = markdown_str.strip().splitlines()
 
     # Remove Markdown separator row (2nd line)
@@ -254,7 +257,7 @@ def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
     return df
 
 
-@pytest.mark.parametrize("max_tokens", [100, 1000, 2000, 8000, 10000, 15000, 19000, 100000])
+@pytest.mark.parametrize("max_tokens", [1, 100, 1000, 2000, 8000, 10000, 15000, 19000, 100000])
 def test_parse_query_result_trims_large_data(max_tokens):
     """
     Ensure _parse_query_result trims output to stay within token limits.
@@ -298,10 +301,12 @@ def test_parse_query_result_trims_large_data(max_tokens):
             }
         )
 
+        expected_markdown = (
+            "" if len(result_df) == 0 else expected_df[: len(result_df)].to_markdown()
+        )
         # Ensure result matches expected subset and respects token limit
-        assert result_df.to_markdown() == expected_df[: len(result_df)].to_markdown()
+        assert markdown_result == expected_markdown
         assert _count_tokens(markdown_result) <= max_tokens
-
         # Ensure adding one more row would exceed token limit or we're at full length
         next_row_exceeds = (
             _count_tokens(expected_df.iloc[: len(result_df) + 1].to_markdown()) > max_tokens
