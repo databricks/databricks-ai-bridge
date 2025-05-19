@@ -72,12 +72,13 @@ def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
         title="Sales Space",
         description="description",
     )
-    MockWorkspaceClient.genie.get_space.return_value = mock_space
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
 
-    agent = GenieAgent("space-id", "Genie", MockWorkspaceClient)
+    agent = GenieAgent("space-id", "Genie", client=mock_client)
     assert agent.description == "description"
 
-    MockWorkspaceClient.genie.get_space.assert_called_once()
+    mock_client.genie.get_space.assert_called_once()
     assert agent == MockRunnableLambda.return_value
 
 
@@ -89,12 +90,13 @@ def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceCl
         title="Sales Space",
         description=None,
     )
-    MockWorkspaceClient.genie.get_space.return_value = mock_space
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
 
-    agent = GenieAgent("space-id", "Genie", "this is a description", MockWorkspaceClient)
+    agent = GenieAgent("space-id", "Genie", "this is a description", client=mock_client)
     assert agent.description == "this is a description"
 
-    MockWorkspaceClient.genie.get_space.assert_called_once()
+    mock_client.genie.get_space.assert_called_once()
     assert agent == MockRunnableLambda.return_value
 
 
