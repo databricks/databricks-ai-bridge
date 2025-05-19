@@ -1,6 +1,6 @@
 [project]
 name = "databricks-openai"
-version = "0.4.1.dev0"
+version = "0.4.2.dev0"
 description = "Support for Databricks AI support with OpenAI"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
