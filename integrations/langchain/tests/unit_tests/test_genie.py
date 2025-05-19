@@ -92,7 +92,7 @@ def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceCl
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
     agent = GenieAgent("space-id", "Genie", "this is a description", MockWorkspaceClient)
-    assert agent.description == "description"
+    assert agent.description == "this is a description"
 
     MockWorkspaceClient.genie.get_space.assert_called_once()
     assert agent == MockRunnableLambda.return_value
