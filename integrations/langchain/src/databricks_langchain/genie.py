@@ -40,9 +40,10 @@ def _query_genie_as_agent(input, genie: Genie, genie_agent_name):
 def GenieAgent(
     genie_space_id,
     genie_agent_name: str = "Genie",
+    description: str = "",
     client: Optional["WorkspaceClient"] = None,
 ):
-    """Create a genie agent that can be used to query the API"""
+    """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used."""
     if not genie_space_id:
         raise ValueError("genie_space_id is required to create a GenieAgent")
 
@@ -61,5 +62,5 @@ def GenieAgent(
 
     runnable = RunnableLambda(partial_genie_agent)
     runnable.name = genie_agent_name
-    runnable.description = genie.description
+    runnable.description = description or genie.description
     return runnable
