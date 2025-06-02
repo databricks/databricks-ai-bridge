@@ -31,7 +31,10 @@ def _query_genie_as_agent(input, genie: Genie, genie_agent_name):
     genie_response = genie.ask_question(message)
 
     if query_result := genie_response.result:
-        return {"messages": [AIMessage(content=query_result)]}
+        messages = [AIMessage(content=query_result)]
+        if query := genie_response.query:
+            messages.append(AIMessage(content=query))
+        return {"messages": messages}
     else:
         return {"messages": [AIMessage(content="")]}
 
