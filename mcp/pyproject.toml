@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-asyncio",
   "typing_extensions",
   "databricks-sdk>=0.49.0",
   "ruff==0.6.4",

@@ -1,6 +1,7 @@
+from databricks.sdk import WorkspaceClient
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthToken
-from databricks.sdk import WorkspaceClient
+
 
 class DatabricksTokenStorage(TokenStorage):
     def __init__(self, workspace_client):
