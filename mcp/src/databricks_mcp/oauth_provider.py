@@ -12,7 +12,7 @@ class DatabricksTokenStorage(TokenStorage):
         return OAuthToken(access_token=token, expires_in=60)
 
 
-class DatabricksOAuthClientProvider:
+class DatabricksOAuthClientProvider(OAuthClientProvider):
     def __init__(self, workspace_client: WorkspaceClient):
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 
