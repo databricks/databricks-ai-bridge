@@ -16,7 +16,7 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
     def __init__(self, workspace_client: WorkspaceClient):
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 
-        super.__init__(
+        super().__init__(
             server_url="",
             client_metadata=None,
             storage=self.databricks_token_storage,
