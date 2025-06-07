@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.9.1",
     "databricks-sdk>=0.49.0",
-    "mlflow"
+    "mlflow==3.0.0rc3"
 ]
 
 [project.optional-dependencies]
