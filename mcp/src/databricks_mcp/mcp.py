@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import List, Any
+from typing import List, Any, Optional
 from urllib.parse import urlparse
 
 from databricks.sdk import WorkspaceClient
@@ -31,8 +31,8 @@ MCP_URL_PATTERNS = {
 
 
 class McpServer:
-    def __init__(self, client: WorkspaceClient, mcp_url: str):
-        self.client = client
+    def __init__(self,  mcp_url: str, client: Optional[WorkspaceClient] = None):
+        self.client = client or WorkspaceClient()
         self.mcp_url = mcp_url
 
     def _is_valid_databricks_managed_mcp_url(self) -> bool:
