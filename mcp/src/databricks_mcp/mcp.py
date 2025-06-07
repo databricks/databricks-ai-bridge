@@ -30,7 +30,7 @@ MCP_URL_PATTERNS = {
 }
 
 
-class McpServer:
+class DatabricksMCPClient:
     def __init__(self,  mcp_url: str, client: Optional[WorkspaceClient] = None):
         self.client = client or WorkspaceClient()
         self.mcp_url = mcp_url

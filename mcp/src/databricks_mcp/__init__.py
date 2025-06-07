@@ -1,4 +1,4 @@
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
-from databricks_mcp.mcp import MCPServer
+from databricks_mcp.mcp import DatabricksMCPClient
 
-__all__ = ["DatabricksOAuthClientProvider", "MCPServer"]
+__all__ = ["DatabricksOAuthClientProvider", "DatabricksMCPClient"]
