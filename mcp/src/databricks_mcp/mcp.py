@@ -1,20 +1,21 @@
 import asyncio
 import logging
 import re
-from typing import List, Any, Optional
+from typing import Any, List, Optional
 from urllib.parse import urlparse
 
 from databricks.sdk import WorkspaceClient
-from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import Tool, CallToolResult
+from mcp.types import CallToolResult, Tool
 from mlflow.models.resources import (
     DatabricksFunction,
     DatabricksGenieSpace,
     DatabricksResource,
     DatabricksVectorSearchIndex,
 )
+
+from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ MCP_URL_PATTERNS = {
 
 
 class DatabricksMCPClient:
-    def __init__(self,  mcp_url: str, client: Optional[WorkspaceClient] = None):
+    def __init__(self, mcp_url: str, client: Optional[WorkspaceClient] = None):
         self.client = client or WorkspaceClient()
         self.mcp_url = mcp_url
 
@@ -40,7 +41,6 @@ class DatabricksMCPClient:
         path = urlparse(self.mcp_url).path
         return any(re.match(pattern, path) for pattern in MCP_URL_PATTERNS.values())
 
-
     def _get_databricks_managed_mcp_url_type(self) -> str:
         """Determine the MCP URL type based on the path."""
         path = urlparse(self.mcp_url).path
@@ -48,7 +48,6 @@ class DatabricksMCPClient:
             if re.match(pattern, path):
                 return mcp_type
         raise ValueError(f"Unrecognized MCP URL: {self.mcp_url}")
-
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
@@ -60,7 +59,11 @@ class DatabricksMCPClient:
                 await session.initialize()
                 return (await session.list_tools()).tools
 
-    async def _call_tools_async(self, tool_name: str, arguments: dict[str, Any] | None = None,) -> CallToolResult:
+    async def _call_tools_async(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> CallToolResult:
         """Call the tool with the given name and input."""
         async with streamablehttp_client(
             url=self.mcp_url,
@@ -79,7 +82,6 @@ class DatabricksMCPClient:
             raise ValueError(f"Genie ID not found in: {self.mcp_url}")
         return genie_id
 
-
     def _normalize_tool_name(self, name: str) -> str:
         """Convert double underscores to dots for compatibility."""
         return name.replace("__", ".")
@@ -87,7 +89,6 @@ class DatabricksMCPClient:
     def list_tools(self) -> List[Tool]:
         """List the tools from the MCP URL."""
         return asyncio.run(self._get_tools_async())
-    
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
         """Call the tool with the given name and input."""
