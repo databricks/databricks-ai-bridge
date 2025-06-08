@@ -102,7 +102,7 @@ class DatabricksMCPClient:
         Note that this method is only for databricks managed MCP URLs. It returns empty list for other MCP URLs
         """
         try:
-            if not self.is_valid_databricks_managed_mcp_url():
+            if not self._is_valid_databricks_managed_mcp_url():
                 logger.warning(f"Ignoring invalid MCP URL: {self.mcp_url}")
                 return []
 
