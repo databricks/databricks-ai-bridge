@@ -10,6 +10,7 @@ class DatabricksTokenStorage(TokenStorage):
         self.workspace_client = workspace_client
 
     async def get_tokens(self) -> OAuthToken | None:
+        print("GETTING TOKENS")
         headers = self.workspace_client.config.authenticate()
         authorization_header = headers["Authorization"]
         if not authorization_header.startswith("Bearer "):
