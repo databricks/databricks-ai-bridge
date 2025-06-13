@@ -2,7 +2,7 @@ from databricks.sdk import WorkspaceClient
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthToken
 
-TOKEN_EXPIRATION_SECONDS = 60
+TOKEN_EXPIRATION_SECONDS = 5
 
 
 class DatabricksTokenStorage(TokenStorage):
