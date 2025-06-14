@@ -252,7 +252,10 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self.client = get_deployment_client(self.target_uri)
+        if "client" in kwargs:
+            self.client = kwargs["client"]
+        else:
+            self.client = get_deployment_client(self.target_uri)
         self.extra_params = self.extra_params or {}
 
     @property
