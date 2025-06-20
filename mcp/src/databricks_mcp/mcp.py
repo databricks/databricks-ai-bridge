@@ -32,27 +32,27 @@ MCP_URL_PATTERNS = {
 
 
 class DatabricksMCPClient:
-    def __init__(self, mcp_url: str, client: Optional[WorkspaceClient] = None):
-        self.client = client or WorkspaceClient()
-        self.mcp_url = mcp_url
+    def __init__(self, server_url: str, workspace_client: Optional[WorkspaceClient] = None):
+        self.client = workspace_client or WorkspaceClient()
+        self.server_url = server_url
 
     def _is_valid_databricks_managed_mcp_url(self) -> bool:
         """Validate the MCP URL against known patterns."""
-        path = urlparse(self.mcp_url).path
+        path = urlparse(self.server_url).path
         return any(re.match(pattern, path) for pattern in MCP_URL_PATTERNS.values())
 
     def _get_databricks_managed_mcp_url_type(self) -> str:
         """Determine the MCP URL type based on the path."""
-        path = urlparse(self.mcp_url).path
+        path = urlparse(self.server_url).path
         for mcp_type, pattern in MCP_URL_PATTERNS.items():
             if re.match(pattern, path):
                 return mcp_type
-        raise ValueError(f"Unrecognized MCP URL: {self.mcp_url}")
+        raise ValueError(f"Unrecognized MCP URL: {self.server_url}")
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
         async with streamablehttp_client(
-            url=self.mcp_url,
+            url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
@@ -66,7 +66,7 @@ class DatabricksMCPClient:
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
         async with streamablehttp_client(
-            url=self.mcp_url,
+            url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
@@ -74,12 +74,12 @@ class DatabricksMCPClient:
 
     def _extract_genie_id(self) -> str:
         """Extract the Genie space ID from the URL."""
-        path = urlparse(self.mcp_url).path
+        path = urlparse(self.server_url).path
         if "/genie/" not in path:
-            raise ValueError(f"Missing /genie/ segment in: {self.mcp_url}")
+            raise ValueError(f"Missing /genie/ segment in: {self.server_url}")
         genie_id = path.split("/genie/", 1)[1]
         if not genie_id:
-            raise ValueError(f"Genie ID not found in: {self.mcp_url}")
+            raise ValueError(f"Genie ID not found in: {self.server_url}")
         return genie_id
 
     def _normalize_tool_name(self, name: str) -> str:
@@ -103,7 +103,7 @@ class DatabricksMCPClient:
         """
         try:
             if not self._is_valid_databricks_managed_mcp_url():
-                logger.warning(f"Ignoring invalid MCP URL: {self.mcp_url}")
+                logger.warning(f"Ignoring invalid MCP URL: {self.server_url}")
                 return []
 
             mcp_type = self._get_databricks_managed_mcp_url_type()
