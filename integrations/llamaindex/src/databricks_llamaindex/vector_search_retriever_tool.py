@@ -130,7 +130,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             )
             search_resp = self._index.similarity_search(**kwargs)
             return parse_vector_search_response(
-                search_resp, retriever_schema=self._retriever_schema, document_class=dict
+                search_resp, retriever_schema=self._retriever_schema, document_class=dict, include_score=self.include_score
             )
 
         # Create tool metadata

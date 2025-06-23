@@ -435,6 +435,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Dict[str, Any]] = None,
         *,
         query_type: Optional[str] = None,
+        include_score: Optional[bool] = False,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Return docs most similar to query, along with scores.
@@ -473,7 +474,7 @@ class DatabricksVectorSearch(VectorStore):
         )
         search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
-            search_resp, retriever_schema=self._retriever_schema, document_class=Document
+            search_resp, retriever_schema=self._retriever_schema, document_class=Document, include_score=include_score
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -543,6 +544,7 @@ class DatabricksVectorSearch(VectorStore):
         *,
         query_type: Optional[str] = None,
         query: Optional[str] = None,
+        include_score: Optional[bool] = False,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Return docs most similar to embedding vector, along with scores.
@@ -586,7 +588,7 @@ class DatabricksVectorSearch(VectorStore):
             **kwargs,
         )
         return parse_vector_search_response(
-            search_resp, retriever_schema=self._retriever_schema, document_class=Document
+            search_resp, retriever_schema=self._retriever_schema, document_class=Document, include_score=include_score
         )
 
     def max_marginal_relevance_search(
@@ -666,6 +668,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Any] = None,
         *,
         query_type: Optional[str] = None,
+        include_score: Optional[bool] = False,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance.
@@ -726,6 +729,7 @@ class DatabricksVectorSearch(VectorStore):
             retriever_schema=self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
+            include_score=include_score
         )
         selected_results = [r[0] for i, r in enumerate(candidates) if i in mmr_selected]
         return selected_results

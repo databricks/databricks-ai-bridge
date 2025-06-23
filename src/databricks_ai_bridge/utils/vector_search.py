@@ -89,7 +89,7 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
 
     if retriever_schema:
         # Skipping the last column, which is always the score
-        for col, value in zip(columns[:-1], result[:-1]):
+        for col, value in zip(columns, result):
             if col == retriever_schema.doc_uri:
                 metadata["doc_uri"] = value
             elif col == retriever_schema.primary_key:
@@ -123,6 +123,7 @@ def parse_vector_search_response(
     retriever_schema: RetrieverSchema = None,
     ignore_cols: Optional[List[str]] = None,
     document_class: Any = dict,
+    include_score: bool = False,
 ) -> List[Tuple[Dict, float]]:
     """
     Parse the search response into a list of Documents with score.
@@ -131,9 +132,13 @@ def parse_vector_search_response(
     if ignore_cols is None:
         ignore_cols = []
 
+    if not include_score:
+        ignore_cols.append("score")
+
     if retriever_schema:
         text_column = retriever_schema.text_column
-    ignore_cols.extend([text_column])
+    
+    ignore_cols.append(text_column)
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
     docs_with_score = []

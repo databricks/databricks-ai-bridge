@@ -100,6 +100,10 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         None,
         description="Identifies the chunk that the document is a part of. This is used by some evaluation metrics.",
     )
+    include_score: Optional[bool] = Field(
+        False,
+        description="When true, will return the similarity score with the metadata."
+    )
 
     @validator("tool_name")
     def validate_tool_name(cls, tool_name):
