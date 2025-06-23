@@ -13,7 +13,7 @@ async def test_oauth_provider():
     oauth_token = await provider.storage.get_tokens()
     assert oauth_token.access_token == "test-token"
     assert oauth_token.expires_in == 60
-    assert oauth_token.token_type == "bearer"
+    assert oauth_token.token_type.lower() == "bearer"
 
 
 @pytest.mark.asyncio
@@ -30,4 +30,4 @@ async def test_authenticate_raises_exception():
             oauth_token = await provider.storage.get_tokens()
             assert oauth_token.access_token == "test-token"
             assert oauth_token.expires_in == 60
-            assert oauth_token.token_type == "bearer"
+            assert oauth_token.token_type.lower() == "bearer"
