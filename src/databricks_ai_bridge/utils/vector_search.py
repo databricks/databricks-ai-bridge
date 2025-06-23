@@ -137,7 +137,7 @@ def parse_vector_search_response(
 
     if retriever_schema:
         text_column = retriever_schema.text_column
-    
+
     ignore_cols.append(text_column)
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]

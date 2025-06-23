@@ -183,7 +183,7 @@ def test_vector_search_retriever_tool_init(
     assert all(["id" in d["metadata"] for d in docs])
 
     # Ensure tracing works properly
-    trace = mlflow.get_last_active_trace()
+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])

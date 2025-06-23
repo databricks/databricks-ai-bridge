@@ -239,6 +239,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             search_resp=search_resp,
             retriever_schema=self._retriever_schema,
             document_class=dict,
-            include_score=self.include_score
+            include_score=self.include_score,
         )
         return [doc for doc, _ in docs_with_score]

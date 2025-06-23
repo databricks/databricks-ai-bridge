@@ -474,7 +474,10 @@ class DatabricksVectorSearch(VectorStore):
         )
         search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
-            search_resp, retriever_schema=self._retriever_schema, document_class=Document, include_score=include_score
+            search_resp,
+            retriever_schema=self._retriever_schema,
+            document_class=Document,
+            include_score=include_score,
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -588,7 +591,10 @@ class DatabricksVectorSearch(VectorStore):
             **kwargs,
         )
         return parse_vector_search_response(
-            search_resp, retriever_schema=self._retriever_schema, document_class=Document, include_score=include_score
+            search_resp,
+            retriever_schema=self._retriever_schema,
+            document_class=Document,
+            include_score=include_score,
         )
 
     def max_marginal_relevance_search(
@@ -729,7 +735,7 @@ class DatabricksVectorSearch(VectorStore):
             retriever_schema=self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
-            include_score=include_score
+            include_score=include_score,
         )
         selected_results = [r[0] for i, r in enumerate(candidates) if i in mmr_selected]
         return selected_results
