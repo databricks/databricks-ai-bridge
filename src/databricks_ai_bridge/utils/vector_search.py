@@ -139,6 +139,9 @@ def parse_vector_search_response(
     if ignore_cols is None:
         ignore_cols = []
 
+    if not include_score:
+        ignore_cols.append("score")
+
     if retriever_schema:
         text_column = retriever_schema.text_column
 
