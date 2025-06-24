@@ -22,8 +22,8 @@ def construct_docs_with_score(
     column_2: str = None,
     column_3: str = None,
     column_4: str = None,
-    document_class = dict,
-    include_score = False,
+    document_class=dict,
+    include_score=False,
 ):
     """
     Constructs a list of (document, score) tuples based on simulated search response data.
@@ -122,25 +122,23 @@ def test_parse_vector_search_response(retriever_schema, ignore_cols, docs_with_s
 
 
 def test_parse_vector_search_response_with_score():
-    assert (
-        parse_vector_search_response(search_resp, retriever_schema=RetrieverSchema(text_column="column_1"), include_score=True)
-        == construct_docs_with_score(
-            page_content_column="column_1",
-            column_2="column_2",
-            column_3="column_3",
-            column_4="column_4",
-            include_score=True
-        )
+    assert parse_vector_search_response(
+        search_resp, retriever_schema=RetrieverSchema(text_column="column_1"), include_score=True
+    ) == construct_docs_with_score(
+        page_content_column="column_1",
+        column_2="column_2",
+        column_3="column_3",
+        column_4="column_4",
+        include_score=True,
     )
 
 
 # The following test is for deprecated functionality
 def test_parse_vector_search_response_without_retriever_schema():
-    assert (
-        parse_vector_search_response(search_resp, text_column="column_1", ignore_cols=["column_2"])
-        == construct_docs_with_score(
-            page_content_column="column_1",
-            column_3="column_3",
-            column_4="column_4",
-        )
+    assert parse_vector_search_response(
+        search_resp, text_column="column_1", ignore_cols=["column_2"]
+    ) == construct_docs_with_score(
+        page_content_column="column_1",
+        column_3="column_3",
+        column_4="column_4",
     )

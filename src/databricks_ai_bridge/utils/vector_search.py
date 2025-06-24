@@ -69,7 +69,13 @@ class RetrieverSchema:
     other_columns: Optional[List[str]] = None
 
 
-def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore_cols, include_score):
+def get_metadata(
+    columns: List[str],
+    result: List[Any],
+    retriever_schema: RetrieverSchema,
+    ignore_cols: List[str],
+    include_score: bool,
+):
     """
     This function constructs a metadata dictionary by mapping column names to their corresponding values
     from the result row, with special handling for the provided retriever schema.
