@@ -87,7 +87,7 @@ class DatabricksMCPClient:
         return name.replace("__", ".")
 
     def list_tools(self) -> List[Tool]:
-        """List the tools from the MCP URL."""
+        """List tools for the current MCP server."""
         return asyncio.run(self._get_tools_async())
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
