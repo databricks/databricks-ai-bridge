@@ -194,7 +194,8 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
     vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
     vector_search_tool._run("Databricks Agent Framework")
-    trace = mlflow.get_last_active_trace()
+    last_trace_id = mlflow.get_last_active_trace_id()
+    trace = mlflow.get_trace(trace_id=last_trace_id)
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
