@@ -88,7 +88,6 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
     metadata = {}
 
     if retriever_schema:
-        # Skipping the last column, which is always the score
         for col, value in zip(columns, result):
             if col == retriever_schema.doc_uri:
                 metadata["doc_uri"] = value
@@ -109,7 +108,7 @@ def get_metadata(columns: List[str], result: List[Any], retriever_schema, ignore
             else:
                 metadata[col] = value
     else:
-        for col, value in zip(columns[:-1], result[:-1]):
+        for col, value in zip(columns, result):
             if col not in ignore_cols:
                 metadata[col] = value
     return metadata
