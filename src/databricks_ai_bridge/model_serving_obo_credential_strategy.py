@@ -111,7 +111,10 @@ class ModelServingUserCredentials(CredentialsStrategy):
             header_factory = model_serving_auth_visitor(cfg)
             if not header_factory:
                 raise ValueError(
-                    f"Unable to authenticate using model_serving_user_credentials in Databricks Model Serving Environment"
+                    "Unable to authenticate using model_serving_user_credentials in Databricks Model Serving Environment. "
+                    "Please ensure you have specified UserAuthPolicy when logging the agent model and On Behalf of User Authorization for Agents is enabled in your workspace. "
+                    "Refer to the documentation here for more information: https://docs.databricks.com/aws/en/generative-ai/agent-framework/authenticate-on-behalf-of-user. "
+                    "If the issue persists, contact Databricks Support"
                 )
             return header_factory
         else:
