@@ -1,18 +1,16 @@
+import logging
 import os
 import threading
 from typing import Dict, Optional, Tuple
 
 from databricks.sdk.core import Config
 from databricks.sdk.credentials_provider import (
-    CredentialsProvider,
-    CredentialsStrategy,
-    DefaultCredentials,
+        CredentialsProvider,
+        CredentialsStrategy,
+        DefaultCredentials,
 )
-import logging
 
 logger = logging.getLogger(__name__)
-
-_MODEL_DEPENDENCY_OAUTH_TOKEN_FILE_PATH = "/var/credentials-secret/model-dependencies-oauth-token"
 
 def should_fetch_model_serving_environment_oauth() -> bool:
         """
@@ -25,9 +23,7 @@ def should_fetch_model_serving_environment_oauth() -> bool:
             or os.environ.get("IS_IN_DATABRICKS_MODEL_SERVING_ENV")
             or "false"
         )
-        return is_in_model_serving_env == "true" and os.path.isfile(
-            _MODEL_DEPENDENCY_OAUTH_TOKEN_FILE_PATH
-        )
+        return is_in_model_serving_env == "true"
 
 def _get_invokers_token():
     main_thread = threading.main_thread()
@@ -37,7 +33,10 @@ def _get_invokers_token():
         invokers_token = thread_data["invokers_token"]
 
     if invokers_token is None:
-        raise RuntimeError("Unable to read Invokers Token in Databricks Model Serving")
+        raise RuntimeError("Unable to read end user token in Databricks Model Serving. " \
+        "Please ensure you have specified UserAuthPolicy when logging the agent model "
+        "and On Behalf of User Authorization for Agents is enabled in your workspace. " \
+        "If the issue persists, contact Databricks Support")
 
     return invokers_token
 
@@ -55,7 +54,9 @@ def model_serving_auth_visitor(cfg: Config) -> Optional[CredentialsProvider]:
             host, token = get_databricks_host_token()
             if token is None:
                 raise ValueError(
-                    "Got malformed auth (empty token) when fetching auth implicitly available in Model Serving Environment. Please contact Databricks support"
+                    "Got malformed auth (empty token) when fetching auth implicitly available in Model Serving Environment. " \
+                    "Please ensure you have specified UserAuthPolicy when logging the agent model and On Behalf of " \
+                    "User Authorization for Agents is enabled in your workspace. If the issue persists, contact Databricks Support"
                 )
             if cfg.host is None:
                 cfg.host = host
@@ -77,12 +78,13 @@ def model_serving_auth_visitor(cfg: Config) -> Optional[CredentialsProvider]:
 
 class ModelServingUserCredentials(CredentialsStrategy):
     """
-    This credential strategy is designed for authenticating the Databricks SDK in the model serving environment using user-specific rights.
-    In the model serving environment, the strategy retrieves a downscoped user token from the thread-local variable.
+    This credential strategy is designed for authenticating the Databricks SDK in the model serving environment 
+    using user authorization (acting as the Databricks principal querying the serving endpoint).
+    In the model serving environment, the strategy retrieves a downscoped user token or fails if no such token is available
     In any other environments, the class defaults to the DefaultCredentialStrategy.
     To use this credential strategy, instantiate the WorkspaceClient with the ModelServingUserCredentials strategy as follows:
 
-    invokers_client = WorkspaceClient(credential_strategy = ModelServingUserCredentials())
+    user_client = WorkspaceClient(credential_strategy = ModelServingUserCredentials())
     """
 
 

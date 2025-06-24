@@ -1,6 +1,7 @@
 import threading
 
 from databricks.sdk.core import Config
+
 from databricks_ai_bridge.model_serving_obo_credential_strategy import ModelServingUserCredentials
 
 
@@ -11,10 +12,6 @@ def test_agent_user_credentials(monkeypatch):
 
     monkeypatch.setenv("IS_IN_DB_MODEL_SERVING_ENV", "true")
     monkeypatch.setenv("DB_MODEL_SERVING_HOST_URL", "x")
-    monkeypatch.setattr(
-        "databricks_ai_bridge.model_serving_obo_credential_strategy._MODEL_DEPENDENCY_OAUTH_TOKEN_FILE_PATH",
-        "tests/testdata/model-serving-test-token",
-    )
 
     invokers_token_val = "databricks_invokers_token"
     current_thread = threading.current_thread()
