@@ -15,7 +15,7 @@ dependencies = [
     "mlflow>=2.20.1",
     "pydantic>2.10.0",
     "unitycatalog-langchain[databricks]>=0.2.0",
-    "databricks-connect>=16.1.1",
+    "databricks-connect>=16.1.1,<16.4",
 ]
 
 [project.optional-dependencies]
