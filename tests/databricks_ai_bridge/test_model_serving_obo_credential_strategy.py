@@ -7,7 +7,7 @@ from databricks_ai_bridge.model_serving_obo_credential_strategy import ModelServ
 
 def test_agent_user_credentials(monkeypatch):
     # Guarantee that the tests defaults to env variables rather than config file.
-    
+
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "x")
 
     monkeypatch.setenv("IS_IN_DB_MODEL_SERVING_ENV", "true")
@@ -59,12 +59,13 @@ def test_agent_user_credentials(monkeypatch):
 
 # If this credential strategy is being used in a non model serving environments then use default credential strategy instead
 def test_agent_user_credentials_in_non_model_serving_environments(monkeypatch):
-
     monkeypatch.setenv("DATABRICKS_HOST", "x")
     monkeypatch.setenv("DATABRICKS_TOKEN", "token")
 
     cfg = Config(credentials_strategy=ModelServingUserCredentials())
-    assert cfg.auth_type == "pat"  # Auth type is PAT as it is no longer in a model serving environment
+    assert (
+        cfg.auth_type == "pat"
+    )  # Auth type is PAT as it is no longer in a model serving environment
 
     headers = cfg.authenticate()
 
