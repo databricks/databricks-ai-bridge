@@ -30,8 +30,21 @@ def _query_genie_as_agent(input, genie: Genie, genie_agent_name):
     # Send the message and wait for a response
     genie_response = genie.ask_question(message)
 
-    if query_result := genie_response.result:
-        return {"messages": [AIMessage(content=query_result)]}
+    query_sql = genie_response.query
+    query_reasoning = genie_response.description
+    query_result = genie_response.result
+    
+    # Create a list of AIMessage to return
+    messages = []
+
+    if query_sql:
+        messages.append(AIMessage(content=query_sql, name="query_sql"))
+    if query_reasoning:
+        messages.append(AIMessage(content=query_reasoning, name="query_reasoning"))
+    if query_result:
+        messages.append(AIMessage(content=query_result, name="query_result"))
+    if messages:
+        return {"messages": messages}
     else:
         return {"messages": [AIMessage(content="")]}
 
