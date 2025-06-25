@@ -51,31 +51,31 @@ def test_query_genie_as_agent(MockWorkspaceClient):
         description="description",
     )
     MockWorkspaceClient.genie.get_space.return_value = mock_space
-    
+
     # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result='It is sunny.',
-        query='SELECT * FROM weather',
-        description='This is the reasoning for the query'
+        result="It is sunny.",
+        query="SELECT * FROM weather",
+        description="This is the reasoning for the query",
     )
-    
+
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", MockWorkspaceClient)
-    
+
     # Mock the ask_question method to return our mock response
-    with patch.object(genie, 'ask_question', return_value=mock_genie_response):
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
         # Test with include_context=False (default)
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
         assert result == expected_message
-        
+
         # Test with include_context=True
         result = _query_genie_as_agent(input_data, genie, "Genie", include_context=True)
         expected_messages = {
             "messages": [
                 AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
                 AIMessage(content="SELECT * FROM weather", name="query_sql"),
-                AIMessage(content="It is sunny.", name="query_result")
+                AIMessage(content="It is sunny.", name="query_result"),
             ]
         }
         assert result == expected_messages
@@ -124,19 +124,17 @@ def test_query_genie_with_client(mock_workspace_client):
         title="Sales Space",
         description="description",
     )
-    
+
     # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result='It is sunny.',
-        query='SELECT weather FROM data',
-        description='Query reasoning'
+        result="It is sunny.", query="SELECT weather FROM data", description="Query reasoning"
     )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", mock_workspace_client)
-    
+
     # Mock the ask_question method to return our mock response
-    with patch.object(genie, 'ask_question', return_value=mock_genie_response):
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
         assert result == expected_message
