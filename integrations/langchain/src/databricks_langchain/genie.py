@@ -19,10 +19,7 @@ def _concat_messages_array(messages):
 
 
 @mlflow.trace()
-def _query_genie_as_agent(input,
-                          genie: Genie,
-                          genie_agent_name,
-                          include_context: bool = False):
+def _query_genie_as_agent(input, genie: Genie, genie_agent_name, include_context: bool = False):
     from langchain_core.messages import AIMessage
 
     message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
