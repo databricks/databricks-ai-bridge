@@ -1,5 +1,5 @@
-import threading
 import sys
+import threading
 from unittest.mock import MagicMock
 
 from databricks.sdk.core import Config
