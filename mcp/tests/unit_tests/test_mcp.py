@@ -215,7 +215,9 @@ class TestDatabricksMCPClient:
             ),
         ],
     )
-    def test_get_databricks_resources_with_tools(self, mcp_type, tool_names, expected_resource_names):
+    def test_get_databricks_resources_with_tools(
+        self, mcp_type, tool_names, expected_resource_names
+    ):
         """Test getting Databricks resources for MCP types that require tool listing."""
         mock_tools = [
             Tool(name=name, description=f"Tool {name}", inputSchema={}) for name in tool_names
