@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 import json
+from unittest.mock import MagicMock
 
 import mlflow  # type: ignore # noqa: F401
 import pytest
@@ -365,3 +366,41 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     assert "content" not in result.llm_output
     assert "role" not in result.llm_output
     assert "type" not in result.llm_output
+
+
+def test_chat_model_with_custom_client() -> None:
+    """Test that ChatDatabricks can be instantiated with a custom client."""
+    mock_custom_client = MagicMock(spec=mlflow.deployments.BaseDeploymentClient)
+    # Configure the mock's predict method to return a valid response structure
+    mock_predict_response = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        "model": "test-model",
+    }
+    mock_custom_client.predict.return_value = mock_predict_response
+
+    chat_model = ChatDatabricks(
+        model="test-model",
+        target_uri="databricks",  # This shouldn't be used if client is provided
+        client=mock_custom_client,
+    )
+
+    assert chat_model.client is mock_custom_client
+
+    sample_messages = [HumanMessage(content="Hello")]
+    chat_model._generate(messages=sample_messages)
+
+    mock_custom_client.predict.assert_called_once()
+    # Check that the 'endpoint' argument to predict matches chat_model.model
+    _, call_kwargs = mock_custom_client.predict.call_args
+    assert call_kwargs["endpoint"] == "test-model"
+    # Check structure of 'inputs' argument
+    assert "messages" in call_kwargs["inputs"]
+    assert len(call_kwargs["inputs"]["messages"]) == 1
+    assert call_kwargs["inputs"]["messages"][0]["content"] == "Hello"
+    assert call_kwargs["inputs"]["messages"][0]["role"] == "user"
