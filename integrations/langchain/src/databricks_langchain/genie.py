@@ -22,10 +22,20 @@ def _concat_messages_array(messages):
 def _query_genie_as_agent(input, genie: Genie, genie_agent_name):
     from langchain_core.messages import AIMessage
 
-    message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
+    messages = input.get("messages", [])
 
-    # Concatenate messages to form the chat history
-    message += _concat_messages_array(input.get("messages"))
+    # If there's only one message, pass it directly without chat history wrapping
+    if len(messages) == 1:
+        single_message = messages[0]
+        if isinstance(single_message, dict):
+            message = single_message.get('content', '')
+        else:
+            message = getattr(single_message, 'content', '')
+    else:
+        # Multiple messages - use chat history wrapping
+        message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
+        # Concatenate messages to form the chat history
+        message += _concat_messages_array(messages)
 
     # Send the message and wait for a response
     genie_response = genie.ask_question(message)
