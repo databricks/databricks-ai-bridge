@@ -74,6 +74,15 @@ class ChatDatabricks(BaseChatModel):
                 max_tokens=500,
             )
 
+        For ResponsesAgent endpoints, enable responses API compatibility:
+
+        .. code-block:: python
+
+            llm = ChatDatabricks(
+                model="my-responses-agent-endpoint",
+                use_responses_api=True,
+            )
+
     **Invoke**:
 
         .. code-block:: python
@@ -228,6 +237,8 @@ class ChatDatabricks(BaseChatModel):
     """
     stream_usage: bool = False
     """Any extra parameters to pass to the endpoint."""
+    use_responses_api: bool = False
+    """Whether to use the responses API format compatible with ResponsesAgent endpoints."""
     client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
 
     @property
@@ -281,7 +292,12 @@ class ChatDatabricks(BaseChatModel):
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
         resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
-        return self._convert_response_to_chat_result(resp)
+        
+        # Use responses API conversion if flag is enabled
+        if self.use_responses_api:
+            return _convert_responses_to_chat_result(resp)
+        else:
+            return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
         self,
@@ -332,47 +348,63 @@ class ChatDatabricks(BaseChatModel):
         if stream_usage is None:
             stream_usage = self.stream_usage
         data = self._prepare_inputs(messages, stop, **kwargs)
-        first_chunk_role = None
-        for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-            if chunk["choices"]:
-                choice = chunk["choices"][0]
+        
+        # Use responses API streaming if flag is enabled
+        if self.use_responses_api:
+            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
+                # Convert responses API chunk to generation chunk
+                generation_chunk = _convert_responses_chunk_to_generation_chunk(chunk)
+                
+                if generation_chunk is not None:
+                    if run_manager:
+                        run_manager.on_llm_new_token(
+                            generation_chunk.text, 
+                            chunk=generation_chunk
+                        )
+                    yield generation_chunk
+        else:
+            # Use standard streaming format
+            first_chunk_role = None
+            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
+                if chunk["choices"]:
+                    choice = chunk["choices"][0]
 
-                chunk_delta = choice["delta"]
-                if first_chunk_role is None:
-                    first_chunk_role = chunk_delta.get("role")
+                    chunk_delta = choice["delta"]
+                    if first_chunk_role is None:
+                        first_chunk_role = chunk_delta.get("role")
 
-                if stream_usage and (usage := chunk.get("usage")):
-                    input_tokens = usage.get("prompt_tokens", 0)
-                    output_tokens = usage.get("completion_tokens", 0)
-                    usage = {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "total_tokens": input_tokens + output_tokens,
-                    }
+                    if stream_usage and (usage := chunk.get("usage")):
+                        input_tokens = usage.get("prompt_tokens", 0)
+                        output_tokens = usage.get("completion_tokens", 0)
+                        usage = {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        }
+                    else:
+                        usage = None
+
+                    chunk_message = _convert_dict_to_message_chunk(
+                        chunk_delta, first_chunk_role, usage=usage
+                    )
+
+                    generation_info = {}
+                    if finish_reason := choice.get("finish_reason"):
+                        generation_info["finish_reason"] = finish_reason
+                    if logprobs := choice.get("logprobs"):
+                        generation_info["logprobs"] = logprobs
+
+                    chunk = ChatGenerationChunk(
+                        message=chunk_message, generation_info=generation_info or None
+                    )
+
+                    if run_manager:
+                        run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
+
+                    yield chunk
                 else:
-                    usage = None
-
-                chunk_message = _convert_dict_to_message_chunk(
-                    chunk_delta, first_chunk_role, usage=usage
-                )
-
-                generation_info = {}
-                if finish_reason := choice.get("finish_reason"):
-                    generation_info["finish_reason"] = finish_reason
-                if logprobs := choice.get("logprobs"):
-                    generation_info["logprobs"] = logprobs
-
-                chunk = ChatGenerationChunk(
-                    message=chunk_message, generation_info=generation_info or None
-                )
-
-                if run_manager:
-                    run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
-
-                yield chunk
-            else:
-                # Handle the case where choices are empty if needed
-                continue
+                    # Handle the case where choices are empty if needed
+                    continue
 
     def bind_tools(
         self,
@@ -854,3 +886,147 @@ def _convert_dict_to_message_chunk(
         )
     else:
         return ChatMessageChunk(content=content, role=role)
+
+
+def _convert_responses_chunk_to_generation_chunk(chunk: Dict[str, Any]) -> Optional[ChatGenerationChunk]:
+    """Convert ResponsesAgent API chunk to ChatGenerationChunk.
+    
+    ResponsesAgent models emit specific event types:
+    - response.output_text.delta: Streaming text content
+    - response.output_item.done: Final items with types: function_call_output, function_call, message
+    """
+    event_type = chunk.get("type")
+    
+    if event_type == "response.output_text.delta":
+        # Handle streaming text deltas
+        delta_text = chunk.get("delta", "")
+        chunk_message = AIMessageChunk(content=delta_text)
+        return ChatGenerationChunk(message=chunk_message)
+    
+    elif event_type == "response.output_item.done":
+        # Handle completed output items
+        item = chunk.get("item", {})
+        item_type = item.get("type")
+        
+        if item_type == "message":
+            # Extract content from message type
+            content = ""
+            if "output_text" in item:
+                content = item["output_text"].get("text", "")
+            
+            # Handle annotations if present
+            additional_kwargs = {}
+            if "annotations" in item:
+                additional_kwargs["annotations"] = item["annotations"]
+            
+            chunk_message = AIMessageChunk(
+                content=content,
+                additional_kwargs=additional_kwargs
+            )
+            generation_info = {"finish_reason": "stop"}
+            return ChatGenerationChunk(message=chunk_message, generation_info=generation_info)
+        
+        elif item_type == "function_call":
+            # Handle function/tool calls
+            function_call = item.get("function_call", {})
+            tool_call_chunks = []
+            
+            if function_call:
+                tool_call_chunks = [
+                    tool_call_chunk(
+                        name=function_call.get("name"),
+                        args=function_call.get("arguments", ""),
+                        id=function_call.get("id"),
+                        index=0
+                    )
+                ]
+            
+            chunk_message = AIMessageChunk(
+                content="",
+                tool_call_chunks=tool_call_chunks
+            )
+            return ChatGenerationChunk(message=chunk_message)
+        
+        elif item_type == "function_call_output":
+            # Handle function call outputs - typically not streamed but included for completeness
+            output_content = item.get("output", "")
+            chunk_message = AIMessageChunk(content=output_content)
+            return ChatGenerationChunk(message=chunk_message)
+    
+    # Return None for unhandled event types
+    return None
+
+
+def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
+    """Convert ResponsesAgent API response to ChatResult.
+    
+    ResponsesAgent responses contain output items with different types.
+    """
+    generations = []
+    
+    # Extract output items from the response
+    output_items = response.get("output", [])
+    if not isinstance(output_items, list):
+        output_items = [output_items] if output_items else []
+    
+    for item in output_items:
+        item_type = item.get("type")
+        
+        if item_type == "message":
+            # Extract content from message type
+            content = ""
+            if "output_text" in item:
+                content = item["output_text"].get("text", "")
+            
+            # Handle annotations
+            additional_kwargs = {}
+            if "annotations" in item:
+                additional_kwargs["annotations"] = item["annotations"]
+            
+            message = AIMessage(
+                content=content,
+                additional_kwargs=additional_kwargs
+            )
+            
+            generation = ChatGeneration(
+                message=message,
+                generation_info={}
+            )
+            generations.append(generation)
+        
+        elif item_type == "function_call":
+            # Handle function/tool calls
+            function_call = item.get("function_call", {})
+            tool_calls = []
+            
+            if function_call:
+                tool_calls = [{
+                    "id": function_call.get("id", ""),
+                    "name": function_call.get("name", ""),
+                    "args": function_call.get("arguments", {})
+                }]
+            
+            message = AIMessage(
+                content="",
+                tool_calls=tool_calls
+            )
+            
+            generation = ChatGeneration(
+                message=message,
+                generation_info={}
+            )
+            generations.append(generation)
+    
+    # If no generations were created, create a default empty one
+    if not generations:
+        generations = [ChatGeneration(
+            message=AIMessage(content=""),
+            generation_info={}
+        )]
+    
+    llm_output = {
+        k: v for k, v in response.items() 
+        if k not in ("output", "choices")
+    }
+    
+    return ChatResult(generations=generations, llm_output=llm_output)

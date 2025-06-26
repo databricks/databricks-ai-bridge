@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 import json
+from unittest import mock
 
 import mlflow  # type: ignore # noqa: F401
 import pytest
@@ -26,6 +27,8 @@ from databricks_langchain.chat_models import (
     _convert_dict_to_message,
     _convert_dict_to_message_chunk,
     _convert_message_to_dict,
+    _convert_responses_chunk_to_generation_chunk,
+    _convert_responses_to_chat_result,
 )
 from tests.utils.chat_models import (  # noqa: F401
     _MOCK_CHAT_RESPONSE,
@@ -365,3 +368,409 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     assert "content" not in result.llm_output
     assert "role" not in result.llm_output
     assert "type" not in result.llm_output
+
+
+### ResponsesAgent API Tests ###
+
+# Mock ResponsesAgent streaming response data
+_MOCK_RESPONSES_STREAM = [
+    {
+        "type": "response.output_text.delta",
+        "delta": "To calculate"
+    },
+    {
+        "type": "response.output_text.delta", 
+        "delta": " the result:"
+    },
+    {
+        "type": "response.output_text.delta",
+        "delta": " 36939 * 8922.4 = 329,511,111.6"
+    },
+    {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "output_text": {
+                "text": "To calculate the result: 36939 * 8922.4 = 329,511,111.6"
+            },
+            "annotations": {
+                "finish_reason": "stop"
+            }
+        }
+    }
+]
+
+# Mock ResponsesAgent non-streaming response
+_MOCK_RESPONSES_RESPONSE = {
+    "id": "response_id",
+    "object": "response",
+    "created": 1721875529,
+    "model": "responses-agent-model",
+    "output": [
+        {
+            "type": "message",
+            "output_text": {
+                "text": "To calculate the result: 36939 * 8922.4 = 329,511,111.6"
+            },
+            "annotations": {
+                "finish_reason": "stop"
+            }
+        }
+    ]
+}
+
+# Mock ResponsesAgent function call streaming response
+_MOCK_RESPONSES_FUNCTION_STREAM = [
+    {
+        "type": "response.output_text.delta",
+        "delta": "I'll help you get the weather."
+    },
+    {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "function_call": {
+                "id": "call_123",
+                "name": "GetWeather",
+                "arguments": '{"location": "San Francisco, CA"}'
+            }
+        }
+    }
+]
+
+# Mock ResponsesAgent function call non-streaming response
+_MOCK_RESPONSES_FUNCTION_RESPONSE = {
+    "id": "response_id",
+    "object": "response", 
+    "created": 1721875529,
+    "model": "responses-agent-model",
+    "output": [
+        {
+            "type": "function_call",
+            "function_call": {
+                "id": "call_123",
+                "name": "GetWeather",
+                "arguments": {"location": "San Francisco, CA"}
+            }
+        }
+    ]
+}
+
+
+def test_convert_responses_chunk_to_generation_chunk_text_delta():
+    """Test conversion of response.output_text.delta chunks."""
+    chunk = {
+        "type": "response.output_text.delta",
+        "delta": "Hello world"
+    }
+    
+    result = _convert_responses_chunk_to_generation_chunk(chunk)
+    
+    assert result is not None
+    assert result.message.content == "Hello world"
+    assert isinstance(result.message, AIMessageChunk)
+
+
+def test_convert_responses_chunk_to_generation_chunk_message_done():
+    """Test conversion of response.output_item.done chunks with message type."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "output_text": {
+                "text": "Complete response text"
+            },
+            "annotations": {
+                "finish_reason": "stop"
+            }
+        }
+    }
+    
+    result = _convert_responses_chunk_to_generation_chunk(chunk)
+    
+    assert result is not None
+    assert result.message.content == "Complete response text"
+    assert result.message.additional_kwargs["annotations"]["finish_reason"] == "stop"
+    assert result.generation_info["finish_reason"] == "stop"
+    assert isinstance(result.message, AIMessageChunk)
+
+
+def test_convert_responses_chunk_to_generation_chunk_function_call():
+    """Test conversion of response.output_item.done chunks with function_call type."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "function_call": {
+                "id": "call_123",
+                "name": "GetWeather",
+                "arguments": '{"location": "San Francisco, CA"}'
+            }
+        }
+    }
+    
+    result = _convert_responses_chunk_to_generation_chunk(chunk)
+    
+    assert result is not None
+    assert result.message.content == ""
+    assert len(result.message.tool_call_chunks) == 1
+    
+    tool_call = result.message.tool_call_chunks[0]
+    assert tool_call["name"] == "GetWeather"
+    assert tool_call["args"] == '{"location": "San Francisco, CA"}'
+    assert tool_call["id"] == "call_123"
+    assert tool_call["index"] == 0
+
+
+def test_convert_responses_chunk_to_generation_chunk_function_call_output():
+    """Test conversion of response.output_item.done chunks with function_call_output type."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call_output",
+            "output": "The weather is sunny and 75°F"
+        }
+    }
+    
+    result = _convert_responses_chunk_to_generation_chunk(chunk)
+    
+    assert result is not None
+    assert result.message.content == "The weather is sunny and 75°F"
+    assert isinstance(result.message, AIMessageChunk)
+
+
+def test_convert_responses_chunk_to_generation_chunk_unknown_type():
+    """Test that unknown chunk types return None."""
+    chunk = {
+        "type": "unknown.type",
+        "data": "some data"
+    }
+    
+    result = _convert_responses_chunk_to_generation_chunk(chunk)
+    assert result is None
+
+
+def test_convert_responses_to_chat_result_message():
+    """Test conversion of ResponsesAgent response with message output."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "Hello, how can I help you?"
+                },
+                "annotations": {
+                    "finish_reason": "stop"
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "Hello, how can I help you?"
+    assert generation.message.additional_kwargs["annotations"]["finish_reason"] == "stop"
+    assert isinstance(generation.message, AIMessage)
+    
+    # Check llm_output
+    assert result.llm_output["id"] == "response_id"
+    assert result.llm_output["model"] == "responses-agent-model"
+    assert "output" not in result.llm_output
+    assert "choices" not in result.llm_output
+
+
+def test_convert_responses_to_chat_result_function_call():
+    """Test conversion of ResponsesAgent response with function_call output."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "function_call",
+                "function_call": {
+                    "id": "call_123",
+                    "name": "GetWeather",
+                    "arguments": {"location": "San Francisco, CA"}
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == ""
+    assert len(generation.message.tool_calls) == 1
+    
+    tool_call = generation.message.tool_calls[0]
+    assert tool_call["id"] == "call_123"
+    assert tool_call["name"] == "GetWeather"
+    assert tool_call["args"] == {"location": "San Francisco, CA"}
+    assert isinstance(generation.message, AIMessage)
+
+
+def test_convert_responses_to_chat_result_empty_output():
+    """Test conversion with empty output creates default generation."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": []
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == ""
+    assert isinstance(generation.message, AIMessage)
+
+
+def test_convert_responses_to_chat_result_single_output():
+    """Test conversion with single output (not in list)."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": {
+            "type": "message",
+            "output_text": {
+                "text": "Single output message"
+            }
+        }
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "Single output message"
+
+
+def test_chat_databricks_use_responses_api_flag():
+    """Test that use_responses_api flag is properly set."""
+    llm = ChatDatabricks(
+        model="responses-agent-model",
+        use_responses_api=True
+    )
+    
+    assert llm.use_responses_api is True
+    
+    # Test default value
+    llm_default = ChatDatabricks(model="standard-model")
+    assert llm_default.use_responses_api is False
+
+
+@pytest.fixture
+def responses_llm() -> ChatDatabricks:
+    """Fixture for ChatDatabricks with responses API enabled."""
+    return ChatDatabricks(
+        model="responses-agent-model",
+        use_responses_api=True,
+        target_uri="databricks"
+    )
+
+
+def test_chat_model_generate_with_responses_api(responses_llm: ChatDatabricks):
+    """Test _generate method with responses API enabled."""
+    # Mock the client to return responses API format
+    with mock.patch.object(responses_llm.client, 'predict', return_value=_MOCK_RESPONSES_RESPONSE):
+        result = responses_llm._generate([HumanMessage(content="Test message")])
+        
+        assert len(result.generations) == 1
+        generation = result.generations[0]
+        assert generation.message.content == "To calculate the result: 36939 * 8922.4 = 329,511,111.6"
+        assert isinstance(generation.message, AIMessage)
+
+
+def test_chat_model_stream_with_responses_api(responses_llm: ChatDatabricks):
+    """Test _stream method with responses API enabled."""
+    # Mock the client to return responses API format
+    with mock.patch.object(responses_llm.client, 'predict_stream', return_value=_MOCK_RESPONSES_STREAM):
+        chunks = list(responses_llm._stream([HumanMessage(content="Test message")]))
+        
+        # Should have 4 chunks: 3 text deltas + 1 final message
+        assert len(chunks) == 4
+        
+        # Check text delta chunks
+        assert chunks[0].message.content == "To calculate"
+        assert chunks[1].message.content == " the result:"
+        assert chunks[2].message.content == " 36939 * 8922.4 = 329,511,111.6"
+        
+        # Check final message chunk
+        assert chunks[3].message.content == "To calculate the result: 36939 * 8922.4 = 329,511,111.6"
+        assert chunks[3].generation_info["finish_reason"] == "stop"
+
+
+def test_chat_model_stream_with_responses_api_function_calls(responses_llm: ChatDatabricks):
+    """Test _stream method with responses API and function calls."""
+    with mock.patch.object(responses_llm.client, 'predict_stream', return_value=_MOCK_RESPONSES_FUNCTION_STREAM):
+        chunks = list(responses_llm._stream([HumanMessage(content="Get weather for SF")]))
+        
+        # Should have 2 chunks: 1 text delta + 1 function call
+        assert len(chunks) == 2
+        
+        # Check text chunk
+        assert chunks[0].message.content == "I'll help you get the weather."
+        
+        # Check function call chunk
+        assert chunks[1].message.content == ""
+        assert len(chunks[1].message.tool_call_chunks) == 1
+        tool_call = chunks[1].message.tool_call_chunks[0]
+        assert tool_call["name"] == "GetWeather"
+        assert tool_call["id"] == "call_123"
+
+
+def test_chat_model_generate_with_responses_api_function_calls(responses_llm: ChatDatabricks):
+    """Test _generate method with responses API and function calls."""
+    with mock.patch.object(responses_llm.client, 'predict', return_value=_MOCK_RESPONSES_FUNCTION_RESPONSE):
+        result = responses_llm._generate([HumanMessage(content="Get weather for SF")])
+        
+        assert len(result.generations) == 1
+        generation = result.generations[0]
+        assert generation.message.content == ""
+        assert len(generation.message.tool_calls) == 1
+        
+        tool_call = generation.message.tool_calls[0]
+        assert tool_call["name"] == "GetWeather"
+        assert tool_call["id"] == "call_123"
+        assert tool_call["args"] == {"location": "San Francisco, CA"}
+
+
+def test_chat_model_backward_compatibility():
+    """Test that standard API still works when use_responses_api=False."""
+    llm = ChatDatabricks(
+        model="standard-model",
+        use_responses_api=False,
+        target_uri="databricks"
+    )
+    
+    # Mock standard API response
+    with mock.patch.object(llm.client, 'predict', return_value=_MOCK_CHAT_RESPONSE):
+        result = llm._generate([HumanMessage(content="Test message")])
+        
+        # Should use standard conversion
+        assert len(result.generations) == 1
+        generation = result.generations[0]
+        assert "To calculate the result of 36939 multiplied by 8922.4" in generation.message.content
+
+
+def test_chat_model_stream_backward_compatibility():
+    """Test that standard streaming API still works when use_responses_api=False."""
+    llm = ChatDatabricks(
+        model="standard-model", 
+        use_responses_api=False,
+        target_uri="databricks"
+    )
+    
+    # Mock standard API streaming response
+    with mock.patch.object(llm.client, 'predict_stream', return_value=_MOCK_STREAM_RESPONSE):
+        chunks = list(llm._stream([HumanMessage(content="Test message")]))
+        
+        # Should use standard conversion and have same number of chunks as mock
+        assert len(chunks) == len(_MOCK_STREAM_RESPONSE)
+        assert chunks[0].message.content == "36939"
+        assert chunks[1].message.content == "x"
