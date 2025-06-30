@@ -27,13 +27,26 @@ def should_fetch_model_serving_environment_oauth() -> bool:
     return is_in_model_serving_env == "true"
 
 
-def _get_invokers_token():
+def _get_invokers_token_fallback():
     main_thread = threading.main_thread()
     thread_data = main_thread.__dict__
     invokers_token = None
     if "invokers_token" in thread_data:
         invokers_token = thread_data["invokers_token"]
+    return invokers_token
 
+
+def _get_invokers_token_from_mlflowserving():
+    try:
+        from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+
+        return fetch_obo_token()
+    except ImportError:
+        return _get_invokers_token_fallback()
+
+
+def _get_invokers_token():
+    invokers_token = _get_invokers_token_from_mlflowserving()
     if invokers_token is None:
         raise RuntimeError(
             "Unable to read end user token in Databricks Model Serving. "
@@ -41,7 +54,6 @@ def _get_invokers_token():
             "and On Behalf of User Authorization for Agents is enabled in your workspace. "
             "If the issue persists, contact Databricks Support"
         )
-
     return invokers_token
 
 

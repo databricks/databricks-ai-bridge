@@ -1,4 +1,6 @@
+import sys
 import threading
+from unittest.mock import MagicMock
 
 from databricks.sdk.core import Config
 
@@ -71,3 +73,52 @@ def test_agent_user_credentials_in_non_model_serving_environments(monkeypatch):
 
     assert cfg.host == "https://x"
     assert headers.get("Authorization") == "Bearer token"
+
+
+def test_agent_user_credentials_with_mlflowserving_mock(monkeypatch):
+    """Test authentication using mocked mlflowserving.scoring_server.agent_utils.fetch_obo_token"""
+
+    # Guarantee that the tests defaults to env variables rather than config file.
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "x")
+    monkeypatch.setenv("IS_IN_DB_MODEL_SERVING_ENV", "true")
+    monkeypatch.setenv("DB_MODEL_SERVING_HOST_URL", "https://test-host.databricks.com")
+
+    # Mock the mlflowserving module and fetch_obo_token function
+    mock_mlflowserving = MagicMock()
+    mock_agent_utils = MagicMock()
+    mock_scoring_server = MagicMock()
+
+    # Create the nested module structure
+    mock_mlflowserving.scoring_server = mock_scoring_server
+    mock_scoring_server.agent_utils = mock_agent_utils
+
+    # Set up the mock function to return a token
+    initial_token = "mlflow_obo_token_123"
+    mock_agent_utils.fetch_obo_token.return_value = initial_token
+
+    # Add the mock module to sys.modules
+    monkeypatch.setitem(sys.modules, "mlflowserving", mock_mlflowserving)
+    monkeypatch.setitem(sys.modules, "mlflowserving.scoring_server", mock_scoring_server)
+    monkeypatch.setitem(sys.modules, "mlflowserving.scoring_server.agent_utils", mock_agent_utils)
+
+    # Test authentication with the mocked mlflowserving
+    cfg = Config(credentials_strategy=ModelServingUserCredentials())
+    assert cfg.auth_type == "model_serving_user_credentials"
+
+    headers = cfg.authenticate()
+    assert cfg.host == "https://test-host.databricks.com"
+    assert headers.get("Authorization") == f"Bearer {initial_token}"
+
+    # Verify that fetch_obo_token was called
+    mock_agent_utils.fetch_obo_token.assert_called()
+
+    # Test token refresh - update the mock to return a new token
+    updated_token = "mlflow_obo_token_456"
+    mock_agent_utils.fetch_obo_token.return_value = updated_token
+
+    # Authenticate again to test token refresh
+    headers = cfg.authenticate()
+    assert headers.get("Authorization") == f"Bearer {updated_token}"
+
+    # Verify fetch_obo_token was called again
+    assert mock_agent_utils.fetch_obo_token.call_count >= 2
