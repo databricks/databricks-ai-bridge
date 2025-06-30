@@ -369,7 +369,7 @@ class ChatDatabricks(BaseChatModel):
             # Use standard streaming format
             first_chunk_role = None
             for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-                if chunk["choices"]:
+                if chunk.get("choices"):
                     choice = chunk["choices"][0]
 
                     chunk_delta = choice["delta"]
@@ -913,6 +913,8 @@ def _convert_responses_chunk_to_generation_chunk(
     - response.output_item.done: Final items with types: function_call_output, function_call, message
     """
     event_type = chunk.get("type")
+    print("event_type in _convert_responses_chunk_to_generation_chunk", event_type)
+    print("chunk in _convert_responses_chunk_to_generation_chunk", chunk)
 
     if event_type == "response.output_text.delta":
         # Handle streaming text deltas
@@ -968,6 +970,22 @@ def _convert_responses_chunk_to_generation_chunk(
     return None
 
 
+def _convert_output_item_to_lc_message(item: Dict[str, Any]) -> BaseMessage:
+    """Convert ResponsesAgent API output item to LangChain message."""
+    if item.get("type") == "message":
+        content
+        for content in item.get("content", []):
+            if content.get("type") == "output_text":
+                return AIMessage(content=content.get("text", ""))
+            elif content.get("type") == "refusal":
+                return AIMessage(content=content.get("refusal", ""))
+    elif item.get("type") == "function_call":
+        return ToolMessage(content=item.get("content", ""), tool_call_id=item.get("id", ""))
+    elif item.get("type") == "function_call_output":
+        return AIMessage(content=item.get("output", ""))
+    return None
+
+
 def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
     """Convert ResponsesAgent API response to ChatResult.
 
@@ -979,107 +997,103 @@ def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
     """
     generations = []
 
-    # Extract output items from the response
-    output_items = response.get("output", [])
-    if not isinstance(output_items, list):
-        output_items = [output_items] if output_items else []
+    # Combine all content and tool calls from output items
+    content_blocks = []
+    tool_calls = []
+    invalid_tool_calls = []
 
-    # Track usage metadata across all outputs
-    total_input_tokens = 0
-    total_output_tokens = 0
+    for item in response.get("output", []):
+        if not isinstance(item, dict):
+            continue
 
-    for item in output_items:
         item_type = item.get("type")
-        generation_info = {}
 
         if item_type == "message":
-            # Extract content from message type
-            content = ""
-            if "output_text" in item:
-                output_text = item["output_text"]
-                if isinstance(output_text, dict):
-                    content = output_text.get("text", "")
-                else:
-                    content = str(output_text)
-
-            # Handle additional metadata
-            additional_kwargs = {}
-            if "annotations" in item:
-                additional_kwargs["annotations"] = item["annotations"]
-
-            # Extract usage metadata if available
-            if "usage" in item:
-                usage = item["usage"]
-                generation_info["usage"] = usage
-                total_input_tokens += usage.get("input_tokens", 0)
-                total_output_tokens += usage.get("output_tokens", 0)
-
-            # Extract response metadata
-            if "metadata" in item:
-                generation_info.update(item["metadata"])
-
-            message = AIMessage(
-                content=content, additional_kwargs=additional_kwargs, id=item.get("id")
-            )
-
-            generation = ChatGeneration(message=message, generation_info=generation_info or None)
-            generations.append(generation)
-
+            for content in item.get("content", []):
+                if content.get("type") == "output_text":
+                    content_blocks.append(
+                        {
+                            "type": "text",
+                            "text": content.get("text", ""),
+                            "annotations": content.get("annotations", {}),
+                            "id": content.get("id", ""),
+                        }
+                    )
+                elif content.get("type") == "refusal":
+                    content_blocks.append(
+                        {
+                            "type": "refusal",
+                            "refusal": content.get("refusal", ""),
+                            "id": content.get("id", ""),
+                        }
+                    )
         elif item_type == "function_call":
-            # Handle function/tool calls
-            function_call = item.get("function_call", {})
-            tool_calls = []
-
-            if function_call:
-                # Parse arguments as JSON if they're a string
-                args = function_call.get("arguments", {})
-                if isinstance(args, str):
-                    try:
-                        import json
-
-                        args = json.loads(args)
-                    except (json.JSONDecodeError, ValueError):
-                        # Keep as string if JSON parsing fails
-                        pass
-
-                tool_calls = [
+            content_blocks.append(item)
+            try:
+                args = json.loads(item.get("arguments", ""), strict=False)
+                error = None
+            except json.JSONDecodeError as e:
+                error = str(e)
+                args = item.get("arguments", "")
+            if error is None:
+                tool_calls.append(
                     {
-                        "id": function_call.get("id", ""),
-                        "name": function_call.get("name", ""),
-                        "args": args,
                         "type": "tool_call",
+                        "name": item.get("name", ""),
+                        "args": args,
+                        "id": item.get("call_id", ""),
                     }
-                ]
+                )
+            else:
+                invalid_tool_calls.append(
+                    {
+                        "type": "invalid_tool_call",
+                        "name": item.get("name", ""),
+                        "args": args,
+                        "id": item.get("call_id", ""),
+                        "error": error,
+                    }
+                )
+        elif item_type == "function_call_output":
+            # Handle function call outputs - add to content
+            output_content = item.get("output", "")
+            if output_content:
+                combined_content += f"\n{output_content}"
+        elif item_type in (
+            "reasoning",
+            "web_search_call",
+            "file_search_call",
+            "computer_call",
+            "code_interpreter_call",
+            "mcp_call",
+            "mcp_list_tools",
+            "mcp_approval_request",
+            "image_generation_call",
+        ):
+            content_blocks.append(item)
 
-            # Extract metadata for function calls
-            if "usage" in item:
-                usage = item["usage"]
-                generation_info["usage"] = usage
-                total_input_tokens += usage.get("input_tokens", 0)
-                total_output_tokens += usage.get("output_tokens", 0)
+    # Create AI message with combined content and tool calls
+    message = AIMessage(
+        content=content_blocks,
+        tool_calls=tool_calls,
+        invalid_tool_calls=invalid_tool_calls,
+        id=response.get("id"),
+    )
+    return ChatResult(generations=[ChatGeneration(message=message)])
 
-            message = AIMessage(content="", tool_calls=tool_calls, id=item.get("id"))
+    # generation = ChatGeneration(
+    #     message=message,
+    #     generation_info=generation_info,
+    # )
+    # generations.append(generation)
 
-            generation = ChatGeneration(message=message, generation_info=generation_info or None)
-            generations.append(generation)
+    # # Create LLM output metadata
+    # llm_output = {}
+    # if usage:
+    #     llm_output["token_usage"] = usage
+    # if "model" in response:
+    #     llm_output["model_name"] = response["model"]
+    # if "id" in response:
+    #     llm_output["id"] = response["id"]
 
-    # If no generations were created, create a default empty one
-    if not generations:
-        generations = [ChatGeneration(message=AIMessage(content=""), generation_info=None)]
-
-    # Construct llm_output with usage information
-    llm_output = {k: v for k, v in response.items() if k not in ("output", "choices")}
-
-    # Add total usage if we have token counts
-    if total_input_tokens > 0 or total_output_tokens > 0:
-        llm_output["usage"] = {
-            "input_tokens": total_input_tokens,
-            "output_tokens": total_output_tokens,
-            "total_tokens": total_input_tokens + total_output_tokens,
-        }
-
-    # Set model name for tracking
-    if "model" in response:
-        llm_output["model_name"] = response["model"]
-
-    return ChatResult(generations=generations, llm_output=llm_output)
+    # return ChatResult(generations=generations, llm_output=llm_output)

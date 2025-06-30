@@ -659,7 +659,7 @@ def test_convert_responses_to_chat_result_message():
     
     # Check llm_output
     assert result.llm_output["id"] == "response_id"
-    assert result.llm_output["model"] == "responses-agent-model"
+    assert result.llm_output["model_name"] == "responses-agent-model"
     assert "output" not in result.llm_output
     assert "choices" not in result.llm_output
 
@@ -729,6 +729,211 @@ def test_convert_responses_to_chat_result_single_output():
     assert len(result.generations) == 1
     generation = result.generations[0]
     assert generation.message.content == "Single output message"
+
+
+def test_convert_responses_to_chat_result_with_usage():
+    """Test conversion with usage metadata."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 15,
+            "total_tokens": 25
+        },
+        "output": [
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "Response with usage"
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "Response with usage"
+    assert generation.message.usage_metadata is not None
+    assert generation.message.usage_metadata["input_tokens"] == 10
+    assert generation.message.usage_metadata["output_tokens"] == 15
+    assert generation.message.usage_metadata["total_tokens"] == 25
+    
+    # Check usage in llm_output
+    assert result.llm_output["token_usage"]["input_tokens"] == 10
+    assert result.llm_output["token_usage"]["output_tokens"] == 15
+    assert result.llm_output["token_usage"]["total_tokens"] == 25
+
+
+def test_convert_responses_to_chat_result_mixed_output_types():
+    """Test conversion with mixed output types in single response."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "Let me help you with the weather."
+                }
+            },
+            {
+                "type": "function_call",
+                "function_call": {
+                    "id": "call_456",
+                    "name": "GetWeather",
+                    "arguments": {"location": "New York, NY"}
+                }
+            },
+            {
+                "type": "function_call_output",
+                "output": "The weather in New York is sunny and 72°F."
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    
+    # Content should combine message text and function output
+    expected_content = "Let me help you with the weather.\nThe weather in New York is sunny and 72°F."
+    assert generation.message.content == expected_content
+    
+    # Should have one tool call from function_call type
+    assert len(generation.message.tool_calls) == 1
+    tool_call = generation.message.tool_calls[0]
+    assert tool_call["name"] == "GetWeather"
+    assert tool_call["id"] == "call_456"
+    assert tool_call["args"] == {"location": "New York, NY"}
+
+
+def test_convert_responses_to_chat_result_invalid_tool_call():
+    """Test conversion with invalid tool call that fails parsing."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "function_call",
+                "function_call": {
+                    "id": "call_invalid",
+                    "name": "",  # Invalid: empty name
+                    "arguments": "invalid json"  # Invalid: not proper JSON
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == ""
+    
+    # Should have no valid tool calls but one invalid tool call
+    assert len(generation.message.tool_calls) == 0
+    assert len(generation.message.invalid_tool_calls) == 1
+    
+    invalid_call = generation.message.invalid_tool_calls[0]
+    assert invalid_call["id"] == "call_invalid"
+
+
+def test_convert_responses_to_chat_result_function_call_output_only():
+    """Test conversion with only function_call_output type."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "function_call_output",
+                "output": "Function execution completed successfully."
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "\nFunction execution completed successfully."
+    assert len(generation.message.tool_calls) == 0
+
+
+def test_convert_responses_to_chat_result_unknown_output_type():
+    """Test conversion ignores unknown output types."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            {
+                "type": "unknown_type",
+                "data": "This should be ignored"
+            },
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "This should be processed"
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "This should be processed"
+
+
+def test_convert_responses_to_chat_result_custom_finish_reason():
+    """Test conversion with custom finish reason."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "finish_reason": "length",
+        "output": [
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "Response cut off due to length limit"
+                }
+            }
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.generation_info["finish_reason"] == "length"
+
+
+def test_convert_responses_to_chat_result_non_dict_output_items():
+    """Test conversion handles non-dict items in output."""
+    response = {
+        "id": "response_id",
+        "model": "responses-agent-model",
+        "output": [
+            "invalid string item",  # This should be ignored
+            {
+                "type": "message",
+                "output_text": {
+                    "text": "Valid message"
+                }
+            },
+            None,  # This should be ignored
+        ]
+    }
+    
+    result = _convert_responses_to_chat_result(response)
+    
+    assert len(result.generations) == 1
+    generation = result.generations[0]
+    assert generation.message.content == "Valid message"
 
 
 def test_chat_databricks_use_responses_api_flag():
