@@ -39,9 +39,11 @@ def _get_invokers_token_fallback():
 def _get_invokers_token_from_mlflowserving():
     try:
         from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+
         return fetch_obo_token()
     except ImportError:
         return _get_invokers_token_fallback()
+
 
 def _get_invokers_token():
     invokers_token = _get_invokers_token_from_mlflowserving()
@@ -53,6 +55,7 @@ def _get_invokers_token():
             "If the issue persists, contact Databricks Support"
         )
     return invokers_token
+
 
 def get_databricks_host_token() -> Optional[Tuple[str, str]]:
     if not should_fetch_model_serving_environment_oauth():
