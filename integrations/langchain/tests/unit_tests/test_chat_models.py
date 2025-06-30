@@ -345,6 +345,87 @@ def test_convert_tool_message_chunk() -> None:
     assert dict_result == delta
 
 
+def test_convert_message_chunk_developer_role() -> None:
+    """Test that developer role is handled correctly as SystemMessageChunk with special kwargs."""
+    delta = {"role": "developer", "content": "System instructions", "id": "msg_123"}
+    result = _convert_dict_to_message_chunk(delta, "default_role")
+    expected_output = SystemMessageChunk(
+        content="System instructions", 
+        id="msg_123", 
+        additional_kwargs={"__openai_role__": "developer"}
+    )
+    assert result == expected_output
+
+
+def test_convert_message_chunk_with_function_call() -> None:
+    """Test that function calls are properly handled in assistant message chunks."""
+    delta = {
+        "role": "assistant",
+        "content": "",
+        "function_call": {"name": "get_weather", "arguments": '{"location": "NYC"}'},
+        "id": "msg_456"
+    }
+    result = _convert_dict_to_message_chunk(delta, "default_role")
+    expected_output = AIMessageChunk(
+        content="",
+        id="msg_456",
+        additional_kwargs={"function_call": {"name": "get_weather", "arguments": '{"location": "NYC"}'}},
+        tool_call_chunks=[]
+    )
+    assert result == expected_output
+
+
+def test_convert_message_chunk_with_function_call_none_name() -> None:
+    """Test that function calls with None name are handled correctly."""
+    delta = {
+        "role": "assistant", 
+        "content": "",
+        "function_call": {"name": None, "arguments": "{}"},
+        "id": "msg_789"
+    }
+    result = _convert_dict_to_message_chunk(delta, "default_role")
+    expected_output = AIMessageChunk(
+        content="",
+        id="msg_789", 
+        additional_kwargs={"function_call": {"name": "", "arguments": "{}"}},
+        tool_call_chunks=[]
+    )
+    assert result == expected_output
+
+
+def test_convert_message_chunk_id_propagation() -> None:
+    """Test that IDs are properly propagated to all message chunk types."""
+    test_cases = [
+        ("user", "user_123", HumanMessageChunk(content="test", id="user_123")),
+        ("system", "sys_123", SystemMessageChunk(content="test", id="sys_123")),
+        ("assistant", "ai_123", AIMessageChunk(content="test", id="ai_123", tool_call_chunks=[])),
+        ("any_role", "chat_123", ChatMessageChunk(content="test", role="any_role", id="chat_123")),
+    ]
+    
+    for role, test_id, expected_output in test_cases:
+        delta = {"role": role, "content": "test", "id": test_id}
+        result = _convert_dict_to_message_chunk(delta, "default_role")
+        assert result == expected_output
+
+
+def test_convert_message_chunk_tool_calls_with_default_index() -> None:
+    """Test that tool calls with missing index get default value of 0."""
+    delta = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": "test_func", "arguments": "{}"}, "id": "call_123"}],
+        "id": "msg_tool"
+    }
+    result = _convert_dict_to_message_chunk(delta, "default_role")
+    expected_output = AIMessageChunk(
+        content="",
+        id="msg_tool",
+        additional_kwargs={"tool_calls": delta["tool_calls"]},
+        tool_call_chunks=[ToolCallChunk(name="test_func", args="{}", id="call_123", index=0)]
+    )
+    assert result == expected_output
+
+
 def test_convert_message_to_dict_function() -> None:
     with pytest.raises(ValueError, match="Function messages are not supported"):
         _convert_message_to_dict(FunctionMessage(content="", name="name"))
