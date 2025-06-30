@@ -263,6 +263,8 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
+        self.use_responses_api = kwargs.get("use_responses_api", False)
+        print("use_responses_api in __init__", self.use_responses_api)
         self.client = get_deployment_client(self.target_uri)
         self.extra_params = self.extra_params or {}
 
@@ -303,7 +305,6 @@ class ChatDatabricks(BaseChatModel):
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        use_responses_api: Optional[bool] = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
@@ -311,7 +312,7 @@ class ChatDatabricks(BaseChatModel):
             **self.extra_params,  # type: ignore
             **kwargs,
         }
-        if use_responses_api:
+        if self.use_responses_api:
             data["input"] = [_convert_message_to_dict(msg) for msg in messages]
         else:
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
@@ -970,7 +971,11 @@ def _convert_responses_chunk_to_generation_chunk(
 def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
     """Convert ResponsesAgent API response to ChatResult.
 
-    ResponsesAgent responses contain output items with different types.
+    Args:
+        response: The ResponsesAgent API response containing output items
+
+    Returns:
+        ChatResult: LangChain chat result with proper message and metadata handling
     """
     generations = []
 
@@ -979,23 +984,45 @@ def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
     if not isinstance(output_items, list):
         output_items = [output_items] if output_items else []
 
+    # Track usage metadata across all outputs
+    total_input_tokens = 0
+    total_output_tokens = 0
+
     for item in output_items:
         item_type = item.get("type")
+        generation_info = {}
 
         if item_type == "message":
             # Extract content from message type
             content = ""
             if "output_text" in item:
-                content = item["output_text"].get("text", "")
+                output_text = item["output_text"]
+                if isinstance(output_text, dict):
+                    content = output_text.get("text", "")
+                else:
+                    content = str(output_text)
 
-            # Handle annotations
+            # Handle additional metadata
             additional_kwargs = {}
             if "annotations" in item:
                 additional_kwargs["annotations"] = item["annotations"]
 
-            message = AIMessage(content=content, additional_kwargs=additional_kwargs)
+            # Extract usage metadata if available
+            if "usage" in item:
+                usage = item["usage"]
+                generation_info["usage"] = usage
+                total_input_tokens += usage.get("input_tokens", 0)
+                total_output_tokens += usage.get("output_tokens", 0)
 
-            generation = ChatGeneration(message=message, generation_info={})
+            # Extract response metadata
+            if "metadata" in item:
+                generation_info.update(item["metadata"])
+
+            message = AIMessage(
+                content=content, additional_kwargs=additional_kwargs, id=item.get("id")
+            )
+
+            generation = ChatGeneration(message=message, generation_info=generation_info or None)
             generations.append(generation)
 
         elif item_type == "function_call":
@@ -1004,23 +1031,55 @@ def _convert_responses_to_chat_result(response: Dict[str, Any]) -> ChatResult:
             tool_calls = []
 
             if function_call:
+                # Parse arguments as JSON if they're a string
+                args = function_call.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        import json
+
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        # Keep as string if JSON parsing fails
+                        pass
+
                 tool_calls = [
                     {
                         "id": function_call.get("id", ""),
                         "name": function_call.get("name", ""),
-                        "args": function_call.get("arguments", {}),
+                        "args": args,
+                        "type": "tool_call",
                     }
                 ]
 
-            message = AIMessage(content="", tool_calls=tool_calls)
+            # Extract metadata for function calls
+            if "usage" in item:
+                usage = item["usage"]
+                generation_info["usage"] = usage
+                total_input_tokens += usage.get("input_tokens", 0)
+                total_output_tokens += usage.get("output_tokens", 0)
 
-            generation = ChatGeneration(message=message, generation_info={})
+            message = AIMessage(content="", tool_calls=tool_calls, id=item.get("id"))
+
+            generation = ChatGeneration(message=message, generation_info=generation_info or None)
             generations.append(generation)
 
     # If no generations were created, create a default empty one
     if not generations:
-        generations = [ChatGeneration(message=AIMessage(content=""), generation_info={})]
+        generations = [ChatGeneration(message=AIMessage(content=""), generation_info=None)]
 
+    # Construct llm_output with usage information
     llm_output = {k: v for k, v in response.items() if k not in ("output", "choices")}
+
+    # Add total usage if we have token counts
+    if total_input_tokens > 0 or total_output_tokens > 0:
+        llm_output["usage"] = {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "total_tokens": total_input_tokens + total_output_tokens,
+        }
+
+    # Set model name for tracking
+    if "model" in response:
+        llm_output["model_name"] = response["model"]
 
     return ChatResult(generations=generations, llm_output=llm_output)
