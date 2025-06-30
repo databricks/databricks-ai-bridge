@@ -281,6 +281,9 @@ class ChatDatabricks(BaseChatModel):
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
         resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
+        if "messages" in resp:
+            return self._convert_chatagent_response_to_chat_result(resp)
+
         return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -303,6 +306,16 @@ class ChatDatabricks(BaseChatModel):
             data["max_tokens"] = self.max_tokens
 
         return data
+
+    def _convert_chatagent_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        """
+        A ChatAgent response has an array of messages, but a ChatResult can only have a single message.
+        To accomodate this, we combine the messages into a single message, following LangChain convention.
+
+        ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
+        """
+        message = AIMessage(content=response.get("messages"))
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         generations = [
@@ -334,7 +347,13 @@ class ChatDatabricks(BaseChatModel):
         data = self._prepare_inputs(messages, stop, **kwargs)
         first_chunk_role = None
         for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-            if chunk["choices"]:
+            # top level delta key means that it is a ChatAgentChunk
+            if chunk.get("delta"):
+                chunk_delta = chunk["delta"]
+                chunk_message = _convert_dict_to_message_chunk(chunk_delta, chunk_delta.get("role"))
+                chunk = ChatGenerationChunk(message=chunk_message)
+                yield chunk
+            elif chunk.get("choices"):
                 choice = chunk["choices"][0]
 
                 chunk_delta = choice["delta"]
@@ -788,6 +807,10 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
         return HumanMessage(content=content)
     elif role == "system":
         return SystemMessage(content=content)
+    elif role == "tool":
+        return ToolMessage(
+            content=content, tool_call_id=_dict.get("tool_call_id"), id=_dict.get("id")
+        )
     elif role == "assistant":
         additional_kwargs: Dict = {}
         tool_calls = []
