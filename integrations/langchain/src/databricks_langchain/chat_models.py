@@ -1124,7 +1124,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                 tool_call_id=item.get("call_id"),
             )
         elif item_type == "function_call":
-            id = item.get("id")
+            id = item.get("call_id")
             content.append(item)
             tool_call_chunks.append(
                 tool_call_chunk(
@@ -1133,22 +1133,27 @@ def _convert_responses_api_chunk_to_lc_chunk(
                     id=item.get("call_id"),
                 )
             )
-            id = item.get("call_id")
         elif item_type == "message":
             id = item.get("id")
-            # handle duplication of text responses that have already been streamed
-            if previous_chunk and previous_chunk.get("type") == "response.output_text.delta":
-                if id == previous_chunk.get("item_id"):
-                    return None
+            # skip text outputs that have already been streamed, but keep the annotations
+            skip_duplicate_text = (
+                previous_chunk
+                and previous_chunk.get("type") == "response.output_text.delta"
+                and id == previous_chunk.get("item_id")
+            )
             for content_item in item.get("content", []):
                 if content_item.get("type") == "output_text":
-                    content.append(
-                        {
-                            "type": "text",
-                            "text": content_item.get("text", ""),
-                            "annotations": content_item.get("annotations", []),
-                        }
-                    )
+                    if skip_duplicate_text:
+                        if content_item.get("annotations"):
+                            content.append({"annotations": content_item.get("annotations")})
+                    else:
+                        content.append(
+                            {
+                                "type": "text",
+                                "text": content_item.get("text", ""),
+                                "annotations": content_item.get("annotations", []),
+                            }
+                        )
                 elif content_item.get("type") == "refusal":
                     content.append(
                         {
@@ -1173,8 +1178,9 @@ def _convert_responses_api_chunk_to_lc_chunk(
     else:
         return None
 
-    return AIMessageChunk(
-        content=content,
-        tool_call_chunks=tool_call_chunks,
-        id=id,
-    )
+    if content:
+        return AIMessageChunk(
+            content=content,
+            tool_call_chunks=tool_call_chunks,
+            id=id,
+        )

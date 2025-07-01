@@ -610,9 +610,40 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     }
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
-
-    # Should return None to skip duplicate
     assert result is None
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
+    """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
+    previous_chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "id": "item_123",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Hello",
+                    "annotations": [
+                        {"type": "url_citation", "title": "title", "url": "google.com"}
+                    ],
+                }
+            ],
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
+    expected = AIMessageChunk(
+        content=[
+            {"annotations": [{"type": "url_citation", "title": "title", "url": "google.com"}]}
+        ],
+        additional_kwargs={},
+        response_metadata={},
+        id="item_123",
+    )
+    assert result == expected
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_error():
