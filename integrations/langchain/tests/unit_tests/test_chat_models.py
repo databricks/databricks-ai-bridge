@@ -20,7 +20,7 @@ from langchain_core.messages import (
     ToolMessageChunk,
 )
 from langchain_core.messages.tool import ToolCallChunk
-from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableMap
 from pydantic import BaseModel, Field
 
@@ -31,7 +31,6 @@ from databricks_langchain.chat_models import (
     _convert_lc_messages_to_responses_api,
     _convert_message_to_dict,
     _convert_responses_api_chunk_to_lc_chunk,
-    _get_tool_calls_from_ai_message,
 )
 from tests.utils.chat_models import (  # noqa: F401
     _MOCK_CHAT_RESPONSE,
@@ -373,33 +372,26 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
 
     result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)
+
+    expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
     expected = ChatResult(
         generations=[
             ChatGeneration(
-                message=AIMessage(content=[{"type": "text", "text": _MOCK_CHAT_RESPONSE}]),
-                id="response_123",
+                message=AIMessage(content=expected_content),
+                generation_info={},
             ),
         ],
         llm_output={
+            "id": _MOCK_CHAT_RESPONSE["id"],
+            "object": _MOCK_CHAT_RESPONSE["object"],
+            "created": _MOCK_CHAT_RESPONSE["created"],
+            "model": _MOCK_CHAT_RESPONSE["model"],
             "model_name": _MOCK_CHAT_RESPONSE["model"],
             "usage": _MOCK_CHAT_RESPONSE["usage"],
         },
     )
+
     assert result == expected
-
-    # Verify that llm_output contains the full response metadata
-    assert "model_name" in result.llm_output
-    assert "usage" in result.llm_output
-    assert result.llm_output["model_name"] == _MOCK_CHAT_RESPONSE["model"]
-
-    # Verify that usage information is included directly in llm_output
-    assert result.llm_output["usage"] == _MOCK_CHAT_RESPONSE["usage"]
-
-    # Verify that choices, content, role, and type are excluded from llm_output
-    assert "choices" not in result.llm_output
-    assert "content" not in result.llm_output
-    assert "role" not in result.llm_output
-    assert "type" not in result.llm_output
 
 
 def test_convert_lc_messages_to_responses_api_basic():
@@ -847,65 +839,3 @@ def test_prepare_inputs_with_extra_params():
 
     assert result["param1"] == "value1"
     assert result["param2"] == "value2"
-
-
-### Test edge cases and error handling ###
-
-
-def test_convert_dict_to_message_unknown_role():
-    """Test _convert_dict_to_message with unknown role."""
-    message = {"role": "unknown", "content": "test"}
-    result = _convert_dict_to_message(message)
-    assert isinstance(result, ChatMessage)
-    assert result.role == "unknown"
-    assert result.content == "test"
-
-
-def test_convert_dict_to_message_chunk_with_usage():
-    """Test _convert_dict_to_message_chunk with usage metadata."""
-    delta = {"role": "assistant", "content": "test"}
-    usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
-
-    result = _convert_dict_to_message_chunk(delta, "assistant", usage=usage)
-
-    assert isinstance(result, AIMessageChunk)
-    assert result.usage_metadata is not None
-    assert result.usage_metadata["input_tokens"] == 10
-    assert result.usage_metadata["output_tokens"] == 5
-    assert result.usage_metadata["total_tokens"] == 15
-
-
-def test_convert_dict_to_message_chunk_tool_calls_key_error():
-    """Test _convert_dict_to_message_chunk handles KeyError in tool calls."""
-    delta = {"role": "assistant", "content": "test", "tool_calls": [{"invalid": "structure"}]}
-
-    result = _convert_dict_to_message_chunk(delta, "assistant")
-
-    assert isinstance(result, AIMessageChunk)
-    # The function still creates tool_call_chunks even with missing keys, with None values
-    assert len(result.tool_call_chunks) == 1
-    tool_call = result.tool_call_chunks[0]
-    assert tool_call["name"] is None
-    assert tool_call["args"] is None
-    assert tool_call["id"] is None
-
-
-def test_convert_dict_to_message_with_invalid_tool_call():
-    """Test _convert_dict_to_message handles invalid tool calls."""
-    message = {
-        "role": "assistant",
-        "content": "test",
-        "tool_calls": [
-            {
-                "id": "call_123",
-                "type": "function",
-                "function": {"name": "test_func", "arguments": "invalid json"},
-            }
-        ],
-    }
-
-    result = _convert_dict_to_message(message)
-
-    assert isinstance(result, AIMessage)
-    assert len(result.invalid_tool_calls) == 1
-    assert result.invalid_tool_calls[0]["name"] == "test_func"

@@ -364,7 +364,6 @@ class ChatDatabricks(BaseChatModel):
                         )
             elif item_type == "function_call":
                 content_blocks.append(item)
-                print("item", item)
                 try:
                     args = json.loads(item.get("arguments", ""), strict=False)
                     error = None
@@ -372,7 +371,6 @@ class ChatDatabricks(BaseChatModel):
                     error = str(e)
                     args = item.get("arguments", "")
                 if error is None:
-                    print("valid tool call args", args)
                     tool_calls.append(
                         {
                             "type": "tool_call",
@@ -413,7 +411,6 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
-        print("response id", response.get("id"))
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
