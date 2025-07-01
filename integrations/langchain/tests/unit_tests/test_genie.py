@@ -164,12 +164,12 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient):
 
     # Create test input
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    
+
     # Mock the ask_question method on the Genie instance
     with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
         # Invoke the agent and verify include_context=True behavior
         result = agent.invoke(input_data)
-        
+
         # Should include reasoning, SQL, and result when include_context=True
         expected_messages = [
             AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
