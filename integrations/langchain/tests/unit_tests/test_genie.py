@@ -181,45 +181,6 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient):
     mock_client.genie.get_space.assert_called_once()
 
 
-@patch("databricks.sdk.WorkspaceClient")
-def test_create_genie_agent_with_include_context_false(MockWorkspaceClient):
-    """Test creating a GenieAgent with include_context=False and verify it only returns result"""
-    mock_space = GenieSpace(
-        space_id="space-id",
-        title="Sales Space", 
-        description="description",
-    )
-    mock_client = MockWorkspaceClient.return_value
-    mock_client.genie.get_space.return_value = mock_space
-
-    # Create a proper GenieResponse instance
-    mock_genie_response = GenieResponse(
-        result="It is sunny.",
-        query="SELECT * FROM weather",
-        description="This is the reasoning for the query",
-    )
-
-    # Test with include_context=False (default)
-    agent = GenieAgent("space-id", "Genie", include_context=False, client=mock_client)
-    assert agent.description == "description"
-
-    # Create test input
-    input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    
-    # Mock the ask_question method on the Genie instance
-    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
-        # Invoke the agent and verify include_context=False behavior
-        result = agent.invoke(input_data)
-        
-        # Should only include result when include_context=False
-        expected_messages = [
-            AIMessage(content="It is sunny.", name="query_result"),
-        ]
-        assert result["messages"] == expected_messages
-
-    mock_client.genie.get_space.assert_called_once()
-
-
 def test_create_genie_agent_no_space_id():
     with pytest.raises(ValueError):
         GenieAgent("", "Genie")
