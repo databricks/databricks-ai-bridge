@@ -74,7 +74,7 @@ class ChatDatabricks(BaseChatModel):
                 max_tokens=500,
             )
 
-    For ResponsesAgent endpoints, enable responses API compatibility:
+    For Responses API endpoints like a ResponsesAgent, set ``use_responses_api=True``:
         .. code-block:: python
             llm = ChatDatabricks(
                 model="my-responses-agent-endpoint",
@@ -350,7 +350,7 @@ class ChatDatabricks(BaseChatModel):
                             {
                                 "type": "text",
                                 "text": content.get("text", ""),
-                                "annotations": content.get("annotations", {}),
+                                "annotations": content.get("annotations", []),
                                 "id": content.get("id", ""),
                             }
                         )
@@ -364,6 +364,7 @@ class ChatDatabricks(BaseChatModel):
                         )
             elif item_type == "function_call":
                 content_blocks.append(item)
+                print("item", item)
                 try:
                     args = json.loads(item.get("arguments", ""), strict=False)
                     error = None
@@ -371,6 +372,7 @@ class ChatDatabricks(BaseChatModel):
                     error = str(e)
                     args = item.get("arguments", "")
                 if error is None:
+                    print("valid tool call args", args)
                     tool_calls.append(
                         {
                             "type": "tool_call",
@@ -411,6 +413,7 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
+        print("response id", response.get("id"))
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
@@ -426,7 +429,7 @@ class ChatDatabricks(BaseChatModel):
 
         ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
         """
-        message = AIMessage(content=response.get("messages"))
+        message = AIMessage(content=response.get("messages"), id=response.get("id"))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
@@ -886,10 +889,7 @@ def _convert_lc_messages_to_responses_api(messages: List[BaseMessage]) -> dict:
     """
     Convert a LangChain message to a Responses API message.
     """
-    # _construct_responses_api_input
-    #
-    # can add support for multimodal at another time
-    # TODO: implement this following https://github.com/langchain-ai/langchain/blob/master/libs/partners/openai/langchain_openai/chat_models/base.py#L3339
+    # TODO: add multimodal support
     input_items = []
     for lc_msg in messages:
         cc_msg = _convert_message_to_dict(lc_msg)
@@ -898,19 +898,6 @@ def _convert_lc_messages_to_responses_api(messages: List[BaseMessage]) -> dict:
             cc_msg.pop("name")
         role = cc_msg["role"]
         if role == "assistant":
-            if tool_calls := cc_msg.get("tool_calls"):
-                input_items.extend(
-                    [
-                        {
-                            "type": "function_call",
-                            "id": lc_msg.id,
-                            "call_id": tool_call["id"],
-                            "name": tool_call["function"]["name"],
-                            "arguments": tool_call["function"]["arguments"],
-                        }
-                        for tool_call in tool_calls
-                    ]
-                )
             if isinstance(cc_msg.get("content"), list):
                 for block in cc_msg["content"]:
                     if isinstance(block, dict) and (block_type := block.get("type")):
@@ -943,18 +930,18 @@ def _convert_lc_messages_to_responses_api(messages: List[BaseMessage]) -> dict:
                                     "id": lc_msg.id,
                                 }
                             )
-                    elif block_type in (
-                        "reasoning",
-                        "web_search_call",
-                        "file_search_call",
-                        "function_call",
-                        "computer_call",
-                        "code_interpreter_call",
-                        "mcp_call",
-                        "mcp_list_tools",
-                        "mcp_approval_request",
-                    ):
-                        input_items.append(block)
+                        elif block_type in (
+                            "reasoning",
+                            "web_search_call",
+                            "file_search_call",
+                            "function_call",
+                            "computer_call",
+                            "code_interpreter_call",
+                            "mcp_call",
+                            "mcp_list_tools",
+                            "mcp_approval_request",
+                        ):
+                            input_items.append(block | {"id": lc_msg.id})
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
                     {
@@ -963,6 +950,20 @@ def _convert_lc_messages_to_responses_api(messages: List[BaseMessage]) -> dict:
                         "id": lc_msg.id,
                         "content": [{"type": "output_text", "text": cc_msg["content"]}],
                     }
+                )
+
+            if tool_calls := cc_msg.get("tool_calls"):
+                input_items.extend(
+                    [
+                        {
+                            "type": "function_call",
+                            "id": lc_msg.id,
+                            "call_id": tool_call["id"],
+                            "name": tool_call["function"]["name"],
+                            "arguments": tool_call["function"]["arguments"],
+                        }
+                        for tool_call in tool_calls
+                    ]
                 )
         elif role == "tool":
             input_items.append(
@@ -1148,7 +1149,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         {
                             "type": "text",
                             "text": content_item.get("text", ""),
-                            "annotations": content_item.get("annotations", {}),
+                            "annotations": content_item.get("annotations", []),
                         }
                     )
                 elif content_item.get("type") == "refusal":

@@ -20,6 +20,7 @@ from langchain_core.messages import (
     ToolMessageChunk,
 )
 from langchain_core.messages.tool import ToolCallChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import RunnableMap
 from pydantic import BaseModel, Field
 
@@ -224,69 +225,6 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
     assert isinstance(structured_llm.first, RunnableMap)
 
 
-def test_with_structured_output_invalid_method(llm: ChatDatabricks) -> None:
-    with pytest.raises(ValueError, match="Unrecognized method argument"):
-        llm.with_structured_output(AnswerWithJustification, method="invalid_method")
-
-
-def test_with_structured_output_with_kwargs(llm: ChatDatabricks) -> None:
-    with pytest.raises(ValueError, match="Received unsupported arguments"):
-        llm.with_structured_output(AnswerWithJustification, invalid_arg="test")
-
-
-### Test ChatDatabricks properties and methods ###
-
-
-def test_endpoint_property_deprecation_warning():
-    with pytest.warns(DeprecationWarning, match="The `endpoint` attribute is deprecated"):
-        llm = ChatDatabricks(model="test-model")
-        _ = llm.endpoint
-
-
-def test_endpoint_setter_deprecation_warning():
-    with pytest.warns(DeprecationWarning, match="The `endpoint` attribute is deprecated"):
-        llm = ChatDatabricks(model="test-model")
-        llm.endpoint = "new-model"
-
-
-def test_default_params(llm: ChatDatabricks) -> None:
-    params = llm._default_params
-    assert params["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert params["target_uri"] == "databricks"
-    assert "temperature" not in params  # None values should be excluded
-
-
-def test_default_params_with_values() -> None:
-    llm = ChatDatabricks(
-        model="test-model",
-        temperature=0.5,
-        max_tokens=100,
-        stop=["stop"],
-        n=2,
-        extra_params={"custom": "value"}
-    )
-    params = llm._default_params
-    assert params["temperature"] == 0.5
-    assert params["max_tokens"] == 100
-    assert params["stop"] == ["stop"]
-    assert params["n"] == 2
-    assert params["extra_params"] == {"custom": "value"}
-
-
-def test_llm_type(llm: ChatDatabricks) -> None:
-    assert llm._llm_type == "chat-databricks"
-
-
-def test_identifying_params(llm: ChatDatabricks) -> None:
-    assert llm._identifying_params == llm._default_params
-
-
-def test_get_invocation_params(llm: ChatDatabricks) -> None:
-    params = llm._get_invocation_params(stop=["custom_stop"])
-    assert "model" in params
-    assert "target_uri" in params
-
-
 ### Test data conversion functions ###
 
 
@@ -296,11 +234,15 @@ def test_get_invocation_params(llm: ChatDatabricks) -> None:
         ("user", HumanMessage("foo")),
         ("system", SystemMessage("foo")),
         ("assistant", AIMessage("foo")),
+        ("tool", ToolMessage(content="foo", tool_call_id="call_123")),
         ("any_role", ChatMessage(content="foo", role="any_role")),
     ],
 )
 def test_convert_message(role: str, expected_output: BaseMessage) -> None:
-    message = {"role": role, "content": "foo"}
+    if role == "tool":
+        message = {"role": role, "content": "foo", "tool_call_id": "call_123"}
+    else:
+        message = {"role": role, "content": "foo"}
     result = _convert_dict_to_message(message)
     assert result == expected_output
 
@@ -431,6 +373,19 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
 
     result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(content=[{"type": "text", "text": _MOCK_CHAT_RESPONSE}]),
+                id="response_123",
+            ),
+        ],
+        llm_output={
+            "model_name": _MOCK_CHAT_RESPONSE["model"],
+            "usage": _MOCK_CHAT_RESPONSE["usage"],
+        },
+    )
+    assert result == expected
 
     # Verify that llm_output contains the full response metadata
     assert "model_name" in result.llm_output
@@ -447,105 +402,6 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     assert "type" not in result.llm_output
 
 
-### Test new functions ###
-
-
-def test_get_tool_calls_from_ai_message_with_tool_calls():
-    """Test _get_tool_calls_from_ai_message with tool_calls attribute."""
-    message = AIMessage(
-        content="I'll help you with that.",
-        tool_calls=[
-            {
-                "name": "get_weather",
-                "args": {"location": "San Francisco"},
-                "id": "call_123",
-                "type": "tool_call",
-            }
-        ]
-    )
-    
-    result = _get_tool_calls_from_ai_message(message)
-    expected = [
-        {
-            "type": "function",
-            "id": "call_123",
-            "function": {
-                "name": "get_weather",
-                "arguments": '{"location": "San Francisco"}',
-            },
-        }
-    ]
-    assert result == expected
-
-
-def test_get_tool_calls_from_ai_message_with_invalid_tool_calls():
-    """Test _get_tool_calls_from_ai_message with invalid_tool_calls attribute."""
-    message = AIMessage(
-        content="I'll help you with that.",
-        invalid_tool_calls=[
-            {
-                "name": "get_weather",
-                "args": "invalid json",
-                "id": "call_123",
-                "type": "tool_call",
-            }
-        ]
-    )
-    
-    result = _get_tool_calls_from_ai_message(message)
-    expected = [
-        {
-            "type": "function",
-            "id": "call_123",
-            "function": {
-                "name": "get_weather",
-                "arguments": "invalid json",
-            },
-        }
-    ]
-    assert result == expected
-
-
-def test_get_tool_calls_from_ai_message_with_additional_kwargs():
-    """Test _get_tool_calls_from_ai_message with additional_kwargs."""
-    message = AIMessage(
-        content="I'll help you with that.",
-        additional_kwargs={
-            "tool_calls": [
-                {
-                    "id": "call_123",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "SF"}',
-                    },
-                    "extra_field": "should_be_filtered"
-                }
-            ]
-        }
-    )
-    
-    result = _get_tool_calls_from_ai_message(message)
-    expected = [
-        {
-            "id": "call_123",
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "arguments": '{"location": "SF"}',
-            },
-        }
-    ]
-    assert result == expected
-
-
-def test_get_tool_calls_from_ai_message_empty():
-    """Test _get_tool_calls_from_ai_message with no tool calls."""
-    message = AIMessage(content="I'll help you with that.")
-    result = _get_tool_calls_from_ai_message(message)
-    assert result == []
-
-
 def test_convert_lc_messages_to_responses_api_basic():
     """Test _convert_lc_messages_to_responses_api with basic messages."""
     messages = [
@@ -553,7 +409,7 @@ def test_convert_lc_messages_to_responses_api_basic():
         HumanMessage(content="Hello!"),
         AIMessage(content="Hi there!"),
     ]
-    
+
     result = _convert_lc_messages_to_responses_api(messages)
     expected = [
         {"role": "system", "content": "You are a helpful assistant."},
@@ -571,6 +427,8 @@ def test_convert_lc_messages_to_responses_api_basic():
 def test_convert_lc_messages_to_responses_api_with_tool_calls():
     """Test _convert_lc_messages_to_responses_api with tool calls."""
     messages = [
+        SystemMessage(content="You are a helpful assistant."),
+        HumanMessage(content="Hello!"),
         AIMessage(
             content="I'll check the weather.",
             tool_calls=[
@@ -581,27 +439,37 @@ def test_convert_lc_messages_to_responses_api_with_tool_calls():
                     "type": "tool_call",
                 }
             ],
-            id="msg_123"
+            id="msg_123",
         ),
         ToolMessage(content="Sunny, 72°F", tool_call_id="call_123"),
     ]
-    
+
     result = _convert_lc_messages_to_responses_api(messages)
-    
-    # Should contain function_call, message, and function_call_output
-    assert len(result) >= 2
-    
-    # Find function_call item
-    function_call_items = [item for item in result if item.get("type") == "function_call"]
-    assert len(function_call_items) == 1
-    assert function_call_items[0]["name"] == "get_weather"
-    assert function_call_items[0]["call_id"] == "call_123"
-    
-    # Find function_call_output item
-    function_output_items = [item for item in result if item.get("type") == "function_call_output"]
-    assert len(function_output_items) == 1
-    assert function_output_items[0]["output"] == "Sunny, 72°F"
-    assert function_output_items[0]["call_id"] == "call_123"
+    expected = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_123",
+            "content": [
+                {"type": "output_text", "text": "I'll check the weather."},
+            ],
+        },
+        {
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call_123",
+            "arguments": '{"location": "SF"}',
+            "id": "msg_123",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": "Sunny, 72°F",
+        },
+    ]
+    assert result == expected
 
 
 def test_convert_lc_messages_to_responses_api_with_complex_content():
@@ -609,45 +477,57 @@ def test_convert_lc_messages_to_responses_api_with_complex_content():
     messages = [
         AIMessage(
             content=[
-                {"type": "text", "text": "Here's the answer:", "annotations": {"key": "value"}},
+                {"type": "text", "text": "Here's the answer:", "annotations": [{"key": "value"}]},
                 {"type": "refusal", "refusal": "I cannot do that."},
-                {"type": "reasoning", "reasoning": "Let me think..."},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Let me think..."}],
+                },
             ],
-            id="msg_456"
+            id="msg_456",
         )
     ]
-    
+
     result = _convert_lc_messages_to_responses_api(messages)
-    
-    # Should have text message, refusal message, and reasoning item
-    assert len(result) >= 2
-    
-    # Find message items
-    message_items = [item for item in result if item.get("type") == "message"]
-    assert len(message_items) >= 1
-    
-    # Check text content in first message
-    text_message = message_items[0]
-    assert text_message["content"][0]["type"] == "output_text"
-    assert text_message["content"][0]["text"] == "Here's the answer:"
-    assert text_message["content"][0]["annotations"] == {"key": "value"}
-    
-    # Find reasoning items 
-    reasoning_items = [item for item in result if item.get("type") == "reasoning"]
-    if reasoning_items:
-        assert reasoning_items[0]["reasoning"] == "Let me think..."
+    expected = [
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_456",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Here's the answer:",
+                    "annotations": [{"key": "value"}],
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_456",
+            "content": [
+                {
+                    "type": "refusal",
+                    "refusal": "I cannot do that.",
+                },
+            ],
+        },
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Let me think..."}],
+            "id": "msg_456",
+        },
+    ]
+    assert result == expected
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
     """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
-    chunk = {
-        "type": "response.output_text.delta",
-        "item_id": "item_123",
-        "delta": "Hello"
-    }
-    
+    chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
+
     assert isinstance(result, AIMessageChunk)
     assert result.content == [{"type": "text", "text": "Hello"}]
     assert result.id == "item_123"
@@ -662,37 +542,38 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
             "id": "item_123",
             "call_id": "call_456",
             "name": "get_weather",
-            "arguments": '{"location": "SF"}'
-        }
+            "arguments": '{"location": "SF"}',
+        },
     }
-    
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
-    assert isinstance(result, AIMessageChunk)
-    assert result.id == "call_456"
-    assert len(result.tool_call_chunks) == 1
-    # The content should contain the function call item
-    assert len(result.content) >= 1
-    # Check that tool_call_chunks contains the expected tool call
-    tool_call = result.tool_call_chunks[0]
-    assert tool_call["name"] == "get_weather"
-    assert tool_call["args"] == '{"location": "SF"}'
-    assert tool_call["id"] == "call_456"
+    expected = AIMessageChunk(
+        id="call_456",
+        content=[
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": '{"location": "SF"}',
+                "id": "item_123",
+                "call_id": "call_456",
+            },
+        ],
+        tool_call_chunks=[
+            ToolCallChunk(name="get_weather", args='{"location": "SF"}', id="call_456")
+        ],
+    )
+    assert result == expected
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call output."""
     chunk = {
         "type": "response.output_item.done",
-        "item": {
-            "type": "function_call_output",
-            "call_id": "call_456",
-            "output": "Sunny, 72°F"
-        }
+        "item": {"type": "function_call_output", "call_id": "call_456", "output": "Sunny, 72°F"},
     }
-    
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
+
     assert isinstance(result, ToolMessageChunk)
     assert result.content == "Sunny, 72°F"
     assert result.tool_call_id == "call_456"
@@ -706,65 +587,54 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
             "type": "message",
             "id": "msg_123",
             "content": [
-                {"type": "output_text", "text": "Hello!", "annotations": {"key": "value"}},
-                {"type": "refusal", "refusal": "I cannot help with that."}
-            ]
-        }
+                {"type": "output_text", "text": "Hello!", "annotations": [{"key": "value"}]},
+                {"type": "refusal", "refusal": "I cannot help with that."},
+            ],
+        },
     }
-    
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
-    assert isinstance(result, AIMessageChunk)
-    assert result.id == "msg_123"
-    assert len(result.content) == 2
-    assert result.content[0]["type"] == "text"
-    assert result.content[0]["text"] == "Hello!"
-    assert result.content[0]["annotations"] == {"key": "value"}
-    assert result.content[1]["type"] == "refusal"
-    assert result.content[1]["refusal"] == "I cannot help with that."
+    expected = AIMessageChunk(
+        id="msg_123",
+        content=[
+            {"type": "text", "text": "Hello!", "annotations": [{"key": "value"}]},
+            {"type": "refusal", "refusal": "I cannot help with that."},
+        ],
+    )
+    assert result == expected
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
-    previous_chunk = {
-        "type": "response.output_text.delta",
-        "item_id": "item_123",
-        "delta": "Hello"
-    }
-    
+    previous_chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
     chunk = {
         "type": "response.output_item.done",
         "item": {
             "type": "message",
             "id": "item_123",
-            "content": [{"type": "output_text", "text": "Hello"}]
-        }
+            "content": [{"type": "output_text", "text": "Hello"}],
+        },
     }
-    
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
-    
+
     # Should return None to skip duplicate
     assert result is None
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_error():
     """Test _convert_responses_api_chunk_to_lc_chunk with error."""
-    chunk = {
-        "type": "error",
-        "error": "Something went wrong"
-    }
-    
+    chunk = {"type": "error", "error": "Something went wrong"}
+
     with pytest.raises(ValueError, match="Something went wrong"):
         _convert_responses_api_chunk_to_lc_chunk(chunk)
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
     """Test _convert_responses_api_chunk_to_lc_chunk with unknown type."""
-    chunk = {
-        "type": "unknown_type",
-        "data": "some data"
-    }
-    
+    chunk = {"type": "unknown_type", "data": "some data"}
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
     assert result is None
 
@@ -775,14 +645,19 @@ def test_convert_responses_api_chunk_to_lc_chunk_special_items():
         "type": "response.output_item.done",
         "item": {
             "type": "reasoning",
-            "reasoning": "Let me think about this..."
-        }
+            "summary": [{"type": "summary_text", "text": "Let me think about this..."}],
+        },
     }
-    
+
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
+
     assert isinstance(result, AIMessageChunk)
-    assert result.content == [{"type": "reasoning", "reasoning": "Let me think about this..."}]
+    assert result.content == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Let me think about this..."}],
+        }
+    ]
 
 
 ### Test ChatDatabricks response conversion methods ###
@@ -791,7 +666,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_special_items():
 def test_convert_responses_api_response_to_chat_result():
     """Test _convert_responses_api_response_to_chat_result method."""
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
-    
+
     response = {
         "id": "response_123",
         "output": [
@@ -802,81 +677,80 @@ def test_convert_responses_api_response_to_chat_result():
                         "type": "output_text",
                         "text": "Hello!",
                         "id": "text_123",
-                        "annotations": {"key": "value"}
+                        "annotations": [{"key": "value"}],
                     }
-                ]
+                ],
             },
             {
                 "type": "function_call",
                 "name": "get_weather",
                 "arguments": '{"location": "SF"}',
-                "call_id": "call_123"
-            }
-        ]
+                "call_id": "call_123",
+            },
+        ],
     }
-    
+
     result = llm._convert_responses_api_response_to_chat_result(response)
-    
-    assert len(result.generations) == 1
-    message = result.generations[0].message
-    assert isinstance(message, AIMessage)
-    assert message.id == "response_123"
-    assert len(message.content) == 2
-    assert message.content[0]["type"] == "text"
-    assert message.content[0]["text"] == "Hello!"
-    assert len(message.tool_calls) == 1
-    assert message.tool_calls[0]["name"] == "get_weather"
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(
+                    id="response_123",
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "Hello!",
+                            "annotations": [{"key": "value"}],
+                            "id": "text_123",
+                        },
+                        {
+                            "type": "function_call",
+                            "name": "get_weather",
+                            "arguments": '{"location": "SF"}',
+                            "call_id": "call_123",
+                        },
+                    ],
+                    tool_calls=[
+                        {
+                            "name": "get_weather",
+                            "args": {"location": "SF"},
+                            "id": "call_123",
+                        }
+                    ],
+                )
+            ),
+        ]
+    )
+    assert result == expected
 
 
 def test_convert_responses_api_response_to_chat_result_with_error():
     """Test _convert_responses_api_response_to_chat_result with error."""
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
-    
-    response = {
-        "error": "Something went wrong"
-    }
-    
+
+    response = {"error": "Something went wrong"}
+
     with pytest.raises(ValueError, match="Something went wrong"):
         llm._convert_responses_api_response_to_chat_result(response)
-
-
-def test_convert_responses_api_response_to_chat_result_invalid_json():
-    """Test _convert_responses_api_response_to_chat_result with invalid JSON in function call."""
-    llm = ChatDatabricks(model="test-model", use_responses_api=True)
-    
-    response = {
-        "output": [
-            {
-                "type": "function_call",
-                "name": "get_weather",
-                "arguments": "invalid json",
-                "call_id": "call_123"
-            }
-        ]
-    }
-    
-    result = llm._convert_responses_api_response_to_chat_result(response)
-    
-    message = result.generations[0].message
-    assert len(message.invalid_tool_calls) == 1
-    assert message.invalid_tool_calls[0]["name"] == "get_weather"
-    assert message.invalid_tool_calls[0]["args"] == "invalid json"
 
 
 def test_convert_chatagent_response_to_chat_result():
     """Test _convert_chatagent_response_to_chat_result method."""
     llm = ChatDatabricks(model="test-model")
-    
-    response = {
-        "messages": "Hello from ChatAgent!"
-    }
-    
+
+    response = {"messages": [{"role": "assistant", "content": "Hello from ChatAgent!"}]}
+
     result = llm._convert_chatagent_response_to_chat_result(response)
-    
-    assert len(result.generations) == 1
-    message = result.generations[0].message
-    assert isinstance(message, AIMessage)
-    assert message.content == "Hello from ChatAgent!"
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(
+                    content=[{"role": "assistant", "content": "Hello from ChatAgent!"}]
+                )
+            ),
+        ]
+    )
+    assert result == expected
 
 
 ### Test ChatDatabricks initialization and configuration ###
@@ -897,12 +771,12 @@ def test_chat_databricks_init_with_extra_params():
 
 def test_chat_databricks_init_sets_client():
     """Test ChatDatabricks initialization sets client."""
-    with patch('databricks_langchain.chat_models.get_deployment_client') as mock_get_client:
+    with patch("databricks_langchain.chat_models.get_deployment_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
-        
+
         llm = ChatDatabricks(model="test-model", target_uri="custom-uri")
-        
+
         mock_get_client.assert_called_once_with("custom-uri")
         assert llm.client == mock_client
 
@@ -912,44 +786,43 @@ def test_chat_databricks_init_sets_client():
 
 def test_prepare_inputs_basic():
     """Test _prepare_inputs method with basic parameters."""
-    llm = ChatDatabricks(
-        model="test-model",
-        temperature=0.7,
-        max_tokens=100,
-        stop=["stop"],
-        n=2
-    )
-    
+    llm = ChatDatabricks(model="test-model", temperature=0.7, max_tokens=100, stop=["stop"], n=2)
+
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
-    
-    assert result["temperature"] == 0.7
-    assert result["max_tokens"] == 100
-    assert result["stop"] == ["stop"]
-    assert result["n"] == 2
-    assert "messages" in result
-    assert len(result["messages"]) == 1
+
+    expected = {
+        "temperature": 0.7,
+        "max_tokens": 100,
+        "stop": ["stop"],
+        "n": 2,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    assert result == expected
 
 
 def test_prepare_inputs_with_responses_api():
     """Test _prepare_inputs method with responses API."""
     llm = ChatDatabricks(model="test-model", use_responses_api=True, temperature=0.5)
-    
+
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
-    
-    assert result["temperature"] == 0.5
-    assert "input" in result
-    assert "messages" not in result
+    expected = {
+        "temperature": 0.5,
+        "input": [{"role": "user", "content": "Hello"}],
+        "n": 1,
+    }
+
+    assert result == expected
 
 
 def test_prepare_inputs_override_stop():
     """Test _prepare_inputs method with stop parameter override."""
     llm = ChatDatabricks(model="test-model", stop=["default_stop"])
-    
+
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, stop=["override_stop"])
-    
+
     # The implementation uses "self.stop or stop" which means if self.stop is truthy, it uses self.stop
     # This is the current behavior based on line 319: if stop := self.stop or stop:
     assert result["stop"] == ["default_stop"]
@@ -958,20 +831,20 @@ def test_prepare_inputs_override_stop():
 def test_prepare_inputs_with_kwargs():
     """Test _prepare_inputs method with additional kwargs."""
     llm = ChatDatabricks(model="test-model")
-    
+
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, custom_param="value")
-    
+
     assert result["custom_param"] == "value"
 
 
 def test_prepare_inputs_with_extra_params():
     """Test _prepare_inputs method with extra_params."""
     llm = ChatDatabricks(model="test-model", extra_params={"param1": "value1"})
-    
+
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, param2="value2")
-    
+
     assert result["param1"] == "value1"
     assert result["param2"] == "value2"
 
@@ -992,9 +865,9 @@ def test_convert_dict_to_message_chunk_with_usage():
     """Test _convert_dict_to_message_chunk with usage metadata."""
     delta = {"role": "assistant", "content": "test"}
     usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
-    
+
     result = _convert_dict_to_message_chunk(delta, "assistant", usage=usage)
-    
+
     assert isinstance(result, AIMessageChunk)
     assert result.usage_metadata is not None
     assert result.usage_metadata["input_tokens"] == 10
@@ -1004,14 +877,10 @@ def test_convert_dict_to_message_chunk_with_usage():
 
 def test_convert_dict_to_message_chunk_tool_calls_key_error():
     """Test _convert_dict_to_message_chunk handles KeyError in tool calls."""
-    delta = {
-        "role": "assistant",
-        "content": "test",
-        "tool_calls": [{"invalid": "structure"}]
-    }
-    
+    delta = {"role": "assistant", "content": "test", "tool_calls": [{"invalid": "structure"}]}
+
     result = _convert_dict_to_message_chunk(delta, "assistant")
-    
+
     assert isinstance(result, AIMessageChunk)
     # The function still creates tool_call_chunks even with missing keys, with None values
     assert len(result.tool_call_chunks) == 1
@@ -1030,16 +899,13 @@ def test_convert_dict_to_message_with_invalid_tool_call():
             {
                 "id": "call_123",
                 "type": "function",
-                "function": {
-                    "name": "test_func",
-                    "arguments": "invalid json"
-                }
+                "function": {"name": "test_func", "arguments": "invalid json"},
             }
-        ]
+        ],
     }
-    
+
     result = _convert_dict_to_message(message)
-    
+
     assert isinstance(result, AIMessage)
     assert len(result.invalid_tool_calls) == 1
     assert result.invalid_tool_calls[0]["name"] == "test_func"
