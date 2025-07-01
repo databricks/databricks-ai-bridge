@@ -462,7 +462,6 @@ class ChatDatabricks(BaseChatModel):
         if self.use_responses_api:
             prev_chunk = None
             for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-                print("\n\n", chunk, prev_chunk)
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
                 if chunk_message:
