@@ -21,7 +21,7 @@ class DatabricksTokenStorage(TokenStorage):
 
 class DatabricksOAuthClientProvider(OAuthClientProvider):
     """
-    An OAuthClientProvider for Databricks. This class extends mcp.client.auth.OAuthClientProvider 
+    An OAuthClientProvider for Databricks. This class extends mcp.client.auth.OAuthClientProvider
     and can be used with the `mcp.client.streamable_http` to authorize the MCP Server with Databricks.
 
     Usage:
@@ -44,6 +44,7 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
     Args:
         workspace_client (databricks.sdk.WorkspaceClient): The Databricks workspace client used for authentication and requests.
     """
+
     def __init__(self, workspace_client: WorkspaceClient):
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 

@@ -220,7 +220,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install .
-          pip install -e mcp[dev]
+          pip install -e databricks_mcp[dev]
       - name: Run tests
         run: |
           pytest databricks_mcp/tests/unit_tests
