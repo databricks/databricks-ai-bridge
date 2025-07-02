@@ -1,6 +1,14 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.6.0, databricks-langchain 0.6.0, databricks-openai 0.5.0, databricks-mcp 0.2.0 (2025-06-02)
+
+### Improvements
+- Add option to include similarity score in VectorSearchRetrieverTool result
+- Introduce DatabricksMCPClient
+- Make ChatDatabricks compatible with ChatAgent and ResponsesAgent
+
 ## databricks-ai-bridge 0.5.1, databricks-langchain 0.5.1, databricks-openai 0.4.1 (2025-05-19)
+
 ### Bug Fixes
 - Fix Databricks Vector Search Filter implementation
 - Improve performance for Genie Truncation
