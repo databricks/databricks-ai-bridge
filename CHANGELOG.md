@@ -5,6 +5,7 @@
 ### Improvements
 - Add option to include similarity score in VectorSearchRetrieverTool result
 - Introduce DatabricksMCPClient
+- Include reasoning + SQL steps when Genie agent is queried
 - Make ChatDatabricks compatible with ChatAgent and ResponsesAgent
 
 ## databricks-ai-bridge 0.5.1, databricks-langchain 0.5.1, databricks-openai 0.4.1 (2025-05-19)
