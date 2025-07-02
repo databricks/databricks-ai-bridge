@@ -43,7 +43,7 @@ class DatabricksMCPClient:
 
     Attributes:
         server_url (str): The base URL of the MCP server to which this client connects.
-        client (WorkspaceClient): The Databricks workspace client used for authentication and requests.
+        client (databricks.sdk.WorkspaceClient): The Databricks workspace client used for authentication and requests.
     """
 
     def __init__(self, server_url: str, workspace_client: Optional[WorkspaceClient] = None):
@@ -97,11 +97,25 @@ class DatabricksMCPClient:
         return name.replace("__", ".")
 
     def list_tools(self) -> List[Tool]:
-        """List tools for the current MCP server."""
+        """
+        Lists the tools for the current MCP Server. This method uses the `streamablehttp_client` from mcp to fetch all the tools from the MCP server.
+
+        Returns:
+            List[mcp.types.Tool]: A list of tools for the current MCP Server.
+        """
         return asyncio.run(self._get_tools_async())
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
-        """Call the tool with the given name and input."""
+        """
+        Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
+
+        Args:
+            tool_name (str): The name of the tool to call.
+            arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+
+        Returns:
+            mcp.types.CallToolResult: The result of the tool call.
+        """
         return asyncio.run(self._call_tools_async(tool_name, arguments))
 
     def get_databricks_resources(self) -> List[DatabricksResource]:

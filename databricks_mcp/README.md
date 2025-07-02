@@ -11,7 +11,7 @@ pip install databricks-mcp
 
 ### From Source
 ```sh
-pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdirectory=mcp
+pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdirectory=databricks_mcp
 ```
 
 ## Key Features

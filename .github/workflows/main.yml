@@ -223,4 +223,4 @@ jobs:
           pip install -e mcp[dev]
       - name: Run tests
         run: |
-          pytest mcp/tests/unit_tests
+          pytest databricks_mcp/tests/unit_tests

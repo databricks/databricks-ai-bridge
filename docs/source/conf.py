@@ -26,6 +26,7 @@ version = importlib.metadata.version("databricks_ai_bridge")
 sys.path.insert(0, os.path.abspath("../.."))
 sys.path.insert(0, os.path.abspath("."))
 sys.path.insert(0, os.path.abspath("../../src/databricks_ai_bridge"))
+sys.path.insert(0, os.path.abspath("../../databricks_mcp/src"))
 sys.path.insert(0, os.path.abspath("../../integrations/langchain/src/databricks_langchain"))
 sys.path.insert(0, os.path.abspath("../../integrations/openai/src/databricks_openai"))
 

@@ -11,3 +11,4 @@ and `databricks-openai <https://pypi.org/project/databricks-openai/>`_
     latest/databricks_ai_bridge
     latest/databricks_langchain
     latest/databricks_openai
+    latest/databricks_mcp
