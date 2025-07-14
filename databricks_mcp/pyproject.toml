@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mcp"
-version = "0.1.1.dev0"
+version = "0.3.0.dev0"
 description = "MCP helpers for Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
