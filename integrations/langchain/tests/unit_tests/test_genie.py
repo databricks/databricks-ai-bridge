@@ -191,11 +191,11 @@ def test_only_pass_last_message_functionality(MockWorkspaceClient):
     """Test only_pass_last_message parameter in both _query_genie_as_agent and GenieAgent"""
     mock_space = GenieSpace(space_id="space-id", title="Sales Space", description="description")
     MockWorkspaceClient.genie.get_space.return_value = mock_space
-    
+
     mock_genie_response = GenieResponse(
         result="It is sunny.", query="SELECT * FROM weather", description="Query reasoning"
     )
-    
+
     # Test data with multiple messages
     input_data = {
         "messages": [
@@ -204,37 +204,43 @@ def test_only_pass_last_message_functionality(MockWorkspaceClient):
             {"role": "user", "content": "What is the weather?"},
         ]
     }
-    
+
     # Test with message objects
     class Message:
         def __init__(self, content):
             self.content = content
-    
+
     input_data_objects = {"messages": [Message("First"), Message("Weather question?")]}
-    
+
     genie = Genie("space-id", MockWorkspaceClient)
-    
+
     with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
         # Test 1: Dict messages with only_pass_last_message=True
         result = _query_genie_as_agent(input_data, genie, "Genie", only_pass_last_message=True)
         mock_ask.assert_called_with("What is the weather?")
         assert result == {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
-        
-        # Test 2: Object messages with only_pass_last_message=True  
+
+        # Test 2: Object messages with only_pass_last_message=True
         mock_ask.reset_mock()
         _query_genie_as_agent(input_data_objects, genie, "Genie", only_pass_last_message=True)
         mock_ask.assert_called_with("Weather question?")
-        
+
         # Test 3: Empty messages
         mock_ask.reset_mock()
-        result = _query_genie_as_agent({"messages": []}, genie, "Genie", only_pass_last_message=True)
+        result = _query_genie_as_agent(
+            {"messages": []}, genie, "Genie", only_pass_last_message=True
+        )
         mock_ask.assert_called_with("")
-        
+
         # Test 4: GenieAgent end-to-end with only_pass_last_message=True
         mock_ask.reset_mock()
-        agent = GenieAgent("space-id", "Genie", only_pass_last_message=True, client=MockWorkspaceClient)
-        
-        with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response) as mock_ask_agent:
+        agent = GenieAgent(
+            "space-id", "Genie", only_pass_last_message=True, client=MockWorkspaceClient
+        )
+
+        with patch(
+            "databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response
+        ) as mock_ask_agent:
             result = agent.invoke(input_data)
             mock_ask_agent.assert_called_once_with("What is the weather?")
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
