@@ -19,13 +19,28 @@ def _concat_messages_array(messages):
 
 
 @mlflow.trace()
-def _query_genie_as_agent(input, genie: Genie, genie_agent_name, include_context: bool = False):
+def _query_genie_as_agent(
+    input,
+    genie: Genie,
+    genie_agent_name,
+    include_context: bool = False,
+    only_pass_last_message: bool = False,
+):
     from langchain_core.messages import AIMessage
 
-    message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
-
-    # Concatenate messages to form the chat history
-    message += _concat_messages_array(input.get("messages"))
+    if only_pass_last_message:
+        messages = input.get("messages", [])
+        if messages:
+            if isinstance(messages[-1], dict):
+                message = messages[-1].get("content", "")
+            else:
+                message = messages[-1].content
+        else:
+            message = ""
+    else:
+        message = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
+        # Concatenate messages to form the chat history
+        message += _concat_messages_array(input.get("messages"))
 
     # Send the message and wait for a response
     genie_response = genie.ask_question(message)
@@ -51,6 +66,7 @@ def GenieAgent(
     genie_agent_name: str = "Genie",
     description: str = "",
     include_context: bool = False,
+    only_pass_last_message: bool = False,
     client: Optional["WorkspaceClient"] = None,
 ):
     """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used."""
@@ -69,6 +85,7 @@ def GenieAgent(
         genie=genie,
         genie_agent_name=genie_agent_name,
         include_context=include_context,
+        only_pass_last_message=only_pass_last_message,
     )
 
     runnable = RunnableLambda(partial_genie_agent)
