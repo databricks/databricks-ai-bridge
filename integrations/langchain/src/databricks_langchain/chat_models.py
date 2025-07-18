@@ -292,6 +292,8 @@ class ChatDatabricks(BaseChatModel):
     ) -> ChatResult:
         print(f"[TIMESTAMP] _generate called at: {datetime.now()}")
         data = self._prepare_inputs(messages, stop, **kwargs)
+        print(f"[TIMESTAMP] _prepare_inputs finished at: {datetime.now()}")
+        print(f"[TIMESTAMP] predict called at: {datetime.now()}")
         resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
         print(f"[TIMESTAMP] predict finished at: {datetime.now()}")
         if self.use_responses_api:
@@ -299,6 +301,7 @@ class ChatDatabricks(BaseChatModel):
         elif "messages" in resp:
             return self._convert_chatagent_response_to_chat_result(resp)
 
+        print(f"[TIMESTAMP] _convert_response_to_chat_result called at: {datetime.now()}")
         temp = self._convert_response_to_chat_result(resp)
         print(f"[TIMESTAMP] _convert_response_to_chat_result finished at: {datetime.now()}")
         return temp
