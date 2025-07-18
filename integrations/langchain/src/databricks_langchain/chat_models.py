@@ -3,6 +3,7 @@
 import json
 import logging
 import warnings
+from datetime import datetime
 from operator import itemgetter
 from typing import (
     Any,
@@ -289,14 +290,18 @@ class ChatDatabricks(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
+        print(f"[TIMESTAMP] _generate called at: {datetime.now()}")
         data = self._prepare_inputs(messages, stop, **kwargs)
         resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
+        print(f"[TIMESTAMP] predict finished at: {datetime.now()}")
         if self.use_responses_api:
             return self._convert_responses_api_response_to_chat_result(resp)
         elif "messages" in resp:
             return self._convert_chatagent_response_to_chat_result(resp)
 
-        return self._convert_response_to_chat_result(resp)
+        temp = self._convert_response_to_chat_result(resp)
+        print(f"[TIMESTAMP] _convert_response_to_chat_result finished at: {datetime.now()}")
+        return temp
 
     def _prepare_inputs(
         self,
@@ -304,6 +309,7 @@ class ChatDatabricks(BaseChatModel):
         stop: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        print(f"[TIMESTAMP] _prepare_inputs called at: {datetime.now()}")
         data: Dict[str, Any] = {
             "n": self.n,
             **self.extra_params,  # type: ignore
@@ -430,6 +436,7 @@ class ChatDatabricks(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        print(f"[TIMESTAMP] _convert_response_to_chat_result called at: {datetime.now()}")
         generations = [
             ChatGeneration(
                 message=_convert_dict_to_message(choice["message"]),
