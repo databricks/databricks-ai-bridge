@@ -107,10 +107,16 @@ class DatabricksLM(dspy.LM):
         model_name_without_databricks_prefix = self.model[len("databricks/") :]
         # Create the provisioned throughput endpoint
         w = self.workspace_client
-        return w.serving_endpoints.create_provisioned_throughput_endpoint_and_wait(
-            name=model_name_without_databricks_prefix,
-            config=config,
-        )
+        try:
+            return w.serving_endpoints.create_provisioned_throughput_endpoint_and_wait(
+                name=model_name_without_databricks_prefix,
+                config=config,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create provisioned throughput endpoint: {e}\n\n"
+                "`create_pt_endpoint=True` is only supported in Databricks notebooks now."
+            ) from e
 
     def tear_down(self):
         if not self.create_pt_endpoint:
