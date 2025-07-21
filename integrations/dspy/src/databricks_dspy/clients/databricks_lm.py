@@ -31,10 +31,14 @@ class DatabricksLM(dspy.LM):
 
         ```python
         import dspy
+        import databricks_dspy
         from databricks.sdk import WorkspaceClient
 
         w = WorkspaceClient()
-        lm = dspy.LM("databricks/databricks-llama-4-maverick", workspace_client=w)
+        lm = databricks_dspy.DatabricksLM(
+            "databricks/databricks-llama-4-maverick",
+            workspace_client=w,
+        )
         dspy.configure(lm=lm)
 
         predict = dspy.Predict("q->a")
@@ -45,6 +49,7 @@ class DatabricksLM(dspy.LM):
 
         ```python
         import dspy
+        import databricks_dspy
         from databricks.sdk import WorkspaceClient
         from databricks.sdk.service.serving import PtServedModel
 
@@ -54,7 +59,7 @@ class DatabricksLM(dspy.LM):
             entity_version="1",
             provisioned_model_units=50,
         )
-        lm = dspy.LM(
+        lm = databricks_dspy.DatabricksLM(
             "databricks/provisioned-llama-4-maverick",
             workspace_client=w,
             create_pt_endpoint=True,
@@ -71,6 +76,8 @@ class DatabricksLM(dspy.LM):
                 "`model` must start with 'databricks/' when using `DatabricksLM`, "
                 "e.g. dspy.LM('databricks/databricks-llama-4-maverick')"
             )
+
+        super().__init__(model=model, **kwargs)
 
         if workspace_client:
             self.workspace_client = workspace_client
@@ -92,8 +99,6 @@ class DatabricksLM(dspy.LM):
 
         if create_pt_endpoint:
             self.pt_endpoint = self._create_pt_endpoint()
-
-        super().__init__(model=model, **kwargs)
 
     def _create_pt_endpoint(self):
         # Create the provisioned throughput endpoint configuration
