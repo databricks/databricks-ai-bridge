@@ -121,13 +121,101 @@ _MOCK_STREAM_RESPONSE = [
 
 @pytest.fixture(autouse=True)
 def mock_client() -> Generator:
-    client = mock.MagicMock()
-    client.predict.return_value = _MOCK_CHAT_RESPONSE
-    client.predict_stream.return_value = _MOCK_STREAM_RESPONSE
-    with mock.patch("mlflow.deployments.get_deploy_client", return_value=client):
+    # Mock MLflow deployments client
+    mlflow_client = mock.MagicMock()
+    mlflow_client.predict.return_value = _MOCK_CHAT_RESPONSE
+    mlflow_client.predict_stream.return_value = _MOCK_STREAM_RESPONSE
+    
+    # Mock OpenAI client response objects
+    class MockOpenAIMessage:
+        def __init__(self, role="assistant", content="", tool_calls=None):
+            self.role = role
+            self.content = content
+            self.tool_calls = tool_calls or []
+    
+    class MockOpenAIChoice:
+        def __init__(self, message, finish_reason="stop"):
+            self.message = message
+            self.finish_reason = finish_reason
+    
+    class MockOpenAIUsage:
+        def __init__(self, prompt_tokens=30, completion_tokens=36, total_tokens=66):
+            self.prompt_tokens = prompt_tokens
+            self.completion_tokens = completion_tokens
+            self.total_tokens = total_tokens
+    
+    class MockOpenAIResponse:
+        def __init__(self):
+            # Ensure the content matches exactly
+            expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
+            self.choices = [
+                MockOpenAIChoice(
+                    MockOpenAIMessage(content=expected_content)
+                )
+            ]
+            self.usage = MockOpenAIUsage()
+            self.model = _MOCK_CHAT_RESPONSE["model"]
+    
+    # Mock OpenAI streaming response
+    class MockOpenAIDelta:
+        def __init__(self, role=None, content=None, tool_calls=None):
+            self.role = role
+            self.content = content
+            self.tool_calls = tool_calls
+    
+    class MockOpenAIStreamChoice:
+        def __init__(self, delta, finish_reason=None):
+            self.delta = delta
+            self.finish_reason = finish_reason
+    
+    class MockOpenAIStreamChunk:
+        def __init__(self, choices, usage=None):
+            self.choices = choices
+            self.usage = usage
+    
+    def mock_openai_stream():
+        for chunk_data in _MOCK_STREAM_RESPONSE:
+            choice_data = chunk_data["choices"][0]
+            delta_data = choice_data["delta"]
+            usage_data = chunk_data.get("usage")
+            
+            delta = MockOpenAIDelta(
+                role=delta_data.get("role"),
+                content=delta_data.get("content", "")
+            )
+            choice = MockOpenAIStreamChoice(
+                delta=delta,
+                finish_reason=choice_data.get("finish_reason")
+            )
+            usage = MockOpenAIUsage(**usage_data) if usage_data else None
+            yield MockOpenAIStreamChunk([choice], usage)
+    
+    # Mock OpenAI client
+    openai_client = mock.MagicMock()
+    
+    def mock_create_completion(**kwargs):
+        if kwargs.get("stream"):
+            return mock_openai_stream()
+        else:
+            return MockOpenAIResponse()
+    
+    openai_client.chat.completions.create.side_effect = mock_create_completion
+    
+    with mock.patch("mlflow.deployments.get_deploy_client", return_value=mlflow_client), \
+         mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client), \
+         mock.patch("databricks_langchain.chat_models.get_openai_client", return_value=openai_client):
         yield
 
 
 @pytest.fixture
 def llm() -> ChatDatabricks:
     return ChatDatabricks(model="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
+
+
+@pytest.fixture
+def llm_openai() -> ChatDatabricks:
+    return ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=True
+    )

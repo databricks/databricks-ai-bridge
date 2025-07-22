@@ -6,12 +6,11 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
+from databricks_langchain import DatabricksEmbeddings
+from databricks_langchain.vectorstores import DatabricksVectorSearch
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
-
-from databricks_langchain import DatabricksEmbeddings
-from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
 class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):

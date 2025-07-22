@@ -35,7 +35,13 @@ from tests.utils.chat_models import (  # noqa: F401
 )
 
 
-def test_dict(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_dict(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
     assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
@@ -60,7 +66,13 @@ def test_dict_with_endpoint() -> None:
     assert d["target_uri"] == "databricks"
 
 
-def test_chat_model_predict(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_model_predict(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     res = llm.invoke(
         [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -70,7 +82,13 @@ def test_chat_model_predict(llm: ChatDatabricks) -> None:
     assert res.content == _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]  # type: ignore[index]
 
 
-def test_chat_model_stream(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_model_stream(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     res = llm.stream(
         [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -81,7 +99,13 @@ def test_chat_model_stream(llm: ChatDatabricks) -> None:
         assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
 
 
-def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_model_stream_with_usage(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     def _assert_usage(chunk, expected):
         usage = chunk.usage_metadata
         assert usage is not None
@@ -106,6 +130,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         endpoint="databricks-meta-llama-3-3-70b-instruct",
         target_uri="databricks",
         stream_usage=True,
+        use_openai_client=use_openai_client,
     )
     res = llm_with_usage.stream(
         [
@@ -130,7 +155,13 @@ class GetPopulation(BaseModel):
     location: str = Field(..., description="The city and state, e.g. San Francisco, CA")
 
 
-def test_chat_model_bind_tools(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_model_bind_tools(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     llm_with_tools = llm.bind_tools([GetWeather, GetPopulation])
     response = llm_with_tools.invoke("Which city is hotter today and which is bigger: LA or NY?")
     assert isinstance(response, AIMessage)
@@ -152,13 +183,21 @@ def test_chat_model_bind_tools(llm: ChatDatabricks) -> None:
     ],
 )
 def test_chat_model_bind_tools_with_choices(
-    llm: ChatDatabricks, tool_choice, expected_output
+    tool_choice, expected_output
 ) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks"
+    )
     llm_with_tool = llm.bind_tools([GetWeather], tool_choice=tool_choice)
     assert llm_with_tool.kwargs["tool_choice"] == expected_output
 
 
-def test_chat_model_bind_tolls_with_invalid_choices(llm: ChatDatabricks) -> None:
+def test_chat_model_bind_tolls_with_invalid_choices() -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks"
+    )
     with pytest.raises(ValueError, match="Unrecognized tool_choice type"):
         llm.bind_tools([GetWeather], tool_choice=123)
 
@@ -201,7 +240,13 @@ JSON_SCHEMA = {
 
 @pytest.mark.parametrize("schema", [AnswerWithJustification, JSON_SCHEMA, None])
 @pytest.mark.parametrize("method", ["function_calling", "json_mode", "json_schema"])
-def test_chat_model_with_structured_output(llm, schema, method: str):
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_model_with_structured_output(use_openai_client, schema, method: str):
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     if schema is None and method in ["function_calling", "json_schema"]:
         pytest.skip("Cannot use function_calling without schema")
 
@@ -347,7 +392,13 @@ def test_convert_message_to_dict_function() -> None:
         _convert_message_to_dict(FunctionMessage(content="", name="name"))
 
 
-def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_convert_response_to_chat_result_llm_output(use_openai_client) -> None:
+    llm = ChatDatabricks(
+        model="databricks-meta-llama-3-3-70b-instruct", 
+        target_uri="databricks",
+        use_openai_client=use_openai_client
+    )
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
 
     result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)

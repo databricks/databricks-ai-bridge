@@ -20,6 +20,36 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
+def get_openai_client(target_uri: str) -> Any:
+    """Get an OpenAI client configured for Databricks."""
+    if (target_uri != "databricks") and (urlparse(target_uri).scheme != "databricks"):
+        raise ValueError("Invalid target URI. The target URI must be a valid databricks URI.")
+
+    try:
+        from databricks.sdk import WorkspaceClient
+        from openai import OpenAI  # type: ignore[import-untyped]
+        
+        # Get Databricks workspace client for authentication
+        workspace_client = WorkspaceClient()
+        
+        # Create OpenAI client with Databricks authentication
+        # Use Databricks workspace URL as base_url and set up authentication
+        workspace_url = workspace_client.config.host
+        if not workspace_url.endswith("/serving-endpoints"):
+            workspace_url = f"{workspace_url}/serving-endpoints"
+            
+        return OpenAI(
+            api_key=workspace_client.config.token,
+            base_url=workspace_url,
+        )
+    except ImportError as e:
+        raise ImportError(
+            "Failed to create the OpenAI client. "
+            "Please run `pip install openai` to install "
+            "required dependencies."
+        ) from e
+
+
 # Utility function for Maximal Marginal Relevance (MMR) reranking.
 # Copied from langchain_community/vectorstores/utils.py to avoid cross-dependency
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]

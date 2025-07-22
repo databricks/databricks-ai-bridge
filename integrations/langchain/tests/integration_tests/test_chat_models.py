@@ -37,8 +37,15 @@ from databricks_langchain.chat_models import ChatDatabricks
 _TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
 
-def test_chat_databricks_invoke():
-    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_invoke(use_openai_client):
+    chat = ChatDatabricks(
+        model=_TEST_ENDPOINT, 
+        temperature=0, 
+        max_tokens=10, 
+        stop=["Java"],
+        use_openai_client=use_openai_client
+    )
 
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
@@ -76,18 +83,21 @@ def test_chat_databricks_invoke():
     assert response.content is not None
 
 
-def test_chat_databricks_invoke_multiple_completions():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_invoke_multiple_completions(use_openai_client):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0.5,
         n=3,
         max_tokens=10,
+        use_openai_client=use_openai_client,
     )
     response = chat.invoke("How to learn Python?")
     assert isinstance(response, AIMessage)
 
 
-def test_chat_databricks_stream():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_stream(use_openai_client):
     class FakeCallbackHandler(BaseCallbackHandler):
         def __init__(self):
             self.chunk_counts = 0
@@ -102,6 +112,7 @@ def test_chat_databricks_stream():
         temperature=0,
         stop=["Python"],
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
 
     chunks = list(chat.stream("How to learn Python?", config={"callbacks": [callback]}))
@@ -114,7 +125,8 @@ def test_chat_databricks_stream():
     assert last_chunk.response_metadata["finish_reason"] == "stop"
 
 
-def test_chat_databricks_stream_with_usage():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_stream_with_usage(use_openai_client):
     class FakeCallbackHandler(BaseCallbackHandler):
         def __init__(self):
             self.chunk_counts = 0
@@ -130,6 +142,7 @@ def test_chat_databricks_stream_with_usage():
         stop=["Python"],
         max_tokens=100,
         stream_usage=True,
+        use_openai_client=use_openai_client,
     )
 
     chunks = list(chat.stream("How to learn Python?", config={"callbacks": [callback]}))
@@ -146,12 +159,14 @@ def test_chat_databricks_stream_with_usage():
     assert last_chunk.usage_metadata["total_tokens"] > 0
 
 
+@pytest.mark.parametrize("use_openai_client", [False, True])
 @pytest.mark.asyncio
-async def test_chat_databricks_ainvoke():
+async def test_chat_databricks_ainvoke(use_openai_client):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
+        use_openai_client=use_openai_client,
     )
 
     response = await chat.ainvoke("How to learn Python? Start the response by 'To learn Python,'")
@@ -159,11 +174,14 @@ async def test_chat_databricks_ainvoke():
     assert response.content.startswith("To learn Python,")
 
 
-async def test_chat_databricks_astream():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+@pytest.mark.asyncio
+async def test_chat_databricks_astream(use_openai_client):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
+        use_openai_client=use_openai_client,
     )
     chunk_count = 0
     async for chunk in chat.astream("How to learn Python?"):
@@ -172,12 +190,14 @@ async def test_chat_databricks_astream():
     assert chunk_count > 0
 
 
+@pytest.mark.parametrize("use_openai_client", [False, True])
 @pytest.mark.asyncio
-async def test_chat_databricks_abatch():
+async def test_chat_databricks_abatch(use_openai_client):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=10,
+        use_openai_client=use_openai_client,
     )
 
     responses = await chat.abatch(
@@ -191,12 +211,14 @@ async def test_chat_databricks_abatch():
     assert all(isinstance(response, AIMessage) for response in responses)
 
 
+@pytest.mark.parametrize("use_openai_client", [False, True])
 @pytest.mark.parametrize("tool_choice", [None, "auto", "required", "any", "none"])
-def test_chat_databricks_tool_calls(tool_choice):
+def test_chat_databricks_tool_calls(use_openai_client, tool_choice):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
 
     class GetWeather(BaseModel):
@@ -271,10 +293,11 @@ JSON_SCHEMA = {
 }
 
 
+@pytest.mark.parametrize("use_openai_client", [False, True])
 @pytest.mark.parametrize("schema", [AnswerWithJustification, JSON_SCHEMA, None])
 @pytest.mark.parametrize("method", ["function_calling", "json_mode"])
-def test_chat_databricks_with_structured_output(schema, method):
-    llm = ChatDatabricks(model=_TEST_ENDPOINT)
+def test_chat_databricks_with_structured_output(use_openai_client, schema, method):
+    llm = ChatDatabricks(model=_TEST_ENDPOINT, use_openai_client=use_openai_client)
 
     if schema is None and method == "function_calling":
         pytest.skip("Cannot use function_calling without schema")
@@ -304,11 +327,13 @@ def test_chat_databricks_with_structured_output(schema, method):
     assert isinstance(response_with_raw["raw"], AIMessage)
 
 
-def test_chat_databricks_runnable_sequence():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_runnable_sequence(use_openai_client):
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
 
     prompt = ChatPromptTemplate.from_template("tell me a joke about {topic}")
@@ -340,11 +365,13 @@ def multiply(a: int, b: int) -> int:
     return a * b
 
 
-def test_chat_databricks_agent_executor():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_agent_executor(use_openai_client):
     model = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
     tools = [add, multiply]
     prompt = ChatPromptTemplate.from_messages(
@@ -362,11 +389,13 @@ def test_chat_databricks_agent_executor():
     assert "45" in response["output"]
 
 
-def test_chat_databricks_langgraph():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_langgraph(use_openai_client):
     model = ChatDatabricks(
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
     tools = [add, multiply]
 
@@ -375,7 +404,8 @@ def test_chat_databricks_langgraph():
     assert "45" in response["messages"][-1].content
 
 
-def test_chat_databricks_langgraph_with_memory():
+@pytest.mark.parametrize("use_openai_client", [False, True])
+def test_chat_databricks_langgraph_with_memory(use_openai_client):
     class State(TypedDict):
         messages: Annotated[list, add_messages]
 
@@ -384,6 +414,7 @@ def test_chat_databricks_langgraph_with_memory():
         model=_TEST_ENDPOINT,
         temperature=0,
         max_tokens=100,
+        use_openai_client=use_openai_client,
     )
     llm_with_tools = llm.bind_tools(tools)
 
