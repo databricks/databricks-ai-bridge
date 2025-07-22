@@ -25,6 +25,7 @@ class GenieResponse:
     result: Union[str, pd.DataFrame]
     query: Optional[str] = ""
     description: Optional[str] = ""
+    conversation_id: Optional[str] = None
 
 
 @mlflow.trace(span_type="PARSER")
@@ -191,6 +192,15 @@ class Genie:
         return poll_result()
 
     @mlflow.trace()
-    def ask_question(self, question):
-        resp = self.start_conversation(question)
-        return self.poll_for_result(resp["conversation_id"], resp["message_id"])
+    def ask_question(self, question, conversation_id: Optional[str] = None):
+        # check if a conversation_id is supplied
+        # if yes, continue an existing genie conversation
+        # otherwise start a new conversation
+        if not conversation_id:
+            resp = self.start_conversation(question)
+        else:
+            resp = self.create_message(conversation_id, question)
+        genie_response =  self.poll_for_result(resp["conversation_id"], resp["message_id"])
+        if not genie_response.conversation_id:
+            genie_response.conversation_id = resp["conversation_id"]
+        return genie_response
