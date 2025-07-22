@@ -28,6 +28,7 @@ def should_fetch_model_serving_environment_oauth() -> bool:
 
 
 def _get_invokers_token_fallback():
+    logger.error("INVOKERS FALLBACK INVOKED")
     main_thread = threading.main_thread()
     thread_data = main_thread.__dict__
     invokers_token = None
@@ -39,10 +40,14 @@ def _get_invokers_token_fallback():
 def _get_invokers_token_from_mlflowserving():
     try:
         from mlflowserving.scoring_server.agent_utils import fetch_obo_token
-
+        logger.error("GOT IT FROM SCORING SERVER")
         return fetch_obo_token()
     except ImportError:
+        logger.error("GOING TO FALLBACK")
         return _get_invokers_token_fallback()
+    except Exception as e:
+        raise RuntimeError(f"Failing in mlflowServing: {e}")
+    
 
 
 def _get_invokers_token():
