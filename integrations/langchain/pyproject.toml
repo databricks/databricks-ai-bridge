@@ -16,7 +16,7 @@ dependencies = [
     "pydantic>2.10.0",
     "unitycatalog-langchain[databricks]>=0.2.0",
     "databricks-connect>=16.1.1",
-    "openai>=1.12.0",
+    "openai>=1.97.1",
 ]
 
 [project.optional-dependencies]

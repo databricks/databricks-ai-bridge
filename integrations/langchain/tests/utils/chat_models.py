@@ -121,11 +121,6 @@ _MOCK_STREAM_RESPONSE = [
 
 @pytest.fixture(autouse=True)
 def mock_client() -> Generator:
-    # Mock MLflow deployments client
-    mlflow_client = mock.MagicMock()
-    mlflow_client.predict.return_value = _MOCK_CHAT_RESPONSE
-    mlflow_client.predict_stream.return_value = _MOCK_STREAM_RESPONSE
-    
     # Mock OpenAI client response objects
     class MockOpenAIMessage:
         def __init__(self, role="assistant", content="", tool_calls=None):
@@ -201,8 +196,7 @@ def mock_client() -> Generator:
     
     openai_client.chat.completions.create.side_effect = mock_create_completion
     
-    with mock.patch("mlflow.deployments.get_deploy_client", return_value=mlflow_client), \
-         mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client), \
+    with mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client), \
          mock.patch("databricks_langchain.chat_models.get_openai_client", return_value=openai_client):
         yield
 
@@ -210,12 +204,3 @@ def mock_client() -> Generator:
 @pytest.fixture
 def llm() -> ChatDatabricks:
     return ChatDatabricks(model="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
-
-
-@pytest.fixture
-def llm_openai() -> ChatDatabricks:
-    return ChatDatabricks(
-        model="databricks-meta-llama-3-3-70b-instruct", 
-        target_uri="databricks",
-        use_openai_client=True
-    )
