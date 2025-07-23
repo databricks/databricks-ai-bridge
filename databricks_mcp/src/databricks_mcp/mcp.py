@@ -63,6 +63,7 @@ class DatabricksMCPClient:
         """Fetch tools from the MCP endpoint asynchronously."""
         async with streamablehttp_client(
             url=self.server_url,
+            headers={"x-databricks-traffic-id": "testenv://liteswap/ann-west"},
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
