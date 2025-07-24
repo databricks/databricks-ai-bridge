@@ -2,6 +2,7 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
+from openai import OpenAI
 
 
 def get_deployment_client(target_uri: str) -> Any:
@@ -27,7 +28,6 @@ def get_openai_client(target_uri: str) -> Any:
 
     try:
         from databricks.sdk import WorkspaceClient
-        from openai import OpenAI  # type: ignore[import-untyped]
         
         # Get Databricks workspace client for authentication
         workspace_client = WorkspaceClient()
@@ -45,7 +45,7 @@ def get_openai_client(target_uri: str) -> Any:
     except ImportError as e:
         raise ImportError(
             "Failed to create the OpenAI client. "
-            "Please run `pip install openai` to install "
+            "Please run `pip install databricks-sdk` to install "
             "required dependencies."
         ) from e
 
