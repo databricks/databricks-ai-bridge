@@ -44,25 +44,65 @@ def test_dict(llm: ChatDatabricks) -> None:
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
     assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+    assert d["profile"] is None  # Default profile
 
 
-def test_dict_with_endpoint() -> None:
-    llm = ChatDatabricks(endpoint="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
+
+
+def test_profile_parameter() -> None:
+    """Test the new profile parameter works correctly."""
+    llm = ChatDatabricks(model="test-model", profile="test-profile")
     d = llm.dict()
-    assert d["_type"] == "chat-databricks"
-    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+    assert d["profile"] == "test-profile"
+    assert "target_uri" not in d or d["target_uri"] is None
 
-    llm = ChatDatabricks(
-        model="databricks-meta-llama-3-3-70b-instruct",
-        endpoint="databricks-meta-llama-3-3-70b-instruct",
-        target_uri="databricks",
-    )
-    d = llm.dict()
-    assert d["_type"] == "chat-databricks"
-    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+
+def test_profile_and_target_uri_conflict() -> None:
+    """Test that specifying both profile and target_uri raises ValueError."""
+    with pytest.raises(ValueError, match="Cannot specify both 'profile' and 'target_uri'"):
+        ChatDatabricks(model="test-model", profile="test-profile", target_uri="databricks://other-profile")
+
+
+def test_target_uri_extraction_databricks_scheme() -> None:
+    """Test extracting profile from target_uri with databricks:// scheme."""
+    import warnings
+    from unittest.mock import patch
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with patch('databricks_langchain.chat_models.get_openai_client'):
+            llm = ChatDatabricks(model="test-model", target_uri="databricks://my-profile")
+    
+    # Check that profile was extracted correctly
+    assert llm.profile == "my-profile"
+    assert llm.target_uri == "databricks://my-profile"
+
+
+def test_target_uri_extraction_databricks_default() -> None:
+    """Test extracting profile from target_uri with default 'databricks'."""
+    import warnings
+    from unittest.mock import patch
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with patch('databricks_langchain.chat_models.get_openai_client'):
+            llm = ChatDatabricks(model="test-model", target_uri="databricks")
+    
+    # Check that profile was extracted correctly
+    assert llm.profile is None  # Uses default profile
+    assert llm.target_uri == "databricks"
+
+
+def test_target_uri_invalid_format() -> None:
+    """Test that invalid target_uri format raises ValueError."""
+    with pytest.raises(ValueError, match="Invalid target_uri format"):
+        ChatDatabricks(model="test-model", target_uri="invalid://format")
+
+
+def test_target_uri_deprecation_warning() -> None:
+    """Test that using target_uri shows deprecation warning."""
+    with pytest.warns(DeprecationWarning, match="The 'target_uri' parameter is deprecated"):
+        ChatDatabricks(model="test-model", target_uri="databricks")
 
 
 def test_chat_model_predict(llm: ChatDatabricks) -> None:
@@ -109,7 +149,6 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
         endpoint="databricks-meta-llama-3-3-70b-instruct",
-        target_uri="databricks",
         stream_usage=True,
     )
     res = llm_with_usage.stream(
@@ -370,28 +409,48 @@ def test_convert_message_to_dict_function() -> None:
 
 def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
-
-    result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)
-
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.completion_usage import CompletionUsage
+    
+    # Create an actual OpenAI response object
     expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
-    expected = ChatResult(
-        generations=[
-            ChatGeneration(
-                message=AIMessage(content=expected_content),
-                generation_info={},
-            ),
-        ],
-        llm_output={
-            "id": _MOCK_CHAT_RESPONSE["id"],
-            "object": _MOCK_CHAT_RESPONSE["object"],
-            "created": _MOCK_CHAT_RESPONSE["created"],
-            "model": _MOCK_CHAT_RESPONSE["model"],
-            "model_name": _MOCK_CHAT_RESPONSE["model"],
-            "usage": _MOCK_CHAT_RESPONSE["usage"],
-        },
+    message = ChatCompletionMessage(
+        role="assistant",
+        content=expected_content,
+        tool_calls=None
+    )
+    choice = Choice(
+        index=0,
+        message=message,
+        finish_reason="stop",
+        logprobs=None
+    )
+    usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
+    openai_response = ChatCompletion(
+        id=_MOCK_CHAT_RESPONSE["id"],
+        choices=[choice],
+        created=_MOCK_CHAT_RESPONSE["created"],
+        model=_MOCK_CHAT_RESPONSE["model"],
+        object="chat.completion",
+        usage=usage
     )
 
-    assert result == expected
+    result = llm._convert_response_to_chat_result(openai_response)
+    
+    # Verify that llm_output contains the full response metadata
+    assert "model_name" in result.llm_output
+    assert "usage" in result.llm_output
+    assert result.llm_output["model_name"] == _MOCK_CHAT_RESPONSE["model"]
+    
+    # Verify that usage information is included directly in llm_output
+    assert result.llm_output["usage"] == _MOCK_CHAT_RESPONSE["usage"]
+    
+    # Verify that choices, content, role, and type are excluded from llm_output
+    assert "choices" not in result.llm_output
+    assert "content" not in result.llm_output
+    assert "role" not in result.llm_output
+    assert "type" not in result.llm_output
 
 
 def test_convert_lc_messages_to_responses_api_basic():
@@ -793,14 +852,14 @@ def test_chat_databricks_init_with_extra_params():
 
 
 def test_chat_databricks_init_sets_client():
-    """Test ChatDatabricks initialization sets client."""
-    with patch("databricks_langchain.chat_models.get_deployment_client") as mock_get_client:
+    """Test ChatDatabricks initialization sets OpenAI client."""
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
 
-        llm = ChatDatabricks(model="test-model", target_uri="custom-uri")
+        llm = ChatDatabricks(model="test-model", profile="test-profile")
 
-        mock_get_client.assert_called_once_with("custom-uri")
+        mock_get_client.assert_called_once_with("test-profile")
         assert llm.client == mock_client
 
 
@@ -815,6 +874,8 @@ def test_prepare_inputs_basic():
     result = llm._prepare_inputs(messages)
 
     expected = {
+        "model": "test-model",
+        "stream": False,
         "temperature": 0.7,
         "max_tokens": 100,
         "stop": ["stop"],
@@ -831,9 +892,10 @@ def test_prepare_inputs_with_responses_api():
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
     expected = {
+        "model": "test-model",
+        "stream": False,
         "temperature": 0.5,
         "input": [{"role": "user", "content": "Hello"}],
-        "n": 1,
     }
 
     assert result == expected

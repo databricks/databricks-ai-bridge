@@ -51,10 +51,9 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from mlflow.deployments import BaseDeploymentClient  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field
 
-from databricks_langchain.utils import get_deployment_client
+from databricks_langchain.utils import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -219,8 +218,10 @@ class ChatDatabricks(BaseChatModel):
 
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
-    target_uri: str = "databricks"
-    """The target URI to use. Defaults to ``databricks``."""
+    target_uri: Optional[str] = None
+    """The target URI to use. Deprecated: use profile instead."""
+    profile: Optional[str] = None
+    """The Databricks CLI profile name to use for authentication."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
@@ -237,7 +238,7 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
-    client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
+    client: Optional[object] = Field(default=None, exclude=True)  #: :meta private:
 
     @property
     def endpoint(self) -> str:
@@ -261,7 +262,36 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self.client = get_deployment_client(self.target_uri)
+        
+        # Validate profile and target_uri parameters
+        if self.profile and self.target_uri:
+            raise ValueError(
+                "Cannot specify both 'profile' and 'target_uri'. Please use 'profile' only, "
+                "as 'target_uri' is deprecated."
+            )
+        
+        # Handle deprecated target_uri parameter
+        if self.target_uri and not self.profile:
+            warnings.warn(
+                "The 'target_uri' parameter is deprecated and will be removed in a future version. "
+                "Use 'profile' parameter instead to specify the Databricks CLI profile name.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            # Extract profile from target_uri if it follows databricks://profile format
+            if self.target_uri.startswith("databricks://"):
+                self.profile = self.target_uri[len("databricks://"):]
+            elif self.target_uri == "databricks":
+                self.profile = None  # Use default profile
+            else:
+                raise ValueError(
+                    f"Invalid target_uri format: {self.target_uri}. "
+                    "Expected 'databricks' or 'databricks://profile-name'."
+                )
+        
+        # Always use OpenAI client (supports both chat completions and responses API)
+        self.client = get_openai_client(self.profile)
+        
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
 
@@ -277,7 +307,7 @@ class ChatDatabricks(BaseChatModel):
 
         params = {
             "model": self.model,
-            "target_uri": self.target_uri,
+            "profile": self.profile,
             **{k: v for k, v in exclude_if_none.items() if v is not None},
         }
         return params
@@ -290,28 +320,36 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
-        resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
+        
         if self.use_responses_api:
+            # Use OpenAI client with responses API
+            resp = self.client.responses.create(**data)  # type: ignore
             return self._convert_responses_api_response_to_chat_result(resp)
-        elif "messages" in resp:
-            return self._convert_chatagent_response_to_chat_result(resp)
-
-        return self._convert_response_to_chat_result(resp)
+        else:
+            # Use OpenAI client with chat completions API
+            resp = self.client.chat.completions.create(**data)  # type: ignore
+            return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
+        stream: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
-            "n": self.n,
+            "model": self.model,
+            "stream": stream,
             **self.extra_params,  # type: ignore
             **kwargs,
         }
+        
+        # Format data based on whether we're using responses API or chat completions
         if self.use_responses_api:
+            # Responses API expects "input" parameter
             data["input"] = _convert_lc_messages_to_responses_api(messages)
         else:
+            # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
 
         if self.temperature is not None:
@@ -320,6 +358,8 @@ class ChatDatabricks(BaseChatModel):
             data["stop"] = stop
         if self.max_tokens is not None:
             data["max_tokens"] = self.max_tokens
+        if self.n != 1:
+            data["n"] = self.n
 
         return data
 
@@ -429,21 +469,79 @@ class ChatDatabricks(BaseChatModel):
         message = AIMessage(content=response.get("messages"), id=response.get("id"))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
-        generations = [
-            ChatGeneration(
-                message=_convert_dict_to_message(choice["message"]),
-                generation_info=choice.get("usage", {}),
-            )
-            for choice in response["choices"]
-        ]
-        llm_output = {
-            k: v for k, v in response.items() if k not in ("choices", "content", "role", "type")
-        }
-        if "model" in llm_output and "model_name" not in llm_output:
-            llm_output["model_name"] = llm_output["model"]
+    def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
+        # Handle OpenAI client responses (with .choices attribute)
+        if hasattr(response, 'choices'):
+            generations = []
+            for choice in response.choices:
+                message_dict = {
+                    "role": choice.message.role,
+                    "content": choice.message.content or "",
+                }
+                if choice.message.tool_calls:
+                    message_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in choice.message.tool_calls
+                    ]
+                
+                generation_info = {}
+                if hasattr(choice, 'finish_reason') and choice.finish_reason:
+                    generation_info["finish_reason"] = choice.finish_reason
+                
+                generations.append(
+                    ChatGeneration(
+                        message=_convert_dict_to_message(message_dict),
+                        generation_info=generation_info,
+                    )
+                )
 
-        return ChatResult(generations=generations, llm_output=llm_output)
+            llm_output = {}
+            if hasattr(response, 'usage') and response.usage:
+                llm_output["usage"] = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+                # Add individual token counts for backwards compatibility with tests
+                llm_output["prompt_tokens"] = response.usage.prompt_tokens
+                llm_output["completion_tokens"] = response.usage.completion_tokens
+                llm_output["total_tokens"] = response.usage.total_tokens
+            if hasattr(response, 'model'):
+                llm_output["model"] = response.model
+                llm_output["model_name"] = response.model
+
+            return ChatResult(generations=generations, llm_output=llm_output)
+        else:
+            # Handle dictionary responses from deployment client
+            generations = [
+                ChatGeneration(
+                    message=_convert_dict_to_message(choice["message"]),
+                    generation_info=choice.get("usage", {}),
+                )
+                for choice in response["choices"]
+            ]
+            
+            llm_output = {}
+            if "usage" in response:
+                llm_output["usage"] = response["usage"]
+            if "model" in response:
+                llm_output["model"] = response["model"]
+                llm_output["model_name"] = response["model"]
+            if "id" in response:
+                llm_output["id"] = response["id"]
+            if "object" in response:
+                llm_output["object"] = response["object"]
+            if "created" in response:
+                llm_output["created"] = response["created"]
+
+            return ChatResult(generations=generations, llm_output=llm_output)
 
     def _stream(
         self,
@@ -456,36 +554,33 @@ class ChatDatabricks(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         if stream_usage is None:
             stream_usage = self.stream_usage
-        data = self._prepare_inputs(messages, stop, **kwargs)
-        first_chunk_role = None
-
+            
+        data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
+        
         if self.use_responses_api:
+            # Use OpenAI client with responses API for streaming
             prev_chunk = None
-            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
+            stream = self.client.responses.create(**data)  # type: ignore
+            for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
                 if chunk_message:
                     yield ChatGenerationChunk(message=chunk_message)
         else:
-            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-                # top level delta key means that it is a ChatAgentChunk
-                if chunk.get("delta"):
-                    chunk_delta = chunk["delta"]
-                    chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta, chunk_delta.get("role")
-                    )
-                    chunk = ChatGenerationChunk(message=chunk_message)
-                    yield chunk
-                elif chunk.get("choices"):
-                    choice = chunk["choices"][0]
-
-                    chunk_delta = choice["delta"]
+            # Use OpenAI client with chat completions API for streaming
+            first_chunk_role = None
+            stream = self.client.chat.completions.create(**data)  # type: ignore
+            for chunk in stream:
+                if chunk.choices:
+                    choice = chunk.choices[0]
+                    chunk_delta = choice.delta
+                    
                     if first_chunk_role is None:
-                        first_chunk_role = chunk_delta.get("role")
+                        first_chunk_role = chunk_delta.role
 
-                    if stream_usage and (usage := chunk.get("usage")):
-                        input_tokens = usage.get("prompt_tokens", 0)
-                        output_tokens = usage.get("completion_tokens", 0)
+                    if stream_usage and hasattr(chunk, 'usage') and chunk.usage:
+                        input_tokens = chunk.usage.prompt_tokens
+                        output_tokens = chunk.usage.completion_tokens
                         usage = {
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
@@ -494,27 +589,44 @@ class ChatDatabricks(BaseChatModel):
                     else:
                         usage = None
 
+                    chunk_delta_dict = {
+                        "role": chunk_delta.role,
+                        "content": chunk_delta.content,
+                    }
+                    if chunk_delta.tool_calls:
+                        chunk_delta_dict["tool_calls"] = [
+                            {
+                                "index": tc.index,
+                                "id": tc.id,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in chunk_delta.tool_calls
+                        ]
+
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta, first_chunk_role, usage=usage
+                        chunk_delta_dict, first_chunk_role, usage=usage
                     )
 
                     generation_info = {}
-                    if finish_reason := choice.get("finish_reason"):
-                        generation_info["finish_reason"] = finish_reason
-                    if logprobs := choice.get("logprobs"):
-                        generation_info["logprobs"] = logprobs
+                    if choice.finish_reason:
+                        generation_info["finish_reason"] = choice.finish_reason
+                    if hasattr(choice, 'logprobs') and choice.logprobs:
+                        generation_info["logprobs"] = choice.logprobs
 
-                    chunk = ChatGenerationChunk(
+                    generation_chunk = ChatGenerationChunk(
                         message=chunk_message, generation_info=generation_info or None
                     )
 
                     if run_manager:
-                        run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
+                        run_manager.on_llm_new_token(
+                            generation_chunk.text, chunk=generation_chunk, 
+                            logprobs=generation_info.get("logprobs")
+                        )
 
-                    yield chunk
-                else:
-                    # Handle the case where choices are empty if needed
-                    continue
+                    yield generation_chunk
 
     def bind_tools(
         self,
@@ -1068,7 +1180,7 @@ def _convert_dict_to_message_chunk(
         return ToolMessageChunk(
             content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant":
+    elif role == "assistant" or (role is None and default_role == "assistant"):
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):

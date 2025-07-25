@@ -38,7 +38,12 @@ _TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
 
 def test_chat_databricks_invoke():
-    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
+    chat = ChatDatabricks(
+        model=_TEST_ENDPOINT, 
+        temperature=0, 
+        max_tokens=10, 
+        stop=["Java"]
+    )
 
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
@@ -159,6 +164,7 @@ async def test_chat_databricks_ainvoke():
     assert response.content.startswith("To learn Python,")
 
 
+@pytest.mark.asyncio
 async def test_chat_databricks_astream():
     chat = ChatDatabricks(
         model=_TEST_ENDPOINT,
