@@ -1,14 +1,17 @@
+import inspect
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
+    RetrieverSchema,
     parse_vector_search_response,
     validate_and_get_return_columns,
     validate_and_get_text_column,
 )
 from databricks_ai_bridge.vector_search_retriever_tool import (
+    FilterItem,
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
@@ -50,7 +53,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             tool_call = first_response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             result = dbvs_tool.execute(
-                query=args["query"]
+                query=args["query"], filters=args.get("filters", None)
             )  # For self-managed embeddings, optionally pass in openai_client=client
 
         Step 3: Supply model with results – so it can incorporate them into its final response.
@@ -109,7 +112,17 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(
-            self.columns or [], self.text_column, self._index_details
+            self.columns or [],
+            self.text_column,
+            self._index_details,
+            self.doc_uri,
+            self.primary_key,
+        )
+        self._retriever_schema = RetrieverSchema(
+            text_column=self.text_column,
+            doc_uri=self.doc_uri,
+            primary_key=self.primary_key,
+            other_columns=self.columns,
         )
 
         if (
@@ -129,6 +142,17 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
         )
+        # We need to remove strict: True from the tool in order to support arbitrary filters
+        if "function" in self.tool and "strict" in self.tool["function"]:
+            del self.tool["function"]["strict"]
+        # We need to remove additionalProperties from the tool in order to support arbitrary kwargs
+        if (
+            "function" in self.tool
+            and "parameters" in self.tool["function"]
+            and "additionalProperties" in self.tool["function"]["parameters"]
+        ):
+            del self.tool["function"]["parameters"]["additionalProperties"]
+
         try:
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.errors.platform import ResourceDoesNotExist
@@ -137,9 +161,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 self.workspace_client.serving_endpoints.get(self.embedding_model_name)
             else:
                 WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
-            self.resources = self._get_resources(self.index_name, self.embedding_model_name)
+            self.resources = self._get_resources(
+                self.index_name, self.embedding_model_name, self._index_details
+            )
         except ResourceDoesNotExist:
-            self.resources = self._get_resources(self.index_name, None)
+            self.resources = self._get_resources(self.index_name, None, self._index_details)
 
         return self
 
@@ -147,7 +173,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def execute(
         self,
         query: str,
+        filters: Optional[List[FilterItem]] = None,
         openai_client: OpenAI = None,
+        **kwargs: Any,
     ) -> List[Dict]:
         """
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
@@ -188,18 +216,28 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
                 )
 
-        search_resp = self._index.similarity_search(
-            columns=self.columns,
-            query_text=query_text,
-            query_vector=query_vector,
-            filters=self.filters,
-            num_results=self.num_results,
-            query_type=self.query_type,
+        # Since LLM can generate either a dict or FilterItem, convert to dict always
+        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
+        combined_filters = {**filters_dict, **(self.filters or {})}
+
+        signature = inspect.signature(self._index.similarity_search)
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+        kwargs.update(
+            {
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "columns": self.columns,
+                "filters": combined_filters,
+                "num_results": self.num_results,
+                "query_type": self.query_type,
+            }
         )
+        search_resp = self._index.similarity_search(**kwargs)
         docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
             search_resp=search_resp,
-            index_details=self._index_details,
-            text_column=self.text_column,
+            retriever_schema=self._retriever_schema,
             document_class=dict,
+            include_score=self.include_score,
         )
         return [doc for doc, _ in docs_with_score]

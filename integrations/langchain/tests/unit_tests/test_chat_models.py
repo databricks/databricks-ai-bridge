@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 import json
+from unittest.mock import Mock, patch
 
 import mlflow  # type: ignore # noqa: F401
 import pytest
@@ -15,9 +16,11 @@ from langchain_core.messages import (
     HumanMessageChunk,
     SystemMessage,
     SystemMessageChunk,
+    ToolMessage,
     ToolMessageChunk,
 )
 from langchain_core.messages.tool import ToolCallChunk
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableMap
 from pydantic import BaseModel, Field
 
@@ -25,7 +28,9 @@ from databricks_langchain.chat_models import (
     ChatDatabricks,
     _convert_dict_to_message,
     _convert_dict_to_message_chunk,
+    _convert_lc_messages_to_responses_api,
     _convert_message_to_dict,
+    _convert_responses_api_chunk_to_lc_chunk,
 )
 from tests.utils.chat_models import (  # noqa: F401
     _MOCK_CHAT_RESPONSE,
@@ -267,11 +272,15 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
         ("user", HumanMessage("foo")),
         ("system", SystemMessage("foo")),
         ("assistant", AIMessage("foo")),
+        ("tool", ToolMessage(content="foo", tool_call_id="call_123")),
         ("any_role", ChatMessage(content="foo", role="any_role")),
     ],
 )
 def test_convert_message(role: str, expected_output: BaseMessage) -> None:
-    message = {"role": role, "content": "foo"}
+    if role == "tool":
+        message = {"role": role, "content": "foo", "tool_call_id": "call_123"}
+    else:
+        message = {"role": role, "content": "foo"}
     result = _convert_dict_to_message(message)
     assert result == expected_output
 
@@ -327,6 +336,18 @@ def test_convert_message_with_tool_calls() -> None:
     dict_result = _convert_message_to_dict(result)
     message_with_tools.pop("id")  # id is not propagated
     assert dict_result == message_with_tools
+
+
+def test_convert_tool_message() -> None:
+    tool_message = ToolMessage(content="result", tool_call_id="call_123")
+    result = _convert_message_to_dict(tool_message)
+    expected = {"role": "tool", "content": "result", "tool_call_id": "call_123"}
+    assert result == expected
+
+    # convert back
+    converted_back = _convert_dict_to_message(result)
+    assert converted_back.content == tool_message.content
+    assert converted_back.tool_call_id == tool_message.tool_call_id
 
 
 @pytest.mark.parametrize(
@@ -430,3 +451,481 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     assert "content" not in result.llm_output
     assert "role" not in result.llm_output
     assert "type" not in result.llm_output
+
+
+def test_convert_lc_messages_to_responses_api_basic():
+    """Test _convert_lc_messages_to_responses_api with basic messages."""
+    messages = [
+        SystemMessage(content="You are a helpful assistant."),
+        HumanMessage(content="Hello!"),
+        AIMessage(content="Hi there!"),
+    ]
+
+    result = _convert_lc_messages_to_responses_api(messages)
+    expected = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": None,
+            "content": [{"type": "output_text", "text": "Hi there!"}],
+        },
+    ]
+    assert result == expected
+
+
+def test_convert_lc_messages_to_responses_api_with_tool_calls():
+    """Test _convert_lc_messages_to_responses_api with tool calls."""
+    messages = [
+        SystemMessage(content="You are a helpful assistant."),
+        HumanMessage(content="Hello!"),
+        AIMessage(
+            content="I'll check the weather.",
+            tool_calls=[
+                {
+                    "name": "get_weather",
+                    "args": {"location": "SF"},
+                    "id": "call_123",
+                    "type": "tool_call",
+                }
+            ],
+            id="msg_123",
+        ),
+        ToolMessage(content="Sunny, 72°F", tool_call_id="call_123"),
+    ]
+
+    result = _convert_lc_messages_to_responses_api(messages)
+    expected = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello!"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_123",
+            "content": [
+                {"type": "output_text", "text": "I'll check the weather."},
+            ],
+        },
+        {
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call_123",
+            "arguments": '{"location": "SF"}',
+            "id": "msg_123",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": "Sunny, 72°F",
+        },
+    ]
+    assert result == expected
+
+
+def test_convert_lc_messages_to_responses_api_with_complex_content():
+    """Test _convert_lc_messages_to_responses_api with complex content."""
+    messages = [
+        AIMessage(
+            content=[
+                {"type": "text", "text": "Here's the answer:", "annotations": [{"key": "value"}]},
+                {"type": "refusal", "refusal": "I cannot do that."},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Let me think..."}],
+                },
+            ],
+            id="msg_456",
+        )
+    ]
+
+    result = _convert_lc_messages_to_responses_api(messages)
+    expected = [
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_456",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Here's the answer:",
+                    "annotations": [{"key": "value"}],
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "id": "msg_456",
+            "content": [
+                {
+                    "type": "refusal",
+                    "refusal": "I cannot do that.",
+                },
+            ],
+        },
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Let me think..."}],
+            "id": "msg_456",
+        },
+    ]
+    assert result == expected
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
+    """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
+    chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == [{"type": "text", "text": "Hello"}]
+    assert result.id == "item_123"
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_function_call():
+    """Test _convert_responses_api_chunk_to_lc_chunk with function call."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "id": "item_123",
+            "call_id": "call_456",
+            "name": "get_weather",
+            "arguments": '{"location": "SF"}',
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+    expected = AIMessageChunk(
+        id="call_456",
+        content=[
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": '{"location": "SF"}',
+                "id": "item_123",
+                "call_id": "call_456",
+            },
+        ],
+        tool_call_chunks=[
+            ToolCallChunk(name="get_weather", args='{"location": "SF"}', id="call_456")
+        ],
+    )
+    assert result == expected
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
+    """Test _convert_responses_api_chunk_to_lc_chunk with function call output."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {"type": "function_call_output", "call_id": "call_456", "output": "Sunny, 72°F"},
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+
+    assert isinstance(result, ToolMessageChunk)
+    assert result.content == "Sunny, 72°F"
+    assert result.tool_call_id == "call_456"
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_message():
+    """Test _convert_responses_api_chunk_to_lc_chunk with message."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "id": "msg_123",
+            "content": [
+                {"type": "output_text", "text": "Hello!", "annotations": [{"key": "value"}]},
+                {"type": "refusal", "refusal": "I cannot help with that."},
+            ],
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+    expected = AIMessageChunk(
+        id="msg_123",
+        content=[
+            {"type": "text", "text": "Hello!", "annotations": [{"key": "value"}]},
+            {"type": "refusal", "refusal": "I cannot help with that."},
+        ],
+    )
+    assert result == expected
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
+    """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
+    previous_chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "id": "item_123",
+            "content": [{"type": "output_text", "text": "Hello"}],
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
+    assert result is None
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
+    """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
+    previous_chunk = {"type": "response.output_text.delta", "item_id": "item_123", "delta": "Hello"}
+
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "id": "item_123",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Hello",
+                    "annotations": [
+                        {"type": "url_citation", "title": "title", "url": "google.com"}
+                    ],
+                }
+            ],
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
+    expected = AIMessageChunk(
+        content=[
+            {"annotations": [{"type": "url_citation", "title": "title", "url": "google.com"}]}
+        ],
+        additional_kwargs={},
+        response_metadata={},
+        id="item_123",
+    )
+    assert result == expected
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_error():
+    """Test _convert_responses_api_chunk_to_lc_chunk with error."""
+    chunk = {"type": "error", "error": "Something went wrong"}
+
+    with pytest.raises(ValueError, match="Something went wrong"):
+        _convert_responses_api_chunk_to_lc_chunk(chunk)
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
+    """Test _convert_responses_api_chunk_to_lc_chunk with unknown type."""
+    chunk = {"type": "unknown_type", "data": "some data"}
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+    assert result is None
+
+
+def test_convert_responses_api_chunk_to_lc_chunk_special_items():
+    """Test _convert_responses_api_chunk_to_lc_chunk with special item types."""
+    chunk = {
+        "type": "response.output_item.done",
+        "item": {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Let me think about this..."}],
+        },
+    }
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Let me think about this..."}],
+        }
+    ]
+
+
+### Test ChatDatabricks response conversion methods ###
+
+
+def test_convert_responses_api_response_to_chat_result():
+    """Test _convert_responses_api_response_to_chat_result method."""
+    llm = ChatDatabricks(model="test-model", use_responses_api=True)
+
+    response = {
+        "id": "response_123",
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello!",
+                        "id": "text_123",
+                        "annotations": [{"key": "value"}],
+                    }
+                ],
+            },
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": '{"location": "SF"}',
+                "call_id": "call_123",
+            },
+        ],
+    }
+
+    result = llm._convert_responses_api_response_to_chat_result(response)
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(
+                    id="response_123",
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "Hello!",
+                            "annotations": [{"key": "value"}],
+                            "id": "text_123",
+                        },
+                        {
+                            "type": "function_call",
+                            "name": "get_weather",
+                            "arguments": '{"location": "SF"}',
+                            "call_id": "call_123",
+                        },
+                    ],
+                    tool_calls=[
+                        {
+                            "name": "get_weather",
+                            "args": {"location": "SF"},
+                            "id": "call_123",
+                        }
+                    ],
+                )
+            ),
+        ]
+    )
+    assert result == expected
+
+
+def test_convert_responses_api_response_to_chat_result_with_error():
+    """Test _convert_responses_api_response_to_chat_result with error."""
+    llm = ChatDatabricks(model="test-model", use_responses_api=True)
+
+    response = {"error": "Something went wrong"}
+
+    with pytest.raises(ValueError, match="Something went wrong"):
+        llm._convert_responses_api_response_to_chat_result(response)
+
+
+def test_convert_chatagent_response_to_chat_result():
+    """Test _convert_chatagent_response_to_chat_result method."""
+    llm = ChatDatabricks(model="test-model")
+
+    response = {"messages": [{"role": "assistant", "content": "Hello from ChatAgent!"}]}
+
+    result = llm._convert_chatagent_response_to_chat_result(response)
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(
+                    content=[{"role": "assistant", "content": "Hello from ChatAgent!"}]
+                )
+            ),
+        ]
+    )
+    assert result == expected
+
+
+### Test ChatDatabricks initialization and configuration ###
+
+
+def test_chat_databricks_init_with_use_responses_api():
+    """Test ChatDatabricks initialization with use_responses_api."""
+    llm = ChatDatabricks(model="test-model", use_responses_api=True)
+    assert llm.use_responses_api is True
+
+
+def test_chat_databricks_init_with_extra_params():
+    """Test ChatDatabricks initialization with extra_params."""
+    extra_params = {"custom_param": "value"}
+    llm = ChatDatabricks(model="test-model", extra_params=extra_params)
+    assert llm.extra_params == extra_params
+
+
+def test_chat_databricks_init_sets_client():
+    """Test ChatDatabricks initialization sets client."""
+    with patch("databricks_langchain.chat_models.get_deployment_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        llm = ChatDatabricks(model="test-model", target_uri="custom-uri")
+
+        mock_get_client.assert_called_once_with("custom-uri")
+        assert llm.client == mock_client
+
+
+### Test ChatDatabricks _prepare_inputs method ###
+
+
+def test_prepare_inputs_basic():
+    """Test _prepare_inputs method with basic parameters."""
+    llm = ChatDatabricks(model="test-model", temperature=0.7, max_tokens=100, stop=["stop"], n=2)
+
+    messages = [HumanMessage(content="Hello")]
+    result = llm._prepare_inputs(messages)
+
+    expected = {
+        "temperature": 0.7,
+        "max_tokens": 100,
+        "stop": ["stop"],
+        "n": 2,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    assert result == expected
+
+
+def test_prepare_inputs_with_responses_api():
+    """Test _prepare_inputs method with responses API."""
+    llm = ChatDatabricks(model="test-model", use_responses_api=True, temperature=0.5)
+
+    messages = [HumanMessage(content="Hello")]
+    result = llm._prepare_inputs(messages)
+    expected = {
+        "temperature": 0.5,
+        "input": [{"role": "user", "content": "Hello"}],
+        "n": 1,
+    }
+
+    assert result == expected
+
+
+def test_prepare_inputs_override_stop():
+    """Test _prepare_inputs method with stop parameter override."""
+    llm = ChatDatabricks(model="test-model", stop=["default_stop"])
+
+    messages = [HumanMessage(content="Hello")]
+    result = llm._prepare_inputs(messages, stop=["override_stop"])
+
+    # The implementation uses "self.stop or stop" which means if self.stop is truthy, it uses self.stop
+    # This is the current behavior based on line 319: if stop := self.stop or stop:
+    assert result["stop"] == ["default_stop"]
+
+
+def test_prepare_inputs_with_kwargs():
+    """Test _prepare_inputs method with additional kwargs."""
+    llm = ChatDatabricks(model="test-model")
+
+    messages = [HumanMessage(content="Hello")]
+    result = llm._prepare_inputs(messages, custom_param="value")
+
+    assert result["custom_param"] == "value"
+
+
+def test_prepare_inputs_with_extra_params():
+    """Test _prepare_inputs method with extra_params."""
+    llm = ChatDatabricks(model="test-model", extra_params={"param1": "value1"})
+
+    messages = [HumanMessage(content="Hello")]
+    result = llm._prepare_inputs(messages, param2="value2")
+
+    assert result["param1"] == "value1"
+    assert result["param2"] == "value2"

@@ -2,21 +2,24 @@ import json
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, create_autospec, patch
 
 import mlflow
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
+from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
+    DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
     DIRECT_ACCESS_INDEX,
     INPUT_TEXTS,
     mock_vs_client,
     mock_workspace_client,
 )
+from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
 from mlflow.entities import SpanType
 from mlflow.models.resources import (
     DatabricksServingEndpoint,
@@ -88,15 +91,20 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     text_column: Optional[str] = None,
     embedding_model_name: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "text_column": text_column,
-        "embedding_model_name": embedding_model_name,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "text_column": text_column,
+            "embedding_model_name": embedding_model_name,
+            "filters": filters,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -143,10 +151,22 @@ def test_vector_search_retriever_tool_init(
     )
     assert isinstance(vector_search_tool, BaseModel)
 
-    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
-        [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
-        if self_managed_embeddings_test.embedding_model_name
-        else []
+    expected_resources = (
+        [DatabricksVectorSearchIndex(index_name=index_name)]
+        + (
+            [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
+            if self_managed_embeddings_test.embedding_model_name
+            else []
+        )
+        + (
+            [
+                DatabricksServingEndpoint(
+                    endpoint_name=DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME
+                )
+            ]
+            if index_name == DELTA_SYNC_INDEX
+            else []
+        )
     )
     assert [res.to_dict() for res in vector_search_tool.resources] == [
         res.to_dict() for res in expected_resources
@@ -163,13 +183,16 @@ def test_vector_search_retriever_tool_init(
     assert all(["id" in d["metadata"] for d in docs])
 
     # Ensure tracing works properly
-    trace = mlflow.get_last_active_trace()
+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
     assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+
+    # Ensure that there aren't additional properties (not compatible with llama)
+    assert "'additionalProperties': True" not in str(vector_search_tool.tool)
 
 
 @pytest.mark.parametrize("columns", [None, ["id", "text"]])
@@ -285,3 +308,58 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+
+
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
+
+    # extra_param is ignored because it isn't part of the signature for similarity_search
+    vector_search_tool.execute(
+        query="what cities are in Germany", debug_level=2, extra_param="something random"
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+        filters={},
+        score_threshold=0.5,
+        debug_level=2,
+    )
+
+
+def test_filters_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.execute(
+        {"query": "what cities are in Germany"},
+        filters=[FilterItem(key="country", value="Germany")],
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text={"query": "what cities are in Germany"},
+        filters={"country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+    )
+
+
+def test_filters_are_combined() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.execute(
+        query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={"city LIKE": "Berlin", "country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+    )

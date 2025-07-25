@@ -187,8 +187,15 @@ def mock_client() -> Generator:
     
     openai_client.chat.completions.create.side_effect = mock_create_completion
     
+    # Mock deployment client for legacy usage
+    deployment_client = mock.MagicMock()
+    deployment_client.predict.return_value = _MOCK_CHAT_RESPONSE
+    deployment_client.predict_stream.return_value = _MOCK_STREAM_RESPONSE
+    
     with mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client), \
-         mock.patch("databricks_langchain.chat_models.get_openai_client", return_value=openai_client):
+         mock.patch("databricks_langchain.chat_models.get_openai_client", return_value=openai_client), \
+         mock.patch("databricks_langchain.utils.get_deployment_client", return_value=deployment_client), \
+         mock.patch("databricks_langchain.chat_models.get_deployment_client", return_value=deployment_client):
         yield
 
 

@@ -2,7 +2,7 @@ import json
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import mlflow
 import pytest
@@ -12,11 +12,13 @@ from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
+    DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
     INPUT_TEXTS,
     _get_index,
     mock_vs_client,
     mock_workspace_client,
 )
+from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from mlflow.entities import SpanType
@@ -46,15 +48,24 @@ def init_vector_search_tool(
     tool_description: Optional[str] = None,
     embedding: Optional[Embeddings] = None,
     text_column: Optional[str] = None,
+    doc_uri: Optional[str] = None,
+    primary_key: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
-    kwargs: Dict[str, Any] = {
-        "index_name": index_name,
-        "columns": columns,
-        "tool_name": tool_name,
-        "tool_description": tool_description,
-        "embedding": embedding,
-        "text_column": text_column,
-    }
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "embedding": embedding,
+            "text_column": text_column,
+            "doc_uri": doc_uri,
+            "primary_key": primary_key,
+            "filters": filters,
+        }
+    )
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
@@ -69,6 +80,7 @@ def init_vector_search_tool(
 def test_init(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
     assert isinstance(vector_search_tool, BaseTool)
+    assert "'additionalProperties': true" not in str(vector_search_tool.args)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -79,6 +91,42 @@ def test_chat_model_bind_tools(llm: ChatDatabricks, index_name: str) -> None:
     llm_with_tools = llm.bind_tools([vector_search_tool])
     response = llm_with_tools.invoke("Which city is hotter today and which is bigger: LA or NY?")
     assert isinstance(response, AIMessage)
+
+
+def test_filters_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {
+            "query": "what cities are in Germany",
+            "filters": [FilterItem(key="country", value="Germany")],
+        }
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what cities are in Germany",
+        k=vector_search_tool.num_results,
+        filter={"country": "Germany"},
+        query_type=vector_search_tool.query_type,
+    )
+
+
+def test_filters_are_combined() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {
+            "query": "what cities are in Germany",
+            "filters": [FilterItem(key="country", value="Germany")],
+        }
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what cities are in Germany",
+        k=vector_search_tool.num_results,
+        filter={"city LIKE": "Berlin", "country": "Germany"},
+        query_type=vector_search_tool.query_type,
+    )
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -112,6 +160,18 @@ def test_vector_search_retriever_tool_combinations(
     assert result is not None
 
 
+def test_vector_search_retriever_tool_combinations() -> None:
+    vector_search_tool = init_vector_search_tool(
+        index_name=DELTA_SYNC_INDEX,
+        doc_uri="uri",
+        primary_key="id",
+    )
+    assert isinstance(vector_search_tool, BaseTool)
+    result = vector_search_tool.invoke("Databricks Agent Framework")
+    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
+    assert all(item.page_content for item in result)
+
+
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 def test_vector_search_retriever_tool_description_generation(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
@@ -134,7 +194,7 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
     vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
     vector_search_tool._run("Databricks Agent Framework")
-    trace = mlflow.get_last_active_trace()
+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
@@ -157,8 +217,18 @@ def test_vector_search_retriever_tool_resources(
     vector_search_tool = VectorSearchRetrieverTool(
         index_name=index_name, embedding=embeddings, text_column=text_column
     )
-    expected_resources = [DatabricksVectorSearchIndex(index_name=index_name)] + (
-        [DatabricksServingEndpoint(endpoint_name=embeddings.endpoint)] if embeddings else []
+    expected_resources = (
+        [DatabricksVectorSearchIndex(index_name=index_name)]
+        + ([DatabricksServingEndpoint(endpoint_name=embeddings.endpoint)] if embeddings else [])
+        + (
+            [
+                DatabricksServingEndpoint(
+                    endpoint_name=DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME
+                )
+            ]
+            if index_name == DELTA_SYNC_INDEX
+            else []
+        )
     )
     assert [res.to_dict() for res in vector_search_tool.resources] == [
         res.to_dict() for res in expected_resources
@@ -243,3 +313,20 @@ def test_vector_search_client_non_model_serving_environment():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(disable_notice=True)
+
+
+def test_kwargs_are_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "extra_param": "something random"},
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what cities are in Germany",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter={},
+        score_threshold=0.5,
+        extra_param="something random",
+    )

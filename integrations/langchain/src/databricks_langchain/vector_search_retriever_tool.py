@@ -1,7 +1,8 @@
-from typing import Optional, Type
+from typing import List, Optional, Type
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
+    FilterItem,
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
@@ -43,8 +44,11 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             "index_name": self.index_name,
             "embedding": self.embedding,
             "text_column": self.text_column,
+            "doc_uri": self.doc_uri,
+            "primary_key": self.primary_key,
             "columns": self.columns,
             "workspace_client": self.workspace_client,
+            "include_score": self.include_score,
         }
         dbvs = DatabricksVectorSearch(**kwargs)
         self._vector_store = dbvs
@@ -56,12 +60,24 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         self.resources = self._get_resources(
             self.index_name,
             (self.embedding.endpoint if isinstance(self.embedding, DatabricksEmbeddings) else None),
+            IndexDetails(dbvs.index),
         )
 
         return self
 
     @vector_search_retriever_tool_trace
-    def _run(self, query: str) -> str:
-        return self._vector_store.similarity_search(
-            query, k=self.num_results, filter=self.filters, query_type=self.query_type
+    def _run(self, query: str, filters: Optional[List[FilterItem]] = None, **kwargs) -> str:
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        # Since LLM can generate either a dict or FilterItem, convert to dict always
+        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
+        combined_filters = {**filters_dict, **(self.filters or {})}
+        # Ensure that we don't have duplicate keys
+        kwargs.update(
+            {
+                "query": query,
+                "k": self.num_results,
+                "filter": combined_filters,
+                "query_type": self.query_type,
+            }
         )
+        return self._vector_store.similarity_search(**kwargs)

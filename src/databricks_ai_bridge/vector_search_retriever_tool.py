@@ -36,10 +36,32 @@ def vector_search_retriever_tool_trace(func):
     return wrapper
 
 
+class FilterItem(BaseModel):
+    key: str = Field(
+        description="The filter key, which includes the column name and can include operators like 'NOT', '<', '>=', 'LIKE', 'OR'"
+    )
+    value: Any = Field(
+        description="The filter value, which can be a single value or an array of values"
+    )
+
+
 class VectorSearchRetrieverToolInput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     query: str = Field(
         description="The string used to query the index with and identify the most similar "
         "vectors and return the associated documents."
+    )
+    filters: Optional[List[FilterItem]] = Field(
+        default=None,
+        description=(
+            "Optional filters to refine vector search results as an array of key-value pairs. Supports the following operators:\n\n"
+            '- Inclusion: [{"key": "column", "value": value}] or [{"key": "column", "value": [value1, value2]}] (matches if the column equals any of the provided values)\n'
+            '- Exclusion: [{"key": "column NOT", "value": value}]\n'
+            '- Comparisons: [{"key": "column <", "value": value}], [{"key": "column >=", "value": value}], etc.\n'
+            '- Pattern match: [{"key": "column LIKE", "value": "word"}] (matches full tokens separated by whitespace)\n'
+            '- OR logic: [{"key": "column1 OR column2", "value": [value1, value2]}] '
+            "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)"
+        ),
     )
 
 
@@ -50,7 +72,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     implementations should follow.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
     index_name: str = Field(
         ..., description="The name of the index to use, format: 'catalog.schema.index'."
     )
@@ -68,8 +90,18 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         None, description="Resources required to log a model that uses this tool."
     )
     workspace_client: Optional[WorkspaceClient] = Field(
-        default=None,
+        None,
         description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient",
+    )
+    doc_uri: Optional[str] = Field(
+        None, description="The URI for the document, used for rendering a link in the UI."
+    )
+    primary_key: Optional[str] = Field(
+        None,
+        description="Identifies the chunk that the document is a part of. This is used by some evaluation metrics.",
+    )
+    include_score: Optional[bool] = Field(
+        False, description="When true, will return the similarity score with the metadata."
     )
 
     @validator("tool_name")
@@ -80,21 +112,68 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 raise ValueError("tool_name must match the pattern '^[a-zA-Z0-9_-]{1,64}$'")
         return tool_name
 
+    def _describe_columns(self) -> str:
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            if self.workspace_client:
+                table_info = self.workspace_client.tables.get(full_name=self.index_name)
+            else:
+                table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
+            columns = []
+
+            for column_info in table_info.columns:
+                name = column_info.name
+                comment = column_info.comment or "No description provided"
+                col_type = column_info.type_name.name
+                if not name.startswith("__"):
+                    columns.append((name, col_type, comment))
+
+            return "The vector search index includes the following columns:\n" + "\n".join(
+                f"{name} ({col_type}): {comment}" for name, col_type, comment in columns
+            )
+        except Exception:
+            _logger.warning(
+                "Unable to retrieve column information automatically. Please manually specify column names, types, and descriptions in the tool description to help LLMs apply filters correctly."
+            )
+
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
             source_table = index_details.index_spec.get("source_table", "")
-            return (
+            description = (
                 DEFAULT_TOOL_DESCRIPTION
-                + f" The queried index uses the source table {source_table}"
+                + f" The queried index uses the source table {source_table}."
             )
-        return DEFAULT_TOOL_DESCRIPTION
+        else:
+            description = DEFAULT_TOOL_DESCRIPTION
 
-    def _get_resources(self, index_name: str, embedding_endpoint: str) -> List[Resource]:
-        return ([DatabricksVectorSearchIndex(index_name=index_name)] if index_name else []) + (
-            [DatabricksServingEndpoint(endpoint_name=embedding_endpoint)]
-            if embedding_endpoint
-            else []
-        )
+        column_description = self._describe_columns()
+        if column_description:
+            return f"{description}\n\n{column_description}"
+        else:
+            return description
+
+    def _get_resources(
+        self, index_name: str, embedding_endpoint: str, index_details: IndexDetails = None
+    ) -> List[Resource]:
+        resources = []
+        if index_name:
+            resources.append(DatabricksVectorSearchIndex(index_name=index_name))
+        if embedding_endpoint:
+            resources.append(DatabricksServingEndpoint(endpoint_name=embedding_endpoint))
+        if (
+            index_details
+            and index_details.is_databricks_managed_embeddings
+            and (
+                managed_embedding := index_details.embedding_source_column.get(
+                    "embedding_model_endpoint_name", None
+                )
+            )
+        ):
+            if managed_embedding != embedding_endpoint:
+                resources.append(DatabricksServingEndpoint(endpoint_name=managed_embedding))
+        return resources
 
     def _get_tool_name(self) -> str:
         tool_name = self.tool_name or self.index_name.replace(".", "__")

@@ -52,7 +52,9 @@ def test_init_with_endpoint_name() -> None:
     assert vectorsearch.index.describe() == INDEX_DETAILS[DELTA_SYNC_INDEX]
 
 
-@pytest.mark.parametrize("index_name", [None, "invalid", 123, MagicMock(spec=VectorSearchIndex)])
+@pytest.mark.parametrize(
+    "index_name", [None, 123, "invalid.name", MagicMock(spec=VectorSearchIndex)]
+)
 def test_init_fail_invalid_index_name(index_name) -> None:
     with pytest.raises(ValueError, match="The `index_name` parameter must be"):
         DatabricksVectorSearch(index_name=index_name)
@@ -302,21 +304,29 @@ def test_similarity_search_hybrid(index_name: str) -> None:
     assert all(["id" in d.metadata for d in search_result])
 
 
-def test_similarity_search_both_filter_and_filters_passed() -> None:
-    vectorsearch = init_vector_search(DIRECT_ACCESS_INDEX)
+def test_similarity_search_passing_kwargs() -> None:
+    vectorsearch = init_vector_search(DELTA_SYNC_INDEX)
     query = "foo"
-    filter = {"some filter": True}
-    filters = {"some other filter": False}
+    filters = {"some filter": True}
+    query_type = "ANN"
 
-    vectorsearch.similarity_search(query, filter=filter, filters=filters)
+    search_result = vectorsearch.similarity_search(
+        query,
+        k=5,
+        filter=filters,
+        query_type=query_type,
+        score_threshold=0.5,
+        num_results=10,
+        random_parameters="not included",
+    )
     vectorsearch.index.similarity_search.assert_called_once_with(
         columns=["id", "text"],
-        query_vector=EMBEDDING_MODEL.embed_query(query),
-        # `filter` should prevail over `filters`
-        filters=filter,
-        num_results=4,
-        query_text=None,
-        query_type=None,
+        query_text=query,
+        query_vector=None,
+        filters=filters,
+        query_type=query_type,
+        num_results=5,  # maintained
+        score_threshold=0.5,  # passed
     )
 
 

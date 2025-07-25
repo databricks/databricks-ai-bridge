@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-import re
 import uuid
 from functools import partial
 from typing import (
@@ -20,6 +20,7 @@ import numpy as np
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
+    RetrieverSchema,
     parse_vector_search_response,
     validate_and_get_return_columns,
     validate_and_get_text_column,
@@ -34,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 _DIRECT_ACCESS_ONLY_MSG = "`%s` is only supported for direct-access index."
 _NON_MANAGED_EMB_ONLY_MSG = "`%s` is not supported for index with Databricks-managed embeddings."
-_INDEX_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
 
 
 class DatabricksVectorSearch(VectorStore):
@@ -222,14 +222,21 @@ class DatabricksVectorSearch(VectorStore):
         endpoint: Optional[str] = None,
         embedding: Optional[Embeddings] = None,
         text_column: Optional[str] = None,
+        doc_uri: Optional[str] = None,
+        primary_key: Optional[str] = None,
         columns: Optional[List[str]] = None,
         workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
+        include_score: bool = False,
     ):
-        if not (isinstance(index_name, str) and _INDEX_NAME_PATTERN.match(index_name)):
+        if not isinstance(index_name, str):
             raise ValueError(
-                "The `index_name` parameter must be a string in the format "
-                f"'catalog.schema.index'. Received: {index_name}"
+                f"The `index_name` parameter must be a string, but got {type(index_name).__name__}."
+            )
+
+        if index_name.count(".") != 2:
+            raise ValueError(
+                f"The `index_name` parameter must be in the format 'catalog.schema.name', but got {index_name!r}."
             )
 
         try:
@@ -273,9 +280,16 @@ class DatabricksVectorSearch(VectorStore):
         self._embeddings = embedding
         self._text_column = validate_and_get_text_column(text_column, self._index_details)
         self._columns = validate_and_get_return_columns(
-            columns or [], self._text_column, self._index_details
+            columns or [], self._text_column, self._index_details, doc_uri, primary_key
         )
         self._primary_key = self._index_details.primary_key
+        self._retriever_schema = RetrieverSchema(
+            text_column=self._text_column,
+            doc_uri=doc_uri,
+            primary_key=primary_key,
+            other_columns=self._columns,
+        )
+        self._include_score = include_score
 
     @property
     def embeddings(self) -> Optional[Embeddings]:
@@ -446,16 +460,24 @@ class DatabricksVectorSearch(VectorStore):
                 query_text = None
             query_vector = self._embeddings.embed_query(query)  # type: ignore[union-attr]
 
-        search_resp = self.index.similarity_search(
-            columns=self._columns,
-            query_text=query_text,
-            query_vector=query_vector,
-            filters=filter,
-            num_results=k,
-            query_type=query_type,
+        signature = inspect.signature(self.index.similarity_search)
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+        kwargs.update(
+            {
+                "columns": self._columns,
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "filters": filter,
+                "num_results": k,
+                "query_type": query_type,
+            }
         )
+        search_resp = self.index.similarity_search(**kwargs)
         return parse_vector_search_response(
-            search_resp, self._index_details, self._text_column, document_class=Document
+            search_resp,
+            retriever_schema=self._retriever_schema,
+            document_class=Document,
+            include_score=self._include_score,
         )
 
     def _select_relevance_score_fn(self) -> Callable[[float], float]:
@@ -565,9 +587,13 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=k,
             query_type=query_type,
+            **kwargs,
         )
         return parse_vector_search_response(
-            search_resp, self._index_details, self._text_column, document_class=Document
+            search_resp,
+            retriever_schema=self._retriever_schema,
+            document_class=Document,
+            include_score=self._include_score,
         )
 
     def max_marginal_relevance_search(
@@ -684,6 +710,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=fetch_k,
             query_type=query_type,
+            **kwargs,
         )
 
         embeddings_result_index = (
@@ -703,10 +730,10 @@ class DatabricksVectorSearch(VectorStore):
         ignore_cols: List = [embedding_column] if embedding_column not in self._columns else []
         candidates = parse_vector_search_response(
             search_resp,
-            self._index_details,
-            self._text_column,
+            retriever_schema=self._retriever_schema,
             ignore_cols=ignore_cols,
             document_class=Document,
+            include_score=self._include_score,
         )
         selected_results = [r[0] for i, r in enumerate(candidates) if i in mmr_selected]
         return selected_results

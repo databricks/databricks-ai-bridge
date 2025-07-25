@@ -21,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.10"
       - name: Install dependencies
         run: |
           pip install -r requirements/lint-requirements.txt
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.10"]
+        python-version: ["3.10", "3.11", "3.12"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -70,6 +70,53 @@ jobs:
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
+  
+  langchain_cross_version_test:
+    runs-on: ubuntu-latest
+    name: langchain_test (${{ matrix.python-version }}, ${{ matrix.version.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        version:
+        - {ref: "databricks-ai-v0.5.0", name: "v0.5.0"}
+        - {ref: "databricks-ai-v0.4.0", name: "v0.4.0"}
+        - {ref: "databricks-ai-v0.3.0", name: "v0.3.0"}
+        - {ref: "databricks-ai-v0.2.0", name: "v0.2.0"}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+      - name: Checkout langchain version
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.version.ref }}
+          fetch-depth: 1
+          path: older-version
+      - name: Replace langchain with older version
+        run: |
+          # Remove current langchain if it exists to avoid conflicts
+          rm -rf integrations/langchain
+          
+          # Copy older version of langchain to the main repo
+          cp -r older-version/integrations/langchain integrations/
+      - name: Install langchain dependency
+        run: |
+          pip install integrations/langchain[dev]
+      - name: Run tests
+        run: |
+          # Only testing initialization since functionality can change
+          pytest integrations/langchain/tests/unit_tests/test_vector_search_retriever_tool.py::test_init
+          pytest integrations/langchain/tests/unit_tests/test_genie.py
+          pytest integrations/langchain/tests/unit_tests/test_embeddings.py
+          pytest integrations/langchain/tests/unit_tests/test_chat_models.py
 
   openai_test:
     runs-on: ubuntu-latest
@@ -91,3 +138,110 @@ jobs:
       - name: Run tests
         run: |
           pytest integrations/openai/tests/unit_tests
+
+  openai_cross_version_test:
+    runs-on: ubuntu-latest
+    name: openai_test (${{ matrix.python-version }}, ${{ matrix.version.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        version:
+        - {ref: "databricks-ai-v0.5.0", name: "v0.5.0", mlflow: "mlflow<3"}
+        - {ref: "databricks-ai-v0.4.0", name: "v0.4.0", mlflow: "mlflow<3"}
+        - {ref: "databricks-ai-v0.3.0", name: "v0.3.0", mlflow: "mlflow<3"}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install . "${{ matrix.version.mlflow }}"
+      - name: Checkout openai version
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.version.ref }}
+          fetch-depth: 1
+          path: older-version
+      - name: Replace openai with older version
+        run: |
+          # Remove current openai if it exists to avoid conflicts
+          rm -rf integrations/openai
+          
+          # Copy older version of openai to the main repo
+          cp -r older-version/integrations/openai integrations/
+      - name: Install openai dependency
+        run: |
+          pip install integrations/openai[dev]
+      - name: Run tests
+        run: |
+          # Only testing initialization since functionality can change
+          pytest integrations/openai/tests/unit_tests/test_vector_search_retriever_tool.py::test_vector_search_retriever_tool_init
+
+
+  llamaindex_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+          pip install integrations/llamaindex[dev]
+      - name: Run tests
+        run: |
+          pytest integrations/llamaindex/tests/unit_tests
+
+  mcp_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+          pip install -e databricks_mcp[dev]
+      - name: Run tests
+        run: |
+          pytest databricks_mcp/tests/unit_tests
+
+  dspy_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .
+          pip install integrations/dspy[dev]
+      - name: Run tests
+        run: |
+          pytest integrations/dspy/tests/unit_tests

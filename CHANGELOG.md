@@ -1,12 +1,44 @@
 # CHANGELOG
 
-## databrick-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
+## databricks-ai-bridge 0.6.0, databricks-langchain 0.6.0, databricks-openai 0.5.0, databricks-mcp 0.2.0 (2025-06-02)
+
+### Improvements
+- Add option to include similarity score in VectorSearchRetrieverTool result
+- Introduce DatabricksMCPClient
+- Include reasoning + SQL steps when Genie agent is queried
+- Make ChatDatabricks compatible with ChatAgent and ResponsesAgent
+
+## databricks-ai-bridge 0.5.1, databricks-langchain 0.5.1, databricks-openai 0.4.1 (2025-05-19)
+
+### Bug Fixes
+- Fix Databricks Vector Search Filter implementation
+- Improve performance for Genie Truncation
+- Fix Bug for Genie Description
+- Deprecate python 3.9 as a supported environment
+
+## databricks-ai-bridge 0.5.0, databricks-langchain 0.5.0, databricks-openai 0.4.0 (2025-05-12)
+
+### Improvements
+- Allow backticked vector search index names
+- Include embedding model as a resource for VectorSearchRetrieverTool
+- Support setting retriever schema (doc_uri, chunk_id) for VectorSearchRetrieverTool
+- Support for passing filters at query time and forwarding arbitrary kwargs through VectorSearchRetrieverTool
+
+## databricks-ai-bridge 0.4.2, databricks-langchain 0.4.3, databricks-openai 0.3.2 (2025-05-07) - YANKED
+
+### Improvements
+- Allow backticked vector search index names
+- Include embedding model as a resource for VectorSearchRetrieverTool
+- Support setting retriever schema (doc_uri, chunk_id) for VectorSearchRetrieverTool
+- Support for passing filters at query time and forwarding arbitrary kwargs through VectorSearchRetrieverTool
+
+## databricks-ai-bridge 0.4.1, databricks-langchain 0.4.1, databricks-openai 0.3.1 (2025-03-27)
 
 ### Improvements
 - Fix Databricks Connect and Tabulate Dependencies
 - Remove default temperature for ChatDatabricks
 
-## databrick-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
+## databricks-ai-bridge 0.4.0, databricks-langchain 0.4.0, databricks-openai 0.3.0 (2025-03-10)
 
 ### Highlights
 - Support On Behalf Of User rights with genie and VectorSearch Tool

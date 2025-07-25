@@ -1,7 +1,8 @@
 from unittest.mock import patch
 
 import pytest
-from databricks_ai_bridge.genie import GenieResponse
+from databricks.sdk.service.dashboards import GenieSpace
+from databricks_ai_bridge.genie import Genie, GenieResponse
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
@@ -42,49 +43,142 @@ def test_concat_messages_array():
     assert result == expected
 
 
-@patch("databricks_langchain.genie.Genie")
-def test_query_genie_as_agent(MockGenie):
-    # Mock the Genie class and its response
-    mock_genie = MockGenie.return_value
-    mock_genie.ask_question.return_value = GenieResponse(result="It is sunny.")
+@patch("databricks.sdk.WorkspaceClient")
+def test_query_genie_as_agent(MockWorkspaceClient):
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+
+    # Create a proper GenieResponse instance
+    mock_genie_response = GenieResponse(
+        result="It is sunny.",
+        query="SELECT * FROM weather",
+        description="This is the reasoning for the query",
+    )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
+    genie = Genie("space-id", MockWorkspaceClient)
 
-    expected_message = {"messages": [AIMessage(content="It is sunny.")]}
-    assert result == expected_message
+    # Mock the ask_question method to return our mock response
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        # Test with include_context=False (default)
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+        expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        assert result == expected_message
 
-    # Test the case when genie_response is empty
-    mock_genie.ask_question.return_value = GenieResponse(result=None)
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", None)
+        # Test with include_context=True
+        result = _query_genie_as_agent(input_data, genie, "Genie", include_context=True)
+        expected_messages = {
+            "messages": [
+                AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
+                AIMessage(content="SELECT * FROM weather", name="query_sql"),
+                AIMessage(content="It is sunny.", name="query_result"),
+            ]
+        }
+        assert result == expected_messages
 
-    expected_message = {"messages": [AIMessage(content="")]}
-    assert result == expected_message
 
-
+@patch("databricks.sdk.WorkspaceClient")
 @patch("langchain_core.runnables.RunnableLambda")
-def test_create_genie_agent(MockRunnableLambda):
-    mock_runnable = MockRunnableLambda.return_value
+def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
 
-    agent = GenieAgent("space-id", "Genie")
-    assert agent == mock_runnable
+    agent = GenieAgent("space-id", "Genie", client=mock_client)
+    assert agent.description == "description"
 
-    # Check that the partial function is created with the correct arguments
-    MockRunnableLambda.assert_called()
+    mock_client.genie.get_space.assert_called_once()
+    assert agent == MockRunnableLambda.return_value
+
+
+@patch("databricks.sdk.WorkspaceClient")
+@patch("langchain_core.runnables.RunnableLambda")
+def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceClient):
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description=None,
+    )
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
+
+    agent = GenieAgent("space-id", "Genie", "this is a description", client=mock_client)
+    assert agent.description == "this is a description"
+
+    mock_client.genie.get_space.assert_called_once()
+    assert agent == MockRunnableLambda.return_value
 
 
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_with_client(mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "abc"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "It is sunny."}}]},
-    ]
+    mock_workspace_client.genie.get_space.return_value = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+
+    # Create a proper GenieResponse instance
+    mock_genie_response = GenieResponse(
+        result="It is sunny.", query="SELECT weather FROM data", description="Query reasoning"
+    )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
-    result = _query_genie_as_agent(input_data, "space-id", "Genie", mock_workspace_client)
+    genie = Genie("space-id", mock_workspace_client)
 
-    expected_message = {"messages": [AIMessage(content="It is sunny.")]}
-    assert result == expected_message
+    # Mock the ask_question method to return our mock response
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+        expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        assert result == expected_message
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_create_genie_agent_with_include_context(MockWorkspaceClient):
+    """Test creating a GenieAgent with include_context parameter and verify it propagates correctly"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
+
+    # Create a proper GenieResponse instance
+    mock_genie_response = GenieResponse(
+        result="It is sunny.",
+        query="SELECT * FROM weather",
+        description="This is the reasoning for the query",
+    )
+
+    # Test with include_context=True
+    agent = GenieAgent("space-id", "Genie", include_context=True, client=mock_client)
+    assert agent.description == "description"
+
+    # Create test input
+    input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
+
+    # Mock the ask_question method on the Genie instance
+    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
+        # Invoke the agent and verify include_context=True behavior
+        result = agent.invoke(input_data)
+
+        # Should include reasoning, SQL, and result when include_context=True
+        expected_messages = [
+            AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
+            AIMessage(content="SELECT * FROM weather", name="query_sql"),
+            AIMessage(content="It is sunny.", name="query_result"),
+        ]
+        assert result["messages"] == expected_messages
+
+    mock_client.genie.get_space.assert_called_once()
 
 
 def test_create_genie_agent_no_space_id():
