@@ -389,8 +389,7 @@ def test_convert_message_to_dict_function() -> None:
 def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
 
-    # Since we now use OpenAI client, we don't directly test with _MOCK_CHAT_RESPONSE
-    # Instead, we test that the method works with the mocked OpenAI response
+    # Test that the method works with the mocked OpenAI response
     # The actual testing happens through the mocked client calls
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
