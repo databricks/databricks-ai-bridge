@@ -38,7 +38,7 @@ from tests.utils.chat_models import (  # noqa: F401
 def test_dict(llm: ChatDatabricks) -> None:
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
-    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
+    assert d["model"] == "databricks-claude-3-7-sonnet"
     assert d["profile"] is None  # Default profile
 
 
@@ -143,7 +143,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
 
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
-        endpoint="databricks-meta-llama-3-3-70b-instruct",
+        endpoint="databricks-claude-3-7-sonnet",
         stream_usage=True,
     )
     res = llm_with_usage.stream(
