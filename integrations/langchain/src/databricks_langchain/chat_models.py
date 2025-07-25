@@ -213,8 +213,10 @@ class ChatDatabricks(BaseChatModel):
 
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
-    target_uri: str = "databricks"
-    """The target URI to use. Defaults to ``databricks``."""
+    target_uri: Optional[str] = None
+    """The target URI to use. Deprecated: use profile instead."""
+    profile: Optional[str] = None
+    """The Databricks CLI profile name to use for authentication."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
@@ -253,7 +255,34 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self.client = get_openai_client(self.target_uri)
+        
+        # Validate profile and target_uri parameters
+        if self.profile and self.target_uri:
+            raise ValueError(
+                "Cannot specify both 'profile' and 'target_uri'. Please use 'profile' only, "
+                "as 'target_uri' is deprecated."
+            )
+        
+        # Handle deprecated target_uri parameter
+        if self.target_uri and not self.profile:
+            warnings.warn(
+                "The 'target_uri' parameter is deprecated and will be removed in a future version. "
+                "Use 'profile' parameter instead to specify the Databricks CLI profile name.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            # Extract profile from target_uri if it follows databricks://profile format
+            if self.target_uri.startswith("databricks://"):
+                self.profile = self.target_uri[len("databricks://"):]
+            elif self.target_uri == "databricks":
+                self.profile = None  # Use default profile
+            else:
+                raise ValueError(
+                    f"Invalid target_uri format: {self.target_uri}. "
+                    "Expected 'databricks' or 'databricks://profile-name'."
+                )
+        
+        self.client = get_openai_client(self.profile)
         self.extra_params = self.extra_params or {}
 
     @property
@@ -268,7 +297,7 @@ class ChatDatabricks(BaseChatModel):
 
         params = {
             "model": self.model,
-            "target_uri": self.target_uri,
+            "profile": self.profile,
             **{k: v for k, v in exclude_if_none.items() if v is not None},
         }
         return params
@@ -347,6 +376,10 @@ class ChatDatabricks(BaseChatModel):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+            # Add individual token counts for backwards compatibility with tests
+            llm_output["prompt_tokens"] = response.usage.prompt_tokens
+            llm_output["completion_tokens"] = response.usage.completion_tokens
+            llm_output["total_tokens"] = response.usage.total_tokens
         if hasattr(response, 'model'):
             llm_output["model"] = response.model
             llm_output["model_name"] = response.model
@@ -879,7 +912,7 @@ def _convert_dict_to_message_chunk(
         return ToolMessageChunk(
             content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant":
+    elif role == "assistant" or (role is None and default_role == "assistant"):
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):
@@ -905,4 +938,6 @@ def _convert_dict_to_message_chunk(
             usage_metadata=usage_metadata,
         )
     else:
-        return ChatMessageChunk(content=content, role=role)
+        # Handle case where role might be None by using default_role
+        effective_role = role if role is not None else default_role
+        return ChatMessageChunk(content=content, role=effective_role)

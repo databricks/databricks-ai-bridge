@@ -39,25 +39,65 @@ def test_dict(llm: ChatDatabricks) -> None:
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
     assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+    assert d["profile"] is None  # Default profile
 
 
-def test_dict_with_endpoint() -> None:
-    llm = ChatDatabricks(endpoint="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
+
+
+def test_profile_parameter() -> None:
+    """Test the new profile parameter works correctly."""
+    llm = ChatDatabricks(model="test-model", profile="test-profile")
     d = llm.dict()
-    assert d["_type"] == "chat-databricks"
-    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+    assert d["profile"] == "test-profile"
+    assert "target_uri" not in d or d["target_uri"] is None
 
-    llm = ChatDatabricks(
-        model="databricks-meta-llama-3-3-70b-instruct",
-        endpoint="databricks-meta-llama-3-3-70b-instruct",
-        target_uri="databricks",
-    )
-    d = llm.dict()
-    assert d["_type"] == "chat-databricks"
-    assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["target_uri"] == "databricks"
+
+def test_profile_and_target_uri_conflict() -> None:
+    """Test that specifying both profile and target_uri raises ValueError."""
+    with pytest.raises(ValueError, match="Cannot specify both 'profile' and 'target_uri'"):
+        ChatDatabricks(model="test-model", profile="test-profile", target_uri="databricks://other-profile")
+
+
+def test_target_uri_extraction_databricks_scheme() -> None:
+    """Test extracting profile from target_uri with databricks:// scheme."""
+    import warnings
+    from unittest.mock import patch
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with patch('databricks_langchain.chat_models.get_openai_client'):
+            llm = ChatDatabricks(model="test-model", target_uri="databricks://my-profile")
+    
+    # Check that profile was extracted correctly
+    assert llm.profile == "my-profile"
+    assert llm.target_uri == "databricks://my-profile"
+
+
+def test_target_uri_extraction_databricks_default() -> None:
+    """Test extracting profile from target_uri with default 'databricks'."""
+    import warnings
+    from unittest.mock import patch
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with patch('databricks_langchain.chat_models.get_openai_client'):
+            llm = ChatDatabricks(model="test-model", target_uri="databricks")
+    
+    # Check that profile was extracted correctly
+    assert llm.profile is None  # Uses default profile
+    assert llm.target_uri == "databricks"
+
+
+def test_target_uri_invalid_format() -> None:
+    """Test that invalid target_uri format raises ValueError."""
+    with pytest.raises(ValueError, match="Invalid target_uri format"):
+        ChatDatabricks(model="test-model", target_uri="invalid://format")
+
+
+def test_target_uri_deprecation_warning() -> None:
+    """Test that using target_uri shows deprecation warning."""
+    with pytest.warns(DeprecationWarning, match="The 'target_uri' parameter is deprecated"):
+        ChatDatabricks(model="test-model", target_uri="databricks")
 
 
 def test_chat_model_predict(llm: ChatDatabricks) -> None:
@@ -104,7 +144,6 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
     # Method 2: Pass stream_usage=True to the constructor
     llm_with_usage = ChatDatabricks(
         endpoint="databricks-meta-llama-3-3-70b-instruct",
-        target_uri="databricks",
         stream_usage=True,
     )
     res = llm_with_usage.stream(

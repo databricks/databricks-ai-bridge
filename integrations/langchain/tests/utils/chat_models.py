@@ -203,4 +203,4 @@ def mock_client() -> Generator:
 
 @pytest.fixture
 def llm() -> ChatDatabricks:
-    return ChatDatabricks(model="databricks-meta-llama-3-3-70b-instruct", target_uri="databricks")
+    return ChatDatabricks(model="databricks-meta-llama-3-3-70b-instruct")

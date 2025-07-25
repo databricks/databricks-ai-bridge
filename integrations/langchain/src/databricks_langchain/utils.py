@@ -21,27 +21,24 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
-def get_openai_client(target_uri: str) -> Any:
-    """Get an OpenAI client configured for Databricks."""
-    if (target_uri != "databricks") and (urlparse(target_uri).scheme != "databricks"):
-        raise ValueError("Invalid target URI. The target URI must be a valid databricks URI.")
-
+def get_openai_client(profile: str = None) -> Any:
+    """Get an OpenAI client configured for Databricks.
+    
+    Args:
+        profile: Optional Databricks CLI profile name. If None, uses default profile.
+    """
     try:
         from databricks.sdk import WorkspaceClient
         
-        # Get Databricks workspace client for authentication
-        workspace_client = WorkspaceClient()
+        # Create workspace client with specified profile
+        if profile:
+            workspace_client = WorkspaceClient(profile=profile)
+        else:
+            workspace_client = WorkspaceClient()
         
-        # Create OpenAI client with Databricks authentication
-        # Use Databricks workspace URL as base_url and set up authentication
-        workspace_url = workspace_client.config.host
-        if not workspace_url.endswith("/serving-endpoints"):
-            workspace_url = f"{workspace_url}/serving-endpoints"
-            
-        return OpenAI(
-            api_key=workspace_client.config.token,
-            base_url=workspace_url,
-        )
+        # Use the serving endpoints client to get a properly configured OpenAI client
+        return workspace_client.serving_endpoints.get_open_ai_client()
+        
     except ImportError as e:
         raise ImportError(
             "Failed to create the OpenAI client. "
