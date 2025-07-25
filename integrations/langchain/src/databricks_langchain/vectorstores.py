@@ -25,10 +25,11 @@ from databricks_ai_bridge.utils.vector_search import (
     validate_and_get_return_columns,
     validate_and_get_text_column,
 )
-from databricks_langchain.utils import maximal_marginal_relevance
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VST, VectorStore
+
+from databricks_langchain.utils import maximal_marginal_relevance
 
 logger = logging.getLogger(__name__)
 

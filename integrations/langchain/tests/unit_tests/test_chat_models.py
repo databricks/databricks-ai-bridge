@@ -852,14 +852,14 @@ def test_chat_databricks_init_with_extra_params():
 
 
 def test_chat_databricks_init_sets_client():
-    """Test ChatDatabricks initialization sets client."""
-    with patch("databricks_langchain.chat_models.get_deployment_client") as mock_get_client:
+    """Test ChatDatabricks initialization sets OpenAI client."""
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
 
-        llm = ChatDatabricks(model="test-model", target_uri="custom-uri")
+        llm = ChatDatabricks(model="test-model", profile="test-profile")
 
-        mock_get_client.assert_called_once_with("custom-uri")
+        mock_get_client.assert_called_once_with("test-profile")
         assert llm.client == mock_client
 
 
@@ -874,6 +874,8 @@ def test_prepare_inputs_basic():
     result = llm._prepare_inputs(messages)
 
     expected = {
+        "model": "test-model",
+        "stream": False,
         "temperature": 0.7,
         "max_tokens": 100,
         "stop": ["stop"],
@@ -890,9 +892,10 @@ def test_prepare_inputs_with_responses_api():
     messages = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
     expected = {
+        "model": "test-model",
+        "stream": False,
         "temperature": 0.5,
         "input": [{"role": "user", "content": "Hello"}],
-        "n": 1,
     }
 
     assert result == expected

@@ -53,10 +53,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import BaseModel, ConfigDict, Field
 
-from openai import OpenAI
-from mlflow.deployments import BaseDeploymentClient
-
-from databricks_langchain.utils import get_openai_client, get_deployment_client
+from databricks_langchain.utils import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -292,13 +289,8 @@ class ChatDatabricks(BaseChatModel):
                     "Expected 'databricks' or 'databricks://profile-name'."
                 )
         
-        # Initialize client based on whether profile is provided or if no target_uri is specified
-        if self.profile is not None or self.target_uri is None or (self.target_uri and self.target_uri.startswith("databricks")):
-            # Use OpenAI client for profile-based authentication or default case
-            self.client = get_openai_client(self.profile)
-        else:
-            # Use deployment client for target_uri-based authentication
-            self.client = get_deployment_client(self.target_uri)
+        # Always use OpenAI client (supports both chat completions and responses API)
+        self.client = get_openai_client(self.profile)
         
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
@@ -329,18 +321,13 @@ class ChatDatabricks(BaseChatModel):
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
         
-        # Use different client methods based on client type
-        if hasattr(self.client, 'chat') and hasattr(self.client.chat, 'completions'):
-            # OpenAI client
-            resp = self.client.chat.completions.create(**data)  # type: ignore
-            return self._convert_response_to_chat_result(resp)
+        if self.use_responses_api:
+            # Use OpenAI client with responses API
+            resp = self.client.responses.create(**data)  # type: ignore
+            return self._convert_responses_api_response_to_chat_result(resp)
         else:
-            # Deployment client
-            resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
-            if self.use_responses_api:
-                return self._convert_responses_api_response_to_chat_result(resp)
-            elif "messages" in resp:
-                return self._convert_chatagent_response_to_chat_result(resp)
+            # Use OpenAI client with chat completions API
+            resp = self.client.chat.completions.create(**data)  # type: ignore
             return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -351,25 +338,19 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
-            "n": self.n,
+            "model": self.model,
+            "stream": stream,
             **self.extra_params,  # type: ignore
             **kwargs,
         }
         
-        # Set data based on client type
-        if hasattr(self.client, 'chat') and hasattr(self.client.chat, 'completions'):
-            # OpenAI client format
-            data.update({
-                "model": self.model,
-                "messages": [_convert_message_to_dict(msg) for msg in messages],
-                "stream": stream,
-            })
+        # Format data based on whether we're using responses API or chat completions
+        if self.use_responses_api:
+            # Responses API expects "input" parameter
+            data["input"] = _convert_lc_messages_to_responses_api(messages)
         else:
-            # Deployment client format
-            if self.use_responses_api:
-                data["input"] = _convert_lc_messages_to_responses_api(messages)
-            else:
-                data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
+            # Chat completions API expects "messages" parameter
+            data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
 
         if self.temperature is not None:
             data["temperature"] = self.temperature
@@ -575,11 +556,19 @@ class ChatDatabricks(BaseChatModel):
             stream_usage = self.stream_usage
             
         data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
-        first_chunk_role = None
         
-        # Use different streaming based on client type
-        if hasattr(self.client, 'chat') and hasattr(self.client.chat, 'completions'):
-            # OpenAI client streaming
+        if self.use_responses_api:
+            # Use OpenAI client with responses API for streaming
+            prev_chunk = None
+            stream = self.client.responses.create(**data)  # type: ignore
+            for chunk in stream:
+                chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
+                prev_chunk = chunk
+                if chunk_message:
+                    yield ChatGenerationChunk(message=chunk_message)
+        else:
+            # Use OpenAI client with chat completions API for streaming
+            first_chunk_role = None
             stream = self.client.chat.completions.create(**data)  # type: ignore
             for chunk in stream:
                 if chunk.choices:
@@ -638,64 +627,6 @@ class ChatDatabricks(BaseChatModel):
                         )
 
                     yield generation_chunk
-        else:
-            # Deployment client streaming
-            if self.use_responses_api:
-                prev_chunk = None
-                for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-                    chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
-                    prev_chunk = chunk
-                    if chunk_message:
-                        yield ChatGenerationChunk(message=chunk_message)
-            else:
-                for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
-                    # top level delta key means that it is a ChatAgentChunk
-                    if chunk.get("delta"):
-                        chunk_delta = chunk["delta"]
-                        chunk_message = _convert_dict_to_message_chunk(
-                            chunk_delta, chunk_delta.get("role")
-                        )
-                        chunk = ChatGenerationChunk(message=chunk_message)
-                        yield chunk
-                    elif chunk.get("choices"):
-                        choice = chunk["choices"][0]
-
-                        chunk_delta = choice["delta"]
-                        if first_chunk_role is None:
-                            first_chunk_role = chunk_delta.get("role")
-
-                        if stream_usage and (usage := chunk.get("usage")):
-                            input_tokens = usage.get("prompt_tokens", 0)
-                            output_tokens = usage.get("completion_tokens", 0)
-                            usage = {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": input_tokens + output_tokens,
-                            }
-                        else:
-                            usage = None
-
-                        chunk_message = _convert_dict_to_message_chunk(
-                            chunk_delta, first_chunk_role, usage=usage
-                        )
-
-                        generation_info = {}
-                        if finish_reason := choice.get("finish_reason"):
-                            generation_info["finish_reason"] = finish_reason
-                        if logprobs := choice.get("logprobs"):
-                            generation_info["logprobs"] = logprobs
-
-                        chunk = ChatGenerationChunk(
-                            message=chunk_message, generation_info=generation_info or None
-                        )
-
-                        if run_manager:
-                            run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
-
-                        yield chunk
-                    else:
-                        # Handle the case where choices are empty if needed
-                        continue
 
     def bind_tools(
         self,

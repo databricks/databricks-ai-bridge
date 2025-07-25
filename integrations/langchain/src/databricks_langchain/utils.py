@@ -2,7 +2,6 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
-from openai import OpenAI
 
 
 def get_deployment_client(target_uri: str) -> Any:
