@@ -912,7 +912,7 @@ def _convert_dict_to_message_chunk(
         return ToolMessageChunk(
             content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant" or (role is None and default_role == "assistant"):
+    elif role == "assistant":
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):
@@ -938,6 +938,4 @@ def _convert_dict_to_message_chunk(
             usage_metadata=usage_metadata,
         )
     else:
-        # Handle case where role might be None by using default_role
-        effective_role = role if role is not None else default_role
-        return ChatMessageChunk(content=content, role=effective_role)
+        return ChatMessageChunk(content=content, role=role)

@@ -121,52 +121,10 @@ _MOCK_STREAM_RESPONSE = [
 
 @pytest.fixture(autouse=True)
 def mock_client() -> Generator:
-    # Mock OpenAI client response objects
-    class MockOpenAIMessage:
-        def __init__(self, role="assistant", content="", tool_calls=None):
-            self.role = role
-            self.content = content
-            self.tool_calls = tool_calls or []
-    
-    class MockOpenAIChoice:
-        def __init__(self, message, finish_reason="stop"):
-            self.message = message
-            self.finish_reason = finish_reason
-    
-    class MockOpenAIUsage:
-        def __init__(self, prompt_tokens=30, completion_tokens=36, total_tokens=66):
-            self.prompt_tokens = prompt_tokens
-            self.completion_tokens = completion_tokens
-            self.total_tokens = total_tokens
-    
-    class MockOpenAIResponse:
-        def __init__(self):
-            # Ensure the content matches exactly
-            expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
-            self.choices = [
-                MockOpenAIChoice(
-                    MockOpenAIMessage(content=expected_content)
-                )
-            ]
-            self.usage = MockOpenAIUsage()
-            self.model = _MOCK_CHAT_RESPONSE["model"]
-    
-    # Mock OpenAI streaming response
-    class MockOpenAIDelta:
-        def __init__(self, role=None, content=None, tool_calls=None):
-            self.role = role
-            self.content = content
-            self.tool_calls = tool_calls
-    
-    class MockOpenAIStreamChoice:
-        def __init__(self, delta, finish_reason=None):
-            self.delta = delta
-            self.finish_reason = finish_reason
-    
-    class MockOpenAIStreamChunk:
-        def __init__(self, choices, usage=None):
-            self.choices = choices
-            self.usage = usage
+    from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice, ChoiceDelta
+    from openai.types.completion_usage import CompletionUsage
     
     def mock_openai_stream():
         for chunk_data in _MOCK_STREAM_RESPONSE:
@@ -174,16 +132,49 @@ def mock_client() -> Generator:
             delta_data = choice_data["delta"]
             usage_data = chunk_data.get("usage")
             
-            delta = MockOpenAIDelta(
+            delta = ChoiceDelta(
                 role=delta_data.get("role"),
-                content=delta_data.get("content", "")
+                content=delta_data.get("content", ""),
+                tool_calls=None
             )
-            choice = MockOpenAIStreamChoice(
+            choice = ChunkChoice(
+                index=0,
                 delta=delta,
-                finish_reason=choice_data.get("finish_reason")
+                finish_reason=choice_data.get("finish_reason"),
+                logprobs=None
             )
-            usage = MockOpenAIUsage(**usage_data) if usage_data else None
-            yield MockOpenAIStreamChunk([choice], usage)
+            usage = CompletionUsage(**usage_data) if usage_data else None
+            yield ChatCompletionChunk(
+                id=chunk_data["id"],
+                choices=[choice],
+                created=chunk_data["created"],
+                model=chunk_data["model"],
+                object="chat.completion.chunk",
+                usage=usage
+            )
+    
+    def create_mock_response():
+        expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
+        message = ChatCompletionMessage(
+            role="assistant",
+            content=expected_content,
+            tool_calls=None
+        )
+        choice = Choice(
+            index=0,
+            message=message,
+            finish_reason="stop",
+            logprobs=None
+        )
+        usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
+        return ChatCompletion(
+            id=_MOCK_CHAT_RESPONSE["id"],
+            choices=[choice],
+            created=_MOCK_CHAT_RESPONSE["created"],
+            model=_MOCK_CHAT_RESPONSE["model"],
+            object="chat.completion",
+            usage=usage
+        )
     
     # Mock OpenAI client
     openai_client = mock.MagicMock()
@@ -192,7 +183,7 @@ def mock_client() -> Generator:
         if kwargs.get("stream"):
             return mock_openai_stream()
         else:
-            return MockOpenAIResponse()
+            return create_mock_response()
     
     openai_client.chat.completions.create.side_effect = mock_create_completion
     
