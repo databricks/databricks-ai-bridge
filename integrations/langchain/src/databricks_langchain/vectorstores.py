@@ -410,6 +410,9 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
+                    to see the full set of supported keyword arguments
 
         Returns:
             List of Documents most similar to the embedding.
@@ -446,6 +449,9 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
+                    to see the full set of supported keyword arguments
 
         Returns:
             List of Documents most similar to the embedding and score for each.
@@ -514,6 +520,9 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
+                    to see the full set of supported keyword arguments
 
         Returns:
             List of Documents most similar to the embedding.
@@ -561,6 +570,9 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
+                    to see the full set of supported keyword arguments
 
         Returns:
             List of Documents most similar to the embedding and score for each.
