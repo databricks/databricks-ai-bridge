@@ -30,6 +30,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     This class integrates with Databricks Vector Search and provides a convenient interface
     for tool calling using the OpenAI SDK.
 
+    Note: Any additional keyword arguments passed to the constructor will be passed along to
+    `databricks.vector_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
+    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
+    to see the full set of supported keyword arguments,
+    e.g. `score_threshold`. Additionally, see documentation for
+    :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for details on additional supported parameters, including
+    `query_type` and `num_results`.
+
     Example:
         Step 1: Call model with VectorSearchRetrieverTool defined
 

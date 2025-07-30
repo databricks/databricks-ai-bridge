@@ -20,6 +20,14 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     A utility class to create a vector search-based retrieval tool for querying indexed embeddings.
     This class integrates with Databricks Vector Search and provides a convenient interface
     for building a retriever tool for agents.
+
+    Note: Any additional keyword arguments passed to the constructor will be passed along to
+    :meth:`~databricks_langchain.vectorstores.DatabricksVectorSearch.similarity_search`. See
+    documentation for :meth:`~databricks_langchain.vectorstores.DatabricksVectorSearch.similarity_search`
+    to see the full set of supported keyword arguments, e.g. `score_threshold`.
+
+    Additionally, see documentation for :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for details on additional supported parameters, including
+    `query_type` and `num_results`.
     """
 
     text_column: Optional[str] = Field(
