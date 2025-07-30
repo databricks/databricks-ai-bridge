@@ -21,7 +21,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     This class integrates with Databricks Vector Search and provides a convenient interface
     for building a retriever tool for agents.
 
-    Note: Any additional keyword arguments passed to the constructor will be passed along to
+    **Note**: Any additional keyword arguments passed to the constructor will be passed along to
     :meth:`~databricks_langchain.vectorstores.DatabricksVectorSearch.similarity_search`. See
     documentation for :meth:`~databricks_langchain.vectorstores.DatabricksVectorSearch.similarity_search`
     to see the full set of supported keyword arguments, e.g. `score_threshold`.
