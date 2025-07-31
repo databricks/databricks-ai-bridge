@@ -27,17 +27,6 @@ def should_fetch_model_serving_environment_oauth() -> bool:
     return is_in_model_serving_env == "true"
 
 
-def _get_invokers_token_fallback():
-    logger.error("FALLING TO FALLBACK FOR OBO TOKEN")
-    main_thread = threading.main_thread()
-    thread_data = main_thread.__dict__
-    logger.error(f"THREAD DATA: ${thread_data}")
-    invokers_token = None
-    if "invokers_token" in thread_data:
-        invokers_token = thread_data["invokers_token"]
-    return invokers_token
-
-
 def is_gevent_running():
     """
     Check if gevent is running in async mode.
@@ -85,6 +74,30 @@ def fetch_obo_token_log_statement():
         main_thread = threading.main_thread()
         thread_data = main_thread.__dict__
         logger.error(f"THREAD DATA: ${thread_data}")
+
+def _get_invokers_token_fallback():
+    logger.error("FALLING TO FALLBACK FOR OBO TOKEN")
+    invokers_token = None
+
+    if is_gevent_running():
+        try:
+            from greenlet import getcurrent as get_current_greenlet
+
+            current_greenlet = get_current_greenlet()
+            if (
+                hasattr(current_greenlet, "__dict__")
+                and "invokers_token" in current_greenlet.__dict__
+            ):
+                invokers_token = current_greenlet.__dict__["invokers_token"]
+        except Exception:
+            pass
+    else:
+        main_thread = threading.main_thread()
+        thread_data = main_thread.__dict__
+        if "invokers_token" in thread_data:
+            invokers_token = thread_data["invokers_token"]
+
+    return invokers_token
 
 def _get_invokers_token_from_mlflowserving():
     try:
