@@ -28,8 +28,10 @@ def should_fetch_model_serving_environment_oauth() -> bool:
 
 
 def _get_invokers_token_fallback():
+    logger.error("FALLING TO FALLBACK FOR OBO TOKEN")
     main_thread = threading.main_thread()
     thread_data = main_thread.__dict__
+    logger.error(f"THREAD DATA: ${thread_data}")
     invokers_token = None
     if "invokers_token" in thread_data:
         invokers_token = thread_data["invokers_token"]
@@ -37,16 +39,69 @@ def _get_invokers_token_fallback():
 
 
 def _get_invokers_token_from_mlflowserving():
+    is_gevent_running = is_gevent_running()
+    logger.error(f"IS GEVENT RUNNING: ${is_gevent_running}")
+    fetch_obo_token_log_statement()
     try:
         from mlflowserving.scoring_server.agent_utils import fetch_obo_token
-
+        logger.error("FETCH OBO TOKEN IMPORTED SUCCESSFULLY")
         return fetch_obo_token()
     except ImportError:
         return _get_invokers_token_fallback()
 
 
+def is_gevent_running():
+    """
+    Check if gevent is running in async mode.
+
+    Returns:
+        bool: True if gevent is active and running, False otherwise
+    """
+    try:
+        import gevent
+
+        # Check if gevent monkey patching is active
+        if hasattr(gevent, "socket") and hasattr(gevent.socket, "socket"):
+            # Additional check to see if we're in a gevent context
+            try:
+                from gevent import getcurrent
+
+                current = getcurrent()
+                # If we get a gevent greenlet (not the main greenlet), gevent is running
+                return current is not None and hasattr(current, "switch")
+            except Exception:
+                return False
+        return False
+    except ImportError:
+        return False
+
+def fetch_obo_token_log_statement():
+    """
+    Get the invokers token from greenlet_local if gevent is running, otherwise use thread local.
+    This also allows for backward compatibility as the old code was using thread local.
+
+    Returns:
+        The invoker's token value if present, None otherwise
+    """
+
+    if is_gevent_running():
+        try:
+            from greenlet import getcurrent as get_current_greenlet
+
+            current_greenlet = get_current_greenlet()
+            logger.error(f"GREENLET DICT: ${current_greenlet.__dict__}")
+        except Exception as e:
+            logger.error(f"GREENLET ERROR: ${e}")
+            pass
+    else:
+        main_thread = threading.main_thread()
+        thread_data = main_thread.__dict__
+        logger.error(f"THREAD DATA: ${thread_data}")
+
 def _get_invokers_token():
+    logger.error("GETTING INVOKERS TOKEN NOW")
     invokers_token = _get_invokers_token_from_mlflowserving()
+    logger.error(f"GOT INVOKERS TOKEN: ${invokers_token}")
     if invokers_token is None:
         raise RuntimeError(
             "Unable to read end user token in Databricks Model Serving. "
