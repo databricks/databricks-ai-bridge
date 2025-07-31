@@ -38,18 +38,6 @@ def _get_invokers_token_fallback():
     return invokers_token
 
 
-def _get_invokers_token_from_mlflowserving():
-    is_gevent_running = is_gevent_running()
-    logger.error(f"IS GEVENT RUNNING: ${is_gevent_running}")
-    fetch_obo_token_log_statement()
-    try:
-        from mlflowserving.scoring_server.agent_utils import fetch_obo_token
-        logger.error("FETCH OBO TOKEN IMPORTED SUCCESSFULLY")
-        return fetch_obo_token()
-    except ImportError:
-        return _get_invokers_token_fallback()
-
-
 def is_gevent_running():
     """
     Check if gevent is running in async mode.
@@ -98,6 +86,20 @@ def fetch_obo_token_log_statement():
         thread_data = main_thread.__dict__
         logger.error(f"THREAD DATA: ${thread_data}")
 
+def _get_invokers_token_from_mlflowserving():
+    try:
+        is_gevent_running_bool = is_gevent_running()
+        logger.error(f"IS GEVENT RUNNING: ${is_gevent_running_bool}")
+        fetch_obo_token_log_statement()
+        from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+        logger.error("FETCH OBO TOKEN IMPORTED SUCCESSFULLY")
+        return fetch_obo_token()
+    except ImportError:
+        return _get_invokers_token_fallback()
+    except Exception as e:
+        logger.error(f"GENERAL EXCEPTION: ${e}")
+        return _get_invokers_token_fallback()
+    
 def _get_invokers_token():
     logger.error("GETTING INVOKERS TOKEN NOW")
     invokers_token = _get_invokers_token_from_mlflowserving()
