@@ -219,9 +219,9 @@ class ChatDatabricks(BaseChatModel):
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
-    """The target URI to use. Deprecated: use profile instead."""
+    """The target MLflow deployment URI to use. Deprecated: use profile instead."""
     profile: Optional[str] = None
-    """The Databricks CLI profile name to use for authentication."""
+    """The optional Databricks CLI profile name to use for authentication. See https://docs.databricks.com/aws/en/dev-tools/cli/profiles for details."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
