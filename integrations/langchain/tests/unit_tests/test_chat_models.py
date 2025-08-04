@@ -409,48 +409,28 @@ def test_convert_message_to_dict_function() -> None:
 
 def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.chat.chat_completion import Choice
-    from openai.types.completion_usage import CompletionUsage
-    
-    # Create an actual OpenAI response object
+
+    result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)
+
     expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
-    message = ChatCompletionMessage(
-        role="assistant",
-        content=expected_content,
-        tool_calls=None
-    )
-    choice = Choice(
-        index=0,
-        message=message,
-        finish_reason="stop",
-        logprobs=None
-    )
-    usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
-    openai_response = ChatCompletion(
-        id=_MOCK_CHAT_RESPONSE["id"],
-        choices=[choice],
-        created=_MOCK_CHAT_RESPONSE["created"],
-        model=_MOCK_CHAT_RESPONSE["model"],
-        object="chat.completion",
-        usage=usage
+    expected = ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(content=expected_content),
+                generation_info={},
+            ),
+        ],
+        llm_output={
+            "id": _MOCK_CHAT_RESPONSE["id"],
+            "object": _MOCK_CHAT_RESPONSE["object"],
+            "created": _MOCK_CHAT_RESPONSE["created"],
+            "model": _MOCK_CHAT_RESPONSE["model"],
+            "model_name": _MOCK_CHAT_RESPONSE["model"],
+            "usage": _MOCK_CHAT_RESPONSE["usage"],
+        },
     )
 
-    result = llm._convert_response_to_chat_result(openai_response)
-    
-    # Verify that llm_output contains the full response metadata
-    assert "model_name" in result.llm_output
-    assert "usage" in result.llm_output
-    assert result.llm_output["model_name"] == _MOCK_CHAT_RESPONSE["model"]
-    
-    # Verify that usage information is included directly in llm_output
-    assert result.llm_output["usage"] == _MOCK_CHAT_RESPONSE["usage"]
-    
-    # Verify that choices, content, role, and type are excluded from llm_output
-    assert "choices" not in result.llm_output
-    assert "content" not in result.llm_output
-    assert "role" not in result.llm_output
-    assert "type" not in result.llm_output
+    assert result == expected
 
 
 def test_convert_lc_messages_to_responses_api_basic():
@@ -600,14 +580,14 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
     expected = AIMessageChunk(
         id="call_456",
-        content=[
+        content=[],
+        tool_calls=[
             {
-                "type": "function_call",
                 "name": "get_weather",
-                "arguments": '{"location": "SF"}',
-                "id": "item_123",
-                "call_id": "call_456",
-            },
+                "args": {"location": "SF"},
+                "id": "call_456",
+                "type": "tool_call",
+            }
         ],
         tool_call_chunks=[
             ToolCallChunk(name="get_weather", args='{"location": "SF"}', id="call_456")
