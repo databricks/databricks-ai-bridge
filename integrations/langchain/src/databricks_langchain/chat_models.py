@@ -374,7 +374,7 @@ class ChatDatabricks(BaseChatModel):
         To accomodate this, we combine the messages into a single message, following LangChain convention.
         """
         # Handle error response
-        error = getattr(response, 'error', None) if hasattr(response, 'error') else response.get('error') if isinstance(response, dict) else None
+        error = getattr(response, 'error', None)
         if error:
             raise ValueError(error)
         # Combine all content and tool calls from output items
@@ -382,20 +382,28 @@ class ChatDatabricks(BaseChatModel):
         tool_calls = []
         invalid_tool_calls = []
 
-        output = getattr(response, 'output', []) if hasattr(response, 'output') else response.get('output', []) if isinstance(response, dict) else []
+        output = getattr(response, 'output', [])
         for item in output:
-            # Handle both OpenAI objects and dictionaries
-            item_type = getattr(item, 'type', None) if hasattr(item, 'type') else item.get("type") if isinstance(item, dict) else None
+            # Handle OpenAI objects
+            item_type = getattr(item, 'type', None)
 
             if item_type == "message":
-                # Handle OpenAI objects vs dictionaries
-                content_list = getattr(item, 'content', []) if hasattr(item, 'content') else item.get("content", []) if isinstance(item, dict) else []
+                # Handle OpenAI objects
+                content_list = getattr(item, 'content', [])
                 for content in content_list:
-                    content_type = getattr(content, 'type', None) if hasattr(content, 'type') else content.get("type") if isinstance(content, dict) else None
+                    content_type = getattr(content, 'type', None)
                     if content_type == "output_text":
-                        text = getattr(content, 'text', "") if hasattr(content, 'text') else content.get("text", "") if isinstance(content, dict) else ""
-                        annotations = getattr(content, 'annotations', []) if hasattr(content, 'annotations') else content.get("annotations", []) if isinstance(content, dict) else []
-                        content_id = getattr(content, 'id', "") if hasattr(content, 'id') else content.get("id", "") if isinstance(content, dict) else ""
+                        text = getattr(content, 'text', "")
+                        annotations = getattr(content, 'annotations', [])
+                        content_id = getattr(content, 'id', "")
+                        
+                        # Convert annotation objects to dictionaries
+                        if annotations:
+                            annotations = [
+                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                for ann in annotations
+                            ]
+                        
                         content_blocks.append(
                             {
                                 "type": "text",
@@ -405,8 +413,8 @@ class ChatDatabricks(BaseChatModel):
                             }
                         )
                     elif content_type == "refusal":
-                        refusal = getattr(content, 'refusal', "") if hasattr(content, 'refusal') else content.get("refusal", "") if isinstance(content, dict) else ""
-                        content_id = getattr(content, 'id', "") if hasattr(content, 'id') else content.get("id", "") if isinstance(content, dict) else ""
+                        refusal = getattr(content, 'refusal', "")
+                        content_id = getattr(content, 'id', "")
                         content_blocks.append(
                             {
                                 "type": "refusal",
@@ -415,23 +423,19 @@ class ChatDatabricks(BaseChatModel):
                             }
                         )
             elif item_type == "function_call":
-                # Convert OpenAI object to dict for content_blocks to maintain backward compatibility
-                if hasattr(item, 'name'):  # OpenAI object
-                    item_dict = {
-                        "type": "function_call",
-                        "name": getattr(item, 'name', ""),
-                        "arguments": getattr(item, 'arguments', ""),
-                        "call_id": getattr(item, 'call_id', ""),
-                    }
-                    content_blocks.append(item_dict)
-                    arguments_str = getattr(item, 'arguments', "")
-                    name = getattr(item, 'name', "")
-                    call_id = getattr(item, 'call_id', "")
-                else:  # Dictionary
-                    content_blocks.append(item)
-                    arguments_str = item.get("arguments", "")
-                    name = item.get("name", "")
-                    call_id = item.get("call_id", "")
+                # Handle OpenAI object
+                name = getattr(item, 'name', "")
+                arguments_str = getattr(item, 'arguments', "")
+                call_id = getattr(item, 'call_id', "")
+                
+                # Convert to dict for content_blocks to maintain backward compatibility
+                item_dict = {
+                    "type": "function_call",
+                    "name": name,
+                    "arguments": arguments_str,
+                    "call_id": call_id,
+                }
+                content_blocks.append(item_dict)
                 
                 try:
                     args = json.loads(arguments_str, strict=False)
@@ -459,9 +463,9 @@ class ChatDatabricks(BaseChatModel):
                         }
                     )
             elif item_type == "function_call_output":
-                # Handle OpenAI objects vs dictionaries
-                output = getattr(item, 'output', "") if hasattr(item, 'output') else item.get("output", "") if isinstance(item, dict) else ""
-                call_id = getattr(item, 'call_id', "") if hasattr(item, 'call_id') else item.get("call_id", "") if isinstance(item, dict) else ""
+                # Handle OpenAI objects
+                output = getattr(item, 'output', "")
+                call_id = getattr(item, 'call_id', "")
                 content_blocks.append(
                     {
                         "role": "tool",
@@ -485,7 +489,7 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
-        response_id = getattr(response, 'id', None) if hasattr(response, 'id') else response.get('id') if isinstance(response, dict) else None
+        response_id = getattr(response, 'id', None)
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
@@ -1244,82 +1248,86 @@ def _convert_dict_to_message_chunk(
         return ChatMessageChunk(content=content, role=role)
 
 
-def _get_chunk_attr(obj: Any, attr: str, default: Any = None) -> Any:
-    """Get attribute from chunk object, supporting both dict and object access."""
-    if hasattr(obj, attr):
-        return getattr(obj, attr, default)
-    elif hasattr(obj, 'get'):
-        return obj.get(attr, default)
-    else:
-        return default
 
 
 def _convert_responses_api_chunk_to_lc_chunk(
     chunk: Any, previous_chunk: Optional[Any] = None
 ) -> Optional[BaseMessageChunk]:
-    # Follow ChatOpenAI pattern for handling responses API chunks
-    # Support both dict-style (unit tests) and object-style (real OpenAI) access
+    # Handle OpenAI responses API chunks
     content = []
     tool_call_chunks = []
     id = None
     
-    chunk_type = _get_chunk_attr(chunk, "type")
+    chunk_type = getattr(chunk, "type", None)
     if chunk_type == "response.output_text.delta":
-        id = _get_chunk_attr(chunk, "item_id")
+        id = getattr(chunk, "item_id", None)
         content.append(
             {
                 "type": "text",
-                "text": _get_chunk_attr(chunk, "delta", ""),
+                "text": getattr(chunk, "delta", ""),
             }
         )
     elif chunk_type == "response.output_item.done":
-        item = _get_chunk_attr(chunk, "item")
-        item_type = _get_chunk_attr(item, "type")
+        item = getattr(chunk, "item", None)
+        item_type = getattr(item, "type", None)
         if item_type == "function_call_output":
             return ToolMessageChunk(
-                content=_get_chunk_attr(item, "output", ""),
-                tool_call_id=_get_chunk_attr(item, "call_id"),
+                content=getattr(item, "output", ""),
+                tool_call_id=getattr(item, "call_id", ""),
             )
         elif item_type == "function_call":
-            id = _get_chunk_attr(item, "call_id")
+            id = getattr(item, "call_id", None)
             tool_call_chunks.append(
                 tool_call_chunk(
-                    name=_get_chunk_attr(item, "name"),
-                    args=_get_chunk_attr(item, "arguments"),
-                    id=_get_chunk_attr(item, "call_id"),
+                    name=getattr(item, "name", ""),
+                    args=getattr(item, "arguments", ""),
+                    id=getattr(item, "call_id", ""),
                 )
             )
         elif item_type == "message":
-            id = _get_chunk_attr(item, "id")
+            id = getattr(item, "id", None)
             # skip text outputs that have already been streamed, but keep the annotations
-            prev_type = _get_chunk_attr(previous_chunk, "type") if previous_chunk else None
-            prev_item_id = _get_chunk_attr(previous_chunk, "item_id") if previous_chunk else None
+            prev_type = getattr(previous_chunk, "type", None) if previous_chunk else None
+            prev_item_id = getattr(previous_chunk, "item_id", None) if previous_chunk else None
             skip_duplicate_text = (
                 previous_chunk
                 and prev_type == "response.output_text.delta"
                 and id == prev_item_id
             )
-            content_list = _get_chunk_attr(item, "content", [])
+            content_list = getattr(item, "content", [])
             for content_item in content_list:
-                content_item_type = _get_chunk_attr(content_item, "type")
+                content_item_type = getattr(content_item, "type", None)
                 if content_item_type == "output_text":
                     if skip_duplicate_text:
-                        annotations = _get_chunk_attr(content_item, "annotations")
+                        annotations = getattr(content_item, "annotations", None)
                         if annotations:
+                            # Convert annotation objects to dictionaries
+                            annotations = [
+                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                for ann in annotations
+                            ]
                             content.append({"annotations": annotations})
                     else:
+                        annotations = getattr(content_item, "annotations", [])
+                        # Convert annotation objects to dictionaries
+                        if annotations:
+                            annotations = [
+                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                for ann in annotations
+                            ]
+                        
                         content.append(
                             {
                                 "type": "text",
-                                "text": _get_chunk_attr(content_item, "text", ""),
-                                "annotations": _get_chunk_attr(content_item, "annotations", []),
+                                "text": getattr(content_item, "text", ""),
+                                "annotations": annotations,
                             }
                         )
                 elif content_item_type == "refusal":
                     content.append(
                         {
                             "type": "refusal",
-                            "refusal": _get_chunk_attr(content_item, "refusal", ""),
+                            "refusal": getattr(content_item, "refusal", ""),
                         }
                     )
         elif item_type in (
@@ -1333,17 +1341,21 @@ def _convert_responses_api_chunk_to_lc_chunk(
             "image_generation_call",
             "reasoning",
         ):
-            # For these tool calls, include the whole item
-            content.append(item)
+            # Convert item to dictionary for LangChain compatibility
+            if hasattr(item, 'model_dump'):
+                content.append(item.model_dump())
+            else:
+                content.append(item)
     elif chunk_type == "response.created":
-        response_obj = _get_chunk_attr(chunk, "response")
-        id = _get_chunk_attr(response_obj, "id") if response_obj else None
+        response_obj = getattr(chunk, "response", None)
+        id = getattr(response_obj, "id", None) if response_obj else None
         return AIMessageChunk(content="", id=id)
     elif chunk_type == "response.completed":
         # This indicates the response is done
         return None
     elif chunk_type == "error":
-        raise ValueError(str(chunk))
+        error_msg = getattr(chunk, "error", str(chunk))
+        raise ValueError(error_msg)
     else:
         # Return None for unknown chunk types
         return None
