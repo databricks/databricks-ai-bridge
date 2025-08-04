@@ -884,6 +884,65 @@ def test_convert_chatagent_response_to_chat_result():
     assert result == expected
 
 
+def test_chat_databricks_responses_api_stream():
+    """Test ChatDatabricks streaming with responses API using mocked client."""
+    from openai.types.responses import ResponseTextDeltaEvent, ResponseOutputItemDoneEvent, ResponseOutputMessage, ResponseOutputText
+    from unittest.mock import Mock, patch
+    
+    # Create mock streaming response chunks
+    mock_chunks = [
+        ResponseTextDeltaEvent.model_construct(
+            type="response.output_text.delta",
+            item_id="item_123",
+            delta="Hello"
+        ),
+        ResponseTextDeltaEvent.model_construct(
+            type="response.output_text.delta", 
+            item_id="item_123",
+            delta=" world"
+        ),
+        ResponseOutputItemDoneEvent.model_construct(
+            type="response.output_item.done",
+            item=ResponseOutputMessage.model_construct(
+                type="message",
+                id="item_123",
+                content=[
+                    ResponseOutputText.model_construct(
+                        type="output_text",
+                        text="Hello world",
+                        id="text_123"
+                    )
+                ]
+            )
+        )
+    ]
+    
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        
+        # Mock the responses.create method to return our chunks
+        mock_client.responses.create.return_value = iter(mock_chunks)
+        
+        llm = ChatDatabricks(model="test-model", use_responses_api=True)
+        
+        messages = [HumanMessage(content="Hello")]
+        chunks = list(llm.stream(messages))
+        
+        # Should get chunks for the text deltas but skip the duplicate done event
+        assert len(chunks) == 2  # Two text delta chunks
+        
+        # Check first chunk
+        assert isinstance(chunks[0], AIMessageChunk)
+        assert chunks[0].content == [{"type": "text", "text": "Hello"}]
+        assert chunks[0].id == "item_123"
+        
+        # Check second chunk  
+        assert isinstance(chunks[1], AIMessageChunk)
+        assert chunks[1].content == [{"type": "text", "text": " world"}]
+        assert chunks[1].id == "item_123"
+
+
 ### Test ChatDatabricks initialization and configuration ###
 
 

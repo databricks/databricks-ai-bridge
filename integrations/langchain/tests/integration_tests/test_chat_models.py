@@ -9,6 +9,7 @@ need to update the corresponding integration test, please contact to the
 maintainers of the repository to verify the changes.
 """
 
+import os
 from typing import Annotated
 from unittest import mock
 
@@ -430,6 +431,10 @@ def test_chat_databricks_langgraph_with_memory():
     assert "40" in response["messages"][-1].content
 
 
+@pytest.mark.skipif(
+    not os.environ.get("RUN_RESPONSES_API_TESTS"),
+    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run."
+)
 def test_chat_databricks_responses_api_invoke():
     """Test ChatDatabricks with responses API."""
     chat = ChatDatabricks(
@@ -446,6 +451,10 @@ def test_chat_databricks_responses_api_invoke():
     assert len(response.content) > 0
 
 
+@pytest.mark.skipif(
+    not os.environ.get("RUN_RESPONSES_API_TESTS"),
+    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run."
+)
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API."""
     chat = ChatDatabricks(
