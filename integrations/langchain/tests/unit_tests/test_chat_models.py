@@ -47,8 +47,6 @@ def test_dict(llm: ChatDatabricks) -> None:
     assert d["profile"] is None  # Default profile
 
 
-
-
 def test_profile_parameter() -> None:
     """Test the new profile parameter works correctly."""
     llm = ChatDatabricks(model="test-model", profile="test-profile")
@@ -60,19 +58,21 @@ def test_profile_parameter() -> None:
 def test_profile_and_target_uri_conflict() -> None:
     """Test that specifying both profile and target_uri raises ValueError."""
     with pytest.raises(ValueError, match="Cannot specify both 'profile' and 'target_uri'"):
-        ChatDatabricks(model="test-model", profile="test-profile", target_uri="databricks://other-profile")
+        ChatDatabricks(
+            model="test-model", profile="test-profile", target_uri="databricks://other-profile"
+        )
 
 
 def test_target_uri_extraction_databricks_scheme() -> None:
     """Test extracting profile from target_uri with databricks:// scheme."""
     import warnings
     from unittest.mock import patch
-    
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        with patch('databricks_langchain.chat_models.get_openai_client'):
+        with patch("databricks_langchain.chat_models.get_openai_client"):
             llm = ChatDatabricks(model="test-model", target_uri="databricks://my-profile")
-    
+
     # Check that profile was extracted correctly
     assert llm.profile == "my-profile"
     assert llm.target_uri == "databricks://my-profile"
@@ -82,12 +82,12 @@ def test_target_uri_extraction_databricks_default() -> None:
     """Test extracting profile from target_uri with default 'databricks'."""
     import warnings
     from unittest.mock import patch
-    
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        with patch('databricks_langchain.chat_models.get_openai_client'):
+        with patch("databricks_langchain.chat_models.get_openai_client"):
             llm = ChatDatabricks(model="test-model", target_uri="databricks")
-    
+
     # Check that profile was extracted correctly
     assert llm.profile is None  # Uses default profile
     assert llm.target_uri == "databricks"
@@ -556,11 +556,9 @@ def test_convert_lc_messages_to_responses_api_with_complex_content():
 def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
     """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
     from openai.types.responses import ResponseTextDeltaEvent
-    
+
     chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta",
-        item_id="item_123", 
-        delta="Hello"
+        type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -573,7 +571,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
 def test_convert_responses_api_chunk_to_lc_chunk_function_call():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call."""
     from openai.types.responses import ResponseFunctionToolCall, ResponseOutputItemDoneEvent
-    
+
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseFunctionToolCall.model_construct(
@@ -582,7 +580,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
             call_id="call_456",
             name="get_weather",
             arguments='{"location": "SF"}',
-        )
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -610,14 +608,12 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
         ResponseFunctionToolCallOutputItem,
         ResponseOutputItemDoneEvent,
     )
-    
+
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseFunctionToolCallOutputItem.model_construct(
-            type="function_call_output", 
-            call_id="call_456", 
-            output="Sunny, 72°F"
-        )
+            type="function_call_output", call_id="call_456", output="Sunny, 72°F"
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -635,25 +631,29 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
         ResponseOutputRefusal,
         ResponseOutputText,
     )
-    
+
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseOutputMessage.model_construct(
             type="message",
             id="msg_123",
             content=[
-                ResponseOutputText.model_construct(type="output_text", text="Hello!", annotations=[{"key": "value"}]),
-                ResponseOutputRefusal.model_construct(type="refusal", refusal="I cannot help with that."),
+                ResponseOutputText.model_construct(
+                    type="output_text", text="Hello!", annotations=[{"key": "value"}]
+                ),
+                ResponseOutputRefusal.model_construct(
+                    type="refusal", refusal="I cannot help with that."
+                ),
             ],
-        )
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
-    
+
     assert isinstance(result, AIMessageChunk)
     assert result.id == "msg_123"
     assert len(result.content) == 2
-    
+
     # Check text content with annotations
     text_content = result.content[0]
     assert text_content["type"] == "text"
@@ -663,7 +663,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
     annotation = text_content["annotations"][0]
     assert isinstance(annotation, dict)
     assert annotation["key"] == "value"
-    
+
     # Check refusal content
     refusal_content = result.content[1]
     assert refusal_content["type"] == "refusal"
@@ -678,11 +678,9 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
         ResponseOutputText,
         ResponseTextDeltaEvent,
     )
-    
+
     previous_chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta", 
-        item_id="item_123", 
-        delta="Hello"
+        type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     chunk = ResponseOutputItemDoneEvent.model_construct(
@@ -691,7 +689,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
             type="message",
             id="item_123",
             content=[ResponseOutputText.model_construct(type="output_text", text="Hello")],
-        )
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
@@ -706,11 +704,9 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
         ResponseOutputText,
         ResponseTextDeltaEvent,
     )
-    
+
     previous_chunk = ResponseTextDeltaEvent.model_construct(
-        type="response.output_text.delta", 
-        item_id="item_123", 
-        delta="Hello"
+        type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
 
     chunk = ResponseOutputItemDoneEvent.model_construct(
@@ -722,25 +718,23 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
                 ResponseOutputText.model_construct(
                     type="output_text",
                     text="Hello",
-                    annotations=[
-                        {"type": "url_citation", "title": "title", "url": "google.com"}
-                    ],
+                    annotations=[{"type": "url_citation", "title": "title", "url": "google.com"}],
                 )
             ],
-        )
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk, previous_chunk)
-    
+
     assert isinstance(result, AIMessageChunk)
     assert result.id == "item_123"
     assert len(result.content) == 1
-    
+
     # Check that annotations were included and converted to dict
     annotation_content = result.content[0]
     assert "annotations" in annotation_content
     assert len(annotation_content["annotations"]) == 1
-    
+
     annotation = annotation_content["annotations"][0]
     assert isinstance(annotation, dict)
     assert annotation["type"] == "url_citation"
@@ -751,11 +745,8 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
 def test_convert_responses_api_chunk_to_lc_chunk_error():
     """Test _convert_responses_api_chunk_to_lc_chunk with error."""
     from openai.types.responses import ResponseErrorEvent
-    
-    chunk = ResponseErrorEvent.model_construct(
-        type="error", 
-        error="Something went wrong"
-    )
+
+    chunk = ResponseErrorEvent.model_construct(type="error", error="Something went wrong")
 
     with pytest.raises(ValueError, match="Something went wrong"):
         _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -763,12 +754,13 @@ def test_convert_responses_api_chunk_to_lc_chunk_error():
 
 def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
     """Test _convert_responses_api_chunk_to_lc_chunk with unknown type."""
+
     # Create a simple object for unknown type
     class UnknownEvent:
         def __init__(self):
             self.type = "unknown_type"
             self.data = "some data"
-    
+
     chunk = UnknownEvent()
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -778,20 +770,20 @@ def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
 def test_convert_responses_api_chunk_to_lc_chunk_special_items():
     """Test _convert_responses_api_chunk_to_lc_chunk with special item types."""
     from openai.types.responses import ResponseOutputItemDoneEvent, ResponseReasoningItem
-    
+
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseReasoningItem.model_construct(
             type="reasoning",
             summary=[{"type": "summary_text", "text": "Let me think about this..."}],
-        )
+        ),
     )
 
     result = _convert_responses_api_chunk_to_lc_chunk(chunk)
 
     assert isinstance(result, AIMessageChunk)
     assert len(result.content) == 1
-    
+
     reasoning_content = result.content[0]
     assert isinstance(reasoning_content, dict)
     assert reasoning_content["type"] == "reasoning"
@@ -812,7 +804,7 @@ def test_convert_responses_api_response_to_chat_result():
         ResponseOutputMessage,
         ResponseOutputText,
     )
-    
+
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
 
     response = Response.model_construct(
@@ -839,18 +831,18 @@ def test_convert_responses_api_response_to_chat_result():
     )
 
     result = llm._convert_responses_api_response_to_chat_result(response)
-    
+
     assert isinstance(result, ChatResult)
     assert len(result.generations) == 1
-    
+
     generation = result.generations[0]
     assert isinstance(generation, ChatGeneration)
-    
+
     message = generation.message
     assert isinstance(message, AIMessage)
     assert message.id == "response_123"
     assert len(message.content) == 2
-    
+
     # Check text content
     text_content = message.content[0]
     assert text_content["type"] == "text"
@@ -859,14 +851,14 @@ def test_convert_responses_api_response_to_chat_result():
     assert len(text_content["annotations"]) == 1
     assert isinstance(text_content["annotations"][0], dict)
     assert text_content["annotations"][0]["key"] == "value"
-    
+
     # Check function call content
     func_content = message.content[1]
     assert func_content["type"] == "function_call"
     assert func_content["name"] == "get_weather"
     assert func_content["arguments"] == '{"location": "SF"}'
     assert func_content["call_id"] == "call_123"
-    
+
     # Check tool calls
     assert len(message.tool_calls) == 1
     tool_call = message.tool_calls[0]
@@ -879,7 +871,7 @@ def test_convert_responses_api_response_to_chat_result():
 def test_convert_responses_api_response_to_chat_result_with_error():
     """Test _convert_responses_api_response_to_chat_result with error."""
     from openai.types.responses import Response
-    
+
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
 
     response = Response.model_construct(error="Something went wrong")
@@ -917,18 +909,14 @@ def test_chat_databricks_responses_api_stream():
         ResponseOutputText,
         ResponseTextDeltaEvent,
     )
-    
+
     # Create mock streaming response chunks
     mock_chunks = [
         ResponseTextDeltaEvent.model_construct(
-            type="response.output_text.delta",
-            item_id="item_123",
-            delta="Hello"
+            type="response.output_text.delta", item_id="item_123", delta="Hello"
         ),
         ResponseTextDeltaEvent.model_construct(
-            type="response.output_text.delta", 
-            item_id="item_123",
-            delta=" world"
+            type="response.output_text.delta", item_id="item_123", delta=" world"
         ),
         ResponseOutputItemDoneEvent.model_construct(
             type="response.output_item.done",
@@ -937,36 +925,34 @@ def test_chat_databricks_responses_api_stream():
                 id="item_123",
                 content=[
                     ResponseOutputText.model_construct(
-                        type="output_text",
-                        text="Hello world",
-                        id="text_123"
+                        type="output_text", text="Hello world", id="text_123"
                     )
-                ]
-            )
-        )
+                ],
+            ),
+        ),
     ]
-    
+
     with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
-        
+
         # Mock the responses.create method to return our chunks
         mock_client.responses.create.return_value = iter(mock_chunks)
-        
+
         llm = ChatDatabricks(model="test-model", use_responses_api=True)
-        
+
         messages = [HumanMessage(content="Hello")]
         chunks = list(llm.stream(messages))
-        
+
         # Should get chunks for the text deltas but skip the duplicate done event
         assert len(chunks) == 2  # Two text delta chunks
-        
+
         # Check first chunk
         assert isinstance(chunks[0], AIMessageChunk)
         assert chunks[0].content == [{"type": "text", "text": "Hello"}]
         assert chunks[0].id == "item_123"
-        
-        # Check second chunk  
+
+        # Check second chunk
         assert isinstance(chunks[1], AIMessageChunk)
         assert chunks[1].content == [{"type": "text", "text": " world"}]
         assert chunks[1].id == "item_123"

@@ -262,14 +262,14 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        
+
         # Validate profile and target_uri parameters
         if self.profile and self.target_uri:
             raise ValueError(
                 "Cannot specify both 'profile' and 'target_uri'. Please use 'profile' only, "
                 "as 'target_uri' is deprecated."
             )
-        
+
         # Handle deprecated target_uri parameter
         if self.target_uri and not self.profile:
             warnings.warn(
@@ -280,7 +280,7 @@ class ChatDatabricks(BaseChatModel):
             )
             # Extract profile from target_uri if it follows databricks://profile format
             if self.target_uri.startswith("databricks://"):
-                self.profile = self.target_uri[len("databricks://"):]
+                self.profile = self.target_uri[len("databricks://") :]
             elif self.target_uri == "databricks":
                 self.profile = None  # Use default profile
             else:
@@ -288,10 +288,10 @@ class ChatDatabricks(BaseChatModel):
                     f"Invalid target_uri format: {self.target_uri}. "
                     "Expected 'databricks' or 'databricks://profile-name'."
                 )
-        
+
         # Always use OpenAI client (supports both chat completions and responses API)
         self.client = get_openai_client(self.profile)
-        
+
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
 
@@ -320,7 +320,7 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
-        
+
         if self.use_responses_api:
             # Use OpenAI client with responses API
             resp = self.client.responses.create(**data)  # type: ignore
@@ -343,7 +343,7 @@ class ChatDatabricks(BaseChatModel):
             **self.extra_params,  # type: ignore
             **kwargs,
         }
-        
+
         # Format data based on whether we're using responses API or chat completions
         if self.use_responses_api:
             # Responses API expects "input" parameter and has different supported parameters
@@ -354,7 +354,7 @@ class ChatDatabricks(BaseChatModel):
         else:
             # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
-            
+
             if self.temperature is not None:
                 data["temperature"] = self.temperature
             if stop := self.stop or stop:
@@ -366,15 +366,13 @@ class ChatDatabricks(BaseChatModel):
 
         return data
 
-    def _convert_responses_api_response_to_chat_result(
-        self, response: Any
-    ) -> ChatResult:
+    def _convert_responses_api_response_to_chat_result(self, response: Any) -> ChatResult:
         """
         A Responses API response has an array of messages, but a ChatResult can only have a single message.
         To accomodate this, we combine the messages into a single message, following LangChain convention.
         """
         # Handle error response
-        error = getattr(response, 'error', None)
+        error = getattr(response, "error", None)
         if error:
             raise ValueError(error)
         # Combine all content and tool calls from output items
@@ -382,28 +380,28 @@ class ChatDatabricks(BaseChatModel):
         tool_calls = []
         invalid_tool_calls = []
 
-        output = getattr(response, 'output', [])
+        output = getattr(response, "output", [])
         for item in output:
             # Handle OpenAI objects
-            item_type = getattr(item, 'type', None)
+            item_type = getattr(item, "type", None)
 
             if item_type == "message":
                 # Handle OpenAI objects
-                content_list = getattr(item, 'content', [])
+                content_list = getattr(item, "content", [])
                 for content in content_list:
-                    content_type = getattr(content, 'type', None)
+                    content_type = getattr(content, "type", None)
                     if content_type == "output_text":
-                        text = getattr(content, 'text', "")
-                        annotations = getattr(content, 'annotations', [])
-                        content_id = getattr(content, 'id', "")
-                        
+                        text = getattr(content, "text", "")
+                        annotations = getattr(content, "annotations", [])
+                        content_id = getattr(content, "id", "")
+
                         # Convert annotation objects to dictionaries
                         if annotations:
                             annotations = [
-                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                ann.model_dump() if hasattr(ann, "model_dump") else ann
                                 for ann in annotations
                             ]
-                        
+
                         content_blocks.append(
                             {
                                 "type": "text",
@@ -413,8 +411,8 @@ class ChatDatabricks(BaseChatModel):
                             }
                         )
                     elif content_type == "refusal":
-                        refusal = getattr(content, 'refusal', "")
-                        content_id = getattr(content, 'id', "")
+                        refusal = getattr(content, "refusal", "")
+                        content_id = getattr(content, "id", "")
                         content_blocks.append(
                             {
                                 "type": "refusal",
@@ -424,10 +422,10 @@ class ChatDatabricks(BaseChatModel):
                         )
             elif item_type == "function_call":
                 # Handle OpenAI object
-                name = getattr(item, 'name', "")
-                arguments_str = getattr(item, 'arguments', "")
-                call_id = getattr(item, 'call_id', "")
-                
+                name = getattr(item, "name", "")
+                arguments_str = getattr(item, "arguments", "")
+                call_id = getattr(item, "call_id", "")
+
                 # Convert to dict for content_blocks to maintain backward compatibility
                 item_dict = {
                     "type": "function_call",
@@ -436,7 +434,7 @@ class ChatDatabricks(BaseChatModel):
                     "call_id": call_id,
                 }
                 content_blocks.append(item_dict)
-                
+
                 try:
                     args = json.loads(arguments_str, strict=False)
                     error = None
@@ -464,8 +462,8 @@ class ChatDatabricks(BaseChatModel):
                     )
             elif item_type == "function_call_output":
                 # Handle OpenAI objects
-                output = getattr(item, 'output', "")
-                call_id = getattr(item, 'call_id', "")
+                output = getattr(item, "output", "")
+                call_id = getattr(item, "call_id", "")
                 content_blocks.append(
                     {
                         "role": "tool",
@@ -489,7 +487,7 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
-        response_id = getattr(response, 'id', None)
+        response_id = getattr(response, "id", None)
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
@@ -510,7 +508,7 @@ class ChatDatabricks(BaseChatModel):
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
         # Handle OpenAI client responses (with .choices attribute)
-        if hasattr(response, 'choices'):
+        if hasattr(response, "choices"):
             generations = []
             for choice in response.choices:
                 message_dict = {
@@ -529,11 +527,11 @@ class ChatDatabricks(BaseChatModel):
                         }
                         for tc in choice.message.tool_calls
                     ]
-                
+
                 generation_info = {}
-                if hasattr(choice, 'finish_reason') and choice.finish_reason:
+                if hasattr(choice, "finish_reason") and choice.finish_reason:
                     generation_info["finish_reason"] = choice.finish_reason
-                
+
                 generations.append(
                     ChatGeneration(
                         message=_convert_dict_to_message(message_dict),
@@ -542,7 +540,7 @@ class ChatDatabricks(BaseChatModel):
                 )
 
             llm_output = {}
-            if hasattr(response, 'usage') and response.usage:
+            if hasattr(response, "usage") and response.usage:
                 llm_output["usage"] = {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
@@ -552,7 +550,7 @@ class ChatDatabricks(BaseChatModel):
                 llm_output["prompt_tokens"] = response.usage.prompt_tokens
                 llm_output["completion_tokens"] = response.usage.completion_tokens
                 llm_output["total_tokens"] = response.usage.total_tokens
-            if hasattr(response, 'model'):
+            if hasattr(response, "model"):
                 llm_output["model"] = response.model
                 llm_output["model_name"] = response.model
 
@@ -566,7 +564,7 @@ class ChatDatabricks(BaseChatModel):
                 )
                 for choice in response["choices"]
             ]
-            
+
             llm_output = {}
             if "usage" in response:
                 llm_output["usage"] = response["usage"]
@@ -593,9 +591,9 @@ class ChatDatabricks(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         if stream_usage is None:
             stream_usage = self.stream_usage
-            
+
         data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
-        
+
         if self.use_responses_api:
             # Use OpenAI client with responses API for streaming
             prev_chunk = None
@@ -613,11 +611,11 @@ class ChatDatabricks(BaseChatModel):
                 if chunk.choices:
                     choice = chunk.choices[0]
                     chunk_delta = choice.delta
-                    
+
                     if first_chunk_role is None:
                         first_chunk_role = chunk_delta.role
 
-                    if stream_usage and hasattr(chunk, 'usage') and chunk.usage:
+                    if stream_usage and hasattr(chunk, "usage") and chunk.usage:
                         input_tokens = chunk.usage.prompt_tokens
                         output_tokens = chunk.usage.completion_tokens
                         usage = {
@@ -652,7 +650,7 @@ class ChatDatabricks(BaseChatModel):
                     generation_info = {}
                     if choice.finish_reason:
                         generation_info["finish_reason"] = choice.finish_reason
-                    if hasattr(choice, 'logprobs') and choice.logprobs:
+                    if hasattr(choice, "logprobs") and choice.logprobs:
                         generation_info["logprobs"] = choice.logprobs
 
                     generation_chunk = ChatGenerationChunk(
@@ -661,8 +659,9 @@ class ChatDatabricks(BaseChatModel):
 
                     if run_manager:
                         run_manager.on_llm_new_token(
-                            generation_chunk.text, chunk=generation_chunk, 
-                            logprobs=generation_info.get("logprobs")
+                            generation_chunk.text,
+                            chunk=generation_chunk,
+                            logprobs=generation_info.get("logprobs"),
                         )
 
                     yield generation_chunk
@@ -1248,8 +1247,6 @@ def _convert_dict_to_message_chunk(
         return ChatMessageChunk(content=content, role=role)
 
 
-
-
 def _convert_responses_api_chunk_to_lc_chunk(
     chunk: Any, previous_chunk: Optional[Any] = None
 ) -> Optional[BaseMessageChunk]:
@@ -1257,7 +1254,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
     content = []
     tool_call_chunks = []
     id = None
-    
+
     chunk_type = getattr(chunk, "type", None)
     if chunk_type == "response.output_text.delta":
         id = getattr(chunk, "item_id", None)
@@ -1290,9 +1287,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
             prev_type = getattr(previous_chunk, "type", None) if previous_chunk else None
             prev_item_id = getattr(previous_chunk, "item_id", None) if previous_chunk else None
             skip_duplicate_text = (
-                previous_chunk
-                and prev_type == "response.output_text.delta"
-                and id == prev_item_id
+                previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
             )
             content_list = getattr(item, "content", [])
             for content_item in content_list:
@@ -1303,7 +1298,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         if annotations:
                             # Convert annotation objects to dictionaries
                             annotations = [
-                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                ann.model_dump() if hasattr(ann, "model_dump") else ann
                                 for ann in annotations
                             ]
                             content.append({"annotations": annotations})
@@ -1312,10 +1307,10 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         # Convert annotation objects to dictionaries
                         if annotations:
                             annotations = [
-                                ann.model_dump() if hasattr(ann, 'model_dump') else ann
+                                ann.model_dump() if hasattr(ann, "model_dump") else ann
                                 for ann in annotations
                             ]
-                        
+
                         content.append(
                             {
                                 "type": "text",
@@ -1332,17 +1327,17 @@ def _convert_responses_api_chunk_to_lc_chunk(
                     )
         elif item_type in (
             "web_search_call",
-            "file_search_call", 
+            "file_search_call",
             "computer_call",
             "code_interpreter_call",
             "mcp_call",
             "mcp_list_tools",
-            "mcp_approval_request", 
+            "mcp_approval_request",
             "image_generation_call",
             "reasoning",
         ):
             # Convert item to dictionary for LangChain compatibility
-            if hasattr(item, 'model_dump'):
+            if hasattr(item, "model_dump"):
                 content.append(item.model_dump())
             else:
                 content.append(item)
@@ -1367,5 +1362,5 @@ def _convert_responses_api_chunk_to_lc_chunk(
             tool_call_chunks=tool_call_chunks,
             id=id,
         )
-    
+
     return None

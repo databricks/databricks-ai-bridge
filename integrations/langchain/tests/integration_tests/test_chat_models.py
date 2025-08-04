@@ -39,12 +39,7 @@ _TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
 
 def test_chat_databricks_invoke():
-    chat = ChatDatabricks(
-        model=_TEST_ENDPOINT, 
-        temperature=0, 
-        max_tokens=10, 
-        stop=["Java"]
-    )
+    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
 
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
@@ -433,13 +428,13 @@ def test_chat_databricks_langgraph_with_memory():
 
 @pytest.mark.skipif(
     not os.environ.get("RUN_RESPONSES_API_TESTS"),
-    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run."
+    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run.",
 )
 def test_chat_databricks_responses_api_invoke():
     """Test ChatDatabricks with responses API."""
     chat = ChatDatabricks(
         model="agents_main-bbqiu-responses-name",
-        profile="ml-inference-staging", 
+        profile="ml-inference-staging",
         use_responses_api=True,
         temperature=0,
         max_tokens=50,
@@ -453,7 +448,7 @@ def test_chat_databricks_responses_api_invoke():
 
 @pytest.mark.skipif(
     not os.environ.get("RUN_RESPONSES_API_TESTS"),
-    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run."
+    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=1 to run.",
 )
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API."""
@@ -467,11 +462,12 @@ def test_chat_databricks_responses_api_stream():
 
     chunks = list(chat.stream("What is 2 + 2?"))
     assert len(chunks) > 0
-    
+
     # Responses API can return both AIMessageChunk and ToolMessageChunk
     from langchain_core.messages import BaseMessageChunk
+
     assert all(isinstance(chunk, BaseMessageChunk) for chunk in chunks)
-    
+
     # Combine all AI message chunks to get text content
     ai_chunks = [chunk for chunk in chunks if isinstance(chunk, AIMessageChunk)]
     text_content = []
@@ -482,6 +478,6 @@ def test_chat_databricks_responses_api_stream():
                     text_content.append(content_item.get("text", ""))
                 elif isinstance(content_item, str):
                     text_content.append(content_item)
-    
+
     full_text = "".join(text_content)
     assert len(full_text) > 0

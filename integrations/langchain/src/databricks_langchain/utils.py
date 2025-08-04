@@ -22,22 +22,22 @@ def get_deployment_client(target_uri: str) -> Any:
 
 def get_openai_client(profile: str = None) -> Any:
     """Get an OpenAI client configured for Databricks.
-    
+
     Args:
         profile: Optional Databricks CLI profile name. If None, uses default profile.
     """
     try:
         from databricks.sdk import WorkspaceClient
-        
+
         # Create workspace client with specified profile
         if profile:
             workspace_client = WorkspaceClient(profile=profile)
         else:
             workspace_client = WorkspaceClient()
-        
+
         # Use the serving endpoints client to get a properly configured OpenAI client
         return workspace_client.serving_endpoints.get_open_ai_client()
-        
+
     except ImportError as e:
         raise ImportError(
             "Failed to create the OpenAI client. "

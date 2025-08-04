@@ -126,23 +126,18 @@ def mock_client() -> Generator:
     from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
     from openai.types.completion_usage import CompletionUsage
-    
+
     def mock_openai_stream():
         for chunk_data in _MOCK_STREAM_RESPONSE:
             choice_data = chunk_data["choices"][0]
             delta_data = choice_data["delta"]
             usage_data = chunk_data.get("usage")
-            
+
             delta = ChoiceDelta(
-                role=delta_data.get("role"),
-                content=delta_data.get("content", ""),
-                tool_calls=None
+                role=delta_data.get("role"), content=delta_data.get("content", ""), tool_calls=None
             )
             choice = ChunkChoice(
-                index=0,
-                delta=delta,
-                finish_reason=choice_data.get("finish_reason"),
-                logprobs=None
+                index=0, delta=delta, finish_reason=choice_data.get("finish_reason"), logprobs=None
             )
             usage = CompletionUsage(**usage_data) if usage_data else None
             yield ChatCompletionChunk(
@@ -151,22 +146,13 @@ def mock_client() -> Generator:
                 created=chunk_data["created"],
                 model=chunk_data["model"],
                 object="chat.completion.chunk",
-                usage=usage
+                usage=usage,
             )
-    
+
     def create_mock_response():
         expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
-        message = ChatCompletionMessage(
-            role="assistant",
-            content=expected_content,
-            tool_calls=None
-        )
-        choice = Choice(
-            index=0,
-            message=message,
-            finish_reason="stop",
-            logprobs=None
-        )
+        message = ChatCompletionMessage(role="assistant", content=expected_content, tool_calls=None)
+        choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
         usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
         return ChatCompletion(
             id=_MOCK_CHAT_RESPONSE["id"],
@@ -174,22 +160,26 @@ def mock_client() -> Generator:
             created=_MOCK_CHAT_RESPONSE["created"],
             model=_MOCK_CHAT_RESPONSE["model"],
             object="chat.completion",
-            usage=usage
+            usage=usage,
         )
-    
+
     # Mock OpenAI client
     openai_client = mock.MagicMock()
-    
+
     def mock_create_completion(**kwargs):
         if kwargs.get("stream"):
             return mock_openai_stream()
         else:
             return create_mock_response()
-    
+
     openai_client.chat.completions.create.side_effect = mock_create_completion
-    
-    with mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client), \
-         mock.patch("databricks_langchain.chat_models.get_openai_client", return_value=openai_client):
+
+    with (
+        mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client),
+        mock.patch(
+            "databricks_langchain.chat_models.get_openai_client", return_value=openai_client
+        ),
+    ):
         yield
 
 
