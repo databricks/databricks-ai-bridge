@@ -572,7 +572,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call."""
-    from openai.types.responses import ResponseOutputItemDoneEvent, ResponseFunctionToolCall
+    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputItemDoneEvent
     
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
@@ -606,7 +606,10 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call output."""
-    from openai.types.responses import ResponseOutputItemDoneEvent, ResponseFunctionToolCallOutputItem
+    from openai.types.responses import (
+        ResponseFunctionToolCallOutputItem,
+        ResponseOutputItemDoneEvent,
+    )
     
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
@@ -626,7 +629,12 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
 
 def test_convert_responses_api_chunk_to_lc_chunk_message():
     """Test _convert_responses_api_chunk_to_lc_chunk with message."""
-    from openai.types.responses import ResponseOutputItemDoneEvent, ResponseOutputMessage, ResponseOutputText, ResponseOutputRefusal
+    from openai.types.responses import (
+        ResponseOutputItemDoneEvent,
+        ResponseOutputMessage,
+        ResponseOutputRefusal,
+        ResponseOutputText,
+    )
     
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
@@ -664,7 +672,12 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
 
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
-    from openai.types.responses import ResponseTextDeltaEvent, ResponseOutputItemDoneEvent, ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses import (
+        ResponseOutputItemDoneEvent,
+        ResponseOutputMessage,
+        ResponseOutputText,
+        ResponseTextDeltaEvent,
+    )
     
     previous_chunk = ResponseTextDeltaEvent.model_construct(
         type="response.output_text.delta", 
@@ -687,7 +700,12 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
 
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
-    from openai.types.responses import ResponseTextDeltaEvent, ResponseOutputItemDoneEvent, ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses import (
+        ResponseOutputItemDoneEvent,
+        ResponseOutputMessage,
+        ResponseOutputText,
+        ResponseTextDeltaEvent,
+    )
     
     previous_chunk = ResponseTextDeltaEvent.model_construct(
         type="response.output_text.delta", 
@@ -788,7 +806,12 @@ def test_convert_responses_api_chunk_to_lc_chunk_special_items():
 
 def test_convert_responses_api_response_to_chat_result():
     """Test _convert_responses_api_response_to_chat_result method."""
-    from openai.types.responses import Response, ResponseOutputMessage, ResponseOutputText, ResponseFunctionToolCall
+    from openai.types.responses import (
+        Response,
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
     
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
 
@@ -886,8 +909,14 @@ def test_convert_chatagent_response_to_chat_result():
 
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API using mocked client."""
-    from openai.types.responses import ResponseTextDeltaEvent, ResponseOutputItemDoneEvent, ResponseOutputMessage, ResponseOutputText
     from unittest.mock import Mock, patch
+
+    from openai.types.responses import (
+        ResponseOutputItemDoneEvent,
+        ResponseOutputMessage,
+        ResponseOutputText,
+        ResponseTextDeltaEvent,
+    )
     
     # Create mock streaming response chunks
     mock_chunks = [
