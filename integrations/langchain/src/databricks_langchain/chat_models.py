@@ -372,106 +372,85 @@ class ChatDatabricks(BaseChatModel):
         To accomodate this, we combine the messages into a single message, following LangChain convention.
         """
         # Handle error response
-        error = getattr(response, "error", None)
-        if error:
-            raise ValueError(error)
+        if response.error:
+            raise ValueError(response.error)
         # Combine all content and tool calls from output items
         content_blocks = []
         tool_calls = []
         invalid_tool_calls = []
 
-        output = getattr(response, "output", [])
-        for item in output:
-            # Handle OpenAI objects
-            item_type = getattr(item, "type", None)
-
-            if item_type == "message":
-                # Handle OpenAI objects
-                content_list = getattr(item, "content", [])
-                for content in content_list:
-                    content_type = getattr(content, "type", None)
-                    if content_type == "output_text":
-                        text = getattr(content, "text", "")
-                        annotations = getattr(content, "annotations", [])
-                        content_id = getattr(content, "id", "")
-
-                        # Convert annotation objects to dictionaries
-                        if annotations:
+        for item in response.output:
+            if item.type == "message":
+                for content in item.content:
+                    if content.type == "output_text":
+                        annotations = []
+                        if content.annotations:
+                            # Convert annotation objects to dictionaries
                             annotations = [
                                 ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in annotations
+                                for ann in content.annotations
                             ]
 
                         content_blocks.append(
                             {
                                 "type": "text",
-                                "text": text,
+                                "text": content.text,
                                 "annotations": annotations,
-                                "id": content_id,
+                                "id": getattr(content, "id", None),
                             }
                         )
-                    elif content_type == "refusal":
-                        refusal = getattr(content, "refusal", "")
-                        content_id = getattr(content, "id", "")
+                    elif content.type == "refusal":
                         content_blocks.append(
                             {
                                 "type": "refusal",
-                                "refusal": refusal,
-                                "id": content_id,
+                                "refusal": content.refusal,
+                                "id": getattr(content, "id", None),
                             }
                         )
-            elif item_type == "function_call":
-                # Handle OpenAI object
-                name = getattr(item, "name", "")
-                arguments_str = getattr(item, "arguments", "")
-                call_id = getattr(item, "call_id", "")
-
+            elif item.type == "function_call":
                 # Convert to dict for content_blocks to maintain backward compatibility
                 item_dict = {
                     "type": "function_call",
-                    "name": name,
-                    "arguments": arguments_str,
-                    "call_id": call_id,
+                    "name": item.name,
+                    "arguments": item.arguments,
+                    "call_id": item.call_id,
                 }
                 content_blocks.append(item_dict)
 
                 try:
-                    args = json.loads(arguments_str, strict=False)
+                    args = json.loads(item.arguments, strict=False)
                     error = None
                 except json.JSONDecodeError as e:
                     error = str(e)
-                    args = arguments_str
+                    args = item.arguments
                 if error is None:
                     tool_calls.append(
                         {
                             "type": "tool_call",
-                            "name": name,
+                            "name": item.name,
                             "args": args,
-                            "id": call_id,
+                            "id": item.call_id,
                         }
                     )
                 else:
                     invalid_tool_calls.append(
                         {
                             "type": "invalid_tool_call",
-                            "name": name,
+                            "name": item.name,
                             "args": args,
-                            "id": call_id,
+                            "id": item.call_id,
                             "error": error,
                         }
                     )
-            elif item_type == "function_call_output":
-                # Handle OpenAI objects
-                output = getattr(item, "output", "")
-                call_id = getattr(item, "call_id", "")
+            elif item.type == "function_call_output":
                 content_blocks.append(
                     {
                         "role": "tool",
-                        "content": output,
-                        "tool_call_id": call_id,
+                        "content": item.output,
+                        "tool_call_id": item.call_id,
                     }
                 )
-            elif item_type in (
+            elif item.type in (
                 "reasoning",
                 "web_search_call",
                 "file_search_call",
@@ -482,17 +461,18 @@ class ChatDatabricks(BaseChatModel):
                 "mcp_approval_request",
                 "image_generation_call",
             ):
-                # For these special types, append as-is for now
-                # TODO: Convert OpenAI objects to dictionaries if needed
-                content_blocks.append(item)
+                # For these special types, convert to dict if possible
+                if hasattr(item, "model_dump"):
+                    content_blocks.append(item.model_dump())
+                else:
+                    content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
-        response_id = getattr(response, "id", None)
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
             invalid_tool_calls=invalid_tool_calls,
-            id=response_id,
+            id=response.id,
         )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
@@ -507,78 +487,52 @@ class ChatDatabricks(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
-        # Handle OpenAI client responses (with .choices attribute)
-        if hasattr(response, "choices"):
-            generations = []
-            for choice in response.choices:
-                message_dict = {
-                    "role": choice.message.role,
-                    "content": choice.message.content or "",
-                }
-                if choice.message.tool_calls:
-                    message_dict["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in choice.message.tool_calls
-                    ]
+        generations = []
+        for choice in response.choices:
+            message_dict = {
+                "role": choice.message.role,
+                "content": choice.message.content or "",
+            }
+            if choice.message.tool_calls:
+                message_dict["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in choice.message.tool_calls
+                ]
 
-                generation_info = {}
-                if hasattr(choice, "finish_reason") and choice.finish_reason:
-                    generation_info["finish_reason"] = choice.finish_reason
+            generation_info = {}
+            if hasattr(choice, "finish_reason") and choice.finish_reason:
+                generation_info["finish_reason"] = choice.finish_reason
 
-                generations.append(
-                    ChatGeneration(
-                        message=_convert_dict_to_message(message_dict),
-                        generation_info=generation_info,
-                    )
-                )
-
-            llm_output = {}
-            if hasattr(response, "usage") and response.usage:
-                llm_output["usage"] = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                }
-                # Add individual token counts for backwards compatibility with tests
-                llm_output["prompt_tokens"] = response.usage.prompt_tokens
-                llm_output["completion_tokens"] = response.usage.completion_tokens
-                llm_output["total_tokens"] = response.usage.total_tokens
-            if hasattr(response, "model"):
-                llm_output["model"] = response.model
-                llm_output["model_name"] = response.model
-
-            return ChatResult(generations=generations, llm_output=llm_output)
-        else:
-            # Handle dictionary responses from deployment client
-            generations = [
+            generations.append(
                 ChatGeneration(
-                    message=_convert_dict_to_message(choice["message"]),
-                    generation_info=choice.get("usage", {}),
+                    message=_convert_dict_to_message(message_dict),
+                    generation_info=generation_info,
                 )
-                for choice in response["choices"]
-            ]
+            )
 
-            llm_output = {}
-            if "usage" in response:
-                llm_output["usage"] = response["usage"]
-            if "model" in response:
-                llm_output["model"] = response["model"]
-                llm_output["model_name"] = response["model"]
-            if "id" in response:
-                llm_output["id"] = response["id"]
-            if "object" in response:
-                llm_output["object"] = response["object"]
-            if "created" in response:
-                llm_output["created"] = response["created"]
+        llm_output = {}
+        if hasattr(response, "usage") and response.usage:
+            llm_output["usage"] = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            # Add individual token counts for backwards compatibility with tests
+            llm_output["prompt_tokens"] = response.usage.prompt_tokens
+            llm_output["completion_tokens"] = response.usage.completion_tokens
+            llm_output["total_tokens"] = response.usage.total_tokens
+        if hasattr(response, "model"):
+            llm_output["model"] = response.model
+            llm_output["model_name"] = response.model
 
-            return ChatResult(generations=generations, llm_output=llm_output)
+        return ChatResult(generations=generations, llm_output=llm_output)
 
     def _stream(
         self,
@@ -1218,7 +1172,8 @@ def _convert_dict_to_message_chunk(
         return ToolMessageChunk(
             content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant":
+    elif role == "assistant" or role is None:
+        # If role is None (common in streaming), default to assistant
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):
@@ -1255,77 +1210,72 @@ def _convert_responses_api_chunk_to_lc_chunk(
     tool_call_chunks = []
     id = None
 
-    chunk_type = getattr(chunk, "type", None)
-    if chunk_type == "response.output_text.delta":
+    if chunk.type == "response.output_text.delta":
         id = getattr(chunk, "item_id", None)
         content.append(
             {
                 "type": "text",
-                "text": getattr(chunk, "delta", ""),
+                "text": chunk.delta,
             }
         )
-    elif chunk_type == "response.output_item.done":
-        item = getattr(chunk, "item", None)
-        item_type = getattr(item, "type", None)
-        if item_type == "function_call_output":
+    elif chunk.type == "response.output_item.done":
+        item = chunk.item
+        if item.type == "function_call_output":
             return ToolMessageChunk(
-                content=getattr(item, "output", ""),
-                tool_call_id=getattr(item, "call_id", ""),
+                content=item.output,
+                tool_call_id=item.call_id,
             )
-        elif item_type == "function_call":
-            id = getattr(item, "call_id", None)
+        elif item.type == "function_call":
+            id = item.call_id
             tool_call_chunks.append(
                 tool_call_chunk(
-                    name=getattr(item, "name", ""),
-                    args=getattr(item, "arguments", ""),
-                    id=getattr(item, "call_id", ""),
+                    name=item.name,
+                    args=item.arguments,
+                    id=item.call_id,
                 )
             )
-        elif item_type == "message":
-            id = getattr(item, "id", None)
+        elif item.type == "message":
+            id = item.id
             # skip text outputs that have already been streamed, but keep the annotations
-            prev_type = getattr(previous_chunk, "type", None) if previous_chunk else None
+            prev_type = previous_chunk.type if previous_chunk else None
             prev_item_id = getattr(previous_chunk, "item_id", None) if previous_chunk else None
             skip_duplicate_text = (
                 previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
             )
-            content_list = getattr(item, "content", [])
-            for content_item in content_list:
-                content_item_type = getattr(content_item, "type", None)
-                if content_item_type == "output_text":
+            for content_item in item.content:
+                if content_item.type == "output_text":
                     if skip_duplicate_text:
-                        annotations = getattr(content_item, "annotations", None)
-                        if annotations:
+                        if content_item.annotations:
                             # Convert annotation objects to dictionaries
                             annotations = [
                                 ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in annotations
+                                for ann in content_item.annotations
                             ]
                             content.append({"annotations": annotations})
                     else:
-                        annotations = getattr(content_item, "annotations", [])
-                        # Convert annotation objects to dictionaries
-                        if annotations:
+                        annotations = []
+                        if content_item.annotations:
+                            # Convert annotation objects to dictionaries
                             annotations = [
                                 ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in annotations
+                                for ann in content_item.annotations
                             ]
 
                         content.append(
                             {
                                 "type": "text",
-                                "text": getattr(content_item, "text", ""),
+                                "text": content_item.text,
                                 "annotations": annotations,
                             }
                         )
-                elif content_item_type == "refusal":
+                elif content_item.type == "refusal":
                     content.append(
                         {
                             "type": "refusal",
-                            "refusal": getattr(content_item, "refusal", ""),
+                            "refusal": content_item.refusal,
                         }
                     )
-        elif item_type in (
+        elif item.type in (
             "web_search_call",
             "file_search_call",
             "computer_call",
@@ -1341,16 +1291,14 @@ def _convert_responses_api_chunk_to_lc_chunk(
                 content.append(item.model_dump())
             else:
                 content.append(item)
-    elif chunk_type == "response.created":
-        response_obj = getattr(chunk, "response", None)
-        id = getattr(response_obj, "id", None) if response_obj else None
+    elif chunk.type == "response.created":
+        id = chunk.response.id if chunk.response else None
         return AIMessageChunk(content="", id=id)
-    elif chunk_type == "response.completed":
+    elif chunk.type == "response.completed":
         # This indicates the response is done
         return None
-    elif chunk_type == "error":
-        error_msg = getattr(chunk, "error", str(chunk))
-        raise ValueError(error_msg)
+    elif chunk.type == "error":
+        raise ValueError(chunk.error)
     else:
         # Return None for unknown chunk types
         return None

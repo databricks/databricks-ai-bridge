@@ -409,24 +409,40 @@ def test_convert_message_to_dict_function() -> None:
 
 def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
+    from openai.types.chat import ChatCompletion, ChatCompletionMessage
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.completion_usage import CompletionUsage
 
-    result = llm._convert_response_to_chat_result(_MOCK_CHAT_RESPONSE)
-
+    # Create OpenAI objects from mock data
     expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
+    message = ChatCompletionMessage(role="assistant", content=expected_content, tool_calls=None)
+    choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
+    usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
+    response = ChatCompletion(
+        id=_MOCK_CHAT_RESPONSE["id"],
+        choices=[choice],
+        created=_MOCK_CHAT_RESPONSE["created"],
+        model=_MOCK_CHAT_RESPONSE["model"],
+        object="chat.completion",
+        usage=usage,
+    )
+
+    result = llm._convert_response_to_chat_result(response)
+
     expected = ChatResult(
         generations=[
             ChatGeneration(
                 message=AIMessage(content=expected_content),
-                generation_info={},
+                generation_info={"finish_reason": "stop"},
             ),
         ],
         llm_output={
-            "id": _MOCK_CHAT_RESPONSE["id"],
-            "object": _MOCK_CHAT_RESPONSE["object"],
-            "created": _MOCK_CHAT_RESPONSE["created"],
+            "usage": _MOCK_CHAT_RESPONSE["usage"],
+            "prompt_tokens": _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"],
+            "completion_tokens": _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"],
+            "total_tokens": _MOCK_CHAT_RESPONSE["usage"]["total_tokens"],
             "model": _MOCK_CHAT_RESPONSE["model"],
             "model_name": _MOCK_CHAT_RESPONSE["model"],
-            "usage": _MOCK_CHAT_RESPONSE["usage"],
         },
     )
 
