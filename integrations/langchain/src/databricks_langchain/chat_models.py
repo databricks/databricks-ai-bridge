@@ -569,7 +569,7 @@ class ChatDatabricks(BaseChatModel):
                     if first_chunk_role is None:
                         first_chunk_role = chunk_delta.role
 
-                    if stream_usage and hasattr(chunk, "usage") and chunk.usage:
+                    if stream_usage and chunk.usage:
                         input_tokens = chunk.usage.prompt_tokens
                         output_tokens = chunk.usage.completion_tokens
                         usage = {
