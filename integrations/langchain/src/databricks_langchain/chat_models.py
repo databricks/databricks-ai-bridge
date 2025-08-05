@@ -219,7 +219,7 @@ class ChatDatabricks(BaseChatModel):
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
-    """The target MLflow deployment URI to use, e.g. "databricks" or "databricks://[profile_name]". Deprecated: use profile instead."""
+    """The target MLflow deployment URI to use. Deprecated: use profile instead."""
     profile: Optional[str] = None
     """The optional Databricks CLI profile name to use for authentication. See https://docs.databricks.com/aws/en/dev-tools/cli/profiles for details."""
     temperature: Optional[float] = None
@@ -1172,7 +1172,8 @@ def _convert_dict_to_message_chunk(
         return ToolMessageChunk(
             content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant":
+    elif role == "assistant" or role is None:
+        # If role is None (common in streaming), default to assistant
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):
