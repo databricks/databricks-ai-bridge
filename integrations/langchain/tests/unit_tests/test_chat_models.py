@@ -22,6 +22,21 @@ from langchain_core.messages import (
 from langchain_core.messages.tool import ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableMap
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.completion_usage import CompletionUsage
+from openai.types.responses import (
+    Response,
+    ResponseErrorEvent,
+    ResponseFunctionToolCall,
+    ResponseFunctionToolCallOutputItem,
+    ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+    ResponseReasoningItem,
+    ResponseTextDeltaEvent,
+)
 from pydantic import BaseModel, Field
 
 from databricks_langchain.chat_models import (
@@ -409,10 +424,6 @@ def test_convert_message_to_dict_function() -> None:
 
 def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None:
     """Test that _convert_response_to_chat_result correctly sets llm_output."""
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.chat.chat_completion import Choice
-    from openai.types.completion_usage import CompletionUsage
-
     # Create OpenAI objects from mock data
     expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
     message = ChatCompletionMessage(role="assistant", content=expected_content, tool_calls=None)
@@ -571,8 +582,6 @@ def test_convert_lc_messages_to_responses_api_with_complex_content():
 
 def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
     """Test _convert_responses_api_chunk_to_lc_chunk with text delta."""
-    from openai.types.responses import ResponseTextDeltaEvent
-
     chunk = ResponseTextDeltaEvent.model_construct(
         type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
@@ -586,8 +595,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_text_delta():
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call."""
-    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputItemDoneEvent
-
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseFunctionToolCall.model_construct(
@@ -620,11 +627,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
     """Test _convert_responses_api_chunk_to_lc_chunk with function call output."""
-    from openai.types.responses import (
-        ResponseFunctionToolCallOutputItem,
-        ResponseOutputItemDoneEvent,
-    )
-
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseFunctionToolCallOutputItem.model_construct(
@@ -641,13 +643,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
 
 def test_convert_responses_api_chunk_to_lc_chunk_message():
     """Test _convert_responses_api_chunk_to_lc_chunk with message."""
-    from openai.types.responses import (
-        ResponseOutputItemDoneEvent,
-        ResponseOutputMessage,
-        ResponseOutputRefusal,
-        ResponseOutputText,
-    )
-
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseOutputMessage.model_construct(
@@ -688,13 +683,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
 
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
-    from openai.types.responses import (
-        ResponseOutputItemDoneEvent,
-        ResponseOutputMessage,
-        ResponseOutputText,
-        ResponseTextDeltaEvent,
-    )
-
     previous_chunk = ResponseTextDeltaEvent.model_construct(
         type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
@@ -714,13 +702,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate():
 
 def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations():
     """Test _convert_responses_api_chunk_to_lc_chunk skips duplicate text."""
-    from openai.types.responses import (
-        ResponseOutputItemDoneEvent,
-        ResponseOutputMessage,
-        ResponseOutputText,
-        ResponseTextDeltaEvent,
-    )
-
     previous_chunk = ResponseTextDeltaEvent.model_construct(
         type="response.output_text.delta", item_id="item_123", delta="Hello"
     )
@@ -760,8 +741,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
 
 def test_convert_responses_api_chunk_to_lc_chunk_error():
     """Test _convert_responses_api_chunk_to_lc_chunk with error."""
-    from openai.types.responses import ResponseErrorEvent
-
     chunk = ResponseErrorEvent.model_construct(type="error", error="Something went wrong")
 
     with pytest.raises(ValueError, match="Something went wrong"):
@@ -785,8 +764,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
 
 def test_convert_responses_api_chunk_to_lc_chunk_special_items():
     """Test _convert_responses_api_chunk_to_lc_chunk with special item types."""
-    from openai.types.responses import ResponseOutputItemDoneEvent, ResponseReasoningItem
-
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseReasoningItem.model_construct(
@@ -814,13 +791,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_special_items():
 
 def test_convert_responses_api_response_to_chat_result():
     """Test _convert_responses_api_response_to_chat_result method."""
-    from openai.types.responses import (
-        Response,
-        ResponseFunctionToolCall,
-        ResponseOutputMessage,
-        ResponseOutputText,
-    )
-
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
 
     response = Response.model_construct(
@@ -886,8 +856,6 @@ def test_convert_responses_api_response_to_chat_result():
 
 def test_convert_responses_api_response_to_chat_result_with_error():
     """Test _convert_responses_api_response_to_chat_result with error."""
-    from openai.types.responses import Response
-
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
 
     response = Response.model_construct(error="Something went wrong")
@@ -918,13 +886,6 @@ def test_convert_chatagent_response_to_chat_result():
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API using mocked client."""
     from unittest.mock import Mock, patch
-
-    from openai.types.responses import (
-        ResponseOutputItemDoneEvent,
-        ResponseOutputMessage,
-        ResponseOutputText,
-        ResponseTextDeltaEvent,
-    )
 
     # Create mock streaming response chunks
     mock_chunks = [
