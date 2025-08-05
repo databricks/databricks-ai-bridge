@@ -432,9 +432,12 @@ def test_chat_databricks_langgraph_with_memory():
 )
 def test_chat_databricks_responses_api_invoke():
     """Test ChatDatabricks with responses API."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="ml-inference-staging")
     chat = ChatDatabricks(
         model="agents_main-bbqiu-responses-name",
-        profile="ml-inference-staging",
+        workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
         max_tokens=50,
@@ -452,9 +455,12 @@ def test_chat_databricks_responses_api_invoke():
 )
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="ml-inference-staging")
     chat = ChatDatabricks(
         model="agents_main-bbqiu-responses-name",
-        profile="ml-inference-staging",
+        workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
         max_tokens=50,

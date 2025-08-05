@@ -67,10 +67,20 @@ class ChatDatabricks(BaseChatModel):
 
             from databricks_langchain import ChatDatabricks
 
+            # Using default authentication (e.g., from environment variables)
             llm = ChatDatabricks(
                 model="databricks-meta-llama-3-1-405b-instruct",
                 temperature=0,
                 max_tokens=500,
+            )
+
+            # Using a WorkspaceClient instance for custom authentication
+            from databricks.sdk import WorkspaceClient
+
+            workspace_client = WorkspaceClient(host="...", token="...")
+            llm = ChatDatabricks(
+                model="databricks-meta-llama-3-1-405b-instruct",
+                workspace_client=workspace_client,
             )
 
     For Responses API endpoints like a ResponsesAgent, set ``use_responses_api=True``:
@@ -219,9 +229,9 @@ class ChatDatabricks(BaseChatModel):
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
-    """The target MLflow deployment URI to use. Deprecated: use profile instead."""
-    profile: Optional[str] = None
-    """The optional Databricks CLI profile name to use for authentication. See https://docs.databricks.com/aws/en/dev-tools/cli/profiles for details."""
+    """The target MLflow deployment URI to use. Deprecated: use workspace_client instead."""
+    workspace_client: Optional[Any] = Field(default=None, exclude=True)
+    """Optional WorkspaceClient instance to use for authentication. If not provided, uses default authentication."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
@@ -263,34 +273,22 @@ class ChatDatabricks(BaseChatModel):
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
 
-        # Validate profile and target_uri parameters
-        if self.profile and self.target_uri:
-            raise ValueError(
-                "Cannot specify both 'profile' and 'target_uri'. Please use 'profile' only, "
-                "as 'target_uri' is deprecated."
-            )
-
         # Handle deprecated target_uri parameter
-        if self.target_uri and not self.profile:
+        if self.target_uri:
             warnings.warn(
                 "The 'target_uri' parameter is deprecated and will be removed in a future version. "
-                "Use 'profile' parameter instead to specify the Databricks CLI profile name.",
+                "Use 'workspace_client' parameter instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # Extract profile from target_uri if it follows databricks://profile format
-            if self.target_uri.startswith("databricks://"):
-                self.profile = self.target_uri[len("databricks://") :]
-            elif self.target_uri == "databricks":
-                self.profile = None  # Use default profile
-            else:
+            if self.workspace_client:
                 raise ValueError(
-                    f"Invalid target_uri format: {self.target_uri}. "
-                    "Expected 'databricks' or 'databricks://profile-name'."
+                    "Cannot specify both 'workspace_client' and 'target_uri'. "
+                    "Please use 'workspace_client' only."
                 )
 
         # Always use OpenAI client (supports both chat completions and responses API)
-        self.client = get_openai_client(self.profile)
+        self.client = get_openai_client(workspace_client=self.workspace_client)
 
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
@@ -307,7 +305,6 @@ class ChatDatabricks(BaseChatModel):
 
         params = {
             "model": self.model,
-            "profile": self.profile,
             **{k: v for k, v in exclude_if_none.items() if v is not None},
         }
         return params

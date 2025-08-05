@@ -59,65 +59,67 @@ def test_dict(llm: ChatDatabricks) -> None:
     d = llm.dict()
     assert d["_type"] == "chat-databricks"
     assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
-    assert d["profile"] is None  # Default profile
+    # workspace_client is excluded from serialization
+    assert "workspace_client" not in d
 
 
-def test_profile_parameter() -> None:
-    """Test the new profile parameter works correctly."""
-    llm = ChatDatabricks(model="test-model", profile="test-profile")
-    d = llm.dict()
-    assert d["profile"] == "test-profile"
-    assert "target_uri" not in d or d["target_uri"] is None
+def test_workspace_client_parameter() -> None:
+    """Test the workspace_client parameter works correctly."""
+    from unittest.mock import Mock, patch
+
+    mock_workspace_client = Mock()
+    mock_openai_client = Mock()
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        llm = ChatDatabricks(model="test-model", workspace_client=mock_workspace_client)
+
+    assert llm.client == mock_openai_client
+    mock_get_client.assert_called_once_with(workspace_client=mock_workspace_client)
 
 
-def test_profile_and_target_uri_conflict() -> None:
-    """Test that specifying both profile and target_uri raises ValueError."""
-    with pytest.raises(ValueError, match="Cannot specify both 'profile' and 'target_uri'"):
+def test_workspace_client_and_target_uri_conflict() -> None:
+    """Test that specifying both workspace_client and target_uri raises ValueError."""
+    from unittest.mock import Mock
+
+    mock_workspace_client = Mock()
+    with pytest.raises(ValueError, match="Cannot specify both 'workspace_client' and 'target_uri'"):
         ChatDatabricks(
-            model="test-model", profile="test-profile", target_uri="databricks://other-profile"
+            model="test-model", workspace_client=mock_workspace_client, target_uri="databricks"
         )
 
 
-def test_target_uri_extraction_databricks_scheme() -> None:
-    """Test extracting profile from target_uri with databricks:// scheme."""
-    import warnings
-    from unittest.mock import patch
+def test_default_workspace_client() -> None:
+    """Test that default WorkspaceClient is created when none provided."""
+    from unittest.mock import Mock, patch
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with patch("databricks_langchain.chat_models.get_openai_client"):
-            llm = ChatDatabricks(model="test-model", target_uri="databricks://my-profile")
+    mock_workspace_client = Mock()
+    mock_openai_client = Mock()
+    mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
 
-    # Check that profile was extracted correctly
-    assert llm.profile == "my-profile"
-    assert llm.target_uri == "databricks://my-profile"
+    # Patch both WorkspaceClient and get_openai_client
+    with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
+        with patch(
+            "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+        ) as mock_get_client:
+            llm = ChatDatabricks(model="test-model")
 
-
-def test_target_uri_extraction_databricks_default() -> None:
-    """Test extracting profile from target_uri with default 'databricks'."""
-    import warnings
-    from unittest.mock import patch
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with patch("databricks_langchain.chat_models.get_openai_client"):
-            llm = ChatDatabricks(model="test-model", target_uri="databricks")
-
-    # Check that profile was extracted correctly
-    assert llm.profile is None  # Uses default profile
-    assert llm.target_uri == "databricks"
-
-
-def test_target_uri_invalid_format() -> None:
-    """Test that invalid target_uri format raises ValueError."""
-    with pytest.raises(ValueError, match="Invalid target_uri format"):
-        ChatDatabricks(model="test-model", target_uri="invalid://format")
+    assert llm.client == mock_openai_client
+    mock_get_client.assert_called_once_with(workspace_client=None)
 
 
 def test_target_uri_deprecation_warning() -> None:
     """Test that using target_uri shows deprecation warning."""
-    with pytest.warns(DeprecationWarning, match="The 'target_uri' parameter is deprecated"):
-        ChatDatabricks(model="test-model", target_uri="databricks")
+    from unittest.mock import Mock, patch
+
+    mock_workspace_client = Mock()
+    mock_openai_client = Mock()
+    mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
+
+    with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
+        with pytest.warns(DeprecationWarning, match="The 'target_uri' parameter is deprecated"):
+            ChatDatabricks(model="test-model", target_uri="databricks")
 
 
 def test_chat_model_predict(llm: ChatDatabricks) -> None:
@@ -957,9 +959,9 @@ def test_chat_databricks_init_sets_client():
         mock_client = Mock()
         mock_get_client.return_value = mock_client
 
-        llm = ChatDatabricks(model="test-model", profile="test-profile")
+        llm = ChatDatabricks(model="test-model")
 
-        mock_get_client.assert_called_once_with("test-profile")
+        mock_get_client.assert_called_once_with(workspace_client=None)
         assert llm.client == mock_client
 
 
