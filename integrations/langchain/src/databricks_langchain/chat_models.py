@@ -507,7 +507,7 @@ class ChatDatabricks(BaseChatModel):
                 ]
 
             generation_info = {}
-            if hasattr(choice, "finish_reason") and choice.finish_reason:
+            if choice.finish_reason:
                 generation_info["finish_reason"] = choice.finish_reason
 
             generations.append(
@@ -518,7 +518,7 @@ class ChatDatabricks(BaseChatModel):
             )
 
         llm_output = {}
-        if hasattr(response, "usage") and response.usage:
+        if response.usage:
             llm_output["usage"] = {
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens,
@@ -528,7 +528,7 @@ class ChatDatabricks(BaseChatModel):
             llm_output["prompt_tokens"] = response.usage.prompt_tokens
             llm_output["completion_tokens"] = response.usage.completion_tokens
             llm_output["total_tokens"] = response.usage.total_tokens
-        if hasattr(response, "model"):
+        if response.model:
             llm_output["model"] = response.model
             llm_output["model_name"] = response.model
 
@@ -604,7 +604,7 @@ class ChatDatabricks(BaseChatModel):
                     generation_info = {}
                     if choice.finish_reason:
                         generation_info["finish_reason"] = choice.finish_reason
-                    if hasattr(choice, "logprobs") and choice.logprobs:
+                    if choice.logprobs:
                         generation_info["logprobs"] = choice.logprobs
 
                     generation_chunk = ChatGenerationChunk(
@@ -1248,7 +1248,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
                             annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                ann.model_dump()
                                 for ann in content_item.annotations
                             ]
                             content.append({"annotations": annotations})
@@ -1257,7 +1257,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
                             annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                ann.model_dump()
                                 for ann in content_item.annotations
                             ]
 
