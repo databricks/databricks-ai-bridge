@@ -434,6 +434,8 @@ def test_chat_databricks_responses_api_invoke():
     """Test ChatDatabricks with responses API."""
     from databricks.sdk import WorkspaceClient
 
+    # TODO: update to query an FMAPI once a multitenant endpoint that supports responses
+    # API is available on Databricks
     workspace_client = WorkspaceClient(profile="ml-inference-staging")
     chat = ChatDatabricks(
         model="agents_main-bbqiu-responses-name",
@@ -457,6 +459,8 @@ def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API."""
     from databricks.sdk import WorkspaceClient
 
+    # TODO: update to query an FMAPI once a multitenant endpoint that supports responses
+    # API is available on Databricks
     workspace_client = WorkspaceClient(profile="ml-inference-staging")
     chat = ChatDatabricks(
         model="agents_main-bbqiu-responses-name",
