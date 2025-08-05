@@ -445,6 +445,7 @@ def test_chat_databricks_responses_api_invoke():
     assert response.content is not None
     assert len(response.content) > 0
 
+
 @pytest.mark.skipif(
     os.environ.get("RUN_RESPONSES_API_TESTS", "").lower() != "true",
     reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=true to run.",

@@ -1247,19 +1247,13 @@ def _convert_responses_api_chunk_to_lc_chunk(
                     if skip_duplicate_text:
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump()
-                                for ann in content_item.annotations
-                            ]
+                            annotations = [ann.model_dump() for ann in content_item.annotations]
                             content.append({"annotations": annotations})
                     else:
                         annotations = []
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump()
-                                for ann in content_item.annotations
-                            ]
+                            annotations = [ann.model_dump() for ann in content_item.annotations]
 
                         content.append(
                             {
