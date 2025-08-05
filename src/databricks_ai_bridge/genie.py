@@ -91,7 +91,7 @@ def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
 
     if not truncate_results:
         warnings.warn(
-            "Automatic data truncation in Genie will be deprecated in a future version. Currently your data is being truncated by default. To preserve this behavior, set truncate_results=True when initializing the Genie class.",
+            "Detected large Genie output, truncating it to better fit in LLM context windows. Automatic result truncation in Genie is deprecated and will be disabled by default in a future release; we recommend truncating large Genie results in your agent code instead, if needed. To keep automatic truncation for large Genie outputs enabled, set truncate_results=True when initializing the Genie class.",
             DeprecationWarning,
             stacklevel=2,
         )
