@@ -37,7 +37,6 @@ from databricks_langchain.chat_models import ChatDatabricks
 _FOUNDATION_MODELS = [
     "databricks-claude-3-7-sonnet",
     "databricks-meta-llama-3-3-70b-instruct",
-    "ep-gpt4o-newest",
 ]
 
 
@@ -228,31 +227,11 @@ def test_chat_databricks_tool_calls(model, tool_choice):
     llm_with_tools = chat.bind_tools([GetWeather], tool_choice=tool_choice)
     question = "Which is the current weather in Los Angeles, CA?"
 
-    try:
-        response = llm_with_tools.invoke(question)
-    except Exception as e:
-        # Skip unavailable endpoints gracefully
-        error_str = str(e).lower()
-        if any(
-            keyword in error_str
-            for keyword in [
-                "connection",
-                "timeout",
-                "not found",
-                "404",
-                "400",
-                "bad request",
-                "endpoint",
-            ]
-        ):
-            pytest.skip(f"Endpoint {model} is not available: {e}")
-        raise
-
+    response = llm_with_tools.invoke(question)
     if tool_choice == "none":
         assert response.tool_calls == []
         return
 
-    # More flexible assertions to accommodate model differences
     # Models should make at least one tool call when tool_choice is not "none"
     assert (
         len(response.tool_calls) >= 1
@@ -265,32 +244,27 @@ def test_chat_databricks_tool_calls(model, tool_choice):
     assert first_call["type"] == "tool_call"
     assert first_call["id"] is not None
 
-    # For follow-up question, models behave differently, so just check basic functionality
-    # Some models may not handle conversation context as well as others
-    try:
-        tool_msg = ToolMessage(
-            "Sunny, 72°F",  # Realistic weather response
-            tool_call_id=response.additional_kwargs["tool_calls"][0]["id"],
-        )
-        response = llm_with_tools.invoke(
-            [
-                HumanMessage(question),
-                response,
-                tool_msg,
-                HumanMessage("What about San Francisco, CA?"),
-            ]
-        )
-
-        # Just verify that the model generates some kind of response
-        # Models may or may not call tools again depending on their behavior
-        assert (
-            response.content is not None or len(response.tool_calls) > 0
-        ), "Expected some response (content or tool calls) for follow-up question"
-
-    except Exception as e:
-        # Some models may not handle multi-turn tool conversations well
-        # This is acceptable model-specific behavior
-        pytest.skip(f"Model {model} doesn't support multi-turn tool conversations: {e}")
+    tool_msg = ToolMessage(
+        "Sunny, 72°F",
+        tool_call_id=response.additional_kwargs["tool_calls"][0]["id"],
+    )
+    response = llm_with_tools.invoke(
+        [
+            HumanMessage(question),
+            response,
+            tool_msg,
+            HumanMessage("What about New York, NY?"),
+        ]
+    )
+    # Should call GetWeather tool for the followup question
+    assert (
+        len(response.tool_calls) >= 1
+    ), f"Expected at least 1 tool call, got {len(response.tool_calls)}"
+    tool_call = response.tool_calls[0]
+    assert tool_call["name"] == "GetWeather", f"Expected GetWeather tool, got {tool_call['name']}"
+    assert "location" in tool_call["args"], f"Expected location in args, got {tool_call['args']}"
+    assert tool_call["type"] == "tool_call"
+    assert tool_call["id"] is not None
 
 
 # Pydantic-based schema
