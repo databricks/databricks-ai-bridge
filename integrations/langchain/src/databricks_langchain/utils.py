@@ -20,6 +20,32 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
+def get_openai_client(workspace_client: Any = None) -> Any:
+    """Get an OpenAI client configured for Databricks.
+
+    Args:
+        workspace_client: Optional WorkspaceClient instance to use for authentication.
+            If not provided, creates a default WorkspaceClient.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        # If workspace_client is provided, use it directly
+        if workspace_client is not None:
+            return workspace_client.serving_endpoints.get_open_ai_client()
+
+        # Otherwise, create default workspace client
+        workspace_client = WorkspaceClient()
+        return workspace_client.serving_endpoints.get_open_ai_client()
+
+    except ImportError as e:
+        raise ImportError(
+            "Failed to create the OpenAI client. "
+            "Please run `pip install databricks-sdk` to install "
+            "required dependencies."
+        ) from e
+
+
 # Utility function for Maximal Marginal Relevance (MMR) reranking.
 # Copied from langchain_community/vectorstores/utils.py to avoid cross-dependency
 Matrix = Union[List[List[float]], List[np.ndarray], np.ndarray]

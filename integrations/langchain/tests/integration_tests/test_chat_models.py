@@ -35,11 +35,11 @@ from typing_extensions import TypedDict
 
 from databricks_langchain.chat_models import ChatDatabricks
 
-_TEST_ENDPOINT = "databricks-meta-llama-3-3-70b-instruct"
+_TEST_ENDPOINT = "databricks-meta-llama-3-70b-instruct"
 
 
 def test_chat_databricks_invoke():
-    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"], target_uri="databricks://dogfood")
+    chat = ChatDatabricks(model=_TEST_ENDPOINT, temperature=0, max_tokens=10, stop=["Java"])
 
     response = chat.invoke("How to learn Java? Start the response by 'To learn Java,'")
     assert isinstance(response, AIMessage)
@@ -438,7 +438,6 @@ def test_chat_databricks_responses_api_invoke():
     chat = ChatDatabricks(
         model="agents_ml-bbqiu-annotationsv2",
         workspace_client=workspace_client,
-        target_uri="databricks://dogfood",
         use_responses_api=True,
         temperature=0,
         max_tokens=50,
@@ -462,7 +461,6 @@ def test_chat_databricks_responses_api_stream():
     chat = ChatDatabricks(
         model="agents_ml-bbqiu-annotationsv2",
         workspace_client=workspace_client,
-        target_uri="databricks://dogfood",
         use_responses_api=True,
         temperature=0,
         max_tokens=50,
@@ -503,7 +501,6 @@ def test_chat_databricks_chatagent_invoke():
     chat = ChatDatabricks(
         model="agents_smurching-default-test_external_monitor_cuj",
         workspace_client=workspace_client,
-        target_uri="databricks://dogfood",
         temperature=0,
         max_tokens=500,
     )
@@ -553,7 +550,6 @@ def test_chat_databricks_chatagent_stream():
     chat = ChatDatabricks(
         model="agents_smurching-default-test_external_monitor_cuj",
         workspace_client=workspace_client,
-        target_uri="databricks://dogfood",
         temperature=0,
         max_tokens=500,
     )
