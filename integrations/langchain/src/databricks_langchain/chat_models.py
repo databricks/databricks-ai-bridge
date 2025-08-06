@@ -1201,7 +1201,9 @@ def _convert_dict_to_message_chunk(
         return SystemMessageChunk(content=content)
     elif role == "tool":
         return ToolMessageChunk(
-            content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
+            content=content, 
+            tool_call_id=_dict.get("tool_call_id", ""), 
+            id=_dict.get("id")
         )
     elif role == "assistant" or role is None:
         # If role is None (common in streaming), default to assistant

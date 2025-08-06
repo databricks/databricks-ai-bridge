@@ -499,16 +499,43 @@ def test_chat_databricks_chatagent_invoke():
 
     workspace_client = WorkspaceClient(profile="dogfood")
     chat = ChatDatabricks(
-        model="agents_ml-bbqiu-chatagent",
+        model="agents_smurching-default-test_external_monitor_cuj",
         workspace_client=workspace_client,
         temperature=0,
-        max_tokens=50,
+        max_tokens=500,
     )
 
-    response = chat.invoke("What is the capital of France?")
+    response = chat.invoke("What is the 100th fibonacci number?")
     assert isinstance(response, AIMessage)
     assert response.content is not None
-    assert len(response.content) > 0
+    
+    # ChatAgent should use tool calls for complex computations like fibonacci
+    # The response content is a list containing message objects including tool calls
+    has_tool_calls = False
+    python_tool_used = False
+    
+    if isinstance(response.content, list):
+        # Check for tool calls in the message sequence
+        for item in response.content:
+            if isinstance(item, dict):
+                # Check for tool_calls in assistant messages
+                if item.get('tool_calls'):
+                    has_tool_calls = True
+                    for tool_call in item['tool_calls']:
+                        tool_name = tool_call.get('function', {}).get('name', '')
+                        if 'python' in tool_name.lower() and 'exec' in tool_name.lower():
+                            python_tool_used = True
+                # Check for tool role messages (responses from tools)
+                elif item.get('role') == 'tool':
+                    has_tool_calls = True
+                # Check for function_call type content blocks
+                elif item.get('type') == 'function_call':
+                    has_tool_calls = True
+                    if 'python' in item.get('name', '').lower() and 'exec' in item.get('name', '').lower():
+                        python_tool_used = True
+    
+    assert has_tool_calls, f"Expected ChatAgent to use tool calls for fibonacci computation. Content: {response.content}"
+    assert python_tool_used, f"Expected ChatAgent to use python execution tool for fibonacci computation. Content: {response.content}"
 
 
 @pytest.mark.skipif(
@@ -521,24 +548,29 @@ def test_chat_databricks_chatagent_stream():
 
     workspace_client = WorkspaceClient(profile="dogfood")
     chat = ChatDatabricks(
-        model="agents_ml-bbqiu-chatagent",
+        model="agents_smurching-default-test_external_monitor_cuj",
         workspace_client=workspace_client,
         temperature=0,
-        max_tokens=50,
+        max_tokens=500,
     )
 
-    chunks = list(chat.stream("What is 2 + 2?"))
+    chunks = list(chat.stream("What is the 100th fibonacci number?"))
     assert len(chunks) > 0
 
-    # All chunks should be AIMessageChunk for ChatAgent
-    from langchain_core.messages import AIMessageChunk
-
-    assert all(isinstance(chunk, AIMessageChunk) for chunk in chunks)
-
-    # Combine chunks to get full content
-    full_content = ""
+    # ChatAgent streaming can include both AIMessageChunk and ToolMessageChunk
+    from langchain_core.messages import AIMessageChunk, ToolMessageChunk, BaseMessageChunk
+    assert all(isinstance(chunk, BaseMessageChunk) for chunk in chunks)
+    
+    # For streaming ChatAgent, just verify we get meaningful content
+    # Tool call detection in streaming is more complex and may vary
+    total_content = ""
     for chunk in chunks:
         if isinstance(chunk.content, str):
-            full_content += chunk.content
-
-    assert len(full_content) > 0
+            total_content += chunk.content
+        elif isinstance(chunk.content, list):
+            for item in chunk.content:
+                if isinstance(item, dict) and item.get('text'):
+                    total_content += item['text']
+    
+    # Verify we get a meaningful response (should contain the fibonacci result or computation)
+    assert len(total_content) > 0, "Expected non-empty content from streaming ChatAgent"
