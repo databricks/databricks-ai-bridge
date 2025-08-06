@@ -614,3 +614,60 @@ def test_chat_databricks_chatagent_stream():
 
     # Verify we get a meaningful response (should contain the fibonacci result or computation)
     assert len(total_content) > 0, "Expected non-empty content from streaming ChatAgent"
+
+
+@pytest.mark.st_endpoints
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
+def test_responses_api_extra_body_custom_inputs():
+    """Test that extra_body parameter can pass custom_inputs to Responses API endpoint"""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="dogfood")
+    chat = ChatDatabricks(
+        model="agents_ml-bbqiu-annotationsv2",
+        workspace_client=workspace_client,
+        use_responses_api=True,
+        temperature=0,
+        max_tokens=50,
+        extra_params={
+            "extra_body": {
+                "custom_inputs": {"test_key": "test_value", "user_preference": "concise"}
+            }
+        },
+    )
+
+    response = chat.invoke("What is the capital of France?")
+
+    assert isinstance(response, AIMessage)
+    assert response.content
+    # Test passes if the endpoint accepts the extra_body without error
+
+
+@pytest.mark.st_endpoints
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
+def test_chatagent_extra_body_custom_inputs():
+    """Test that extra_body parameter works with ChatAgent endpoints"""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="dogfood")
+    chat = ChatDatabricks(
+        model="agents_smurching-default-test_external_monitor_cuj",
+        workspace_client=workspace_client,
+        temperature=0,
+        max_tokens=50,
+        extra_params={
+            "extra_body": {"custom_inputs": {"test_mode": "integration", "response_style": "brief"}}
+        },
+    )
+
+    response = chat.invoke("Hello! How are you?")
+
+    assert isinstance(response, AIMessage)
+    assert response.content
+    # Test passes if the endpoint accepts the extra_body without error
