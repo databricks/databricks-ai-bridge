@@ -19,7 +19,7 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
     VectorSearchRetrieverToolInput,
 )
-from llama_index.core.agent import ReActAgent
+from llama_index.core.agent.workflow import ReActAgent
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.openai import OpenAI
@@ -135,7 +135,7 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 def test_vector_search_retriever_tool_bind_agent(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
     llm = OpenAI()
-    assert ReActAgent.from_tools([vector_search_tool], llm=llm, verbose=True) is not None
+    assert ReActAgent(tools=[vector_search_tool], llm=llm, verbose=True) is not None
 
 
 def test_vector_search_client_model_serving_environment():
