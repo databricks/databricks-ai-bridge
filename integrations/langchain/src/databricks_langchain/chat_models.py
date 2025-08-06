@@ -69,7 +69,7 @@ class ChatDatabricks(BaseChatModel):
 
             # Using default authentication (e.g., from environment variables)
             llm = ChatDatabricks(
-                model="databricks-meta-llama-3-1-405b-instruct",
+                model="databricks-claude-3-7-sonnet",
                 temperature=0,
                 max_tokens=500,
             )
@@ -79,7 +79,7 @@ class ChatDatabricks(BaseChatModel):
 
             workspace_client = WorkspaceClient(host="...", token="...")
             llm = ChatDatabricks(
-                model="databricks-meta-llama-3-1-405b-instruct",
+                model="databricks-claude-3-7-sonnet",
                 workspace_client=workspace_client,
             )
 
@@ -161,7 +161,7 @@ class ChatDatabricks(BaseChatModel):
 
         .. code-block:: python
 
-            llm = ChatDatabricks(model="databricks-meta-llama-3-1-405b-instruct", stream_usage=True)
+            llm = ChatDatabricks(model="databricks-claude-3-7-sonnet", stream_usage=True)
             structured_llm = llm.with_structured_output(...)
 
     **Async**:
@@ -473,35 +473,39 @@ class ChatDatabricks(BaseChatModel):
         )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_chatagent_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+    def _convert_chatagent_response_to_chat_result(self, response: Any) -> ChatResult:
         """
         A ChatAgent response has an array of messages, but a ChatResult can only have a single message.
         To accomodate this, we combine the messages into a single message, following LangChain convention.
 
         ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
         """
-        message = AIMessage(content=response.get("messages"), id=response.get("id"))
+        # ChatAgent response structure may have messages or other fields
+        if hasattr(response, 'messages') and response.messages:
+            messages = response.messages
+        elif hasattr(response, 'model_dump') and 'messages' in response.model_dump():
+            messages = response.model_dump()['messages']
+        elif isinstance(response, dict) and 'messages' in response:
+            messages = response['messages']
+        else:
+            # Fallback: try to get any content from the response
+            messages = str(response)
+        
+        message = AIMessage(content=messages, id=getattr(response, 'id', None))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
+        # Check if this is a ChatAgent response (has messages but no choices)
+        if hasattr(response, 'choices') and response.choices is None and hasattr(response, 'messages'):
+            return self._convert_chatagent_response_to_chat_result(response)
+        
         generations = []
         for choice in response.choices:
-            message_dict = {
-                "role": choice.message.role,
-                "content": choice.message.content or "",
-            }
-            if choice.message.tool_calls:
-                message_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in choice.message.tool_calls
-                ]
+            # Use model_dump instead of manual dict reconstruction
+            message_dict = choice.message.model_dump(exclude_unset=True)
+            # Ensure content is not None
+            if message_dict.get("content") is None:
+                message_dict["content"] = ""
 
             generation_info = {}
             if choice.finish_reason:
@@ -559,7 +563,33 @@ class ChatDatabricks(BaseChatModel):
             first_chunk_role = None
             stream = self.client.chat.completions.create(**data)  # type: ignore
             for chunk in stream:
-                if chunk.choices:
+                # Handle ChatAgent chunks that don't have choices but have delta
+                if hasattr(chunk, 'choices') and chunk.choices is None and hasattr(chunk, 'delta'):
+                    # ChatAgent streaming chunk format - has delta directly on chunk
+                    delta = chunk.delta
+                    
+                    if first_chunk_role is None:
+                        first_chunk_role = delta.get('role', 'assistant')
+                    
+                    chunk_delta_dict = {
+                        "role": delta.get('role'),
+                        "content": delta.get('content', ''),
+                    }
+                    
+                    chunk_message = _convert_dict_to_message_chunk(
+                        chunk_delta_dict, first_chunk_role
+                    )
+                    
+                    generation_chunk = ChatGenerationChunk(message=chunk_message)
+                    
+                    if run_manager:
+                        run_manager.on_llm_new_token(
+                            generation_chunk.text,
+                            chunk=generation_chunk,
+                        )
+                    
+                    yield generation_chunk
+                elif chunk.choices:
                     choice = chunk.choices[0]
                     chunk_delta = choice.delta
 
@@ -750,7 +780,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
                 structured_llm = llm.with_structured_output(AnswerWithJustification)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -775,7 +805,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
                 structured_llm = llm.with_structured_output(AnswerWithJustification, include_raw=True)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -802,7 +832,7 @@ class ChatDatabricks(BaseChatModel):
 
 
                 dict_schema = convert_to_openai_tool(AnswerWithJustification)
-                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
                 structured_llm = llm.with_structured_output(dict_schema)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -822,7 +852,7 @@ class ChatDatabricks(BaseChatModel):
                     answer: str
                     justification: str
 
-                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
+                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
                 structured_llm = llm.with_structured_output(
                     AnswerWithJustification,
                     method="json_mode",
@@ -1244,13 +1274,19 @@ def _convert_responses_api_chunk_to_lc_chunk(
                     if skip_duplicate_text:
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
-                            annotations = [ann.model_dump() for ann in content_item.annotations]
+                            annotations = [
+                                ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                for ann in content_item.annotations
+                            ]
                             content.append({"annotations": annotations})
                     else:
                         annotations = []
                         if content_item.annotations:
                             # Convert annotation objects to dictionaries
-                            annotations = [ann.model_dump() for ann in content_item.annotations]
+                            annotations = [
+                                ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                for ann in content_item.annotations
+                            ]
 
                         content.append(
                             {

@@ -491,3 +491,57 @@ def test_chat_databricks_responses_api_stream():
 
     full_text = "".join(text_content)
     assert len(full_text) > 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_CHATAGENT_TESTS", "").lower() != "true",
+    reason="ChatAgent integration tests require special endpoint access. Set RUN_CHATAGENT_TESTS=true to run.",
+)
+def test_chat_databricks_chatagent_invoke():
+    """Test ChatDatabricks with ChatAgent endpoint."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="dogfood")
+    chat = ChatDatabricks(
+        model="agents_ml-bbqiu-chatagent",
+        workspace_client=workspace_client,
+        temperature=0,
+        max_tokens=50,
+    )
+
+    response = chat.invoke("What is the capital of France?")
+    assert isinstance(response, AIMessage)
+    assert response.content is not None
+    assert len(response.content) > 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_CHATAGENT_TESTS", "").lower() != "true",
+    reason="ChatAgent integration tests require special endpoint access. Set RUN_CHATAGENT_TESTS=true to run.",
+)
+def test_chat_databricks_chatagent_stream():
+    """Test ChatDatabricks streaming with ChatAgent endpoint."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile="dogfood")
+    chat = ChatDatabricks(
+        model="agents_ml-bbqiu-chatagent",
+        workspace_client=workspace_client,
+        temperature=0,
+        max_tokens=50,
+    )
+
+    chunks = list(chat.stream("What is 2 + 2?"))
+    assert len(chunks) > 0
+    
+    # All chunks should be AIMessageChunk for ChatAgent
+    from langchain_core.messages import AIMessageChunk
+    assert all(isinstance(chunk, AIMessageChunk) for chunk in chunks)
+    
+    # Combine chunks to get full content
+    full_content = ""
+    for chunk in chunks:
+        if isinstance(chunk.content, str):
+            full_content += chunk.content
+    
+    assert len(full_content) > 0
