@@ -481,24 +481,28 @@ class ChatDatabricks(BaseChatModel):
         ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
         """
         # ChatAgent response structure may have messages or other fields
-        if hasattr(response, 'messages') and response.messages:
+        if hasattr(response, "messages") and response.messages:
             messages = response.messages
-        elif hasattr(response, 'model_dump') and 'messages' in response.model_dump():
-            messages = response.model_dump()['messages']
-        elif isinstance(response, dict) and 'messages' in response:
-            messages = response['messages']
+        elif hasattr(response, "model_dump") and "messages" in response.model_dump():
+            messages = response.model_dump()["messages"]
+        elif isinstance(response, dict) and "messages" in response:
+            messages = response["messages"]
         else:
             # Fallback: try to get any content from the response
             messages = str(response)
-        
-        message = AIMessage(content=messages, id=getattr(response, 'id', None))
+
+        message = AIMessage(content=messages, id=getattr(response, "id", None))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
         # Check if this is a ChatAgent response (has messages but no choices)
-        if hasattr(response, 'choices') and response.choices is None and hasattr(response, 'messages'):
+        if (
+            hasattr(response, "choices")
+            and response.choices is None
+            and hasattr(response, "messages")
+        ):
             return self._convert_chatagent_response_to_chat_result(response)
-        
+
         generations = []
         for choice in response.choices:
             # Use model_dump instead of manual dict reconstruction
@@ -564,30 +568,30 @@ class ChatDatabricks(BaseChatModel):
             stream = self.client.chat.completions.create(**data)  # type: ignore
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
-                if hasattr(chunk, 'choices') and chunk.choices is None and hasattr(chunk, 'delta'):
+                if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
                     # ChatAgent streaming chunk format - has delta directly on chunk
                     delta = chunk.delta
-                    
+
                     if first_chunk_role is None:
-                        first_chunk_role = delta.get('role', 'assistant')
-                    
+                        first_chunk_role = delta.get("role", "assistant")
+
                     chunk_delta_dict = {
-                        "role": delta.get('role'),
-                        "content": delta.get('content', ''),
+                        "role": delta.get("role"),
+                        "content": delta.get("content", ""),
                     }
-                    
+
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict, first_chunk_role
                     )
-                    
+
                     generation_chunk = ChatGenerationChunk(message=chunk_message)
-                    
+
                     if run_manager:
                         run_manager.on_llm_new_token(
                             generation_chunk.text,
                             chunk=generation_chunk,
                         )
-                    
+
                     yield generation_chunk
                 elif chunk.choices:
                     choice = chunk.choices[0]

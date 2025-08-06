@@ -427,18 +427,16 @@ def test_chat_databricks_langgraph_with_memory():
 
 
 @pytest.mark.skipif(
-    os.environ.get("RUN_RESPONSES_API_TESTS", "").lower() != "true",
-    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=true to run.",
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
 def test_chat_databricks_responses_api_invoke():
     """Test ChatDatabricks with responses API."""
     from databricks.sdk import WorkspaceClient
 
-    # TODO: update to query an FMAPI once a multitenant endpoint that supports responses
-    # API is available on Databricks
-    workspace_client = WorkspaceClient(profile="ml-inference-staging")
+    workspace_client = WorkspaceClient(profile="dogfood")
     chat = ChatDatabricks(
-        model="agents_main-bbqiu-responses-name",
+        model="agents_ml-bbqiu-annotationsv2",
         workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
@@ -452,18 +450,16 @@ def test_chat_databricks_responses_api_invoke():
 
 
 @pytest.mark.skipif(
-    os.environ.get("RUN_RESPONSES_API_TESTS", "").lower() != "true",
-    reason="Responses API integration tests require special endpoint access. Set RUN_RESPONSES_API_TESTS=true to run.",
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
 def test_chat_databricks_responses_api_stream():
     """Test ChatDatabricks streaming with responses API."""
     from databricks.sdk import WorkspaceClient
 
-    # TODO: update to query an FMAPI once a multitenant endpoint that supports responses
-    # API is available on Databricks
-    workspace_client = WorkspaceClient(profile="ml-inference-staging")
+    workspace_client = WorkspaceClient(profile="dogfood")
     chat = ChatDatabricks(
-        model="agents_main-bbqiu-responses-name",
+        model="agents_ml-bbqiu-annotationsv2",
         workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
@@ -494,8 +490,8 @@ def test_chat_databricks_responses_api_stream():
 
 
 @pytest.mark.skipif(
-    os.environ.get("RUN_CHATAGENT_TESTS", "").lower() != "true",
-    reason="ChatAgent integration tests require special endpoint access. Set RUN_CHATAGENT_TESTS=true to run.",
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
 def test_chat_databricks_chatagent_invoke():
     """Test ChatDatabricks with ChatAgent endpoint."""
@@ -516,8 +512,8 @@ def test_chat_databricks_chatagent_invoke():
 
 
 @pytest.mark.skipif(
-    os.environ.get("RUN_CHATAGENT_TESTS", "").lower() != "true",
-    reason="ChatAgent integration tests require special endpoint access. Set RUN_CHATAGENT_TESTS=true to run.",
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
 def test_chat_databricks_chatagent_stream():
     """Test ChatDatabricks streaming with ChatAgent endpoint."""
@@ -533,15 +529,16 @@ def test_chat_databricks_chatagent_stream():
 
     chunks = list(chat.stream("What is 2 + 2?"))
     assert len(chunks) > 0
-    
+
     # All chunks should be AIMessageChunk for ChatAgent
     from langchain_core.messages import AIMessageChunk
+
     assert all(isinstance(chunk, AIMessageChunk) for chunk in chunks)
-    
+
     # Combine chunks to get full content
     full_content = ""
     for chunk in chunks:
         if isinstance(chunk.content, str):
             full_content += chunk.content
-    
+
     assert len(full_content) > 0
