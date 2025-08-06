@@ -51,9 +51,10 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
+from mlflow.deployments import BaseDeploymentClient  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field
 
-from databricks_langchain.utils import get_openai_client
+from databricks_langchain.utils import get_deployment_client
 
 logger = logging.getLogger(__name__)
 
@@ -67,20 +68,10 @@ class ChatDatabricks(BaseChatModel):
 
             from databricks_langchain import ChatDatabricks
 
-            # Using default authentication (e.g., from environment variables)
             llm = ChatDatabricks(
-                model="databricks-claude-3-7-sonnet",
+                model="databricks-meta-llama-3-1-405b-instruct",
                 temperature=0,
                 max_tokens=500,
-            )
-
-            # Using a WorkspaceClient instance for custom authentication
-            from databricks.sdk import WorkspaceClient
-
-            workspace_client = WorkspaceClient(host="...", token="...")
-            llm = ChatDatabricks(
-                model="databricks-claude-3-7-sonnet",
-                workspace_client=workspace_client,
             )
 
     For Responses API endpoints like a ResponsesAgent, set ``use_responses_api=True``:
@@ -161,7 +152,7 @@ class ChatDatabricks(BaseChatModel):
 
         .. code-block:: python
 
-            llm = ChatDatabricks(model="databricks-claude-3-7-sonnet", stream_usage=True)
+            llm = ChatDatabricks(model="databricks-meta-llama-3-1-405b-instruct", stream_usage=True)
             structured_llm = llm.with_structured_output(...)
 
     **Async**:
@@ -228,10 +219,8 @@ class ChatDatabricks(BaseChatModel):
 
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
-    target_uri: Optional[str] = None
-    """The target MLflow deployment URI to use. Deprecated: use workspace_client instead."""
-    workspace_client: Optional[Any] = Field(default=None, exclude=True)
-    """Optional WorkspaceClient instance to use for authentication. If not provided, uses default authentication."""
+    target_uri: str = "databricks://dogfood"
+    """The target URI to use. Defaults to ``databricks``."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
     n: int = 1
@@ -248,7 +237,7 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
-    client: Optional[object] = Field(default=None, exclude=True)  #: :meta private:
+    client: Optional[BaseDeploymentClient] = Field(default=None, exclude=True)  #: :meta private:
 
     @property
     def endpoint(self) -> str:
@@ -272,24 +261,7 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-
-        # Handle deprecated target_uri parameter
-        if self.target_uri:
-            warnings.warn(
-                "The 'target_uri' parameter is deprecated and will be removed in a future version. "
-                "Use 'workspace_client' parameter instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if self.workspace_client:
-                raise ValueError(
-                    "Cannot specify both 'workspace_client' and 'target_uri'. "
-                    "Please use 'workspace_client' only."
-                )
-
-        # Always use OpenAI client (supports both chat completions and responses API)
-        self.client = get_openai_client(workspace_client=self.workspace_client)
-
+        self.client = get_deployment_client(self.target_uri)
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
 
@@ -305,6 +277,7 @@ class ChatDatabricks(BaseChatModel):
 
         params = {
             "model": self.model,
+            "target_uri": self.target_uri,
             **{k: v for k, v in exclude_if_none.items() if v is not None},
         }
         return params
@@ -317,137 +290,114 @@ class ChatDatabricks(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         data = self._prepare_inputs(messages, stop, **kwargs)
-
+        resp = self.client.predict(endpoint=self.model, inputs=data)  # type: ignore
         if self.use_responses_api:
-            # Use OpenAI client with responses API
-            resp = self.client.responses.create(**data)  # type: ignore
             return self._convert_responses_api_response_to_chat_result(resp)
-        else:
-            # Use OpenAI client with chat completions API
-            resp = self.client.chat.completions.create(**data)  # type: ignore
-            return self._convert_response_to_chat_result(resp)
+        elif "messages" in resp:
+            return self._convert_chatagent_response_to_chat_result(resp)
+
+        return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        stream: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
-            "model": self.model,
-            "stream": stream,
+            "n": self.n,
             **self.extra_params,  # type: ignore
             **kwargs,
         }
-
-        # Format data based on whether we're using responses API or chat completions
         if self.use_responses_api:
-            # Responses API expects "input" parameter and has different supported parameters
             data["input"] = _convert_lc_messages_to_responses_api(messages)
-            # Responses API only supports temperature, not max_tokens, stop, or n
-            if self.temperature is not None:
-                data["temperature"] = self.temperature
         else:
-            # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
 
-            if self.temperature is not None:
-                data["temperature"] = self.temperature
-            if stop := self.stop or stop:
-                data["stop"] = stop
-            if self.max_tokens is not None:
-                data["max_tokens"] = self.max_tokens
-            if self.n != 1:
-                data["n"] = self.n
+        if self.temperature is not None:
+            data["temperature"] = self.temperature
+        if stop := self.stop or stop:
+            data["stop"] = stop
+        if self.max_tokens is not None:
+            data["max_tokens"] = self.max_tokens
 
         return data
 
-    def _convert_responses_api_response_to_chat_result(self, response: Any) -> ChatResult:
+    def _convert_responses_api_response_to_chat_result(
+        self, response: Mapping[str, Any]
+    ) -> ChatResult:
         """
         A Responses API response has an array of messages, but a ChatResult can only have a single message.
         To accomodate this, we combine the messages into a single message, following LangChain convention.
         """
-        # Handle error response
-        if response.error:
-            raise ValueError(response.error)
+        if response.get("error"):
+            raise ValueError(response.get("error"))
         # Combine all content and tool calls from output items
         content_blocks = []
         tool_calls = []
         invalid_tool_calls = []
 
-        for item in response.output:
-            if item.type == "message":
-                for content in item.content:
-                    if content.type == "output_text":
-                        annotations = []
-                        if content.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content.annotations
-                            ]
+        for item in response.get("output", []):
+            if not isinstance(item, dict):
+                continue
 
+            item_type = item.get("type")
+
+            if item_type == "message":
+                for content in item.get("content", []):
+                    if content.get("type") == "output_text":
                         content_blocks.append(
                             {
                                 "type": "text",
-                                "text": content.text,
-                                "annotations": annotations,
-                                "id": getattr(content, "id", None),
+                                "text": content.get("text", ""),
+                                "annotations": content.get("annotations", []),
+                                "id": content.get("id", ""),
                             }
                         )
-                    elif content.type == "refusal":
+                    elif content.get("type") == "refusal":
                         content_blocks.append(
                             {
                                 "type": "refusal",
-                                "refusal": content.refusal,
-                                "id": getattr(content, "id", None),
+                                "refusal": content.get("refusal", ""),
+                                "id": content.get("id", ""),
                             }
                         )
-            elif item.type == "function_call":
-                # Convert to dict for content_blocks to maintain backward compatibility
-                item_dict = {
-                    "type": "function_call",
-                    "name": item.name,
-                    "arguments": item.arguments,
-                    "call_id": item.call_id,
-                }
-                content_blocks.append(item_dict)
-
+            elif item_type == "function_call":
+                content_blocks.append(item)
                 try:
-                    args = json.loads(item.arguments, strict=False)
+                    args = json.loads(item.get("arguments", ""), strict=False)
                     error = None
                 except json.JSONDecodeError as e:
                     error = str(e)
-                    args = item.arguments
+                    args = item.get("arguments", "")
                 if error is None:
                     tool_calls.append(
                         {
                             "type": "tool_call",
-                            "name": item.name,
+                            "name": item.get("name", ""),
                             "args": args,
-                            "id": item.call_id,
+                            "id": item.get("call_id", ""),
                         }
                     )
                 else:
                     invalid_tool_calls.append(
                         {
                             "type": "invalid_tool_call",
-                            "name": item.name,
+                            "name": item.get("name", ""),
                             "args": args,
-                            "id": item.call_id,
+                            "id": item.get("call_id", ""),
                             "error": error,
                         }
                     )
-            elif item.type == "function_call_output":
+            elif item_type == "function_call_output":
                 content_blocks.append(
                     {
                         "role": "tool",
-                        "content": item.output,
-                        "tool_call_id": item.call_id,
+                        "content": item.get("output", ""),
+                        "tool_call_id": item.get("call_id", ""),
                     }
                 )
-            elif item.type in (
+            elif item_type in (
                 "reasoning",
                 "web_search_call",
                 "file_search_call",
@@ -458,84 +408,40 @@ class ChatDatabricks(BaseChatModel):
                 "mcp_approval_request",
                 "image_generation_call",
             ):
-                # For these special types, convert to dict if possible
-                if hasattr(item, "model_dump"):
-                    content_blocks.append(item.model_dump())
-                else:
-                    content_blocks.append(item)
+                content_blocks.append(item)
 
         # Create AI message with combined content and tool calls
         message = AIMessage(
             content=content_blocks,
             tool_calls=tool_calls,
             invalid_tool_calls=invalid_tool_calls,
-            id=response.id,
+            id=response.get("id"),
         )
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_chatagent_response_to_chat_result(self, response: Any) -> ChatResult:
+    def _convert_chatagent_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
         """
         A ChatAgent response has an array of messages, but a ChatResult can only have a single message.
         To accomodate this, we combine the messages into a single message, following LangChain convention.
 
         ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
         """
-        # ChatAgent response structure may have messages or other fields
-        if hasattr(response, "messages") and response.messages:
-            messages = response.messages
-        elif hasattr(response, "model_dump") and "messages" in response.model_dump():
-            messages = response.model_dump()["messages"]
-        elif isinstance(response, dict) and "messages" in response:
-            messages = response["messages"]
-        else:
-            # Fallback: try to get any content from the response
-            messages = str(response)
-
-        message = AIMessage(content=messages, id=getattr(response, "id", None))
+        message = AIMessage(content=response.get("messages"), id=response.get("id"))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
-        # Check if this is a ChatAgent response (has messages but no choices)
-        if (
-            hasattr(response, "choices")
-            and response.choices is None
-            and hasattr(response, "messages")
-        ):
-            return self._convert_chatagent_response_to_chat_result(response)
-
-        generations = []
-        for choice in response.choices:
-            # Use model_dump instead of manual dict reconstruction
-            message_dict = choice.message.model_dump(exclude_unset=True)
-            # Ensure content is not None
-            if message_dict.get("content") is None:
-                message_dict["content"] = ""
-
-            generation_info = {}
-            if choice.finish_reason:
-                generation_info["finish_reason"] = choice.finish_reason
-
-            generations.append(
-                ChatGeneration(
-                    message=_convert_dict_to_message(message_dict),
-                    generation_info=generation_info,
-                )
+    def _convert_response_to_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        generations = [
+            ChatGeneration(
+                message=_convert_dict_to_message(choice["message"]),
+                generation_info=choice.get("usage", {}),
             )
-
-        llm_output = {}
-        if response.usage:
-            llm_output["usage"] = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-            # Add individual token counts for backwards compatibility with tests
-            llm_output["prompt_tokens"] = response.usage.prompt_tokens
-            llm_output["completion_tokens"] = response.usage.completion_tokens
-            llm_output["total_tokens"] = response.usage.total_tokens
-        if response.model:
-            llm_output["model"] = response.model
-            llm_output["model_name"] = response.model
+            for choice in response["choices"]
+        ]
+        llm_output = {
+            k: v for k, v in response.items() if k not in ("choices", "content", "role", "type")
+        }
+        if "model" in llm_output and "model_name" not in llm_output:
+            llm_output["model_name"] = llm_output["model"]
 
         return ChatResult(generations=generations, llm_output=llm_output)
 
@@ -550,59 +456,36 @@ class ChatDatabricks(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         if stream_usage is None:
             stream_usage = self.stream_usage
-
-        data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
+        data = self._prepare_inputs(messages, stop, **kwargs)
+        first_chunk_role = None
 
         if self.use_responses_api:
-            # Use OpenAI client with responses API for streaming
             prev_chunk = None
-            stream = self.client.responses.create(**data)  # type: ignore
-            for chunk in stream:
+            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
                 if chunk_message:
                     yield ChatGenerationChunk(message=chunk_message)
         else:
-            # Use OpenAI client with chat completions API for streaming
-            first_chunk_role = None
-            stream = self.client.chat.completions.create(**data)  # type: ignore
-            for chunk in stream:
-                # Handle ChatAgent chunks that don't have choices but have delta
-                if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
-                    # ChatAgent streaming chunk format - has delta directly on chunk
-                    delta = chunk.delta
-
-                    if first_chunk_role is None:
-                        first_chunk_role = delta.get("role", "assistant")
-
-                    chunk_delta_dict = {
-                        "role": delta.get("role"),
-                        "content": delta.get("content", ""),
-                    }
-
+            for chunk in self.client.predict_stream(endpoint=self.model, inputs=data):  # type: ignore
+                # top level delta key means that it is a ChatAgentChunk
+                if chunk.get("delta"):
+                    chunk_delta = chunk["delta"]
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role
+                        chunk_delta, chunk_delta.get("role")
                     )
+                    chunk = ChatGenerationChunk(message=chunk_message)
+                    yield chunk
+                elif chunk.get("choices"):
+                    choice = chunk["choices"][0]
 
-                    generation_chunk = ChatGenerationChunk(message=chunk_message)
-
-                    if run_manager:
-                        run_manager.on_llm_new_token(
-                            generation_chunk.text,
-                            chunk=generation_chunk,
-                        )
-
-                    yield generation_chunk
-                elif chunk.choices:
-                    choice = chunk.choices[0]
-                    chunk_delta = choice.delta
-
+                    chunk_delta = choice["delta"]
                     if first_chunk_role is None:
-                        first_chunk_role = chunk_delta.role
+                        first_chunk_role = chunk_delta.get("role")
 
-                    if stream_usage and chunk.usage:
-                        input_tokens = chunk.usage.prompt_tokens
-                        output_tokens = chunk.usage.completion_tokens
+                    if stream_usage and (usage := chunk.get("usage")):
+                        input_tokens = usage.get("prompt_tokens", 0)
+                        output_tokens = usage.get("completion_tokens", 0)
                         usage = {
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
@@ -611,45 +494,27 @@ class ChatDatabricks(BaseChatModel):
                     else:
                         usage = None
 
-                    chunk_delta_dict = {
-                        "role": chunk_delta.role,
-                        "content": chunk_delta.content,
-                    }
-                    if chunk_delta.tool_calls:
-                        chunk_delta_dict["tool_calls"] = [
-                            {
-                                "index": tc.index,
-                                "id": tc.id,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in chunk_delta.tool_calls
-                        ]
-
                     chunk_message = _convert_dict_to_message_chunk(
-                        chunk_delta_dict, first_chunk_role, usage=usage
+                        chunk_delta, first_chunk_role, usage=usage
                     )
 
                     generation_info = {}
-                    if choice.finish_reason:
-                        generation_info["finish_reason"] = choice.finish_reason
-                    if choice.logprobs:
-                        generation_info["logprobs"] = choice.logprobs
+                    if finish_reason := choice.get("finish_reason"):
+                        generation_info["finish_reason"] = finish_reason
+                    if logprobs := choice.get("logprobs"):
+                        generation_info["logprobs"] = logprobs
 
-                    generation_chunk = ChatGenerationChunk(
+                    chunk = ChatGenerationChunk(
                         message=chunk_message, generation_info=generation_info or None
                     )
 
                     if run_manager:
-                        run_manager.on_llm_new_token(
-                            generation_chunk.text,
-                            chunk=generation_chunk,
-                            logprobs=generation_info.get("logprobs"),
-                        )
+                        run_manager.on_llm_new_token(chunk.text, chunk=chunk, logprobs=logprobs)
 
-                    yield generation_chunk
+                    yield chunk
+                else:
+                    # Handle the case where choices are empty if needed
+                    continue
 
     def bind_tools(
         self,
@@ -784,7 +649,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -809,7 +674,7 @@ class ChatDatabricks(BaseChatModel):
                     justification: str
 
 
-                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(AnswerWithJustification, include_raw=True)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -836,7 +701,7 @@ class ChatDatabricks(BaseChatModel):
 
 
                 dict_schema = convert_to_openai_tool(AnswerWithJustification)
-                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(dict_schema)
 
                 structured_llm.invoke("What weighs more a pound of bricks or a pound of feathers")
@@ -856,7 +721,7 @@ class ChatDatabricks(BaseChatModel):
                     answer: str
                     justification: str
 
-                llm = ChatDatabricks(model="databricks-claude-3-7-sonnet")
+                llm = ChatDatabricks(model="databricks-meta-llama-3-1-70b-instruct")
                 structured_llm = llm.with_structured_output(
                     AnswerWithJustification,
                     method="json_mode",
@@ -1201,12 +1066,9 @@ def _convert_dict_to_message_chunk(
         return SystemMessageChunk(content=content)
     elif role == "tool":
         return ToolMessageChunk(
-            content=content, 
-            tool_call_id=_dict.get("tool_call_id", ""), 
-            id=_dict.get("id")
+            content=content, tool_call_id=_dict["tool_call_id"], id=_dict.get("id")
         )
-    elif role == "assistant" or role is None:
-        # If role is None (common in streaming), default to assistant
+    elif role == "assistant":
         additional_kwargs: Dict = {}
         tool_call_chunks = []
         if raw_tool_calls := _dict.get("tool_calls"):
@@ -1236,79 +1098,70 @@ def _convert_dict_to_message_chunk(
 
 
 def _convert_responses_api_chunk_to_lc_chunk(
-    chunk: Any, previous_chunk: Optional[Any] = None
-) -> Optional[BaseMessageChunk]:
-    # Handle OpenAI responses API chunks
+    chunk: Mapping[str, Any], previous_chunk: Optional[Mapping[str, Any]] = None
+) -> BaseMessageChunk:
+    # TODO: add support for additional streaming types at another time
+    # ex. multimodal, tool calls, annotations, reasoning, refusal, etc.
     content = []
     tool_call_chunks = []
     id = None
-
-    if chunk.type == "response.output_text.delta":
-        id = getattr(chunk, "item_id", None)
+    chunk_type = chunk.get("type")
+    if chunk_type == "response.output_text.delta":
+        id = chunk.get("item_id")
         content.append(
             {
                 "type": "text",
-                "text": chunk.delta,
+                "text": chunk.get("delta", ""),
             }
         )
-    elif chunk.type == "response.output_item.done":
-        item = chunk.item
-        if item.type == "function_call_output":
+    elif chunk_type == "response.output_item.done":
+        item = chunk.get("item")
+        item_type = item.get("type")
+        if item_type == "function_call_output":
+            id = item.get("call_id")
             return ToolMessageChunk(
-                content=item.output,
-                tool_call_id=item.call_id,
+                content=item.get("output"),
+                tool_call_id=item.get("call_id"),
             )
-        elif item.type == "function_call":
-            id = item.call_id
+        elif item_type == "function_call":
+            id = item.get("call_id")
+            content.append(item)
             tool_call_chunks.append(
                 tool_call_chunk(
-                    name=item.name,
-                    args=item.arguments,
-                    id=item.call_id,
+                    name=item.get("name"),
+                    args=item.get("arguments"),
+                    id=item.get("call_id"),
                 )
             )
-        elif item.type == "message":
-            id = item.id
+        elif item_type == "message":
+            id = item.get("id")
             # skip text outputs that have already been streamed, but keep the annotations
-            prev_type = previous_chunk.type if previous_chunk else None
-            prev_item_id = getattr(previous_chunk, "item_id", None) if previous_chunk else None
             skip_duplicate_text = (
-                previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
+                previous_chunk
+                and previous_chunk.get("type") == "response.output_text.delta"
+                and id == previous_chunk.get("item_id")
             )
-            for content_item in item.content:
-                if content_item.type == "output_text":
+            for content_item in item.get("content", []):
+                if content_item.get("type") == "output_text":
                     if skip_duplicate_text:
-                        if content_item.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content_item.annotations
-                            ]
-                            content.append({"annotations": annotations})
+                        if content_item.get("annotations"):
+                            content.append({"annotations": content_item.get("annotations")})
                     else:
-                        annotations = []
-                        if content_item.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content_item.annotations
-                            ]
-
                         content.append(
                             {
                                 "type": "text",
-                                "text": content_item.text,
-                                "annotations": annotations,
+                                "text": content_item.get("text", ""),
+                                "annotations": content_item.get("annotations", []),
                             }
                         )
-                elif content_item.type == "refusal":
+                elif content_item.get("type") == "refusal":
                     content.append(
                         {
                             "type": "refusal",
-                            "refusal": content_item.refusal,
+                            "refusal": content_item.get("refusal", ""),
                         }
                     )
-        elif item.type in (
+        elif item_type in (
             "web_search_call",
             "file_search_call",
             "computer_call",
@@ -1319,29 +1172,15 @@ def _convert_responses_api_chunk_to_lc_chunk(
             "image_generation_call",
             "reasoning",
         ):
-            # Convert item to dictionary for LangChain compatibility
-            if hasattr(item, "model_dump"):
-                content.append(item.model_dump())
-            else:
-                content.append(item)
-    elif chunk.type == "response.created":
-        id = chunk.response.id if chunk.response else None
-        return AIMessageChunk(content="", id=id)
-    elif chunk.type == "response.completed":
-        # This indicates the response is done
-        return None
-    elif chunk.type == "error":
-        raise ValueError(chunk.error)
+            content.append(item)
+    elif chunk_type == "error":
+        raise ValueError(str(chunk))
     else:
-        # Return None for unknown chunk types
         return None
 
-    # Only return a chunk if we have content or tool calls
-    if content or tool_call_chunks:
+    if content:
         return AIMessageChunk(
             content=content,
             tool_call_chunks=tool_call_chunks,
             id=id,
         )
-
-    return None
