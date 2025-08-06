@@ -1,6 +1,7 @@
 import bisect
 import logging
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
@@ -28,7 +29,7 @@ class GenieResponse:
 
 
 @mlflow.trace(span_type="PARSER")
-def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
+def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
     output = resp["result"]
     if not output:
         return "EMPTY"
@@ -88,11 +89,20 @@ def _parse_query_result(resp) -> Union[str, pd.DataFrame]:
     if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
         truncated_result = truncated_df.iloc[:-1].to_markdown()
 
+    if not truncate_results:
+        warnings.warn(
+            "Detected large Genie output, truncating it to better fit in LLM context windows. Automatic result truncation in Genie is deprecated and will be disabled by default in a future release; we recommend truncating large Genie results in your agent code instead, if needed. To keep automatic truncation for large Genie outputs enabled, set truncate_results=True when initializing the Genie class.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     return truncated_result.strip()
 
 
 class Genie:
-    def __init__(self, space_id, client: Optional["WorkspaceClient"] = None):
+    def __init__(
+        self, space_id, client: Optional["WorkspaceClient"] = None, truncate_results=False
+    ):
         self.space_id = space_id
         workspace_client = client or WorkspaceClient()
         self.genie = workspace_client.genie
@@ -101,6 +111,7 @@ class Genie:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+        self.truncate_results = truncate_results
 
     @mlflow.trace()
     def start_conversation(self, content):
@@ -136,7 +147,7 @@ class Genie:
                 )["statement_response"]
                 state = resp["status"]["state"]
                 if state == "SUCCEEDED":
-                    result = _parse_query_result(resp)
+                    result = _parse_query_result(resp, self.truncate_results)
                     return GenieResponse(result, query_str, description)
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
