@@ -39,6 +39,17 @@ _FOUNDATION_MODELS = [
     "databricks-meta-llama-3-3-70b-instruct",
 ]
 
+# Endpoint constants for easier maintenance
+RESPONSES_AGENT_ENDPOINT_WITH_ANNOTATIONS = "agents_ml-bbqiu-annotationsv2"
+RESPONSES_AGENT_ENDPOINT_WITH_TOOL_CALLING = "agents_ml-bbqiu-resp-fmapi"
+CHAT_AGENT_ENDPOINT_WITH_TOOL_CALLING = "agents_smurching-default-test_external_monitor_cuj"
+DATABRICKS_CLI_PROFILE = "dogfood"
+
+_RESPONSES_API_ENDPOINTS = [
+    RESPONSES_AGENT_ENDPOINT_WITH_ANNOTATIONS,
+    RESPONSES_AGENT_ENDPOINT_WITH_TOOL_CALLING,
+]
+
 
 @pytest.mark.foundation_models
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
@@ -458,49 +469,50 @@ def test_chat_databricks_langgraph_with_memory(model):
 
 
 @pytest.mark.st_endpoints
-@pytest.mark.st_endpoints
+@pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
 @pytest.mark.skipif(
     os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
     reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
-def test_chat_databricks_responses_api_invoke():
+def test_chat_databricks_responses_api_invoke(endpoint):
     """Test ChatDatabricks with responses API."""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_ml-bbqiu-annotationsv2",
+        model=endpoint,
         workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
-        max_tokens=50,
+        max_tokens=500,
     )
 
-    response = chat.invoke("What is the capital of France?")
+    response = chat.invoke("What is the 100th fibonacci number?")
     assert isinstance(response, AIMessage)
     assert response.content is not None
     assert len(response.content) > 0
 
 
 @pytest.mark.st_endpoints
+@pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
 @pytest.mark.skipif(
     os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
     reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
-def test_chat_databricks_responses_api_stream():
+def test_chat_databricks_responses_api_stream(endpoint):
     """Test ChatDatabricks streaming with responses API."""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_ml-bbqiu-annotationsv2",
+        model=endpoint,
         workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
-        max_tokens=50,
+        max_tokens=500,
     )
 
-    chunks = list(chat.stream("What is 2 + 2?"))
+    chunks = list(chat.stream("What is the 100th fibonacci number?"))
     assert len(chunks) > 0
 
     # Responses API can return both AIMessageChunk and ToolMessageChunk
@@ -532,9 +544,9 @@ def test_chat_databricks_chatagent_invoke():
     """Test ChatDatabricks with ChatAgent endpoint."""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_smurching-default-test_external_monitor_cuj",
+        model=CHAT_AGENT_ENDPOINT_WITH_TOOL_CALLING,
         workspace_client=workspace_client,
         temperature=0,
         max_tokens=500,
@@ -585,9 +597,9 @@ def test_chat_databricks_chatagent_stream():
     """Test ChatDatabricks streaming with ChatAgent endpoint."""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_smurching-default-test_external_monitor_cuj",
+        model=CHAT_AGENT_ENDPOINT_WITH_TOOL_CALLING,
         workspace_client=workspace_client,
         temperature=0,
         max_tokens=500,
@@ -617,21 +629,22 @@ def test_chat_databricks_chatagent_stream():
 
 
 @pytest.mark.st_endpoints
+@pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
 @pytest.mark.skipif(
     os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
     reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
 )
-def test_responses_api_extra_body_custom_inputs():
+def test_responses_api_extra_body_custom_inputs(endpoint):
     """Test that extra_body parameter can pass custom_inputs to Responses API endpoint"""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_ml-bbqiu-annotationsv2",
+        model=endpoint,
         workspace_client=workspace_client,
         use_responses_api=True,
         temperature=0,
-        max_tokens=50,
+        max_tokens=500,
         extra_params={
             "extra_body": {
                 "custom_inputs": {"test_key": "test_value", "user_preference": "concise"}
@@ -639,7 +652,7 @@ def test_responses_api_extra_body_custom_inputs():
         },
     )
 
-    response = chat.invoke("What is the capital of France?")
+    response = chat.invoke("What is the 100th fibonacci number?")
 
     assert isinstance(response, AIMessage)
     assert response.content
@@ -655,9 +668,9 @@ def test_chatagent_extra_body_custom_inputs():
     """Test that extra_body parameter works with ChatAgent endpoints"""
     from databricks.sdk import WorkspaceClient
 
-    workspace_client = WorkspaceClient(profile="dogfood")
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
     chat = ChatDatabricks(
-        model="agents_smurching-default-test_external_monitor_cuj",
+        model=CHAT_AGENT_ENDPOINT_WITH_TOOL_CALLING,
         workspace_client=workspace_client,
         temperature=0,
         max_tokens=50,
