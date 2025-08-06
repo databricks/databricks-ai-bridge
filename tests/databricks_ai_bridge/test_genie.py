@@ -126,7 +126,7 @@ def test_ask_question(genie, mock_workspace_client):
 
 def test_parse_query_result_empty():
     resp = {"manifest": {"schema": {"columns": []}}, "result": None}
-    result = _parse_query_result(resp)
+    result = _parse_query_result(resp, truncate_results=True)
     assert result == "EMPTY"
 
 
@@ -148,7 +148,7 @@ def test_parse_query_result_with_data():
             ]
         },
     }
-    result = _parse_query_result(resp)
+    result = _parse_query_result(resp, truncate_results=True)
     expected_df = pd.DataFrame(
         {
             "id": [1, 2],
@@ -177,7 +177,7 @@ def test_parse_query_result_with_null_values():
             ]
         },
     }
-    result = _parse_query_result(resp)
+    result = _parse_query_result(resp, truncate_results=True)
     expected_df = pd.DataFrame(
         {
             "id": [1, 2],
@@ -216,7 +216,7 @@ def test_parse_query_result_trims_data():
                 ]
             },
         }
-        result = _parse_query_result(resp)
+        result = _parse_query_result(resp, truncate_results=True)
         assert (
             result
             == pd.DataFrame(
@@ -288,7 +288,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
             "result": {"data_array": data_array},
         }
 
-        markdown_result = _parse_query_result(response)
+        markdown_result = _parse_query_result(response, truncate_results=True)
         result_df = markdown_to_dataframe(markdown_result)
 
         expected_df = pd.DataFrame(
