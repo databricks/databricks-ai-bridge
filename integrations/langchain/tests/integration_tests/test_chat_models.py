@@ -684,3 +684,34 @@ def test_chatagent_extra_body_custom_inputs():
     assert isinstance(response, AIMessage)
     assert response.content
     # Test passes if the endpoint accepts the extra_body without error
+
+
+@pytest.mark.foundation_models
+@pytest.mark.parametrize("model", _FOUNDATION_MODELS)
+def test_chat_databricks_utf8_encoding(model):
+    """Test that ChatDatabricks properly handles UTF-8 encoding."""
+    chat = ChatDatabricks(
+        model=model,
+        temperature=0,
+        max_tokens=200,
+    )
+    messages = [
+        SystemMessage(content="Du er en hjælpsom assistent der kan dansk."),
+        HumanMessage(content="Sig blåbær på dansk, med små bogstaver."),
+    ]
+
+    # Test invoke with UTF-8 characters
+    response = chat.invoke(messages)
+    assert isinstance(response, AIMessage)
+    assert "blåbær" in response.content
+
+    # Test with streaming as well to ensure chunks handle UTF-8
+    stream_chunks = list(chat.stream(messages))
+    assert len(stream_chunks) > 0
+
+    # Combine all chunks to verify content
+    full_content = ""
+    for chunk in stream_chunks:
+        if hasattr(chunk, "content") and chunk.content:
+            full_content += chunk.content
+    assert "blåbær" in full_content.lower()
