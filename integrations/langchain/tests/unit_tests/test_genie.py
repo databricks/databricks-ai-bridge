@@ -187,8 +187,8 @@ def test_create_genie_agent_no_space_id():
 
 
 @patch("databricks.sdk.WorkspaceClient")
-def test_only_pass_last_message_functionality(MockWorkspaceClient):
-    """Test only_pass_last_message parameter in both _query_genie_as_agent and GenieAgent"""
+def test_only_pass_user_messages_functionality(MockWorkspaceClient):
+    """Test only_pass_user_messages parameter in both _query_genie_as_agent and GenieAgent"""
     mock_space = GenieSpace(space_id="space-id", title="Sales Space", description="description")
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
@@ -196,51 +196,67 @@ def test_only_pass_last_message_functionality(MockWorkspaceClient):
         result="It is sunny.", query="SELECT * FROM weather", description="Query reasoning"
     )
 
-    # Test data with multiple messages
+    # Test data with multiple messages including assistant messages
     input_data = {
         "messages": [
-            {"role": "user", "content": "First message"},
+            {"role": "user", "content": "First user message"},
             {"role": "assistant", "content": "Assistant response"},
-            {"role": "user", "content": "What is the weather?"},
+            {"role": "user", "content": "Second user message"},
         ]
     }
 
     # Test with message objects
     class Message:
-        def __init__(self, content):
+        def __init__(self, role, content):
+            self.role = role
             self.content = content
 
-    input_data_objects = {"messages": [Message("First"), Message("Weather question?")]}
+    input_data_objects = {
+        "messages": [
+            Message("user", "First user message object"),
+            Message("assistant", "Assistant response object"),
+            Message("user", "Second user message object"),
+        ]
+    }
 
     genie = Genie("space-id", MockWorkspaceClient)
 
     with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
-        # Test 1: Dict messages with only_pass_last_message=True
-        result = _query_genie_as_agent(input_data, genie, "Genie", only_pass_last_message=True)
-        mock_ask.assert_called_with("What is the weather?")
+        # Test 1: Dict messages with only_pass_user_messages=True - should concatenate all user messages
+        result = _query_genie_as_agent(input_data, genie, "Genie", only_pass_user_messages=True)
+        expected_query = "user: First user message\nuser: Second user message"
+        mock_ask.assert_called_with(expected_query)
         assert result == {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
 
-        # Test 2: Object messages with only_pass_last_message=True
+        # Test 2: Object messages with only_pass_user_messages=True
         mock_ask.reset_mock()
-        _query_genie_as_agent(input_data_objects, genie, "Genie", only_pass_last_message=True)
-        mock_ask.assert_called_with("Weather question?")
+        _query_genie_as_agent(input_data_objects, genie, "Genie", only_pass_user_messages=True)
+        expected_query_objects = "user: First user message object\nuser: Second user message object"
+        mock_ask.assert_called_with(expected_query_objects)
 
         # Test 3: Empty messages
         mock_ask.reset_mock()
         result = _query_genie_as_agent(
-            {"messages": []}, genie, "Genie", only_pass_last_message=True
+            {"messages": []}, genie, "Genie", only_pass_user_messages=True
         )
         mock_ask.assert_called_with("")
 
-        # Test 4: GenieAgent end-to-end with only_pass_last_message=True
+        # Test 4: Only assistant messages - should result in empty query
+        mock_ask.reset_mock()
+        assistant_only_data = {"messages": [{"role": "assistant", "content": "Only assistant"}]}
+        _query_genie_as_agent(assistant_only_data, genie, "Genie", only_pass_user_messages=True)
+        mock_ask.assert_called_with("")
+
+        # Test 5: GenieAgent end-to-end with only_pass_user_messages=True
         mock_ask.reset_mock()
         agent = GenieAgent(
-            "space-id", "Genie", only_pass_last_message=True, client=MockWorkspaceClient
+            "space-id", "Genie", only_pass_user_messages=True, client=MockWorkspaceClient
         )
 
         with patch(
             "databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response
         ) as mock_ask_agent:
             result = agent.invoke(input_data)
-            mock_ask_agent.assert_called_once_with("What is the weather?")
+            expected_query = "user: First user message\nuser: Second user message"
+            mock_ask_agent.assert_called_once_with(expected_query)
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
