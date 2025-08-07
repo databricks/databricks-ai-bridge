@@ -480,17 +480,8 @@ class ChatDatabricks(BaseChatModel):
 
         ex: https://github.com/langchain-ai/langchain/blob/2d3020f6cd9d3bf94738f2b6732b68acc55d9cce/libs/partners/openai/langchain_openai/chat_models/base.py#L3739
         """
-        # ChatAgent response structure may have messages or other fields
-        if hasattr(response, "messages") and response.messages:
-            messages = response.messages
-        elif hasattr(response, "model_dump") and "messages" in response.model_dump():
-            messages = response.model_dump()["messages"]
-        elif isinstance(response, dict) and "messages" in response:
-            messages = response["messages"]
-        else:
-            # Fallback: try to get any content from the response
-            messages = str(response)
-
+        # Since we only enter this when response.messages exists, we can directly access it
+        messages = response.messages
         message = AIMessage(content=messages, id=getattr(response, "id", None))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
@@ -572,9 +563,6 @@ class ChatDatabricks(BaseChatModel):
                     # ChatAgent streaming chunk format - has delta directly on chunk
                     delta = chunk.delta
 
-                    if first_chunk_role is None:
-                        first_chunk_role = delta.get("role", "assistant")
-
                     chunk_delta_dict = {
                         "role": delta.get("role"),
                         "content": delta.get("content", ""),
@@ -611,22 +599,8 @@ class ChatDatabricks(BaseChatModel):
                     else:
                         usage = None
 
-                    chunk_delta_dict = {
-                        "role": chunk_delta.role,
-                        "content": chunk_delta.content,
-                    }
-                    if chunk_delta.tool_calls:
-                        chunk_delta_dict["tool_calls"] = [
-                            {
-                                "index": tc.index,
-                                "id": tc.id,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in chunk_delta.tool_calls
-                        ]
+                    # Use model_dump instead of manual dict reconstruction
+                    chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
 
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict, first_chunk_role, usage=usage
