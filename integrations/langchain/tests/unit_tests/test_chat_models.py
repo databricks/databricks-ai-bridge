@@ -1,6 +1,7 @@
 """Test chat model integration."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import mlflow  # type: ignore # noqa: F401
@@ -869,9 +870,7 @@ def test_convert_responses_api_response_to_chat_result_with_error():
 def test_convert_chatagent_response_to_chat_result():
     """Test _convert_chatagent_response_to_chat_result method."""
     llm = ChatDatabricks(model="test-model")
-
-    response = {"messages": [{"role": "assistant", "content": "Hello from ChatAgent!"}]}
-
+    response = SimpleNamespace(messages=[{"role": "assistant", "content": "Hello from ChatAgent!"}])
     result = llm._convert_chatagent_response_to_chat_result(response)
     expected = ChatResult(
         generations=[
