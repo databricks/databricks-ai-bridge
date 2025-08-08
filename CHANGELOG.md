@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.5.2, databricks-langchain 0.5.2, databricks-openai 0.4.2, databricks-llamaindex 0.1.1, databricks-mcp 0.3.0 (TBD)
+
+### Highlights
+- Add DSPy integration support with DatabricksLM
+- Improved ChatDatabricks with OpenAI client compatibility
+- Enhanced Genie deprecation warnings
+
+### Improvements
+- Use OpenAI client to make LLM inference requests in ChatDatabricks (#153)
+- Add integration test for databricks-dspy (#158)
+- Include MTPT endpoint creation in DatabricksLM (#151)
+- Add DSPy integration in databricks-ai-bridge (#148)
+- Update VectorSearchRetrieverTool docs for langchain/openai to document additional parameters and kwargs passthrough (#156)
+- Add Genie deprecation warning (#157)
+
+### Bug Fixes
+- Fix CI issues (#159)
+
 ## databricks-ai-bridge 0.6.0, databricks-langchain 0.6.0, databricks-openai 0.5.0, databricks-mcp 0.2.0 (2025-06-02)
 
 ### Improvements
