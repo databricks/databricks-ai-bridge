@@ -72,8 +72,9 @@ def GenieAgent(
         genie_agent_name: Name for the agent (default: "Genie")
         description: Custom description for the agent
         include_context: Whether to include query reasoning and SQL in the response
-        message_processor: Optional function to process messages before querying.
-                          Should accept a list of messages and return a query string.
+        message_processor: Optional function to process messages before querying. It should accept a list of either dict
+                            or LangChain Message objects and return a query string. If not provided, the agent will
+                            use the chat history to form the query.
         client: Optional WorkspaceClient instance
 
     Examples:
