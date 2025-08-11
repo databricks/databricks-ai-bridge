@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Callable, Optional
 
 import mlflow
 from databricks.sdk import WorkspaceClient
@@ -24,26 +24,19 @@ def _query_genie_as_agent(
     genie: Genie,
     genie_agent_name,
     include_context: bool = False,
-    only_pass_user_messages: bool = False,
+    message_processor: Optional[Callable] = None,
 ):
     from langchain_core.messages import AIMessage
 
-    if only_pass_user_messages:
-        messages = input.get("messages", [])
-        if messages:
-            user_messages = []
-            for msg in messages:
-                if isinstance(msg, dict) and msg.get("role") == "user":
-                    user_messages.append(msg)
-                elif hasattr(msg, "role") and msg.role == "user":
-                    user_messages.append(msg)
-            query = _concat_messages_array(user_messages)
-        else:
-            query = ""
+    messages = input.get("messages", [])
+
+    # Apply message processor if provided
+    if message_processor:
+        query = message_processor(messages)
     else:
         query = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
         # Concatenate messages to form the chat history
-        query += _concat_messages_array(input.get("messages"))
+        query += _concat_messages_array(messages)
 
     # Send the message and wait for a response
     genie_response = genie.ask_question(query)
@@ -69,10 +62,49 @@ def GenieAgent(
     genie_agent_name: str = "Genie",
     description: str = "",
     include_context: bool = False,
-    only_pass_user_messages: bool = False,
+    message_processor: Optional[Callable] = None,
     client: Optional["WorkspaceClient"] = None,
 ):
-    """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used."""
+    """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used.
+
+    Args:
+        genie_space_id: The ID of the genie space to use
+        genie_agent_name: Name for the agent (default: "Genie")
+        description: Custom description for the agent
+        include_context: Whether to include query reasoning and SQL in the response
+        message_processor: Optional function to process messages before querying.
+                          Should accept a list of messages and return a query string.
+        client: Optional WorkspaceClient instance
+
+    Examples:
+        # Basic usage
+        agent = GenieAgent("space-123")
+
+        # Only pass the last message
+        def last_message_processor(messages):
+            if not messages:
+                return ""
+            last_msg = messages[-1]
+            if isinstance(last_msg, dict):
+                return last_msg.get("content", "")
+            else:
+                return last_msg.content
+
+        agent = GenieAgent("space-123", message_processor=last_message_processor)
+
+        # Custom message filtering
+        def custom_processor(messages):
+            # Only process messages containing "data"
+            filtered = [msg for msg in messages if "data" in (
+                msg.get("content", "") if isinstance(msg, dict) else msg.content
+            )]
+            return "\\n".join([
+                msg.get("content", "") if isinstance(msg, dict) else msg.content
+                for msg in filtered
+            ])
+
+        agent = GenieAgent("space-123", message_processor=custom_processor)
+    """
     if not genie_space_id:
         raise ValueError("genie_space_id is required to create a GenieAgent")
 
@@ -88,7 +120,7 @@ def GenieAgent(
         genie=genie,
         genie_agent_name=genie_agent_name,
         include_context=include_context,
-        only_pass_user_messages=only_pass_user_messages,
+        message_processor=message_processor,
     )
 
     runnable = RunnableLambda(partial_genie_agent)
