@@ -28,9 +28,11 @@ from mlflow.models.resources import (
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionMessage,
-    ChatCompletionMessageToolCall,
 )
 from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_message_function_tool_call import (
+    ChatCompletionMessageFunctionToolCall,
+)
 from openai.types.chat.chat_completion_message_tool_call_param import Function
 from pydantic import BaseModel
 
@@ -63,7 +65,7 @@ def get_chat_completion_response(tool_name: str, index_name: str):
                     audio=None,
                     function_call=None,
                     tool_calls=[
-                        ChatCompletionMessageToolCall(
+                        ChatCompletionMessageFunctionToolCall(
                             id="call_VtmBTsVM2zQ3yL5GzddMgWb0",
                             function=Function(
                                 arguments='{"query":"Databricks Agent Framework"}',
