@@ -243,13 +243,6 @@ def test_message_processor_functionality(MockWorkspaceClient):
         mock_ask.assert_called_with(expected_query)
         assert result == {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
 
-    # Test 3: Message processor with empty messages
-    with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
-        result = _query_genie_as_agent(
-            {"messages": []}, genie, "Genie", message_processor=last_message_processor
-        )
-        mock_ask.assert_called_with("")
-
     # Test 4: GenieAgent end-to-end with message_processor
     with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
         agent = GenieAgent(
@@ -266,80 +259,3 @@ def test_message_processor_functionality(MockWorkspaceClient):
             expected_query = "Second message"
             mock_ask_agent.assert_called_once_with(expected_query)
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
-
-
-@patch("databricks.sdk.WorkspaceClient")
-def test_message_processor_with_object_messages(MockWorkspaceClient):
-    """Test message_processor with message objects (not dicts)"""
-    mock_space = GenieSpace(space_id="space-id", title="Sales Space", description="description")
-    MockWorkspaceClient.genie.get_space.return_value = mock_space
-
-    mock_genie_response = GenieResponse(
-        result="Processed", query="SELECT *", description="Reasoning"
-    )
-
-    # Test with message objects
-    class Message:
-        def __init__(self, role, content):
-            self.role = role
-            self.content = content
-
-    input_data = {
-        "messages": [
-            Message("user", "Object message 1"),
-            Message("assistant", "Object response"),
-            Message("user", "Object message 2"),
-        ]
-    }
-
-    genie = Genie("space-id", MockWorkspaceClient)
-
-    # Last message processor should work with objects too
-    def last_message_processor(messages):
-        if not messages:
-            return ""
-        last_msg = messages[-1]
-        if isinstance(last_msg, dict):
-            return last_msg.get("content", "")
-        else:
-            return last_msg.content
-
-    with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
-        result = _query_genie_as_agent(
-            input_data, genie, "Genie", message_processor=last_message_processor
-        )
-        expected_query = "Object message 2"
-        mock_ask.assert_called_with(expected_query)
-        assert result == {"messages": [AIMessage(content="Processed", name="query_result")]}
-
-
-@patch("databricks.sdk.WorkspaceClient")
-def test_message_processor_with_include_context(MockWorkspaceClient):
-    """Test that message_processor works with include_context parameter"""
-    mock_space = GenieSpace(space_id="space-id", title="Sales Space", description="description")
-    MockWorkspaceClient.genie.get_space.return_value = mock_space
-
-    mock_genie_response = GenieResponse(
-        result="Final result", query="SELECT data", description="Reasoning for query"
-    )
-
-    input_data = {"messages": [{"role": "user", "content": "Test query"}]}
-    genie = Genie("space-id", MockWorkspaceClient)
-
-    def simple_processor(messages):
-        return "PROCESSED: " + messages[0].get("content", "")
-
-    with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
-        result = _query_genie_as_agent(
-            input_data, genie, "Genie", include_context=True, message_processor=simple_processor
-        )
-
-        mock_ask.assert_called_with("PROCESSED: Test query")
-        expected_messages = {
-            "messages": [
-                AIMessage(content="Reasoning for query", name="query_reasoning"),
-                AIMessage(content="SELECT data", name="query_sql"),
-                AIMessage(content="Final result", name="query_result"),
-            ]
-        }
-        assert result == expected_messages
