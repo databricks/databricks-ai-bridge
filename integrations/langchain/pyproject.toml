@@ -17,13 +17,14 @@ dependencies = [
     "unitycatalog-langchain[databricks]>=0.2.0",
     "databricks-connect>=16.1.1,<16.4",
     "openai>=1.97.1",
+    "databricks-sdk>=0.63.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
   "typing_extensions",
-  "databricks-sdk>=0.34.0",
+  "databricks-sdk>=0.63.0",
   "ruff==0.6.4",
 ]
 
