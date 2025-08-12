@@ -715,3 +715,47 @@ def test_chat_databricks_utf8_encoding(model):
         if hasattr(chunk, "content") and chunk.content:
             full_content += chunk.content
     assert "blåbær" in full_content.lower()
+
+
+def test_chat_databricks_with_timeout_and_retries():
+    """Test that ChatDatabricks can be initialized with timeout and max_retries parameters."""
+    from unittest.mock import Mock, patch
+    
+    # Mock the OpenAI client
+    mock_openai_client = Mock()
+    mock_workspace_client = Mock()
+    mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
+    
+    with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
+        # Create ChatDatabricks with timeout and max_retries
+        chat = ChatDatabricks(
+            model="databricks-meta-llama-3-3-70b-instruct",
+            timeout=45.0,
+            max_retries=3
+        )
+        
+        # Verify the parameters are set correctly
+        assert chat.timeout == 45.0
+        assert chat.max_retries == 3
+        
+        # Verify the client was configured with these parameters
+        assert chat.client == mock_openai_client
+        
+    # Test with workspace_client parameter
+    with patch("databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client) as mock_get_client:
+        chat_with_ws = ChatDatabricks(
+            model="databricks-meta-llama-3-3-70b-instruct",
+            workspace_client=mock_workspace_client,
+            timeout=30.0,
+            max_retries=2
+        )
+        
+        # Verify get_openai_client was called with all parameters
+        mock_get_client.assert_called_once_with(
+            workspace_client=mock_workspace_client,
+            timeout=30.0,
+            max_retries=2
+        )
+        
+        assert chat_with_ws.timeout == 30.0
+        assert chat_with_ws.max_retries == 2
