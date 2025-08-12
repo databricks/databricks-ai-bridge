@@ -77,11 +77,9 @@ def test_workspace_client_parameter() -> None:
         llm = ChatDatabricks(model="test-model", workspace_client=mock_workspace_client)
 
     assert llm.client == mock_openai_client
-    # Now expects timeout and max_retries parameters with None defaults
+    # Now expects no additional kwargs when timeout/max_retries are None
     mock_get_client.assert_called_once_with(
-        workspace_client=mock_workspace_client,
-        timeout=None,
-        max_retries=None
+        workspace_client=mock_workspace_client
     )
 
 
@@ -174,11 +172,9 @@ def test_default_workspace_client() -> None:
             llm = ChatDatabricks(model="test-model")
 
     assert llm.client == mock_openai_client
-    # Now expects timeout and max_retries parameters with None defaults
+    # Now expects no additional kwargs when timeout/max_retries are None
     mock_get_client.assert_called_once_with(
-        workspace_client=None,
-        timeout=None,
-        max_retries=None
+        workspace_client=None
     )
 
 
@@ -1032,11 +1028,9 @@ def test_chat_databricks_init_sets_client():
 
         llm = ChatDatabricks(model="test-model")
 
-        # Now expects timeout and max_retries parameters with None defaults
+        # Now expects no additional kwargs when timeout/max_retries are None
         mock_get_client.assert_called_once_with(
-            workspace_client=None,
-            timeout=None,
-            max_retries=None
+            workspace_client=None
         )
         assert llm.client == mock_client
 

@@ -8,11 +8,9 @@ from databricks_langchain.utils import get_openai_client
 
 
 def test_get_openai_client_with_timeout_and_max_retries() -> None:
-    """Test that get_openai_client properly sets timeout and max_retries on the OpenAI client."""
+    """Test that get_openai_client properly passes timeout and max_retries as kwargs to the SDK."""
     
     mock_openai_client = Mock()
-    mock_openai_client.timeout = None
-    mock_openai_client.max_retries = None
     
     mock_workspace_client = Mock()
     mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
@@ -24,20 +22,20 @@ def test_get_openai_client_with_timeout_and_max_retries() -> None:
         max_retries=3
     )
     
-    # Verify the OpenAI client was obtained
-    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once()
+    # Verify the OpenAI client was obtained with the correct kwargs
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once_with(
+        timeout=45.0,
+        max_retries=3
+    )
     
-    # Verify timeout and max_retries were set
-    assert client.timeout == 45.0
-    assert client.max_retries == 3
+    # Verify the client is returned
+    assert client == mock_openai_client
 
 
 def test_get_openai_client_with_default_workspace_client() -> None:
     """Test get_openai_client creates default WorkspaceClient when none provided."""
     
     mock_openai_client = Mock()
-    mock_openai_client.timeout = None
-    mock_openai_client.max_retries = None
     
     mock_workspace_client = Mock()
     mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
@@ -45,30 +43,28 @@ def test_get_openai_client_with_default_workspace_client() -> None:
     with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
         client = get_openai_client(timeout=30.0, max_retries=2)
     
-    # Verify default WorkspaceClient was created
-    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once()
+    # Verify default WorkspaceClient was created and kwargs were passed
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once_with(
+        timeout=30.0,
+        max_retries=2
+    )
     
-    # Verify timeout and max_retries were set
-    assert client.timeout == 30.0
-    assert client.max_retries == 2
+    # Verify the client is returned
+    assert client == mock_openai_client
 
 
 def test_get_openai_client_without_timeout_and_retries() -> None:
-    """Test get_openai_client doesn't set timeout/max_retries when not provided."""
+    """Test get_openai_client doesn't pass kwargs when not provided."""
     
     mock_openai_client = Mock()
-    # Set initial values to check they're not changed
-    mock_openai_client.timeout = "original_timeout"
-    mock_openai_client.max_retries = "original_retries"
     
     mock_workspace_client = Mock()
     mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
     
     client = get_openai_client(workspace_client=mock_workspace_client)
     
-    # Verify the OpenAI client was obtained
-    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once()
+    # Verify the OpenAI client was obtained without kwargs
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once_with()
     
-    # Verify timeout and max_retries were NOT changed (None values don't override)
-    assert client.timeout == "original_timeout"
-    assert client.max_retries == "original_retries"
+    # Verify the client is returned
+    assert client == mock_openai_client

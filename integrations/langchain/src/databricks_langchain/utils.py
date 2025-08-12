@@ -20,33 +20,25 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
-def get_openai_client(workspace_client: Any = None, timeout: Any = None, max_retries: Any = None) -> Any:
+def get_openai_client(workspace_client: Any = None, **kwargs) -> Any:
     """Get an OpenAI client configured for Databricks.
 
     Args:
         workspace_client: Optional WorkspaceClient instance to use for authentication.
             If not provided, creates a default WorkspaceClient.
-        timeout: Optional timeout in seconds for HTTP requests.
-        max_retries: Optional maximum number of retries for failed requests.
+        **kwargs: Additional keyword arguments to pass to get_open_ai_client(),
+            such as timeout and max_retries.
     """
     try:
         from databricks.sdk import WorkspaceClient
 
         # If workspace_client is provided, use it directly
         if workspace_client is not None:
-            client = workspace_client.serving_endpoints.get_open_ai_client()
+            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
         else:
             # Otherwise, create default workspace client
             workspace_client = WorkspaceClient()
-            client = workspace_client.serving_endpoints.get_open_ai_client()
-        
-        # Configure timeout and max_retries if provided
-        if timeout is not None:
-            client.timeout = timeout
-        if max_retries is not None:
-            client.max_retries = max_retries
-            
-        return client
+            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
 
     except ImportError as e:
         raise ImportError(

@@ -294,10 +294,16 @@ class ChatDatabricks(BaseChatModel):
                 )
 
         # Always use OpenAI client (supports both chat completions and responses API)
+        # Prepare kwargs for the SDK call
+        openai_kwargs = {}
+        if self.timeout is not None:
+            openai_kwargs["timeout"] = self.timeout
+        if self.max_retries is not None:
+            openai_kwargs["max_retries"] = self.max_retries
+            
         self.client = get_openai_client(
             workspace_client=self.workspace_client,
-            timeout=self.timeout,
-            max_retries=self.max_retries
+            **openai_kwargs
         )
 
         self.use_responses_api = kwargs.get("use_responses_api", False)
