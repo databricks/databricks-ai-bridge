@@ -44,9 +44,12 @@ def _handle_mcp_errors(func: Callable) -> Callable:
             raise error
 
         try:
-            auth_provider = DatabricksOAuthClientProvider(client_instance.client)
+            headers = client_instance.client.config.authenticate()
+            authorization_header = headers["Authorization"]
+            token = authorization_header.split("Bearer ")[1]
+
             headers = {
-                "Authorization": f"Bearer {auth_provider.databricks_token_storage.get_tokens().access_token}",
+                "Authorization": f"Bearer {token}",
             }
             response = requests.request(
                 "POST", f"{client_instance.server_url}/initialize", headers=headers
