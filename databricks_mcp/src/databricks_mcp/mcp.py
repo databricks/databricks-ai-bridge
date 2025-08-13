@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 from functools import wraps
@@ -35,7 +36,7 @@ MCP_URL_PATTERNS = {
 
 
 def _handle_mcp_errors(func: Callable) -> Callable:
-    """Decorator to handle MCP connection errors consistently for async functions."""
+    """Decorator to handle MCP connection errors for sync wrapper methods."""
 
     def _process_mcp_error(client_instance, error: Exception) -> None:
         """Process and enhance MCP connection errors with better context."""
@@ -49,42 +50,59 @@ def _handle_mcp_errors(func: Callable) -> Callable:
             token = authorization_header.split("Bearer ")[1]
 
             headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {token}",
             }
-            response = requests.request(
-                "POST", f"{client_instance.server_url}/initialize", headers=headers
+            payload = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "id": "1av",
+                    "params": {
+                        "clientInfo": {"name": "test-client", "version": "1.0"},
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                    },
+                }
             )
-        except Exception:
+            response = requests.request(
+                "POST",
+                client_instance.server_url,
+                headers=headers,
+                data=payload,
+                allow_redirects=False,
+            )
+        except Exception as e:
             # Error during processing the error, re-raise the original error
             raise error from None
 
         # Auth errors to Databricks Apps are redirected to a login page; a 302 often indicates an auth issue
         if response.status_code == 302:
             raise PermissionError(
-                """
-                Access denied to the MCP server. When accessing an MCP server hosted on a Databricks App please ensure you are using a valid OAuth token. 
-                If using a Service Principal, ensure that the service principal has query permissions on the Databricks App. 
-                For more information refer to the documentation here: 
-                https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp?language=Local+environment#connect-to-the-custom-mcp-server
-                """
-            )
+                "Access denied to the MCP server. When accessing an MCP server hosted on a Databricks App please ensure you are using a valid OAuth token. "
+                "If using a Service Principal, ensure that the service principal has query permissions on the Databricks App. "
+                "For more information refer to the documentation here: "
+                "https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp?language=Local+environment#connect-to-the-custom-mcp-server"
+            ) from None
         # Not finding a `/initialize` endpoint means the MCP server is not running or the endpoint is not correct
         elif response.status_code == 404:
             raise ValueError(
-                "The MCP server endpoint is not found. Please ensure the MCP server endpoint provided is correct."
-            )
+                "MCP Server not found at the provided server url. Please ensure the server url specified hosts a MCP Server. For more information refer to the documentation here: "
+                "https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
+            ) from None
 
         # If the error is not a 302 or 404, re-raise the original error
         raise error
 
     @wraps(func)
-    async def async_wrapper(self, *args, **kwargs):
+    def sync_wrapper(self, *args, **kwargs):
         try:
-            return await func(self, *args, **kwargs)
+            return func(self, *args, **kwargs)
         except Exception as error:
             _process_mcp_error(self, error)
 
-    return async_wrapper
+    return sync_wrapper
 
 
 @experimental
@@ -114,7 +132,6 @@ class DatabricksMCPClient:
 
         return None
 
-    @_handle_mcp_errors
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
         async with streamablehttp_client(
@@ -125,7 +142,6 @@ class DatabricksMCPClient:
                 await session.initialize()
                 return (await session.list_tools()).tools
 
-    @_handle_mcp_errors
     async def _call_tools_async(
         self,
         tool_name: str,
@@ -153,6 +169,7 @@ class DatabricksMCPClient:
         """Convert double underscores to dots for compatibility."""
         return name.replace("__", ".")
 
+    @_handle_mcp_errors
     def list_tools(self) -> List[Tool]:
         """
         Lists the tools for the current MCP Server. This method uses the `streamablehttp_client` from mcp to fetch all the tools from the MCP server.
@@ -162,6 +179,7 @@ class DatabricksMCPClient:
         """
         return asyncio.run(self._get_tools_async())
 
+    @_handle_mcp_errors
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
         """
         Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
