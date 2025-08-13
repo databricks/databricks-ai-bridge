@@ -1,14 +1,11 @@
 import json
+import logging
 import os
 from dataclasses import dataclass
-from importlib.util import find_spec
 from typing import Any
-
-import requests
 
 import dspy
 from dspy.primitives.prediction import Prediction
-import logging
 
 logger = logging.getLogger(__name__)
 
