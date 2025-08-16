@@ -1,9 +1,12 @@
 import asyncio
+import json
 import logging
 import re
-from typing import Any, List, Optional
+from functools import wraps
+from typing import Any, Callable, List, Optional
 from urllib.parse import urlparse
 
+import requests
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.annotations import experimental
 from mcp.client.session import ClientSession
@@ -30,6 +33,76 @@ MCP_URL_PATTERNS = {
     VECTOR_SEARCH_MCP: r"^/api/2\.0/mcp/vector-search/[^/]+/[^/]+$",
     GENIE_MCP: r"^/api/2\.0/mcp/genie/[^/]+$",
 }
+
+
+def _handle_mcp_errors(func: Callable) -> Callable:
+    """Decorator to handle MCP connection errors for sync wrapper methods."""
+
+    def _process_mcp_error(client_instance, error: Exception) -> None:
+        """Process and enhance MCP connection errors with better context."""
+        # For Databricks-managed MCP servers, no special error processing needed
+        if client_instance._get_databricks_managed_mcp_url_type() is not None:
+            raise error
+
+        try:
+            headers = client_instance.client.config.authenticate()
+            authorization_header = headers["Authorization"]
+            token = authorization_header.split("Bearer ")[1]
+
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": f"Bearer {token}",
+            }
+            payload = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "id": "1av",
+                    "params": {
+                        "clientInfo": {"name": "test-client", "version": "1.0"},
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                    },
+                }
+            )
+            response = requests.request(
+                "POST",
+                client_instance.server_url,
+                headers=headers,
+                data=payload,
+                allow_redirects=False,
+            )
+        except Exception as e:
+            # Error during processing the error, re-raise the original error
+            raise error from None
+
+        # Auth errors to Databricks Apps are redirected to a login page; a 302 often indicates an auth issue
+        if response.status_code == 302:
+            raise PermissionError(
+                "Access denied to the MCP server. When accessing an MCP server hosted on a Databricks App please ensure you are using a valid OAuth token. "
+                "If using a Service Principal, ensure that the service principal has query permissions on the Databricks App. "
+                "For more information refer to the documentation here: "
+                "https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp?language=Local+environment#connect-to-the-custom-mcp-server"
+            ) from None
+        # Not finding a `/initialize` endpoint means the MCP server is not running or the endpoint is not correct
+        elif response.status_code == 404:
+            raise ValueError(
+                "MCP Server not found at the provided server url. Please ensure the server url specified hosts a MCP Server. For more information refer to the documentation here: "
+                "https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
+            ) from None
+
+        # If the error is not a 302 or 404, re-raise the original error
+        raise error
+
+    @wraps(func)
+    def sync_wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except Exception as error:
+            _process_mcp_error(self, error)
+
+    return sync_wrapper
 
 
 @experimental
@@ -96,6 +169,7 @@ class DatabricksMCPClient:
         """Convert double underscores to dots for compatibility."""
         return name.replace("__", ".")
 
+    @_handle_mcp_errors
     def list_tools(self) -> List[Tool]:
         """
         Lists the tools for the current MCP Server. This method uses the `streamablehttp_client` from mcp to fetch all the tools from the MCP server.
@@ -105,6 +179,7 @@ class DatabricksMCPClient:
         """
         return asyncio.run(self._get_tools_async())
 
+    @_handle_mcp_errors
     def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
         """
         Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
