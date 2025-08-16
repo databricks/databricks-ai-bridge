@@ -7,18 +7,18 @@ from databricks.sdk.service.jobs import RunLifecycleStateV2State, TerminationTyp
 
 
 @pytest.mark.timeout(3600)
-def test_databricks_lm():
+def test_databricks_integration():
     """
     This test simply triggers a predefined Databricks job to verify the functionality
-    of the DatabricksLM class.
+    of public APIs in databricks-dspy.
     """
-    test_job_id = os.getenv("DATABRICKS_LM_TEST_JOB_ID")
+    test_job_id = os.getenv("DATABRICKS_DSPY_TEST_JOB_ID")
     branch_name = os.getenv("BRANCH_NAME")
     fork_name = os.getenv("FORK_NAME")
 
     if not test_job_id:
         raise RuntimeError(
-            "Please set the environment variable DATABRICKS_LM_TEST_JOB_ID",
+            "Please set the environment variable DATABRICKS_DSPY_TEST_JOB_ID",
         )
 
     w = WorkspaceClient()
