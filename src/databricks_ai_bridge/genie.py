@@ -173,7 +173,9 @@ class Genie:
                     headers=self.headers,
                 )
                 if resp["status"] == "COMPLETED":
-                    attachment = next((r for r in resp["attachments"] if "query" in r), None)
+                    attachment = next(
+                        (r for r in resp.get("attachments", []) if r.get("query")), None
+                    )
                     if attachment:
                         query_obj = attachment["query"]
                         description = query_obj.get("description", "")
@@ -181,9 +183,9 @@ class Genie:
                         attachment_id = attachment["attachment_id"]
                         return poll_query_results(attachment_id, query_str, description)
                     if resp["status"] == "COMPLETED":
-                        text_content = next(r for r in resp["attachments"] if "text" in r)["text"][
-                            "content"
-                        ]
+                        text_content = next(
+                            r for r in resp.get("attachments", []) if r.get("text")
+                        )["text"]["content"]
                         return GenieResponse(result=text_content)
                 elif resp["status"] in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
                     return GenieResponse(result=f"Genie query {resp['status'].lower()}.")
