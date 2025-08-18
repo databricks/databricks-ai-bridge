@@ -188,7 +188,8 @@ def test_parse_query_result_with_null_values():
     assert result == expected_df.to_markdown()
 
 
-def test_parse_query_result_trims_data():
+@pytest.mark.parametrize("truncate_results", [True, False])
+def test_parse_query_result_trims_data(truncate_results):
     # patch MAX_TOKENS_OF_DATA to 100 for this test
     with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 100):
         resp = {
@@ -216,22 +217,57 @@ def test_parse_query_result_trims_data():
                 ]
             },
         }
-        result = _parse_query_result(resp, truncate_results=True)
-        assert (
-            result
-            == pd.DataFrame(
-                {
-                    "id": [1, 2, 3],
-                    "name": ["Alice", "Bob", "Charlie"],
-                    "created_at": [
-                        datetime(2023, 10, 1).date(),
-                        datetime(2023, 10, 2).date(),
-                        datetime(2023, 10, 3).date(),
-                    ],
-                }
-            ).to_markdown()
-        )
-        assert _count_tokens(result) <= 100
+        result = _parse_query_result(resp, truncate_results=truncate_results)
+
+        if truncate_results:
+            assert (
+                result
+                == pd.DataFrame(
+                    {
+                        "id": [1, 2, 3],
+                        "name": ["Alice", "Bob", "Charlie"],
+                        "created_at": [
+                            datetime(2023, 10, 1).date(),
+                            datetime(2023, 10, 2).date(),
+                            datetime(2023, 10, 3).date(),
+                        ],
+                    }
+                ).to_markdown()
+            )
+            assert _count_tokens(result) <= 100
+        else:
+            assert (
+                result
+                == pd.DataFrame(
+                    {
+                        "id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                        "name": [
+                            "Alice",
+                            "Bob",
+                            "Charlie",
+                            "David",
+                            "Eve",
+                            "Frank",
+                            "Grace",
+                            "Hank",
+                            "Ivy",
+                            "Jack",
+                        ],
+                        "created_at": [
+                            datetime(2023, 10, 1).date(),
+                            datetime(2023, 10, 2).date(),
+                            datetime(2023, 10, 3).date(),
+                            datetime(2023, 10, 4).date(),
+                            datetime(2023, 10, 5).date(),
+                            datetime(2023, 10, 6).date(),
+                            datetime(2023, 10, 7).date(),
+                            datetime(2023, 10, 8).date(),
+                            datetime(2023, 10, 9).date(),
+                            datetime(2023, 10, 10).date(),
+                        ],
+                    }
+                ).to_markdown()
+            )
 
 
 def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
