@@ -145,7 +145,7 @@ def test_databricks_rm_initialization():
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value = {"userName": "test_user"}
         MockWSClient.return_value = mock_ws
-        
+
         rm = DatabricksRM(
             databricks_index_name="test_index",
             databricks_endpoint="https://test.databricks.com",
@@ -160,7 +160,7 @@ def test_databricks_rm_initialization():
         assert rm.docs_id_column_name == "id"
         assert rm.text_column_name == "text"
         assert not rm.use_with_databricks_agent_framework
-        
+
         # Verify WorkspaceClient was created with token auth
         MockWSClient.assert_called_once_with(
             host="https://test.databricks.com",
@@ -174,7 +174,7 @@ def test_databricks_rm_initialization_with_custom_workspace_client():
     """Test initialization with custom workspace_client."""
     mock_workspace_client = MagicMock()
     mock_workspace_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     rm = DatabricksRM(
         databricks_index_name="test_index",
         workspace_client=mock_workspace_client,
@@ -187,7 +187,7 @@ def test_databricks_rm_initialization_with_custom_workspace_client():
     assert rm.docs_id_column_name == "id"
     assert rm.text_column_name == "text"
     assert not rm.use_with_databricks_agent_framework
-    
+
     # Verify credentials validation was performed
     mock_workspace_client.current_user.me.assert_called_once()
 
@@ -196,7 +196,7 @@ def test_databricks_rm_query_with_custom_workspace_client():
     """Test that custom workspace_client is used for queries."""
     mock_workspace_client = MagicMock()
     mock_workspace_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     mock_response = {
         "result": {
             "data_array": [
@@ -214,20 +214,20 @@ def test_databricks_rm_query_with_custom_workspace_client():
     mock_workspace_client.vector_search_indexes.query_index.return_value.as_dict.return_value = (
         mock_response
     )
-    
+
     rm = DatabricksRM(
         databricks_index_name="test_index",
         workspace_client=mock_workspace_client,
     )
-    
+
     result = rm("test query")
-    
+
     # Verify that the custom workspace_client was used for the query
     mock_workspace_client.vector_search_indexes.query_index.assert_called_once()
     call_args = mock_workspace_client.vector_search_indexes.query_index.call_args[1]
     assert call_args["index_name"] == "test_index"
     assert call_args["query_text"] == "test query"
-    
+
     # Verify results
     assert len(result.docs) == 1
     assert result.docs[0] == "This is document 1"
@@ -265,7 +265,7 @@ def test_databricks_rm_invalid_query_type():
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value = {"userName": "test_user"}
         MockWSClient.return_value = mock_ws
-        
+
         rm = DatabricksRM(databricks_index_name="test_index")
 
         with pytest.raises(ValueError, match="Invalid query_type: INVALID"):
@@ -277,7 +277,7 @@ def test_databricks_rm_missing_column_error():
     with patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient") as MockWSClient:
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value = {"userName": "test_user"}
-        
+
         # Response missing the ID column
         mock_response = {
             "result": {"data_array": []},
@@ -291,7 +291,9 @@ def test_databricks_rm_missing_column_error():
             docs_id_column_name="id",
         )
 
-        with pytest.raises(ValueError, match="docs_id_column_name: 'id' is not in the index columns"):
+        with pytest.raises(
+            ValueError, match="docs_id_column_name: 'id' is not in the index columns"
+        ):
             rm("test query")
 
 
@@ -300,7 +302,7 @@ def test_databricks_rm_result_sorting():
     with patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient") as MockWSClient:
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value = {"userName": "test_user"}
-        
+
         # Results in random order
         mock_response = {
             "result": {
@@ -330,14 +332,14 @@ def test_databricks_rm_invalid_credentials_error():
         mock_ws = MagicMock()
         mock_ws.current_user.me.side_effect = Exception("Invalid credentials")
         MockWSClient.return_value = mock_ws
-        
+
         with pytest.raises(RuntimeError, match="Failed to validate databricks credentials"):
             DatabricksRM(
                 databricks_index_name="test_index",
                 databricks_token="invalid_token",
                 databricks_endpoint="https://test.databricks.com",
             )
-        
+
         # Verify credentials validation was attempted
         mock_ws.current_user.me.assert_called_once()
 
@@ -346,13 +348,13 @@ def test_databricks_rm_custom_workspace_client_invalid_credentials():
     """Test error when custom workspace client credentials validation fails."""
     mock_workspace_client = MagicMock()
     mock_workspace_client.current_user.me.side_effect = Exception("Invalid credentials")
-    
+
     with pytest.raises(RuntimeError, match="Failed to validate databricks credentials"):
         DatabricksRM(
             databricks_index_name="test_index",
             workspace_client=mock_workspace_client,
         )
-    
+
     # Verify credentials validation was attempted
     mock_workspace_client.current_user.me.assert_called_once()
 
@@ -363,11 +365,11 @@ def test_databricks_rm_fallback_to_default_auth():
         mock_ws = MagicMock()
         mock_ws.current_user.me.return_value = {"userName": "test_user"}
         MockWSClient.return_value = mock_ws
-        
+
         rm = DatabricksRM(databricks_index_name="test_index")
-        
+
         assert rm.databricks_index_name == "test_index"
-        
+
         # Verify WorkspaceClient was created with no auth params (default auth)
         MockWSClient.assert_called_once_with()
         # Verify credentials validation was performed

@@ -125,7 +125,7 @@ class DatabricksRM(dspy.Retrieve):
                 containing document text to retrieve.
             use_with_databricks_agent_framework (bool): Whether to use the `DatabricksRM` in a way
                 that is compatible with the Databricks Mosaic Agent Framework.
-            workspace_client (Optional[WorkspaceClient]): The workspace client to use. If not 
+            workspace_client (Optional[WorkspaceClient]): The workspace client to use. If not
                 provided, a new one will be created with default credentials from the environment.
         """
         super().__init__(k=k)
@@ -184,7 +184,7 @@ class DatabricksRM(dspy.Retrieve):
                 logger.info(
                     "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
                 )
-        
+
         try:
             # If credentials are invalid, `w.current_user.me()` will throw an error.
             self.workspace_client.current_user.me()
