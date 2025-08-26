@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import dspy
-from dspy.primitives.prediction import Prediction
 from databricks.sdk import WorkspaceClient
+from dspy.primitives.prediction import Prediction
 
 logger = logging.getLogger(__name__)
 
