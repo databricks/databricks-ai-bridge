@@ -167,19 +167,19 @@ def test_databricks_rm_lazy_workspace_client_creation(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     rm = DatabricksRM(
         databricks_index_name="test_index",
         databricks_endpoint="https://test.databricks.com",
         databricks_token="test_token",
     )
-    
+
     # WorkspaceClient should not be created during initialization (lazy initialization)
     mock_workspace_client.assert_not_called()
-    
+
     # Access workspace_client property to trigger lazy creation
     client = rm.workspace_client
-    
+
     # Verify WorkspaceClient was created with token auth
     mock_workspace_client.assert_called_once_with(
         host="https://test.databricks.com",
@@ -210,7 +210,7 @@ def test_databricks_rm_initialization_with_custom_workspace_client():
 
     # No credentials validation during initialization (lazy initialization)
     mock_workspace_client.current_user.me.assert_not_called()
-    
+
     # Then validation occurs when accessing the property
     client = rm.workspace_client
     assert client == mock_workspace_client
@@ -290,7 +290,7 @@ def test_databricks_rm_invalid_query_type(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     rm = DatabricksRM(databricks_index_name="test_index")
 
     with pytest.raises(ValueError, match="Invalid query_type: INVALID"):
@@ -303,7 +303,7 @@ def test_databricks_rm_missing_column_error(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     # Response missing the ID column
     mock_response = {
         "result": {"data_array": []},
@@ -326,7 +326,7 @@ def test_databricks_rm_result_sorting(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     # Results in random order
     mock_response = {
         "result": {
@@ -358,17 +358,17 @@ def test_databricks_rm_invalid_credentials_error(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.side_effect = Exception("Invalid credentials")
-    
+
     rm = DatabricksRM(
         databricks_index_name="test_index",
         databricks_token="invalid_token",
         databricks_endpoint="https://test.databricks.com",
     )
-    
+
     # Validation fails on first access to workspace_client property
     with pytest.raises(RuntimeError, match="Failed to validate databricks credentials"):
         _ = rm.workspace_client
-    
+
     # Verify credentials validation was attempted
     mock_client.current_user.me.assert_called_once()
 
@@ -382,7 +382,7 @@ def test_databricks_rm_custom_workspace_client_invalid_credentials():
         databricks_index_name="test_index",
         workspace_client=mock_workspace_client,
     )
-    
+
     # Validation fails on first access to workspace_client property
     with pytest.raises(RuntimeError, match="Failed to validate databricks credentials"):
         _ = rm.workspace_client
@@ -397,14 +397,14 @@ def test_databricks_rm_fallback_to_default_auth(mock_workspace_client):
     mock_client = MagicMock()
     mock_workspace_client.return_value = mock_client
     mock_client.current_user.me.return_value = {"userName": "test_user"}
-    
+
     rm = DatabricksRM(databricks_index_name="test_index")
-    
+
     assert rm.databricks_index_name == "test_index"
-    
+
     # Access workspace_client property to trigger lazy creation
     client = rm.workspace_client
-    
+
     # Verify WorkspaceClient was created with no auth params (default auth)
     mock_workspace_client.assert_called_once_with()
     # Verify credentials validation was performed
