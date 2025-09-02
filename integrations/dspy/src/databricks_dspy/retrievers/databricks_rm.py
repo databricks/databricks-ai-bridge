@@ -39,6 +39,10 @@ class DatabricksRM(dspy.Retrieve):
 
         ```python
         from databricks.vector_search.client import VectorSearchClient
+        from databricks.sdk import WorkspaceClient
+
+        # Create a Databricks workspace client
+        w = WorkspaceClient()
 
         # Create a Databricks Vector Search Endpoint
         client = VectorSearchClient()
@@ -159,41 +163,9 @@ class DatabricksRM(dspy.Retrieve):
                     "library. Please install mlflow via `pip install mlflow`."
                 ) from None
 
-        if workspace_client:
-            self.workspace_client = workspace_client
-        else:
-            if databricks_client_secret and databricks_client_id:
-                # Use client ID and secret for authentication if they are provided
-                self.workspace_client = WorkspaceClient(
-                    client_id=databricks_client_id,
-                    client_secret=databricks_client_secret,
-                )
-                logger.info(
-                    "Creating Databricks workspace client using service principal authentication."
-                )
-            elif databricks_token and databricks_endpoint:
-                # token-based authentication
-                self.workspace_client = WorkspaceClient(
-                    host=databricks_endpoint,
-                    token=databricks_token,
-                )
-                logger.info("Creating Databricks workspace client using token authentication.")
-            else:
-                # fallback to default authentication, i.e., using `~/.databrickscfg` file.
-                self.workspace_client = WorkspaceClient()
-                logger.info(
-                    "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
-                )
-
-        try:
-            # If credentials are invalid, `w.current_user.me()` will throw an error.
-            self.workspace_client.current_user.me()
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to validate databricks credentials, please refer to "
-                "https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth#default-methods-for-client-unified-authentication "  # noqa: E501
-                "for how to set up the authentication."
-            ) from e
+        # Lazy initialization of workspace client
+        self._workspace_client = workspace_client
+        self._workspace_client_validated = False
 
     def _extract_doc_ids(self, item: dict[str, Any]) -> str:
         """Extracts the document id from a search result
@@ -231,6 +203,54 @@ class DatabricksRM(dspy.Retrieve):
                 },
             }
         return extra_columns
+
+    @property
+    def workspace_client(self) -> WorkspaceClient:
+        """Get or create the workspace client lazily."""
+        # If client is already validated, return it
+        if self._workspace_client is not None and self._workspace_client_validated:
+            return self._workspace_client
+
+        if self._workspace_client is not None:
+            # Use the workspace client that was passed in
+            client = self._workspace_client
+        elif self.databricks_client_secret and self.databricks_client_id:
+            # Use client ID and secret for authentication if they are provided
+            client = WorkspaceClient(
+                client_id=self.databricks_client_id,
+                client_secret=self.databricks_client_secret,
+            )
+            logger.info(
+                "Creating Databricks workspace client using service principal authentication."
+            )
+        elif self.databricks_token and self.databricks_endpoint:
+            # token-based authentication
+            client = WorkspaceClient(
+                host=self.databricks_endpoint,
+                token=self.databricks_token,
+            )
+            logger.info("Creating Databricks workspace client using token authentication.")
+        else:
+            # fallback to default authentication, i.e., using `~/.databrickscfg` file.
+            client = WorkspaceClient()
+            logger.info(
+                "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
+            )
+
+        # Validate the client
+        try:
+            # If credentials are invalid, `w.current_user.me()` will throw an error.
+            client.current_user.me()
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to validate databricks credentials, please refer to "
+                "https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth#default-methods-for-client-unified-authentication "  # noqa: E501
+                "for how to set up the authentication."
+            ) from e
+
+        self._workspace_client = client
+        self._workspace_client_validated = True
+        return client
 
     def forward(
         self,
