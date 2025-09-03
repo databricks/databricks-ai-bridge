@@ -23,7 +23,6 @@ dependencies = [
 dev = [
   "pytest",
   "typing_extensions",
-  "databricks-sdk>=0.63.0",
   "ruff==0.6.4",
 ]
 
