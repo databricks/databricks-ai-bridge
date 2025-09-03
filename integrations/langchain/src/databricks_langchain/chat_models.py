@@ -557,8 +557,10 @@ class ChatDatabricks(BaseChatModel):
 
         data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
 
+        usage_chunk_emitted = False
+        final_usage = None
+
         if self.use_responses_api:
-            # Use OpenAI client with responses API for streaming
             prev_chunk = None
             stream = self.client.responses.create(**data)  # type: ignore
             for chunk in stream:
@@ -566,59 +568,67 @@ class ChatDatabricks(BaseChatModel):
                 prev_chunk = chunk
                 if chunk_message:
                     yield ChatGenerationChunk(message=chunk_message)
+                # Check for usage in the chunk if available
+                if stream_usage and hasattr(chunk, "usage") and chunk.usage:
+                    input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+                    output_tokens = getattr(chunk.usage, "completion_tokens", None)
+                    if input_tokens is not None and output_tokens is not None:
+                        final_usage = {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens,
+                        }
+            # Emit special usage chunk at end of stream
+            if stream_usage and final_usage and not usage_chunk_emitted:
+                # Usage chunk is an AIMessageChunk with empty content and usage_metadata
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(content="", usage_metadata=UsageMetadata(**final_usage))
+                )
+                usage_chunk_emitted = True
         else:
-            # Use OpenAI client with chat completions API for streaming
             first_chunk_role = None
             stream = self.client.chat.completions.create(**data)  # type: ignore
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
                 if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
-                    # ChatAgent streaming chunk format - has delta directly on chunk
                     delta = chunk.delta
-
                     chunk_delta_dict = {
                         "role": delta.get("role"),
                         "content": delta.get("content", ""),
                     }
-
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict, first_chunk_role
                     )
-
                     generation_chunk = ChatGenerationChunk(message=chunk_message)
-
                     if run_manager:
                         run_manager.on_llm_new_token(
                             generation_chunk.text,
                             chunk=generation_chunk,
                         )
-
                     yield generation_chunk
                 elif chunk.choices:
                     choice = chunk.choices[0]
                     chunk_delta = choice.delta
-
                     if first_chunk_role is None:
                         first_chunk_role = chunk_delta.role
 
+                    usage = None
+                    # Collect usage info only if both are present
                     if stream_usage and chunk.usage:
-                        input_tokens = chunk.usage.prompt_tokens
-                        output_tokens = chunk.usage.completion_tokens
-                        usage = {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
-                        }
-                    else:
-                        usage = None
-
+                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
+                        if input_tokens is not None and output_tokens is not None:
+                            usage = {
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": input_tokens + output_tokens,
+                            }
+                            final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
-
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict, first_chunk_role, usage=usage
                     )
-
                     generation_info = {}
                     if choice.finish_reason:
                         generation_info["finish_reason"] = choice.finish_reason
@@ -635,8 +645,14 @@ class ChatDatabricks(BaseChatModel):
                             chunk=generation_chunk,
                             logprobs=generation_info.get("logprobs"),
                         )
-
                     yield generation_chunk
+
+            # Emit special usage chunk at end of stream
+            if stream_usage and final_usage and not usage_chunk_emitted:
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(content="", usage_metadata=UsageMetadata(**final_usage))
+                )
+                usage_chunk_emitted = True
 
     def bind_tools(
         self,
