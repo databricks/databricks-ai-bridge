@@ -1,6 +1,6 @@
 [project]
 name = "databricks-dspy"
-version = "0.0.1"
+version = "0.0.1.dev0"
 description = "Databricks integration for DSPy"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -59,4 +59,4 @@ select = [
 
 [tool.ruff.format]
 docstring-code-format = true
-docstring-code-line-length = 88
+docstring-code-line-length = 100

@@ -360,3 +360,89 @@ class TestMCPURLPatterns:
         # Test invalid URLs
         for url in invalid_urls:
             assert not re.match(pattern, url), f"URL should not match: {url}"
+
+    @pytest.mark.parametrize(
+        "status_code,expected_exc,expected_msg,method_name",
+        [
+            (302, PermissionError, "Access denied to the MCP server", "list_tools"),
+            (302, PermissionError, "Access denied to the MCP server", "call_tool"),
+            (404, ValueError, "MCP Server not found at the provided server url", "list_tools"),
+            (404, ValueError, "MCP Server not found at the provided server url", "call_tool"),
+            # Any non-302/404 should re-raise the original error
+            (500, Exception, "Original connection error", "list_tools"),
+            (500, Exception, "Original connection error", "call_tool"),
+        ],
+    )
+    def test_error_decorator_paths(self, status_code, expected_exc, expected_msg, method_name):
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient("https://custom-mcp-server.com", workspace_client)
+
+        original_error = Exception("Original connection error")
+
+        with (
+            patch.object(client, "_get_databricks_managed_mcp_url_type", return_value=None),
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider") as mock_auth_provider,
+            patch("requests.request") as mock_request,
+            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch.object(
+                client.client.config,
+                "authenticate",
+                return_value={"Authorization": "Bearer test-token"},
+            ) as mock_auth,
+        ):
+            mock_response = MagicMock()
+            mock_response.status_code = status_code
+            mock_request.return_value = mock_response
+
+            # Trigger decorator by failing the MCP call
+            mock_client.side_effect = original_error
+
+            method = getattr(client, method_name)
+            if expected_exc is Exception:
+                with pytest.raises(Exception, match=expected_msg):
+                    if method_name == "list_tools":
+                        method()
+                    else:
+                        method("test_tool", {"arg": "value"})
+            else:
+                with pytest.raises(expected_exc, match=expected_msg):
+                    if method_name == "list_tools":
+                        method()
+                    else:
+                        method("test_tool", {"arg": "value"})
+
+            # Verify probe request was attempted with correct headers and payload
+            expected_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer test-token",
+            }
+            mock_request.assert_called_once()
+            call_args = mock_request.call_args
+            assert call_args[0] == ("POST", "https://custom-mcp-server.com")
+            assert call_args[1]["headers"] == expected_headers
+            assert "data" in call_args[1]
+            assert "allow_redirects" in call_args[1]
+            assert call_args[1]["allow_redirects"] == False
+
+    def test_error_decorator_managed_server_reraises_original(self):
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient(
+            "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+        )
+
+        original_error = Exception("Databricks server error")
+
+        with (
+            patch.object(
+                client, "_get_databricks_managed_mcp_url_type", return_value=UC_FUNCTIONS_MCP
+            ),
+            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("requests.request") as mock_request,
+        ):
+            mock_client.side_effect = original_error
+
+            with pytest.raises(Exception, match="Databricks server error"):
+                client.list_tools()
+
+            mock_request.assert_not_called()

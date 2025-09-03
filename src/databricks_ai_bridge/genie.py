@@ -1,14 +1,12 @@
 import bisect
 import logging
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
 
 import mlflow
 import pandas as pd
-import tiktoken
 from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000
@@ -17,6 +15,8 @@ MAX_ITERATIONS = 50
 
 # Define a function to count tokens
 def _count_tokens(text):
+    import tiktoken
+
     encoding = tiktoken.encoding_for_model("gpt-4o")
     return len(encoding.encode(text))
 
@@ -62,6 +62,16 @@ def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
         rows.append(row)
 
     dataframe = pd.DataFrame(rows, columns=header)
+
+    if truncate_results:
+        query_result = _truncate_result(dataframe)
+    else:
+        query_result = dataframe.to_markdown()
+
+    return query_result.strip()
+
+
+def _truncate_result(dataframe):
     query_result = dataframe.to_markdown()
     tokens_used = _count_tokens(query_result)
 
@@ -88,15 +98,7 @@ def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
     # Double-check edge case if we overshot by one
     if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
         truncated_result = truncated_df.iloc[:-1].to_markdown()
-
-    if not truncate_results:
-        warnings.warn(
-            "Detected large Genie output, truncating it to better fit in LLM context windows. Automatic result truncation in Genie is deprecated and will be disabled by default in a future release; we recommend truncating large Genie results in your agent code instead, if needed. To keep automatic truncation for large Genie outputs enabled, set truncate_results=True when initializing the Genie class.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    return truncated_result.strip()
+    return truncated_result
 
 
 class Genie:

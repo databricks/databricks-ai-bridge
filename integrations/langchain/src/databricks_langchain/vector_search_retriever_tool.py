@@ -80,13 +80,18 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         # Since LLM can generate either a dict or FilterItem, convert to dict always
         filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
         combined_filters = {**filters_dict, **(self.filters or {})}
+
+        # Allow kwargs to override the default values upon invocation
+        num_results = kwargs.pop("k", self.num_results)
+        query_type = kwargs.pop("query_type", self.query_type)
+
         # Ensure that we don't have duplicate keys
         kwargs.update(
             {
                 "query": query,
-                "k": self.num_results,
+                "k": num_results,
                 "filter": combined_filters,
-                "query_type": self.query_type,
+                "query_type": query_type,
             }
         )
         return self._vector_store.similarity_search(**kwargs)
