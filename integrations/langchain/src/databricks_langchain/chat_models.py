@@ -300,11 +300,8 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["timeout"] = self.timeout
         if self.max_retries is not None:
             openai_kwargs["max_retries"] = self.max_retries
-            
-        self.client = get_openai_client(
-            workspace_client=self.workspace_client,
-            **openai_kwargs
-        )
+
+        self.client = get_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
 
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
