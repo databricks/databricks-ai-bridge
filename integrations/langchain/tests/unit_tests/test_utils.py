@@ -2,8 +2,6 @@
 
 from unittest.mock import Mock, patch
 
-import pytest
-
 from databricks_langchain.utils import get_openai_client
 
 
