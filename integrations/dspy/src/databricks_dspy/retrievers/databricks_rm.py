@@ -163,9 +163,31 @@ class DatabricksRM(dspy.Retrieve):
                     "library. Please install mlflow via `pip install mlflow`."
                 ) from None
 
-        # Lazy initialization of workspace client
-        self._workspace_client = workspace_client
-        self._workspace_client_validated = False
+        # Use provided workspace client or create one based on credentials
+        if workspace_client:
+            self.workspace_client = workspace_client
+        elif databricks_client_secret and databricks_client_id:
+            # Use client ID and secret for authentication if they are provided
+            self.workspace_client = WorkspaceClient(
+                client_id=databricks_client_id,
+                client_secret=databricks_client_secret,
+            )
+            logger.info(
+                "Creating Databricks workspace client using service principal authentication."
+            )
+        elif databricks_token and databricks_endpoint:
+            # token-based authentication
+            self.workspace_client = WorkspaceClient(
+                host=databricks_endpoint,
+                token=databricks_token,
+            )
+            logger.info("Creating Databricks workspace client using token authentication.")
+        else:
+            # fallback to default authentication, i.e., using `~/.databrickscfg` file.
+            self.workspace_client = WorkspaceClient()
+            logger.info(
+                "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
+            )
 
     def _extract_doc_ids(self, item: dict[str, Any]) -> str:
         """Extracts the document id from a search result
@@ -203,54 +225,6 @@ class DatabricksRM(dspy.Retrieve):
                 },
             }
         return extra_columns
-
-    @property
-    def workspace_client(self) -> WorkspaceClient:
-        """Get or create the workspace client lazily."""
-        # If client is already validated, return it
-        if self._workspace_client is not None and self._workspace_client_validated:
-            return self._workspace_client
-
-        if self._workspace_client is not None:
-            # Use the workspace client that was passed in
-            client = self._workspace_client
-        elif self.databricks_client_secret and self.databricks_client_id:
-            # Use client ID and secret for authentication if they are provided
-            client = WorkspaceClient(
-                client_id=self.databricks_client_id,
-                client_secret=self.databricks_client_secret,
-            )
-            logger.info(
-                "Creating Databricks workspace client using service principal authentication."
-            )
-        elif self.databricks_token and self.databricks_endpoint:
-            # token-based authentication
-            client = WorkspaceClient(
-                host=self.databricks_endpoint,
-                token=self.databricks_token,
-            )
-            logger.info("Creating Databricks workspace client using token authentication.")
-        else:
-            # fallback to default authentication, i.e., using `~/.databrickscfg` file.
-            client = WorkspaceClient()
-            logger.info(
-                "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
-            )
-
-        # Validate the client
-        try:
-            # If credentials are invalid, `w.current_user.me()` will throw an error.
-            client.current_user.me()
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to validate databricks credentials, please refer to "
-                "https://docs.databricks.com/aws/en/dev-tools/auth/unified-auth#default-methods-for-client-unified-authentication "  # noqa: E501
-                "for how to set up the authentication."
-            ) from e
-
-        self._workspace_client = client
-        self._workspace_client_validated = True
-        return client
 
     def forward(
         self,
@@ -298,10 +272,6 @@ class DatabricksRM(dspy.Retrieve):
             query_type=query_type,
             query_text=query_text,
             query_vector=query_vector,
-            databricks_token=self.databricks_token,
-            databricks_endpoint=self.databricks_endpoint,
-            databricks_client_id=self.databricks_client_id,
-            databricks_client_secret=self.databricks_client_secret,
             filters_json=filters_json or self.filters_json,
         )
 
@@ -366,15 +336,10 @@ class DatabricksRM(dspy.Retrieve):
         query_type: str,
         query_text: str | None,
         query_vector: list[float] | None,
-        databricks_token: str | None,
-        databricks_endpoint: str | None,
-        databricks_client_id: str | None,
-        databricks_client_secret: str | None,
         filters_json: str | None,
     ) -> dict[str, Any]:
         """
         Query a Databricks Vector Search Index via the Databricks SDK.
-        Assumes that the databricks-sdk Python library is installed.
 
         Args:
             index_name (str): Name of the Databricks vector search index to query
@@ -385,14 +350,6 @@ class DatabricksRM(dspy.Retrieve):
             query_vector (Optional[list[float]]): Numeric query vector for which to find relevant
                 documents. Exactly one of query_text or query_vector must be specified.
             filters_json (Optional[str]): JSON string representing additional query filters.
-            databricks_token (str): Databricks authentication token. If not specified,
-                the token is resolved from the current environment.
-            databricks_endpoint (str): Databricks index endpoint url. If not specified,
-                the endpoint is resolved from the current environment.
-            databricks_client_id (str): Databricks service principal id. If not specified,
-                the token is resolved from the current environment (DATABRICKS_CLIENT_ID).
-            databricks_client_secret (str): Databricks service principal secret. If not specified,
-                the endpoint is resolved from the current environment (DATABRICKS_CLIENT_SECRET).
 
         Returns:
             dict[str, Any]: Parsed JSON response from the Databricks Vector Search Index query.
