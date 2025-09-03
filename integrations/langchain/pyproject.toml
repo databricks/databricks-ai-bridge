@@ -15,6 +15,7 @@ dependencies = [
     "mlflow>=2.20.1",
     "pydantic>2.10.0",
     "unitycatalog-langchain[databricks]>=0.2.0",
+    "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
 ]
 
@@ -22,7 +23,6 @@ dependencies = [
 dev = [
   "pytest",
   "typing_extensions",
-  "databricks-sdk>=0.34.0",
   "ruff==0.6.4",
 ]
 

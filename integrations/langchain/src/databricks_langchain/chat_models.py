@@ -72,6 +72,8 @@ class ChatDatabricks(BaseChatModel):
                 model="databricks-claude-3-7-sonnet",
                 temperature=0,
                 max_tokens=500,
+                timeout=30.0,  # Timeout in seconds
+                max_retries=3,  # Maximum number of retries
             )
 
             # Using a WorkspaceClient instance for custom authentication
@@ -248,6 +250,10 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
+    timeout: Optional[float] = None
+    """Timeout in seconds for the HTTP request. If None, uses the default timeout."""
+    max_retries: Optional[int] = None
+    """Maximum number of retries for failed requests. If None, uses the default retry count."""
     client: Optional[object] = Field(default=None, exclude=True)  #: :meta private:
 
     @property
@@ -288,7 +294,14 @@ class ChatDatabricks(BaseChatModel):
                 )
 
         # Always use OpenAI client (supports both chat completions and responses API)
-        self.client = get_openai_client(workspace_client=self.workspace_client)
+        # Prepare kwargs for the SDK call
+        openai_kwargs = {}
+        if self.timeout is not None:
+            openai_kwargs["timeout"] = self.timeout
+        if self.max_retries is not None:
+            openai_kwargs["max_retries"] = self.max_retries
+
+        self.client = get_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
 
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}

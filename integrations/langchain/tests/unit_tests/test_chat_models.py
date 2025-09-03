@@ -91,6 +91,55 @@ def test_workspace_client_and_target_uri_conflict() -> None:
         )
 
 
+def test_timeout_and_max_retries_parameters() -> None:
+    """Test that timeout and max_retries parameters are properly passed to the OpenAI client."""
+    from unittest.mock import Mock, patch
+
+    mock_openai_client = Mock()
+    mock_openai_client.timeout = None
+    mock_openai_client.max_retries = None
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        # Test with timeout and max_retries
+        llm = ChatDatabricks(model="test-model", timeout=60.0, max_retries=5)
+
+    # Verify get_openai_client was called with the correct parameters
+    mock_get_client.assert_called_once_with(workspace_client=None, timeout=60.0, max_retries=5)
+
+    # Test that client is set
+    assert llm.client == mock_openai_client
+    assert llm.timeout == 60.0
+    assert llm.max_retries == 5
+
+
+def test_timeout_and_max_retries_with_workspace_client() -> None:
+    """Test timeout and max_retries parameters work with workspace_client."""
+    from unittest.mock import Mock, patch
+
+    mock_workspace_client = Mock()
+    mock_openai_client = Mock()
+    mock_openai_client.timeout = None
+    mock_openai_client.max_retries = None
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        llm = ChatDatabricks(
+            model="test-model", workspace_client=mock_workspace_client, timeout=30.0, max_retries=2
+        )
+
+    # Verify get_openai_client was called with all parameters
+    mock_get_client.assert_called_once_with(
+        workspace_client=mock_workspace_client, timeout=30.0, max_retries=2
+    )
+
+    assert llm.client == mock_openai_client
+    assert llm.timeout == 30.0
+    assert llm.max_retries == 2
+
+
 def test_default_workspace_client() -> None:
     """Test that default WorkspaceClient is created when none provided."""
     from unittest.mock import Mock, patch
