@@ -237,11 +237,20 @@ def test_chat_model_stream_usage_chunk_emission():
     mock_usage = Mock()
     mock_usage.prompt_tokens = 10
     mock_usage.completion_tokens = 5
-    
+
     mock_chunks = [
         Mock(
-            choices=[Mock(delta=Mock(role="assistant", content="Hello", model_dump=Mock(return_value={"role": "assistant", "content": "Hello"})), finish_reason="stop")],
-            usage=mock_usage
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=mock_usage,
         ),
     ]
 
@@ -252,14 +261,16 @@ def test_chat_model_stream_usage_chunk_emission():
 
         llm = ChatDatabricks(model="test-model")
         messages = [HumanMessage(content="Hello")]
-        
+
         # Test with stream_usage=True
         chunks = list(llm.stream(messages, stream_usage=True))
-        
+
         # Find the usage chunk (empty content with usage_metadata)
-        usage_chunks = [chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None]
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
         assert len(usage_chunks) == 1
-        
+
         # Verify usage chunk structure
         usage_chunk = usage_chunks[0]
         assert isinstance(usage_chunk, AIMessageChunk)
@@ -276,16 +287,36 @@ def test_chat_model_stream_no_duplicate_usage_chunks():
     mock_usage = Mock()
     mock_usage.prompt_tokens = 20
     mock_usage.completion_tokens = 8
-    
+
     # Multiple chunks with usage data to test the duplicate prevention logic
     mock_chunks = [
         Mock(
-            choices=[Mock(delta=Mock(role="assistant", content="Hello", model_dump=Mock(return_value={"role": "assistant", "content": "Hello"})), finish_reason=None, logprobs=None)],
-            usage=mock_usage
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason=None,
+                    logprobs=None,
+                )
+            ],
+            usage=mock_usage,
         ),
         Mock(
-            choices=[Mock(delta=Mock(role="assistant", content=" world", model_dump=Mock(return_value={"role": "assistant", "content": " world"})), finish_reason="stop", logprobs=None)],
-            usage=mock_usage
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content=" world",
+                        model_dump=Mock(return_value={"role": "assistant", "content": " world"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=mock_usage,
         ),
     ]
 
@@ -296,11 +327,13 @@ def test_chat_model_stream_no_duplicate_usage_chunks():
 
         llm = ChatDatabricks(model="test-model")
         messages = [HumanMessage(content="Hello")]
-        
+
         chunks = list(llm.stream(messages, stream_usage=True))
-        
+
         # Should emit exactly ONE usage chunk despite multiple chunks having usage data
-        usage_chunks = [chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None]
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
         assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
 
 
