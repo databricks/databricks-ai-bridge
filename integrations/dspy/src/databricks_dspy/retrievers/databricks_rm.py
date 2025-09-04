@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import dspy
+from databricks.sdk import WorkspaceClient
 from dspy.primitives.prediction import Prediction
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,10 @@ class DatabricksRM(dspy.Retrieve):
 
         ```python
         from databricks.vector_search.client import VectorSearchClient
+        from databricks.sdk import WorkspaceClient
+
+        # Create a Databricks workspace client
+        w = WorkspaceClient()
 
         # Create a Databricks Vector Search Endpoint
         client = VectorSearchClient()
@@ -65,6 +70,7 @@ class DatabricksRM(dspy.Retrieve):
             docs_id_column_name="id",
             text_column_name="field2",
             k=3,
+            workspace_client=w,
         )
         ```
 
@@ -90,6 +96,7 @@ class DatabricksRM(dspy.Retrieve):
         docs_uri_column_name: str | None = None,
         text_column_name: str = "text",
         use_with_databricks_agent_framework: bool = False,
+        workspace_client: WorkspaceClient | None = None,
     ):
         """
         Args:
@@ -122,6 +129,8 @@ class DatabricksRM(dspy.Retrieve):
                 containing document text to retrieve.
             use_with_databricks_agent_framework (bool): Whether to use the `DatabricksRM` in a way
                 that is compatible with the Databricks Mosaic Agent Framework.
+            workspace_client (Optional[WorkspaceClient]): The workspace client to use. If not
+                provided, a new one will be created with default credentials from the environment.
         """
         super().__init__(k=k)
         self.databricks_token = databricks_token or os.environ.get("DATABRICKS_TOKEN")
@@ -153,6 +162,32 @@ class DatabricksRM(dspy.Retrieve):
                     "Mosaic Agent Framework, you must install the mlflow Python "
                     "library. Please install mlflow via `pip install mlflow`."
                 ) from None
+
+        # Use provided workspace client or create one based on credentials
+        if workspace_client:
+            self.workspace_client = workspace_client
+        elif databricks_client_secret and databricks_client_id:
+            # Use client ID and secret for authentication if they are provided
+            self.workspace_client = WorkspaceClient(
+                client_id=databricks_client_id,
+                client_secret=databricks_client_secret,
+            )
+            logger.info(
+                "Creating Databricks workspace client using service principal authentication."
+            )
+        elif databricks_token and databricks_endpoint:
+            # token-based authentication
+            self.workspace_client = WorkspaceClient(
+                host=databricks_endpoint,
+                token=databricks_token,
+            )
+            logger.info("Creating Databricks workspace client using token authentication.")
+        else:
+            # fallback to default authentication, i.e., using `~/.databrickscfg` file.
+            self.workspace_client = WorkspaceClient()
+            logger.info(
+                "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
+            )
 
     def _extract_doc_ids(self, item: dict[str, Any]) -> str:
         """Extracts the document id from a search result
@@ -237,10 +272,6 @@ class DatabricksRM(dspy.Retrieve):
             query_type=query_type,
             query_text=query_text,
             query_vector=query_vector,
-            databricks_token=self.databricks_token,
-            databricks_endpoint=self.databricks_endpoint,
-            databricks_client_id=self.databricks_client_id,
-            databricks_client_secret=self.databricks_client_secret,
             filters_json=filters_json or self.filters_json,
         )
 
@@ -305,15 +336,10 @@ class DatabricksRM(dspy.Retrieve):
         query_type: str,
         query_text: str | None,
         query_vector: list[float] | None,
-        databricks_token: str | None,
-        databricks_endpoint: str | None,
-        databricks_client_id: str | None,
-        databricks_client_secret: str | None,
         filters_json: str | None,
     ) -> dict[str, Any]:
         """
         Query a Databricks Vector Search Index via the Databricks SDK.
-        Assumes that the databricks-sdk Python library is installed.
 
         Args:
             index_name (str): Name of the Databricks vector search index to query
@@ -324,49 +350,14 @@ class DatabricksRM(dspy.Retrieve):
             query_vector (Optional[list[float]]): Numeric query vector for which to find relevant
                 documents. Exactly one of query_text or query_vector must be specified.
             filters_json (Optional[str]): JSON string representing additional query filters.
-            databricks_token (str): Databricks authentication token. If not specified,
-                the token is resolved from the current environment.
-            databricks_endpoint (str): Databricks index endpoint url. If not specified,
-                the endpoint is resolved from the current environment.
-            databricks_client_id (str): Databricks service principal id. If not specified,
-                the token is resolved from the current environment (DATABRICKS_CLIENT_ID).
-            databricks_client_secret (str): Databricks service principal secret. If not specified,
-                the endpoint is resolved from the current environment (DATABRICKS_CLIENT_SECRET).
 
         Returns:
             dict[str, Any]: Parsed JSON response from the Databricks Vector Search Index query.
         """
-
-        from databricks.sdk import WorkspaceClient
-
         if (query_text, query_vector).count(None) != 1:
             raise ValueError("Exactly one of query_text or query_vector must be specified.")
 
-        if databricks_client_secret and databricks_client_id:
-            # Use client ID and secret for authentication if they are provided
-            databricks_client = WorkspaceClient(
-                client_id=databricks_client_id,
-                client_secret=databricks_client_secret,
-            )
-            logger.info(
-                "Creating Databricks workspace client using service principal authentication."
-            )
-
-        elif databricks_token and databricks_endpoint:
-            # token-based authentication
-            databricks_client = WorkspaceClient(
-                host=databricks_endpoint,
-                token=databricks_token,
-            )
-            logger.info("Creating Databricks workspace client using token authentication.")
-        else:
-            # fallback to default authentication, i.e., using `~/.databrickscfg` file.
-            databricks_client = WorkspaceClient()
-            logger.info(
-                "Creating Databricks workspace client using credentials from `~/.databrickscfg` file."
-            )
-
-        return databricks_client.vector_search_indexes.query_index(
+        return self.workspace_client.vector_search_indexes.query_index(
             index_name=index_name,
             query_type=query_type,
             query_text=query_text,

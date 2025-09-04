@@ -49,7 +49,7 @@ def mock_vector_search_response_with_uri():
     }
 
 
-@patch("databricks.sdk.WorkspaceClient")
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_forward_string_query(mock_workspace_client, mock_vector_search_response):
     """Test forward method with string query and ANN search."""
     mock_client = MagicMock()
@@ -84,7 +84,7 @@ def test_databricks_rm_forward_string_query(mock_workspace_client, mock_vector_s
     assert result.doc_ids[0] == "doc1"
 
 
-@patch("databricks.sdk.WorkspaceClient")
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_forward_vector_query(mock_workspace_client, mock_vector_search_response):
     """Test forward method with vector query and HYBRID search."""
     mock_client = MagicMock()
@@ -107,7 +107,7 @@ def test_databricks_rm_forward_vector_query(mock_workspace_client, mock_vector_s
     assert set(call_args["columns"]) == {"id", "text"}
 
 
-@patch("databricks.sdk.WorkspaceClient")
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_agent_framework_format(
     mock_workspace_client, mock_vector_search_response_with_uri
 ):
@@ -138,8 +138,12 @@ def test_databricks_rm_agent_framework_format(
     assert doc["type"] == "Document"
 
 
-def test_databricks_rm_initialization():
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_initialization(mock_workspace_client):
     """Test initialization with token authentication."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+
     rm = DatabricksRM(
         databricks_index_name="test_index",
         databricks_endpoint="https://test.databricks.com",
@@ -155,8 +159,75 @@ def test_databricks_rm_initialization():
     assert rm.text_column_name == "text"
     assert not rm.use_with_databricks_agent_framework
 
+    # Verify WorkspaceClient was created with token auth
+    mock_workspace_client.assert_called_once_with(
+        host="https://test.databricks.com",
+        token="test_token",
+    )
+    # Workspace client should be set
+    assert rm.workspace_client == mock_client
 
-@patch("databricks.sdk.WorkspaceClient")
+
+def test_databricks_rm_initialization_with_custom_workspace_client():
+    """Test initialization with custom workspace_client."""
+    mock_workspace_client = MagicMock()
+
+    rm = DatabricksRM(
+        databricks_index_name="test_index",
+        workspace_client=mock_workspace_client,
+        k=5,
+    )
+
+    assert rm.databricks_index_name == "test_index"
+    assert rm.workspace_client == mock_workspace_client
+    assert rm.k == 5
+    assert rm.docs_id_column_name == "id"
+    assert rm.text_column_name == "text"
+    assert not rm.use_with_databricks_agent_framework
+
+
+def test_databricks_rm_query_with_custom_workspace_client():
+    """Test that custom workspace_client is used for queries."""
+    mock_workspace_client = MagicMock()
+
+    mock_response = {
+        "result": {
+            "data_array": [
+                ["doc1", "This is document 1", 0.95],
+            ]
+        },
+        "manifest": {
+            "columns": [
+                {"name": "id"},
+                {"name": "text"},
+                {"name": "score"},
+            ]
+        },
+    }
+    mock_workspace_client.vector_search_indexes.query_index.return_value.as_dict.return_value = (
+        mock_response
+    )
+
+    rm = DatabricksRM(
+        databricks_index_name="test_index",
+        workspace_client=mock_workspace_client,
+    )
+
+    result = rm("test query")
+
+    # Verify that the custom workspace_client was used for the query
+    mock_workspace_client.vector_search_indexes.query_index.assert_called_once()
+    call_args = mock_workspace_client.vector_search_indexes.query_index.call_args[1]
+    assert call_args["index_name"] == "test_index"
+    assert call_args["query_text"] == "test query"
+
+    # Verify results
+    assert len(result.docs) == 1
+    assert result.docs[0] == "This is document 1"
+    assert result.doc_ids[0] == "doc1"
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_service_principal_auth(mock_workspace_client, mock_vector_search_response):
     """Test querying with service principal authentication."""
     mock_client = MagicMock()
@@ -180,15 +251,19 @@ def test_databricks_rm_service_principal_auth(mock_workspace_client, mock_vector
     )
 
 
-def test_databricks_rm_invalid_query_type():
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_invalid_query_type(mock_workspace_client):
     """Test forward method with invalid query type."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+
     rm = DatabricksRM(databricks_index_name="test_index")
 
     with pytest.raises(ValueError, match="Invalid query_type: INVALID"):
         rm("test query", query_type="INVALID")
 
 
-@patch("databricks.sdk.WorkspaceClient")
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_missing_column_error(mock_workspace_client):
     """Test error when ID column is missing from index."""
     mock_client = MagicMock()
@@ -210,7 +285,7 @@ def test_databricks_rm_missing_column_error(mock_workspace_client):
         rm("test query")
 
 
-@patch("databricks.sdk.WorkspaceClient")
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_result_sorting(mock_workspace_client):
     """Test that results are sorted by score in descending order."""
     mock_client = MagicMock()
@@ -236,3 +311,37 @@ def test_databricks_rm_result_sorting(mock_workspace_client):
     # Should be sorted by score (highest first)
     assert result.doc_ids == ["doc1", "doc3", "doc2"]
     assert result.docs == ["Document 1", "Document 3", "Document 2"]
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_query_with_invalid_credentials(mock_workspace_client):
+    """Test that authentication errors are raised during query execution."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+    # Simulate authentication error when querying the index
+    mock_client.vector_search_indexes.query_index.side_effect = Exception("Authentication failed")
+
+    rm = DatabricksRM(
+        databricks_index_name="test_index",
+        databricks_token="invalid_token",
+        databricks_endpoint="https://test.databricks.com",
+    )
+
+    # Error occurs when trying to query, not during initialization
+    with pytest.raises(Exception, match="Authentication failed"):
+        rm("test query")
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_fallback_to_default_auth(mock_workspace_client):
+    """Test fallback to default authentication when no credentials provided."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+
+    rm = DatabricksRM(databricks_index_name="test_index")
+
+    assert rm.databricks_index_name == "test_index"
+
+    # Verify WorkspaceClient was created with no auth params (default auth)
+    mock_workspace_client.assert_called_once_with()
+    assert rm.workspace_client == mock_client
