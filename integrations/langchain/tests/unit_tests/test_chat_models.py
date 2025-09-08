@@ -229,6 +229,113 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         _assert_usage(chunk, expected)
 
 
+def test_chat_model_stream_usage_chunk_emission():
+    """Test that stream_usage=True emits a final usage-only chunk with empty content."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 10
+    mock_usage.completion_tokens = 5
+
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        # Test with stream_usage=True
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Find the usage chunk (empty content with usage_metadata)
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 1
+
+        # Verify usage chunk structure
+        usage_chunk = usage_chunks[0]
+        assert isinstance(usage_chunk, AIMessageChunk)
+        assert usage_chunk.content == ""
+        assert usage_chunk.usage_metadata["input_tokens"] == 10
+        assert usage_chunk.usage_metadata["output_tokens"] == 5
+        assert usage_chunk.usage_metadata["total_tokens"] == 15
+
+
+def test_chat_model_stream_no_duplicate_usage_chunks():
+    """Test that usage_chunk_emitted flag prevents duplicate usage chunks."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 20
+    mock_usage.completion_tokens = 8
+
+    # Multiple chunks with usage data to test the duplicate prevention logic
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason=None,
+                    logprobs=None,
+                )
+            ],
+            usage=mock_usage,
+        ),
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content=" world",
+                        model_dump=Mock(return_value={"role": "assistant", "content": " world"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Should emit exactly ONE usage chunk despite multiple chunks having usage data
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
+
+
 class GetWeather(BaseModel):
     """Get the current weather in a given location"""
 
