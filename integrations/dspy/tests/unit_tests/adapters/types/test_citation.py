@@ -1,5 +1,9 @@
+from unittest import mock
+
+import dspy
 import pydantic
 import pytest
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 import databricks_dspy
 
@@ -124,68 +128,84 @@ def test_citations_from_dict_list():
     assert citations.citations[0].document_title == "Weather Guide"
 
 
-def test_citations_postprocessing():
-    from dspy.adapters.chat_adapter import ChatAdapter
-    from dspy.signatures.signature import Signature
+@pytest.mark.asyncio
+@pytest.mark.skipif(dspy.__version__ <= "3.0.3", reason="Streaming with custom types is not supported in dspy < 3.0.3")
+async def test_streaming_with_citations():
+    class AnswerWithSources(dspy.Signature):
+        """Answer questions using provided documents with citations."""
+        documents: list[databricks_dspy.DatabricksDocument] = dspy.InputField()
+        question: str = dspy.InputField()
+        answer: str = dspy.OutputField()
+        citations: databricks_dspy.DatabricksCitations = dspy.OutputField()
 
-    class CitationSignature(Signature):
-        """Test signature with citations."""
-        question: str = databricks_dspy.InputField()
-        answer: str = databricks_dspy.OutputField()
-        citations: databricks_dspy.DatabricksCitations = databricks_dspy.OutputField()
+    class MyProgram(dspy.Module):
+        def __init__(self):
+            super().__init__()
+            self.predict = dspy.Predict(AnswerWithSources)
 
-    adapter = ChatAdapter()
+        def forward(self, documents, question, **kwargs):
+            return self.predict(documents=documents, question=question, **kwargs)
 
-    outputs = [{
-        "text": "[[ ## answer ## ]]\nThe answer is blue.\n\n[[ ## citations ## ]]\n[]",
-        "citations": [
-            {
-                "cited_text": "The sky is blue",
-                "document_index": 0,
-                "document_title": "Weather Guide",
-                "start_char_index": 10,
-                "end_char_index": 25,
-                "supported_text": "The sky is blue"
+    async def citation_stream(*args, **kwargs):
+        # Stream chunks with citation data in provider_specific_fields
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="[[ ##"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" answer"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" ## ]]\n\n"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="Water"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" boils"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" at"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" 100°C"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="."))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="\n\n"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(
+            content="",
+            provider_specific_fields={
+                "citation": {
+                    "type": "char_location",
+                    "cited_text": "Water boils at 100°C",
+                    "document_index": 0,
+                    "document_title": "Physics Facts",
+                    "start_char_index": 0,
+                    "end_char_index": 19
+                }
             }
-        ]
-    }]
+        ))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="\n\n"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content="[[ ##"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" completed"))])
+        yield ModelResponseStream(model="claude", choices=[StreamingChoices(delta=Delta(content=" ## ]]"))])
 
-    result = adapter._call_postprocess(
-        CitationSignature.delete("citations"),
-        CitationSignature,
-        outputs
-    )
+    # Mock the final response choice to include provider_specific_fields with citations
+    with mock.patch("litellm.acompletion", return_value=citation_stream()):
+        program = dspy.streamify(
+            MyProgram(),
+            stream_listeners=[
+                dspy.streaming.StreamListener(signature_field_name="citations"),
+            ],
+        )
 
-    assert len(result) == 1
-    assert "citations" in result[0]
-    assert isinstance(result[0]["citations"], databricks_dspy.DatabricksCitations)
-    assert len(result[0]["citations"]) == 1
-    assert result[0]["citations"][0].cited_text == "The sky is blue"
+        # Create test documents
+        docs = [databricks_dspy.DatabricksDocument(data="Water boils at 100°C at standard pressure.", title="Physics Facts")]
 
+        with dspy.context(lm=dspy.LM("anthropic/claude-3-5-sonnet-20241022", cache=False)):
+            output = program(documents=docs, question="What temperature does water boil?")
+            citation_chunks = []
+            final_prediction = None
+            async for value in output:
+                if isinstance(value, dspy.streaming.StreamResponse) and value.signature_field_name == "citations":
+                    citation_chunks.append(value)
+                elif isinstance(value, dspy.Prediction):
+                    final_prediction = value
 
-def test_citation_extraction_from_lm_response():
-    from unittest.mock import MagicMock
+            # Test that we received citation chunks from streaming
+            assert len(citation_chunks) > 0
+            citation_chunk = citation_chunks[0]
+            assert isinstance(citation_chunk.chunk, databricks_dspy.DatabricksCitations)
+            assert len(citation_chunk.chunk) == 1
+            assert citation_chunk.chunk[0].cited_text == "Water boils at 100°C"
+            assert citation_chunk.chunk[0].document_title == "Physics Facts"
 
-    mock_choice = MagicMock(message=MagicMock(provider_specific_fields={"citations": [[
-        {
-            "type": "char_location",
-            "cited_text": "The sky is blue",
-            "document_index": 0,
-            "document_title": "Weather Guide",
-            "start_char_index": 10,
-            "end_char_index": 25,
-            "supported_text": "The sky is blue"
-        }
-    ]]}))
-
-    lm = databricks_dspy.DatabricksLM(model="test")
-    citations = lm._extract_citations_from_response(mock_choice)
-
-    assert citations is not None
-    assert len(citations) == 1
-    assert citations[0]["cited_text"] == "The sky is blue"
-    assert citations[0]["document_index"] == 0
-    assert citations[0]["document_title"] == "Weather Guide"
-    assert citations[0]["start_char_index"] == 10
-    assert citations[0]["end_char_index"] == 25
-    assert citations[0]["supported_text"] == "The sky is blue"
+            # Test that prediction contains the expected fields
+            assert final_prediction is not None
+            assert hasattr(final_prediction, "answer")
+            assert hasattr(final_prediction, "citations")

@@ -78,8 +78,6 @@ class DatabricksDocument(Type):
 
         return [document_block]
 
-
-
     @classmethod
     def description(cls) -> str:
         """Description of the document type for use in prompts."""

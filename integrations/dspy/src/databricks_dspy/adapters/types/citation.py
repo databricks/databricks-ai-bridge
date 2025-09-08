@@ -1,7 +1,8 @@
-from typing import Any
+from typing import Any, Optional
 
 import pydantic
 from dspy.adapters.types.base_type import Type
+from litellm import ModelResponseStream
 
 
 class DatabricksCitations(Type):
@@ -150,6 +151,28 @@ class DatabricksCitations(Type):
                 return {"citations": [cls.Citation(**data)]}
 
         raise ValueError(f"Received invalid value for `dspy.Citations`: {data}")
+    
+    @classmethod
+    def is_streamable(cls) -> bool:
+        return True
+    
+    @classmethod
+    def parse_stream_chunk(cls, chunk: ModelResponseStream) -> Optional["DatabricksCitations"]:
+        try:
+            if chunk_citation := chunk.choices[0].delta.provider_specific_fields.get("citation", None):
+                return cls.from_dict_list([chunk_citation])
+        except Exception:
+            return None
+    
+    @classmethod
+    def use_native_response(cls, model: str) -> bool:
+        return "claude" in model
+    
+    @classmethod
+    def parse_lm_response(cls, response: str | dict[str, Any]) -> Optional["DatabricksCitations"]:
+        if isinstance(response, str):
+            return None
+        return cls.from_dict_list(response.get("citations", []))
 
     def __iter__(self):
         """Allow iteration over citations."""
