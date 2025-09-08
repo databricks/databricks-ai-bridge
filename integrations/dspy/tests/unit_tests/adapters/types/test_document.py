@@ -28,7 +28,7 @@ def test_document_with_all_fields():
         data="Water boils at 100°C at standard pressure.",
         title="Physics Facts",
         media_type="application/pdf",
-        context="Laboratory conditions"
+        context="Laboratory conditions",
     )
     assert doc.data == "Water boils at 100°C at standard pressure."
     assert doc.title == "Physics Facts"
@@ -38,9 +38,7 @@ def test_document_with_all_fields():
 
 def test_document_format():
     doc = databricks_dspy.DatabricksDocument(
-        data="The sky is blue.",
-        title="Color Facts",
-        media_type="text/plain"
+        data="The sky is blue.", title="Color Facts", media_type="text/plain"
     )
 
     formatted = doc.format()

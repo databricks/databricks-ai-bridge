@@ -17,24 +17,26 @@ class DatabricksCitations(Type):
         import dspy
         from dspy.signatures import Signature
 
+
         class AnswerWithSources(Signature):
             '''Answer questions using provided documents with citations.'''
+
             documents: list[dspy.DatabricksDocument] = dspy.InputField()
             question: str = dspy.InputField()
             answer: str = dspy.OutputField()
             citations: dspy.DatabricksCitations = dspy.OutputField()
 
+
         # Create documents to provide as sources
         docs = [
             dspy.DatabricksDocument(
-                data="The Earth orbits the Sun in an elliptical path.",
-                title="Basic Astronomy Facts"
+                data="The Earth orbits the Sun in an elliptical path.", title="Basic Astronomy Facts"
             ),
             dspy.DatabricksDocument(
                 data="Water boils at 100°C at standard atmospheric pressure.",
                 title="Physics Fundamentals",
-                metadata={"author": "Dr. Smith", "year": 2023}
-            )
+                metadata={"author": "Dr. Smith", "year": 2023},
+            ),
         ]
 
         # Use with a model that supports citations like Claude
@@ -49,6 +51,7 @@ class DatabricksCitations(Type):
 
     class Citation(Type):
         """Individual citation with character location information."""
+
         type: str = "char_location"
         cited_text: str
         document_index: int
@@ -68,7 +71,7 @@ class DatabricksCitations(Type):
                 "cited_text": self.cited_text,
                 "document_index": self.document_index,
                 "start_char_index": self.start_char_index,
-                "end_char_index": self.end_char_index
+                "end_char_index": self.end_char_index,
             }
 
             if self.document_title:
@@ -101,7 +104,7 @@ class DatabricksCitations(Type):
                     "document_title": "Weather Guide",
                     "start_char_index": 0,
                     "end_char_index": 15,
-                    "supported_text": "The sky was blue yesterday."
+                    "supported_text": "The sky was blue yesterday.",
                 }
             ]
             citations = Citations.from_dict_list(citations_dict)
@@ -151,23 +154,25 @@ class DatabricksCitations(Type):
                 return {"citations": [cls.Citation(**data)]}
 
         raise ValueError(f"Received invalid value for `dspy.Citations`: {data}")
-    
+
     @classmethod
     def is_streamable(cls) -> bool:
         return True
-    
+
     @classmethod
     def parse_stream_chunk(cls, chunk: ModelResponseStream) -> Optional["DatabricksCitations"]:
         try:
-            if chunk_citation := chunk.choices[0].delta.provider_specific_fields.get("citation", None):
+            if chunk_citation := chunk.choices[0].delta.provider_specific_fields.get(
+                "citation", None
+            ):
                 return cls.from_dict_list([chunk_citation])
         except Exception:
             return None
-    
+
     @classmethod
     def use_native_response(cls, model: str) -> bool:
         return "claude" in model
-    
+
     @classmethod
     def parse_lm_response(cls, response: str | dict[str, Any]) -> Optional["DatabricksCitations"]:
         if isinstance(response, str):

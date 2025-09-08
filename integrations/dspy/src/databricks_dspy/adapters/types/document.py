@@ -22,23 +22,25 @@ class DatabricksDocument(Type):
         import dspy
         from dspy.signatures import Signature
 
+
         class AnswerWithSources(Signature):
             '''Answer questions using provided documents with citations.'''
+
             documents: list[dspy.DatabricksDocument] = dspy.InputField()
             question: str = dspy.InputField()
             answer: str = dspy.OutputField()
             citations: dspy.DatabricksCitations = dspy.OutputField()
 
+
         # Create documents
         docs = [
             dspy.DatabricksDocument(
-                data="The Earth orbits the Sun in an elliptical path.",
-                title="Basic Astronomy Facts"
+                data="The Earth orbits the Sun in an elliptical path.", title="Basic Astronomy Facts"
             ),
             dspy.DatabricksDocument(
                 data="Water boils at 100°C at standard atmospheric pressure.",
                 title="Physics Fundamentals",
-            )
+            ),
         ]
 
         # Use with a citation-supporting model
@@ -62,12 +64,8 @@ class DatabricksDocument(Type):
         """
         document_block = {
             "type": "document",
-            "source": {
-                "type": "text",
-                "media_type": self.media_type,
-                "data": self.data
-            },
-            "citations": {"enabled": True}
+            "source": {"type": "text", "media_type": self.media_type, "data": self.data},
+            "citations": {"enabled": True},
         }
 
         if self.title:
