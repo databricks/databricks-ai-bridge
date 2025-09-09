@@ -64,16 +64,15 @@ def _parse_query_result(
         rows.append(row)
 
     dataframe = pd.DataFrame(rows, columns=header)
-    # Default to dataframe
-    query_result = dataframe
+    if return_pandas:
+        return dataframe
+    
+    if truncate_results:
+        query_result = _truncate_result(dataframe)
+    else:
+        query_result = dataframe.to_markdown()
 
-    if return_pandas == False:
-        if truncate_results:
-            query_result = _truncate_result(query_result)
-        elif return_pandas == False:
-            query_result = query_result.to_markdown().strip()
-
-    return query_result
+    return query_result.strip()
 
 
 def _truncate_result(dataframe):
@@ -98,14 +97,12 @@ def _truncate_result(dataframe):
     if len(truncated_df) == 0:
         return ""
 
-    truncated_result = truncated_df
+    truncated_result = truncated_df.to_markdown()
 
     # Double-check edge case if we overshot by one
-    if _count_tokens(truncated_result.to_markdown()) > MAX_TOKENS_OF_DATA:
-        truncated_result = truncated_df.iloc[:-1]
-
-    final_output = truncated_result.to_markdown().strip()
-    return final_output
+    if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
+        truncated_result = truncated_df.iloc[:-1].to_markdown()
+    return truncated_result
 
 
 class Genie:
