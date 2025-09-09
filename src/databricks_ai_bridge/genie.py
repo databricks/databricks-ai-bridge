@@ -66,7 +66,7 @@ def _parse_query_result(
     dataframe = pd.DataFrame(rows, columns=header)
     if return_pandas:
         return dataframe
-    
+
     if truncate_results:
         query_result = _truncate_result(dataframe)
     else:
