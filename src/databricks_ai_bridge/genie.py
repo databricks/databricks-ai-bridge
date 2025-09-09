@@ -98,7 +98,7 @@ def _truncate_result(dataframe, return_pandas : bool = False):
     truncated_result = truncated_df
 
     # Double-check edge case if we overshot by one
-    if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
+    if _count_tokens(truncated_result.to_markdown()) > MAX_TOKENS_OF_DATA:
         truncated_result = truncated_df.iloc[:-1]
     
     final_output = truncated_result if return_pandas else truncated_result.to_markdown().strip()
