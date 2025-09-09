@@ -29,7 +29,9 @@ class GenieResponse:
 
 
 @mlflow.trace(span_type="PARSER")
-def _parse_query_result(resp, truncate_results, return_pandas : bool = False) -> Union[str, pd.DataFrame]:
+def _parse_query_result(
+    resp, truncate_results, return_pandas: bool = False
+) -> Union[str, pd.DataFrame]:
     output = resp["result"]
     if not output:
         return "EMPTY"
@@ -67,13 +69,13 @@ def _parse_query_result(resp, truncate_results, return_pandas : bool = False) ->
 
     if truncate_results:
         query_result = _truncate_result(query_result, return_pandas)
-    elif (return_pandas == False):
+    elif return_pandas == False:
         query_result = query_result.to_markdown().strip()
 
     return query_result
 
 
-def _truncate_result(dataframe, return_pandas : bool = False):
+def _truncate_result(dataframe, return_pandas: bool = False):
     query_result = dataframe.to_markdown()
     tokens_used = _count_tokens(query_result)
 
@@ -100,7 +102,7 @@ def _truncate_result(dataframe, return_pandas : bool = False):
     # Double-check edge case if we overshot by one
     if _count_tokens(truncated_result.to_markdown()) > MAX_TOKENS_OF_DATA:
         truncated_result = truncated_df.iloc[:-1]
-    
+
     final_output = truncated_result if return_pandas else truncated_result.to_markdown().strip()
     return final_output
 
@@ -140,7 +142,7 @@ class Genie:
         return resp
 
     @mlflow.trace()
-    def poll_for_result(self, conversation_id, message_id, return_pandas : bool = False):
+    def poll_for_result(self, conversation_id, message_id, return_pandas: bool = False):
         @mlflow.trace()
         def poll_query_results(attachment_id, query_str, description):
             iteration_count = 0
@@ -165,7 +167,7 @@ class Genie:
             return GenieResponse(
                 f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
                 query_str,
-                description
+                description,
             )
 
         @mlflow.trace()
@@ -208,6 +210,6 @@ class Genie:
         return poll_result()
 
     @mlflow.trace()
-    def ask_question(self, question, return_pandas : bool = False):
+    def ask_question(self, question, return_pandas: bool = False):
         resp = self.start_conversation(question)
         return self.poll_for_result(resp["conversation_id"], resp["message_id"], return_pandas)
