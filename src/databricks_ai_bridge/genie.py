@@ -29,7 +29,9 @@ class GenieResponse:
 
 
 @mlflow.trace(span_type="PARSER")
-def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
+def _parse_query_result(
+    resp, truncate_results, return_pandas: bool = False
+) -> Union[str, pd.DataFrame]:
     output = resp["result"]
     if not output:
         return "EMPTY"
@@ -62,6 +64,8 @@ def _parse_query_result(resp, truncate_results) -> Union[str, pd.DataFrame]:
         rows.append(row)
 
     dataframe = pd.DataFrame(rows, columns=header)
+    if return_pandas:
+        return dataframe
 
     if truncate_results:
         query_result = _truncate_result(dataframe)
@@ -103,7 +107,11 @@ def _truncate_result(dataframe):
 
 class Genie:
     def __init__(
-        self, space_id, client: Optional["WorkspaceClient"] = None, truncate_results=False
+        self,
+        space_id,
+        client: Optional["WorkspaceClient"] = None,
+        truncate_results=False,
+        return_pandas: bool = False,
     ):
         self.space_id = space_id
         workspace_client = client or WorkspaceClient()
@@ -114,6 +122,7 @@ class Genie:
             "Content-Type": "application/json",
         }
         self.truncate_results = truncate_results
+        self.return_pandas = return_pandas
 
     @mlflow.trace()
     def start_conversation(self, content):
@@ -149,7 +158,7 @@ class Genie:
                 )["statement_response"]
                 state = resp["status"]["state"]
                 if state == "SUCCEEDED":
-                    result = _parse_query_result(resp, self.truncate_results)
+                    result = _parse_query_result(resp, self.truncate_results, self.return_pandas)
                     return GenieResponse(result, query_str, description)
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
