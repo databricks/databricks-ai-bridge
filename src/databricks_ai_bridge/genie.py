@@ -67,7 +67,7 @@ def _parse_query_result(
     # Default to dataframe
     query_result = dataframe
 
-    if (return_pandas == False):
+    if return_pandas == False:
         if truncate_results:
             query_result = _truncate_result(query_result)
         elif return_pandas == False:
@@ -110,7 +110,11 @@ def _truncate_result(dataframe):
 
 class Genie:
     def __init__(
-        self, space_id, client: Optional["WorkspaceClient"] = None, truncate_results=False, return_pandas: bool = False
+        self,
+        space_id,
+        client: Optional["WorkspaceClient"] = None,
+        truncate_results=False,
+        return_pandas: bool = False,
     ):
         self.space_id = space_id
         workspace_client = client or WorkspaceClient()
@@ -122,7 +126,6 @@ class Genie:
         }
         self.truncate_results = truncate_results
         self.return_pandas = return_pandas
-        
 
     @mlflow.trace()
     def start_conversation(self, content):
