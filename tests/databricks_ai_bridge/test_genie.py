@@ -122,6 +122,47 @@ def test_ask_question(genie, mock_workspace_client):
     ]
     genie_result = genie.ask_question("What is the meaning of life?")
     assert genie_result.result == "Answer"
+    assert genie_result.conversation_id == "123"
+
+
+def test_ask_question_continued_conversation(genie, mock_workspace_client):
+    mock_workspace_client.genie._api.do.side_effect = [
+        {"conversation_id": "123", "message_id": "456"},
+        {"status": "COMPLETED", "attachments": [{"text": {"content": "42"}}]},
+    ]
+    genie_result = genie.ask_question("What is the meaning of life?", "123")
+    assert genie_result.result == "42"
+    assert genie_result.conversation_id == "123"
+
+
+def test_ask_question_calls_start_once_and_not_create_on_new(genie, mock_workspace_client):
+    # arrange
+    with (
+        patch.object(genie, "create_message") as mock_create_message,
+        patch.object(genie, "start_conversation") as mock_start_conversation,
+        patch.object(genie, "poll_for_result") as mock_poll_for_result,
+    ):
+        # act
+        genie.ask_question("What is the meaning of life?")
+
+        # assert
+        mock_create_message.assert_not_called()
+        mock_start_conversation.assert_called_once()
+
+
+def test_ask_question_calls_create_once_and_not_start_on_continue(genie, mock_workspace_client):
+    # arrange
+    with (
+        patch.object(genie, "create_message") as mock_create_message,
+        patch.object(genie, "start_conversation") as mock_start_conversation,
+        patch.object(genie, "poll_for_result") as mock_poll_for_result,
+    ):
+        # act
+        genie.ask_question("What is the meaning of life?", "123")
+
+        # assert
+        mock_create_message.assert_called_once()
+        mock_start_conversation.assert_not_called()
 
 
 def test_parse_query_result_empty():
