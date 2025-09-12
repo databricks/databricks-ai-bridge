@@ -59,8 +59,14 @@ jobs:
           fi
           echo "Version validation passed: $PYPROJECT_VERSION"
 
-      - name: Update package name for testing
-        run: sed -i 's/^name *= *".*"/name = "dspy-databricks-test"/' pyproject.toml
+      - name: Update package name and version for testing
+        run: |
+          # Update package name for TestPyPI
+          sed -i 's/^name *= *".*"/name = "dspy-databricks-test"/' pyproject.toml
+          # Add dev suffix with timestamp for unique TestPyPI versions
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          sed -i "s/^version *= *\"\(.*\)\"/version = \"\1.dev${TIMESTAMP}\"/" pyproject.toml
+          echo "Updated version for TestPyPI: $(grep '^version = ' pyproject.toml)"
       - name: Build package
         run: |
           python -m build
@@ -114,10 +120,11 @@ jobs:
       - name: Test installation from TestPyPI
         run: |
           sleep 30  # Wait for package to be available
+          # Install the test package with dev version
           pip install --index-url https://test.pypi.org/simple/ \
                       --extra-index-url https://pypi.org/simple \
-                      databricks-dspy==${{ needs.extract_tag.outputs.version }}
-          python -c "import databricks_dspy; print('Package installed successfully')"
+                      dspy-databricks-test
+          python -c "import databricks_dspy; print('Package installed successfully from TestPyPI')"
 
   publish_pypi:
     runs-on: ubuntu-latest
