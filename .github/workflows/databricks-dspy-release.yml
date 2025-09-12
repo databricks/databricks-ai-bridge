@@ -62,7 +62,7 @@ jobs:
       - name: Update package name and version for testing
         run: |
           # Update package name for TestPyPI
-          sed -i 's/^name *= *".*"/name = "databricks-dspy-test-chenmoney"/' pyproject.toml
+          sed -i 's/^name *= *".*"/name = "databricks-dspy-test"/' pyproject.toml
           # Add dev suffix with timestamp for unique TestPyPI versions
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           sed -i "s/^version *= *\"\(.*\)\"/version = \"\1.dev${TIMESTAMP}\"/" pyproject.toml
@@ -123,7 +123,7 @@ jobs:
           # Install the test package with dev version
           pip install --index-url https://test.pypi.org/simple/ \
                       --extra-index-url https://pypi.org/simple \
-                      databricks-dspy-test-chenmoney
+                      databricks-dspy-test
           python -c "import databricks_dspy; print('Package installed successfully from TestPyPI')"
 
   publish_pypi:
