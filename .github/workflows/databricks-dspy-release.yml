@@ -59,27 +59,42 @@ jobs:
           fi
           echo "Version validation passed: $PYPROJECT_VERSION"
 
-      - name: Update package name and version for testing
+      - name: Build original package for PyPI
         run: |
+          python -m build
+          # Save original package for PyPI
+          mkdir -p dist-pypi
+          cp dist/* dist-pypi/
+
+      - name: Build test package for TestPyPI
+        run: |
+          # Clean previous build
+          rm -rf dist/*
           # Update package name for TestPyPI
           sed -i 's/^name *= *".*"/name = "databricks-dspy-test"/' pyproject.toml
           # Add dev suffix with timestamp for unique TestPyPI versions
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           sed -i "s/^version *= *\"\(.*\)\"/version = \"\1.dev${TIMESTAMP}\"/" pyproject.toml
           echo "Updated version for TestPyPI: $(grep '^version = ' pyproject.toml)"
-      - name: Build package
-        run: |
+          # Build test package
           python -m build
 
-      - name: Check package
+      - name: Check packages
         run: |
           twine check dist/*
+          twine check dist-pypi/*
 
-      - name: Upload build artifacts
+      - name: Upload TestPyPI artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-files
+          name: dist-test-files
           path: integrations/dspy/dist/
+
+      - name: Upload PyPI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-pypi-files
+          path: integrations/dspy/dist-pypi/
 
   publish_test_pypi:
     runs-on: ubuntu-latest
@@ -89,7 +104,7 @@ jobs:
         working-directory: integrations/dspy
     environment:
       name: test-pypi
-      url: https://test.pypi.org/p/databricks-dspy
+      url: https://test.pypi.org/p/databricks-dspy-test
     permissions:
       id-token: write
     steps:
@@ -101,10 +116,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download build artifacts
+      - name: Download TestPyPI artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist-files
+          name: dist-test-files
           path: integrations/dspy/dist/
 
       - name: Install twine
@@ -147,10 +162,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Download build artifacts
+      - name: Download PyPI artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist-files
+          name: dist-pypi-files
           path: integrations/dspy/dist/
 
       - name: Install twine
