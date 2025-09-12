@@ -148,7 +148,9 @@ class Genie:
     @mlflow.trace()
     def poll_for_result(self, conversation_id, message_id):
         @mlflow.trace()
-        def poll_query_results(attachment_id, query_str, description, conversation_id=conversation_id):
+        def poll_query_results(
+            attachment_id, query_str, description, conversation_id=conversation_id
+        ):
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
                 iteration_count += 1
@@ -167,13 +169,16 @@ class Genie:
                     time.sleep(5)
                 else:
                     return GenieResponse(
-                        f"No query result: {resp['state']}", query_str, description, returned_conversation_id
+                        f"No query result: {resp['state']}",
+                        query_str,
+                        description,
+                        returned_conversation_id,
                     )
             return GenieResponse(
                 f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
                 query_str,
                 description,
-                conversation_id
+                conversation_id,
             )
 
         @mlflow.trace()
@@ -194,12 +199,16 @@ class Genie:
                         description = query_obj.get("description", "")
                         query_str = query_obj.get("query", "")
                         attachment_id = attachment["attachment_id"]
-                        return poll_query_results(attachment_id, query_str, description, returned_conversation_id)
+                        return poll_query_results(
+                            attachment_id, query_str, description, returned_conversation_id
+                        )
                     if resp["status"] == "COMPLETED":
                         text_content = next(r for r in resp["attachments"] if "text" in r)["text"][
                             "content"
                         ]
-                        return GenieResponse(result=text_content, conversation_id=returned_conversation_id)
+                        return GenieResponse(
+                            result=text_content, conversation_id=returned_conversation_id
+                        )
                 elif resp["status"] in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
                     return GenieResponse(result=f"Genie query {resp['status'].lower()}.")
                 elif resp["status"] == "FAILED":
@@ -212,7 +221,7 @@ class Genie:
                     time.sleep(5)
             return GenieResponse(
                 f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds",
-                conversation_id=conversation_id
+                conversation_id=conversation_id,
             )
 
         return poll_result()
@@ -226,7 +235,7 @@ class Genie:
             resp = self.start_conversation(question)
         else:
             resp = self.create_message(conversation_id, question)
-        genie_response =  self.poll_for_result(resp["conversation_id"], resp["message_id"])
+        genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
         if not genie_response.conversation_id:
             genie_response.conversation_id = resp["conversation_id"]
         return genie_response
