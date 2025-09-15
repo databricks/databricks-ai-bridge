@@ -185,7 +185,7 @@ def test_parse_query_result_with_data():
         "result": {
             "data_array": [
                 ["1", "Alice", "2023-10-01T14:30:45Z"],
-                ["2", "Bob", "2023-10-02T09:15:22Z"],
+                ["2", "Bob", "2023-10-02 09:15:22Z"],  # test without T separator
             ]
         },
     }
