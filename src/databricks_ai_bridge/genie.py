@@ -55,8 +55,18 @@ def _parse_query_result(
                 row.append(float(value))
             elif type_name == "BOOLEAN":
                 row.append(value.lower() == "true")
-            elif type_name == "DATE" or type_name == "TIMESTAMP":
+            elif type_name == "DATE":
+                # first 10 characters represent the date
                 row.append(datetime.strptime(value[:10], "%Y-%m-%d").date())
+            elif type_name == "TIMESTAMP":
+                # first 19 characters represent the date and time to the second
+                # https://docs.databricks.com/aws/en/sql/language-manual/data-types/timestamp-type
+                timestamp_str = value[:19]
+                # Handle both 'T' and space separators
+                if 'T' in timestamp_str:
+                    row.append(datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S"))
+                else:
+                    row.append(datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S"))
             elif type_name == "BINARY":
                 row.append(bytes(value, "utf-8"))
             else:

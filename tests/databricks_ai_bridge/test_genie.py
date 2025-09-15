@@ -184,8 +184,8 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                ["1", "Alice", "2023-10-01T00:00:00Z"],
-                ["2", "Bob", "2023-10-02T00:00:00Z"],
+                ["1", "Alice", "2023-10-01T14:30:45Z"],
+                ["2", "Bob", "2023-10-02T09:15:22Z"],
             ]
         },
     }
@@ -194,7 +194,7 @@ def test_parse_query_result_with_data():
         {
             "id": [1, 2],
             "name": ["Alice", "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), datetime(2023, 10, 2).date()],
+            "created_at": [datetime(2023, 10, 1, 14, 30, 45), datetime(2023, 10, 2, 9, 15, 22)],
         }
     )
     assert result == expected_df.to_markdown()
@@ -213,7 +213,7 @@ def test_parse_query_result_with_null_values():
         },
         "result": {
             "data_array": [
-                ["1", None, "2023-10-01T00:00:00Z"],
+                ["1", None, "2023-10-01T14:30:45Z"],
                 ["2", "Bob", None],
             ]
         },
@@ -223,7 +223,7 @@ def test_parse_query_result_with_null_values():
         {
             "id": [1, 2],
             "name": [None, "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), None],
+            "created_at": [datetime(2023, 10, 1, 14, 30, 45), None],
         }
     )
     assert result == expected_df.to_markdown()
@@ -245,16 +245,16 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    ["1", "Alice", "2023-10-01T00:00:00Z"],
-                    ["2", "Bob", "2023-10-02T00:00:00Z"],
-                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
-                    ["4", "David", "2023-10-04T00:00:00Z"],
-                    ["5", "Eve", "2023-10-05T00:00:00Z"],
-                    ["6", "Frank", "2023-10-06T00:00:00Z"],
-                    ["7", "Grace", "2023-10-07T00:00:00Z"],
-                    ["8", "Hank", "2023-10-08T00:00:00Z"],
-                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
-                    ["10", "Jack", "2023-10-10T00:00:00Z"],
+                    ["1", "Alice", "2023-10-01T14:30:45Z"],
+                    ["2", "Bob", "2023-10-02T09:15:22Z"],
+                    ["3", "Charlie", "2023-10-03T16:45:30Z"],
+                    ["4", "David", "2023-10-04T11:20:15Z"],
+                    ["5", "Eve", "2023-10-05T08:35:40Z"],
+                    ["6", "Frank", "2023-10-06T19:10:55Z"],
+                    ["7", "Grace", "2023-10-07T13:25:10Z"],
+                    ["8", "Hank", "2023-10-08T07:50:25Z"],
+                    ["9", "Ivy", "2023-10-09T20:15:35Z"],
+                    ["10", "Jack", "2023-10-10T12:40:50Z"],
                 ]
             },
         }
@@ -265,12 +265,11 @@ def test_parse_query_result_trims_data(truncate_results):
                 result
                 == pd.DataFrame(
                     {
-                        "id": [1, 2, 3],
-                        "name": ["Alice", "Bob", "Charlie"],
+                        "id": [1, 2],
+                        "name": ["Alice", "Bob"],
                         "created_at": [
-                            datetime(2023, 10, 1).date(),
-                            datetime(2023, 10, 2).date(),
-                            datetime(2023, 10, 3).date(),
+                            datetime(2023, 10, 1, 14, 30, 45),
+                            datetime(2023, 10, 2, 9, 15, 22),
                         ],
                     }
                 ).to_markdown()
@@ -295,16 +294,16 @@ def test_parse_query_result_trims_data(truncate_results):
                             "Jack",
                         ],
                         "created_at": [
-                            datetime(2023, 10, 1).date(),
-                            datetime(2023, 10, 2).date(),
-                            datetime(2023, 10, 3).date(),
-                            datetime(2023, 10, 4).date(),
-                            datetime(2023, 10, 5).date(),
-                            datetime(2023, 10, 6).date(),
-                            datetime(2023, 10, 7).date(),
-                            datetime(2023, 10, 8).date(),
-                            datetime(2023, 10, 9).date(),
-                            datetime(2023, 10, 10).date(),
+                            datetime(2023, 10, 1, 14, 30, 45),
+                            datetime(2023, 10, 2, 9, 15, 22),
+                            datetime(2023, 10, 3, 16, 45, 30),
+                            datetime(2023, 10, 4, 11, 20, 15),
+                            datetime(2023, 10, 5, 8, 35, 40),
+                            datetime(2023, 10, 6, 19, 10, 55),
+                            datetime(2023, 10, 7, 13, 25, 10),
+                            datetime(2023, 10, 8, 7, 50, 25),
+                            datetime(2023, 10, 9, 20, 15, 35),
+                            datetime(2023, 10, 10, 12, 40, 50),
                         ],
                     }
                 ).to_markdown()
@@ -373,7 +372,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "id": [int(row[0]) for row in data_array],
                 "name": [row[1] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ").date() for row in data_array
+                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
                 ],
             }
         )
