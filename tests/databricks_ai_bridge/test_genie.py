@@ -184,8 +184,8 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                ["1", "Alice", "2023-10-01T14:30:45Z"],
-                ["2", "Bob", "2023-10-02 09:15:22Z"],  # test without T separator
+                ["1", "Alice", "2023-10-01T00:00:00Z"],
+                ["2", "Bob", "2023-10-02T00:00:00Z"],
             ]
         },
     }
@@ -194,7 +194,7 @@ def test_parse_query_result_with_data():
         {
             "id": [1, 2],
             "name": ["Alice", "Bob"],
-            "created_at": [datetime(2023, 10, 1, 14, 30, 45), datetime(2023, 10, 2, 9, 15, 22)],
+            "created_at": [datetime(2023, 10, 1), datetime(2023, 10, 2)],
         }
     )
     assert result == expected_df.to_markdown()
@@ -213,7 +213,7 @@ def test_parse_query_result_with_null_values():
         },
         "result": {
             "data_array": [
-                ["1", None, "2023-10-01T14:30:45Z"],
+                ["1", None, "2023-10-01T00:00:00Z"],
                 ["2", "Bob", None],
             ]
         },
@@ -223,7 +223,7 @@ def test_parse_query_result_with_null_values():
         {
             "id": [1, 2],
             "name": [None, "Bob"],
-            "created_at": [datetime(2023, 10, 1, 14, 30, 45), None],
+            "created_at": [datetime(2023, 10, 1), None],
         }
     )
     assert result == expected_df.to_markdown()
@@ -232,7 +232,7 @@ def test_parse_query_result_with_null_values():
 @pytest.mark.parametrize("truncate_results", [True, False])
 def test_parse_query_result_trims_data(truncate_results):
     # patch MAX_TOKENS_OF_DATA to 100 for this test
-    with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 100):
+    with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 120):
         resp = {
             "manifest": {
                 "schema": {
@@ -245,16 +245,16 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    ["1", "Alice", "2023-10-01T14:30:45Z"],
-                    ["2", "Bob", "2023-10-02T09:15:22Z"],
-                    ["3", "Charlie", "2023-10-03T16:45:30Z"],
-                    ["4", "David", "2023-10-04T11:20:15Z"],
-                    ["5", "Eve", "2023-10-05T08:35:40Z"],
-                    ["6", "Frank", "2023-10-06T19:10:55Z"],
-                    ["7", "Grace", "2023-10-07T13:25:10Z"],
-                    ["8", "Hank", "2023-10-08T07:50:25Z"],
-                    ["9", "Ivy", "2023-10-09T20:15:35Z"],
-                    ["10", "Jack", "2023-10-10T12:40:50Z"],
+                    ["1", "Alice", "2023-10-01T00:00:00Z"],
+                    ["2", "Bob", "2023-10-02T00:00:00Z"],
+                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
+                    ["4", "David", "2023-10-04T00:00:00Z"],
+                    ["5", "Eve", "2023-10-05T00:00:00Z"],
+                    ["6", "Frank", "2023-10-06T00:00:00Z"],
+                    ["7", "Grace", "2023-10-07T00:00:00Z"],
+                    ["8", "Hank", "2023-10-08T00:00:00Z"],
+                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
+                    ["10", "Jack", "2023-10-10T00:00:00Z"],
                 ]
             },
         }
@@ -265,16 +265,17 @@ def test_parse_query_result_trims_data(truncate_results):
                 result
                 == pd.DataFrame(
                     {
-                        "id": [1, 2],
-                        "name": ["Alice", "Bob"],
+                        "id": [1, 2, 3],
+                        "name": ["Alice", "Bob", "Charlie"],
                         "created_at": [
-                            datetime(2023, 10, 1, 14, 30, 45),
-                            datetime(2023, 10, 2, 9, 15, 22),
+                            datetime(2023, 10, 1),
+                            datetime(2023, 10, 2),
+                            datetime(2023, 10, 3),
                         ],
                     }
                 ).to_markdown()
             )
-            assert _count_tokens(result) <= 100
+            assert _count_tokens(result) <= 120
         else:
             assert (
                 result
@@ -294,16 +295,16 @@ def test_parse_query_result_trims_data(truncate_results):
                             "Jack",
                         ],
                         "created_at": [
-                            datetime(2023, 10, 1, 14, 30, 45),
-                            datetime(2023, 10, 2, 9, 15, 22),
-                            datetime(2023, 10, 3, 16, 45, 30),
-                            datetime(2023, 10, 4, 11, 20, 15),
-                            datetime(2023, 10, 5, 8, 35, 40),
-                            datetime(2023, 10, 6, 19, 10, 55),
-                            datetime(2023, 10, 7, 13, 25, 10),
-                            datetime(2023, 10, 8, 7, 50, 25),
-                            datetime(2023, 10, 9, 20, 15, 35),
-                            datetime(2023, 10, 10, 12, 40, 50),
+                            datetime(2023, 10, 1),
+                            datetime(2023, 10, 2),
+                            datetime(2023, 10, 3),
+                            datetime(2023, 10, 4),
+                            datetime(2023, 10, 5),
+                            datetime(2023, 10, 6),
+                            datetime(2023, 10, 7),
+                            datetime(2023, 10, 8),
+                            datetime(2023, 10, 9),
+                            datetime(2023, 10, 10),
                         ],
                     }
                 ).to_markdown()
@@ -407,3 +408,37 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
         ]
         result = genie.poll_for_result("123", "456")
         assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
+
+
+def test_parse_query_result_with_timestamp_formats():
+    resp = {
+        "manifest": {"schema": {"columns": [{"name": "created_at", "type_name": "TIMESTAMP"}]}},
+        "result": {
+            "data_array": [
+                ["2023-10-01T14:30:45"],  # %Y-%m-%dT%H:%M:%S
+                ["2023-10-02 09:15:22"],  # %Y-%m-%d %H:%M:%S
+                ["2023-10-03T16:45"],  # %Y-%m-%dT%H:%M
+                ["2023-10-04 11:20"],  # %Y-%m-%d %H:%M
+                ["2023-10-05T08"],  # %Y-%m-%dT%H
+                ["2023-10-06 19"],  # %Y-%m-%d %H
+                ["2023-10-07"],  # %Y-%m-%d
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=True)
+    assert (
+        result
+        == pd.DataFrame(
+            {
+                "created_at": [
+                    datetime(2023, 10, 1, 14, 30, 45),  # full timestamp
+                    datetime(2023, 10, 2, 9, 15, 22),  # full timestamp with space
+                    datetime(2023, 10, 3, 16, 45),  # hour and minute only
+                    datetime(2023, 10, 4, 11, 20),  # hour and minute with space
+                    datetime(2023, 10, 5, 8),  # hour only
+                    datetime(2023, 10, 6, 19),  # hour only with space
+                    datetime(2023, 10, 7),  # date only
+                ],
+            }
+        ).to_markdown()
+    )

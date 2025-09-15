@@ -59,14 +59,33 @@ def _parse_query_result(
                 # first 10 characters represent the date
                 row.append(datetime.strptime(value[:10], "%Y-%m-%d").date())
             elif type_name == "TIMESTAMP":
-                # first 19 characters represent the date and time to the second
                 # https://docs.databricks.com/aws/en/sql/language-manual/data-types/timestamp-type
-                timestamp_str = value[:19]
-                # Handle both 'T' and space separators
-                if 'T' in timestamp_str:
-                    row.append(datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S"))
-                else:
-                    row.append(datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S"))
+                # first 19 characters represent the date and time to the second
+                # doesn't account for possibility of +/- in first character
+                stripped_value = value[:19]
+                timestamp_formats = [
+                    "%Y-%m-%dT%H:%M:%S",  # 2023-10-01T14:30:45
+                    "%Y-%m-%d %H:%M:%S",  # 2023-10-01 14:30:45
+                    "%Y-%m-%dT%H:%M",  # 2023-10-01T14:30
+                    "%Y-%m-%d %H:%M",  # 2023-10-01 14:30
+                    "%Y-%m-%dT%H",  # 2023-10-01T14
+                    "%Y-%m-%d %H",  # 2023-10-01 14
+                    "%Y-%m-%d",  # 2023-10-01
+                ]
+
+                parsed_timestamp = None
+                for fmt in timestamp_formats:
+                    try:
+                        parsed_timestamp = datetime.strptime(stripped_value, fmt)
+                        break
+                    except ValueError:
+                        continue
+
+                if parsed_timestamp is None:
+                    # Fallback: just parse the date part
+                    parsed_timestamp = datetime.strptime(value[:10], "%Y-%m-%d")
+
+                row.append(parsed_timestamp)
             elif type_name == "BINARY":
                 row.append(bytes(value, "utf-8"))
             else:
