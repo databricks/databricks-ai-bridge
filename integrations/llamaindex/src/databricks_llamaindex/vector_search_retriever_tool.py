@@ -116,6 +116,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             signature = inspect.signature(self._index.similarity_search)
             kwargs = {**kwargs, **(self.model_extra or {})}
             kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+            print(kwargs)
 
             # Allow kwargs to override the default values upon invocation
             num_results = kwargs.pop("num_results", self.num_results)

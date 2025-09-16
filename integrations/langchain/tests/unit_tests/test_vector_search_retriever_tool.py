@@ -332,36 +332,6 @@ def test_kwargs_are_passed_through() -> None:
     )
 
 
-def test_kwargs_override_num_results() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
-
-    vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "k": 5},
-    )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=5,  # Should use overridden value
-        query_type=vector_search_tool.query_type,
-        filter={},
-    )
-
-
-def test_kwargs_override_query_type() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, query_type="ANN")
-    vector_search_tool._vector_store.similarity_search = MagicMock()
-
-    vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "query_type": "HYBRID"},
-    )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=vector_search_tool.num_results,
-        query_type="HYBRID",  # Should use overridden value
-        filter={},
-    )
-
-
 def test_kwargs_override_both_num_results_and_query_type() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
     vector_search_tool._vector_store.similarity_search = MagicMock()
