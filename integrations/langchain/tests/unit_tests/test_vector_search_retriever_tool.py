@@ -330,3 +330,18 @@ def test_kwargs_are_passed_through() -> None:
         score_threshold=0.5,
         extra_param="something random",
     )
+
+
+def test_kwargs_override_both_num_results_and_query_type() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke(
+        {"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"},
+    )
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what cities are in Germany",
+        k=3,  # Should use overridden value
+        query_type="HYBRID",  # Should use overridden value
+        filter={},
+    )
