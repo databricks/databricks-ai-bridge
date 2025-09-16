@@ -117,6 +117,10 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             kwargs = {**kwargs, **(self.model_extra or {})}
             kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
 
+            # Allow kwargs to override the default values upon invocation
+            num_results = kwargs.pop("num_results", self.num_results)
+            query_type = kwargs.pop("query_type", self.query_type)
+
             # Ensure that we don't have duplicate keys
             kwargs.update(
                 {
@@ -124,8 +128,8 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                     "query_vector": query_vector,
                     "columns": self.columns,
                     "filters": combined_filters,
-                    "num_results": self.num_results,
-                    "query_type": self.query_type,
+                    "num_results": num_results,
+                    "query_type": query_type,
                 }
             )
             search_resp = self._index.similarity_search(**kwargs)

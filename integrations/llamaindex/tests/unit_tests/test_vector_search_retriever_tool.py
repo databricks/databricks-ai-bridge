@@ -242,3 +242,54 @@ def test_filters_are_combined() -> None:
         query_type=vector_search_tool.query_type,
         query_vector=None,
     )
+
+
+def test_kwargs_override_num_results() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10)
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.call(
+        query="what cities are in Germany", num_results=5
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={},
+        num_results=5,  # Should use overridden value
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+    )
+
+
+def test_kwargs_override_query_type() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, query_type="ANN")
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.call(
+        query="what cities are in Germany", query_type="HYBRID"
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={},
+        num_results=vector_search_tool.num_results,
+        query_type="HYBRID",  # Should use overridden value
+        query_vector=None,
+    )
+
+
+def test_kwargs_override_both_num_results_and_query_type() -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
+    vector_search_tool._index.similarity_search = MagicMock()
+
+    vector_search_tool.call(
+        query="what cities are in Germany", num_results=3, query_type="HYBRID"
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={},
+        num_results=3,  # Should use overridden value
+        query_type="HYBRID",  # Should use overridden value
+        query_vector=None,
+    )
