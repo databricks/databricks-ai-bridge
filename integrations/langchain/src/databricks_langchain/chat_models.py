@@ -1158,6 +1158,8 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
     if not isinstance(content, str):
+        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
+        # for example, output parsers expect a string
         content = json.dumps(content)
 
     if role == "user":
@@ -1198,6 +1200,8 @@ def _convert_dict_to_message_chunk(
     role = _dict.get("role", default_role)
     content = _dict.get("content") or ""
     if not isinstance(content, str):
+        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
+        # for example, output parsers expect a string
         content = json.dumps(content)
 
     if role == "user":
