@@ -1189,3 +1189,20 @@ def test_prepare_inputs_with_extra_params():
 
     assert result["param1"] == "value1"
     assert result["param2"] == "value2"
+
+
+def test_convert_dict_to_message_with_non_string_content():
+    """Test _convert_dict_to_message handles non-string content by JSON encoding it."""
+    # Test with list of dict content (matching gpt oss)
+    message_dict = {
+        "role": "assistant",
+        "content": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]},
+            {"type": "text", "text": "asdf"},
+        ],
+    }
+    result = _convert_dict_to_message(message_dict)
+    expected = AIMessage(
+        content='[{"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]}, {"type": "text", "text": "asdf"}]'
+    )
+    assert result == expected

@@ -42,9 +42,9 @@ def construct_docs_with_score(
 
         metadata = {}
         if column_1:
-            metadata[column_1] = f"row {row_index+1}, column 1"
+            metadata[column_1] = f"row {row_index + 1}, column 1"
         if column_2:
-            metadata[column_2] = f"row {row_index+1}, column 2"
+            metadata[column_2] = f"row {row_index + 1}, column 2"
         if column_3:
             metadata[column_3] = num_cols[row_index][0]
         if column_4:
@@ -52,7 +52,7 @@ def construct_docs_with_score(
         if include_score:
             metadata["score"] = score
 
-        page_content = f"row {row_index+1}, column {page_content_column[-1]}"
+        page_content = f"row {row_index + 1}, column {page_content_column[-1]}"
         return (document_class(page_content=page_content, metadata=metadata), score)
 
     return [make_document(0, 0.673), make_document(1, 0.236)]
