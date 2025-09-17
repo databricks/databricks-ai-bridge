@@ -1156,8 +1156,11 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
 
 def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
     role = _dict["role"]
-    content = _dict.get("content")
-    content = content if content is not None else ""
+    content = _dict.get("content") or ""
+    if not isinstance(content, str):
+        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
+        # for example, output parsers expect a string
+        content = json.dumps(content)
 
     if role == "user":
         return HumanMessage(content=content)
@@ -1195,8 +1198,11 @@ def _convert_dict_to_message_chunk(
     usage: Optional[Dict[str, Any]] = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
-    content = _dict.get("content")
-    content = content if content is not None else ""
+    content = _dict.get("content") or ""
+    if not isinstance(content, str):
+        # for non-string content, serialize it into a string to maintain compatibility with downstream consumers
+        # for example, output parsers expect a string
+        content = json.dumps(content)
 
     if role == "user":
         return HumanMessageChunk(content=content)
