@@ -194,7 +194,7 @@ def test_parse_query_result_with_data():
         {
             "id": [1, 2],
             "name": ["Alice", "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), datetime(2023, 10, 2).date()],
+            "created_at": [datetime(2023, 10, 1), datetime(2023, 10, 2)],
         }
     )
     assert result == expected_df.to_markdown()
@@ -223,7 +223,7 @@ def test_parse_query_result_with_null_values():
         {
             "id": [1, 2],
             "name": [None, "Bob"],
-            "created_at": [datetime(2023, 10, 1).date(), None],
+            "created_at": [datetime(2023, 10, 1), None],
         }
     )
     assert result == expected_df.to_markdown()
@@ -232,7 +232,7 @@ def test_parse_query_result_with_null_values():
 @pytest.mark.parametrize("truncate_results", [True, False])
 def test_parse_query_result_trims_data(truncate_results):
     # patch MAX_TOKENS_OF_DATA to 100 for this test
-    with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 100):
+    with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 120):
         resp = {
             "manifest": {
                 "schema": {
@@ -268,14 +268,14 @@ def test_parse_query_result_trims_data(truncate_results):
                         "id": [1, 2, 3],
                         "name": ["Alice", "Bob", "Charlie"],
                         "created_at": [
-                            datetime(2023, 10, 1).date(),
-                            datetime(2023, 10, 2).date(),
-                            datetime(2023, 10, 3).date(),
+                            datetime(2023, 10, 1),
+                            datetime(2023, 10, 2),
+                            datetime(2023, 10, 3),
                         ],
                     }
                 ).to_markdown()
             )
-            assert _count_tokens(result) <= 100
+            assert _count_tokens(result) <= 120
         else:
             assert (
                 result
@@ -295,16 +295,16 @@ def test_parse_query_result_trims_data(truncate_results):
                             "Jack",
                         ],
                         "created_at": [
-                            datetime(2023, 10, 1).date(),
-                            datetime(2023, 10, 2).date(),
-                            datetime(2023, 10, 3).date(),
-                            datetime(2023, 10, 4).date(),
-                            datetime(2023, 10, 5).date(),
-                            datetime(2023, 10, 6).date(),
-                            datetime(2023, 10, 7).date(),
-                            datetime(2023, 10, 8).date(),
-                            datetime(2023, 10, 9).date(),
-                            datetime(2023, 10, 10).date(),
+                            datetime(2023, 10, 1),
+                            datetime(2023, 10, 2),
+                            datetime(2023, 10, 3),
+                            datetime(2023, 10, 4),
+                            datetime(2023, 10, 5),
+                            datetime(2023, 10, 6),
+                            datetime(2023, 10, 7),
+                            datetime(2023, 10, 8),
+                            datetime(2023, 10, 9),
+                            datetime(2023, 10, 10),
                         ],
                     }
                 ).to_markdown()
@@ -373,7 +373,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "id": [int(row[0]) for row in data_array],
                 "name": [row[1] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ").date() for row in data_array
+                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
                 ],
             }
         )
@@ -408,3 +408,37 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
         ]
         result = genie.poll_for_result("123", "456")
         assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
+
+
+def test_parse_query_result_with_timestamp_formats():
+    resp = {
+        "manifest": {"schema": {"columns": [{"name": "created_at", "type_name": "TIMESTAMP"}]}},
+        "result": {
+            "data_array": [
+                ["2023-10-01T14:30:45"],  # %Y-%m-%dT%H:%M:%S
+                ["2023-10-02 09:15:22"],  # %Y-%m-%d %H:%M:%S
+                ["2023-10-03T16:45"],  # %Y-%m-%dT%H:%M
+                ["2023-10-04 11:20"],  # %Y-%m-%d %H:%M
+                ["2023-10-05T08"],  # %Y-%m-%dT%H
+                ["2023-10-06 19"],  # %Y-%m-%d %H
+                ["2023-10-07"],  # %Y-%m-%d
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=True)
+    assert (
+        result
+        == pd.DataFrame(
+            {
+                "created_at": [
+                    datetime(2023, 10, 1, 14, 30, 45),  # full timestamp
+                    datetime(2023, 10, 2, 9, 15, 22),  # full timestamp with space
+                    datetime(2023, 10, 3, 16, 45),  # hour and minute only
+                    datetime(2023, 10, 4, 11, 20),  # hour and minute with space
+                    datetime(2023, 10, 5, 8),  # hour only
+                    datetime(2023, 10, 6, 19),  # hour only with space
+                    datetime(2023, 10, 7),  # date only
+                ],
+            }
+        ).to_markdown()
+    )
