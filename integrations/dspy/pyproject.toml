@@ -1,6 +1,6 @@
 [project]
 name = "databricks-dspy"
-version = "0.0.1.dev0"
+version = "0.1.0"
 description = "Databricks integration for DSPy"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
