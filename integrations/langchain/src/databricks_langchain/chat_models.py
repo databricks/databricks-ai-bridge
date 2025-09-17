@@ -1156,7 +1156,7 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
 
 def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
     role = _dict["role"]
-    content = _dict.get("content", "")
+    content = _dict.get("content") or ""
     if not isinstance(content, str):
         content = json.dumps(content)
 
@@ -1196,7 +1196,7 @@ def _convert_dict_to_message_chunk(
     usage: Optional[Dict[str, Any]] = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
-    content = _dict.get("content", "")
+    content = _dict.get("content") or ""
     if not isinstance(content, str):
         content = json.dumps(content)
 
