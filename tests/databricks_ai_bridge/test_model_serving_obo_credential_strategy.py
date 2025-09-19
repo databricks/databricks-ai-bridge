@@ -1,12 +1,13 @@
+import logging
 import sys
 import threading
 from unittest.mock import MagicMock
 
+import pytest
 from databricks.sdk.core import Config
 
 from databricks_ai_bridge.model_serving_obo_credential_strategy import ModelServingUserCredentials
-import logging
-import pytest
+
 
 def test_agent_user_credentials(monkeypatch):
     # Guarantee that the tests defaults to env variables rather than config file.
@@ -124,6 +125,7 @@ def test_agent_user_credentials_with_mlflowserving_mock(monkeypatch):
     # Verify fetch_obo_token was called again
     assert mock_agent_utils.fetch_obo_token.call_count >= 2
 
+
 @pytest.mark.parametrize(
     "should_log",
     [
@@ -148,4 +150,4 @@ def test_logging_statements(caplog, monkeypatch, should_log):
     with caplog.at_level(logging.ERROR):
         headers = cfg.authenticate()
     logged = "Getting Invokers Credentials from Model Serving" in caplog.text
-    assert(logged == should_log)
+    assert logged == should_log

@@ -16,9 +16,11 @@ logger = logging.getLogger(__name__)
 def _is_debug_mode():
     return os.getenv("OBO_DEBUG_MODE", "false") == "true"
 
+
 def _log_debug_information(debug_str):
     if _is_debug_mode():
         logger.error(debug_str)
+
 
 def is_gevent_running():
     """
@@ -44,7 +46,8 @@ def is_gevent_running():
         return False
     except ImportError:
         return False
-    
+
+
 def should_fetch_model_serving_environment_oauth() -> bool:
     """
     Check whether this is the model serving environment
@@ -75,12 +78,13 @@ def _get_invokers_token_fallback():
 def _get_invokers_token_from_mlflowserving():
     try:
         from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+
         _log_debug_information("[Debug] Retrieving OBO Token from Scoring Server")
 
         if _is_debug_mode():
             is_gevent = is_gevent_running()
-            _log_debug_information(f"[Debug] Gevent Running: ${is_gevent}")
-        
+            _log_debug_information(f"[Debug] Gevent Running: {is_gevent}")
+
         return fetch_obo_token()
     except ImportError:
         return _get_invokers_token_fallback()
