@@ -13,6 +13,38 @@ from databricks.sdk.credentials_provider import (
 logger = logging.getLogger(__name__)
 
 
+def _is_debug_mode():
+    return os.getenv("OBO_DEBUG_MODE", "false") == "true"
+
+def _log_debug_information(debug_str):
+    if _is_debug_mode():
+        logger.error(debug_str)
+
+def is_gevent_running():
+    """
+    Check if gevent is running in async mode.
+
+    Returns:
+        bool: True if gevent is active and running, False otherwise
+    """
+    try:
+        import gevent
+
+        # Check if gevent monkey patching is active
+        if hasattr(gevent, "socket") and hasattr(gevent.socket, "socket"):
+            # Additional check to see if we're in a gevent context
+            try:
+                from gevent import getcurrent
+
+                current = getcurrent()
+                # If we get a gevent greenlet (not the main greenlet), gevent is running
+                return current is not None and hasattr(current, "switch")
+            except Exception:
+                return False
+        return False
+    except ImportError:
+        return False
+    
 def should_fetch_model_serving_environment_oauth() -> bool:
     """
     Check whether this is the model serving environment
@@ -28,18 +60,27 @@ def should_fetch_model_serving_environment_oauth() -> bool:
 
 
 def _get_invokers_token_fallback():
+    _log_debug_information("[Debug] Using Invokers Token Fallback")
     main_thread = threading.main_thread()
     thread_data = main_thread.__dict__
     invokers_token = None
     if "invokers_token" in thread_data:
+        _log_debug_information("[Debug] Found Invokers Token in Thread Data")
         invokers_token = thread_data["invokers_token"]
+    else:
+        _log_debug_information("[Debug] Unable to find Invokers Token in Thread Data")
     return invokers_token
 
 
 def _get_invokers_token_from_mlflowserving():
     try:
         from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+        _log_debug_information("[Debug] Retrieving OBO Token from Scoring Server")
 
+        if _is_debug_mode():
+            is_gevent = is_gevent_running()
+            _log_debug_information(f"[Debug] Gevent Running: ${is_gevent}")
+        
         return fetch_obo_token()
     except ImportError:
         return _get_invokers_token_fallback()
@@ -48,12 +89,14 @@ def _get_invokers_token_from_mlflowserving():
 def _get_invokers_token():
     invokers_token = _get_invokers_token_from_mlflowserving()
     if invokers_token is None:
+        _log_debug_information("[Debug] Invokers token is None")
         raise RuntimeError(
             "Unable to read end user token in Databricks Model Serving. "
             "Please ensure you have specified UserAuthPolicy when logging the agent model "
             "and On Behalf of User Authorization for Agents is enabled in your workspace. "
             "If the issue persists, contact Databricks Support"
         )
+    _log_debug_information("[Debug] Retrieved Invokers Token Successfully")
     return invokers_token
 
 
@@ -120,6 +163,7 @@ class ModelServingUserCredentials(CredentialsStrategy):
     # Override
     def __call__(self, cfg: Config) -> CredentialsProvider:
         if should_fetch_model_serving_environment_oauth():
+            _log_debug_information("[Debug] Getting Invokers Credentials from Model Serving")
             header_factory = model_serving_auth_visitor(cfg)
             if not header_factory:
                 raise ValueError(
