@@ -1,7 +1,9 @@
+import logging
 import sys
 import threading
 from unittest.mock import MagicMock
 
+import pytest
 from databricks.sdk.core import Config
 
 from databricks_ai_bridge.model_serving_obo_credential_strategy import ModelServingUserCredentials
@@ -122,3 +124,30 @@ def test_agent_user_credentials_with_mlflowserving_mock(monkeypatch):
 
     # Verify fetch_obo_token was called again
     assert mock_agent_utils.fetch_obo_token.call_count >= 2
+
+
+@pytest.mark.parametrize(
+    "should_log",
+    [
+        True,
+        False,
+    ],
+)
+def test_logging_statements(caplog, monkeypatch, should_log):
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "x")
+
+    monkeypatch.setenv("IS_IN_DB_MODEL_SERVING_ENV", "true")
+    monkeypatch.setenv("DB_MODEL_SERVING_HOST_URL", "x")
+    monkeypatch.setenv("OBO_DEBUG_MODE", "true" if should_log else "false")
+
+    invokers_token_val = "databricks_invokers_token"
+    current_thread = threading.current_thread()
+    thread_data = current_thread.__dict__
+    thread_data["invokers_token"] = invokers_token_val
+
+    cfg = Config(credentials_strategy=ModelServingUserCredentials())
+    assert cfg.auth_type == "model_serving_user_credentials"
+    with caplog.at_level(logging.ERROR):
+        headers = cfg.authenticate()
+    logged = "Getting Invokers Credentials from Model Serving" in caplog.text
+    assert logged == should_log
