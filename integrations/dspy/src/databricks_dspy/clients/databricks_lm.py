@@ -9,45 +9,38 @@ logger = logging.getLogger(__name__)
 
 
 class DatabricksLM(dspy.LM):
-    def __init__(
-        self,
-        model: str,
-        workspace_client: Optional[WorkspaceClient] = None,
-        create_pt_endpoint: bool = False,
-        pt_entity: Optional[PtServedModel] = None,
-        **kwargs,
-    ):
-        """Subclass of `dspy.LM` for compatibility with Databricks.
+    """Subclass of `dspy.LM` for compatibility with Databricks.
 
-        Args:
-            model: The model to use. Must start with 'databricks/'.
-            workspace_client: The workspace client to use. If not provided, a new one will be
-                created with default credentials from the environment.
-            create_pt_endpoint: Whether to create a provisioned throughput endpoint to make LM
-                calls.
-            pt_entity: The entity to serve, only used when `create_pt_endpoint` is True.
+    Args:
+        model: The model to use. Must start with 'databricks/'.
+        workspace_client: The workspace client to use. If not provided, a new one will be
+            created with default credentials from the environment.
+        create_pt_endpoint: Whether to create a provisioned throughput endpoint to make LM
+            calls.
+        pt_entity: The entity to serve, only used when `create_pt_endpoint` is True.
 
-        Example 1: Use a Databricks model with preconfigured workspace client.
+    Example 1: Use a Databricks model with preconfigured workspace client.
 
-        ```python
-        import dspy
-        import databricks_dspy
-        from databricks.sdk import WorkspaceClient
+        .. code-block:: python
 
-        w = WorkspaceClient()
-        lm = databricks_dspy.DatabricksLM(
-            "databricks/databricks-llama-4-maverick",
-            workspace_client=w,
-        )
-        dspy.configure(lm=lm)
+            import dspy
+            import databricks_dspy
+            from databricks.sdk import WorkspaceClient
 
-        predict = dspy.Predict("q->a")
-        print(predict(q="why did a chicken cross the kitchen?"))
-        ```
+            w = WorkspaceClient()
+            lm = databricks_dspy.DatabricksLM(
+                "databricks/databricks-llama-4-maverick",
+                workspace_client=w,
+            )
+            dspy.configure(lm=lm)
 
-        Example 2: Create a provisioned throughput endpoint for a Databricks model.
+            predict = dspy.Predict("q->a")
+            print(predict(q="why did a chicken cross the kitchen?"))
 
-        ```python
+    Example 2: Create a provisioned throughput endpoint for a Databricks model.
+
+    .. code-block:: python
+
         import dspy
         import databricks_dspy
         from databricks.sdk import WorkspaceClient
@@ -69,8 +62,16 @@ class DatabricksLM(dspy.LM):
 
         predict = dspy.Predict("q->a")
         print(predict(q="why did a chicken cross the kitchen?"))
-        ```
-        """
+    """
+
+    def __init__(
+        self,
+        model: str,
+        workspace_client: Optional[WorkspaceClient] = None,
+        create_pt_endpoint: bool = False,
+        pt_entity: Optional[PtServedModel] = None,
+        **kwargs,
+    ):
         if not model.startswith("databricks/"):
             raise ValueError(
                 "`model` must start with 'databricks/' when using `DatabricksLM`, "

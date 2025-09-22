@@ -37,49 +37,49 @@ class DatabricksRM(dspy.Retrieve):
         (example adapted from "Databricks: How to create and query a Vector Search Index:
         https://docs.databricks.com/en/generative-ai/create-query-vector-search.html#create-a-vector-search-index)
 
-        ```python
-        from databricks.vector_search.client import VectorSearchClient
-        from databricks.sdk import WorkspaceClient
+        .. code-block:: python
 
-        # Create a Databricks workspace client
-        w = WorkspaceClient()
+            from databricks.vector_search.client import VectorSearchClient
+            from databricks.sdk import WorkspaceClient
 
-        # Create a Databricks Vector Search Endpoint
-        client = VectorSearchClient()
-        client.create_endpoint(name="your_vector_search_endpoint_name", endpoint_type="STANDARD")
+            # Create a Databricks workspace client
+            w = WorkspaceClient()
 
-        # Create a Databricks Direct Access Vector Search Index
-        index = client.create_direct_access_index(
-            endpoint_name="your_vector_search_endpoint_name",
-            index_name="your_index_name",
-            primary_key="id",
-            embedding_dimension=1024,
-            embedding_vector_column="text_vector",
-            schema={
-                "id": "int",
-                "field2": "str",
-                "field3": "float",
-                "text_vector": "array<float>",
-            },
-        )
+            # Create a Databricks Vector Search Endpoint
+            client = VectorSearchClient()
+            client.create_endpoint(name="your_vector_search_endpoint_name", endpoint_type="STANDARD")
 
-        # Create a DatabricksRM retriever module to query the Databricks Direct Access Vector
-        # Search Index
-        retriever = DatabricksRM(
-            databricks_index_name="your_index_name",
-            docs_id_column_name="id",
-            text_column_name="field2",
-            k=3,
-            workspace_client=w,
-        )
-        ```
+            # Create a Databricks Direct Access Vector Search Index
+            index = client.create_direct_access_index(
+                endpoint_name="your_vector_search_endpoint_name",
+                index_name="your_index_name",
+                primary_key="id",
+                embedding_dimension=1024,
+                embedding_vector_column="text_vector",
+                schema={
+                    "id": "int",
+                    "field2": "str",
+                    "field3": "float",
+                    "text_vector": "array<float>",
+                },
+            )
+
+            # Create a DatabricksRM retriever module to query the Databricks Direct Access Vector
+            # Search Index
+            retriever = DatabricksRM(
+                databricks_index_name="your_index_name",
+                docs_id_column_name="id",
+                text_column_name="field2",
+                k=3,
+                workspace_client=w,
+            )
 
         Below is a code snippet that shows how to query the Databricks Direct Access Vector
         Search Index using the DatabricksRM retriever module:
 
-        ```python
-        retrieved_results = DatabricksRM(query="Example query text"))
-        ```
+        .. code-block:: python
+
+            retrieved_results = DatabricksRM(query="Example query text"))
     """
 
     def __init__(
