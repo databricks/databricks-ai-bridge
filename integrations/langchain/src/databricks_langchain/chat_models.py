@@ -224,6 +224,34 @@ class ChatDatabricks(BaseChatModel):
 
         To use tool calls, your model endpoint must support ``tools`` parameter. See [Function calling on Databricks](https://python.langchain.com/docs/integrations/chat/databricks/#function-calling-on-databricks) for more information.
 
+    **Custom inputs and outputs**:
+
+        Pass additional context or configuration to the model using the ``custom_inputs`` keyword argument.
+        Access model-specific metadata from the ``custom_outputs`` attribute of the response.
+
+        .. code-block:: python
+
+            # Pass custom inputs to the model
+            messages = [("human", "Hello, how are you?")]
+            custom_inputs = {"user_id": "12345", "session_id": "abc123"}
+
+            response = llm.invoke(messages, custom_inputs=custom_inputs)
+            print(response.content)
+
+            # Access custom outputs from the response (if provided by the model)
+            if hasattr(response, "custom_outputs"):
+                print(f"Custom outputs: {response.custom_outputs}")
+
+        .. code-block:: python
+
+            # Custom inputs also work with streaming
+            for chunk in llm.stream(messages, custom_inputs=custom_inputs):
+                print(chunk.content, end="")
+
+                # Check for custom outputs in chunks
+                if hasattr(chunk, "custom_outputs"):
+                    print(f"Custom outputs: {chunk.custom_outputs}")
+
     """  # noqa: E501
 
     model_config = ConfigDict(populate_by_name=True)
@@ -327,9 +355,11 @@ class ChatDatabricks(BaseChatModel):
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
+        *,
+        custom_inputs: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        data = self._prepare_inputs(messages, stop, **kwargs)
+        data = self._prepare_inputs(messages, stop, custom_inputs=custom_inputs, **kwargs)
 
         if self.use_responses_api:
             # Use OpenAI client with responses API
@@ -345,6 +375,8 @@ class ChatDatabricks(BaseChatModel):
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
         stream: bool = False,
+        *,
+        custom_inputs: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {
@@ -353,6 +385,10 @@ class ChatDatabricks(BaseChatModel):
             **self.extra_params,  # type: ignore
             **kwargs,
         }
+        if custom_inputs is not None:
+            data["extra_body"] = {
+                "custom_inputs": custom_inputs,
+            }
 
         # Format data based on whether we're using responses API or chat completions
         if self.use_responses_api:
@@ -484,6 +520,8 @@ class ChatDatabricks(BaseChatModel):
             invalid_tool_calls=invalid_tool_calls,
             id=response.id,
         )
+        if hasattr(response, "custom_outputs"):
+            message.custom_outputs = response.custom_outputs
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_chatagent_response_to_chat_result(self, response: Any) -> ChatResult:
@@ -496,6 +534,8 @@ class ChatDatabricks(BaseChatModel):
         # Since we only enter this when response.messages exists, we can directly access it
         messages = response.messages
         message = AIMessage(content=messages, id=getattr(response, "id", None))
+        if hasattr(response, "custom_outputs"):
+            message.custom_outputs = response.custom_outputs
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
@@ -509,7 +549,6 @@ class ChatDatabricks(BaseChatModel):
 
         generations = []
         for choice in response.choices:
-            # Use model_dump instead of manual dict reconstruction
             message_dict = choice.message.model_dump(exclude_unset=True)
             # Ensure content is not None
             if message_dict.get("content") is None:
@@ -550,12 +589,15 @@ class ChatDatabricks(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         *,
         stream_usage: Optional[bool] = None,
+        custom_inputs: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         if stream_usage is None:
             stream_usage = self.stream_usage
 
-        data = self._prepare_inputs(messages, stop, stream=True, **kwargs)
+        data = self._prepare_inputs(
+            messages, stop, stream=True, custom_inputs=custom_inputs, **kwargs
+        )
 
         usage_chunk_emitted = False
         final_usage = None
@@ -1162,12 +1204,13 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
         # for example, output parsers expect a string
         content = json.dumps(content)
 
+    lc_message = None
     if role == "user":
-        return HumanMessage(content=content)
+        lc_message = HumanMessage(content=content)
     elif role == "system":
-        return SystemMessage(content=content)
+        lc_message = SystemMessage(content=content)
     elif role == "tool":
-        return ToolMessage(
+        lc_message = ToolMessage(
             content=content, tool_call_id=_dict.get("tool_call_id"), id=_dict.get("id")
         )
     elif role == "assistant":
@@ -1181,7 +1224,7 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
                     tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
                 except Exception as e:
                     invalid_tool_calls.append(make_invalid_tool_call(raw_tool_call, str(e)))
-        return AIMessage(
+        lc_message = AIMessage(
             content=content,
             additional_kwargs=additional_kwargs,
             id=_dict.get("id"),
@@ -1189,7 +1232,11 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
             invalid_tool_calls=invalid_tool_calls,
         )
     else:
-        return ChatMessage(content=content, role=role)
+        lc_message = ChatMessage(content=content, role=role)
+
+    if _dict.get("custom_outputs"):
+        lc_message.custom_outputs = _dict.get("custom_outputs")
+    return lc_message
 
 
 def _convert_dict_to_message_chunk(
@@ -1204,12 +1251,13 @@ def _convert_dict_to_message_chunk(
         # for example, output parsers expect a string
         content = json.dumps(content)
 
+    lc_chunk = None
     if role == "user":
-        return HumanMessageChunk(content=content)
+        lc_chunk = HumanMessageChunk(content=content)
     elif role == "system":
-        return SystemMessageChunk(content=content)
+        lc_chunk = SystemMessageChunk(content=content)
     elif role == "tool":
-        return ToolMessageChunk(
+        lc_chunk = ToolMessageChunk(
             content=content, tool_call_id=_dict.get("tool_call_id", ""), id=_dict.get("id")
         )
     elif role == "assistant" or role is None:
@@ -1231,7 +1279,7 @@ def _convert_dict_to_message_chunk(
             except KeyError:
                 pass
         usage_metadata = UsageMetadata(**usage) if usage else None  # type: ignore
-        return AIMessageChunk(
+        lc_chunk = AIMessageChunk(
             content=content,
             additional_kwargs=additional_kwargs,
             id=_dict.get("id"),
@@ -1239,7 +1287,11 @@ def _convert_dict_to_message_chunk(
             usage_metadata=usage_metadata,
         )
     else:
-        return ChatMessageChunk(content=content, role=role)
+        lc_chunk = ChatMessageChunk(content=content, role=role)
+
+    if _dict.get("custom_outputs"):
+        lc_chunk.custom_outputs = _dict.get("custom_outputs")
+    return lc_chunk
 
 
 def _convert_responses_api_chunk_to_lc_chunk(
@@ -1249,6 +1301,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
     content = []
     tool_call_chunks = []
     id = None
+    lc_chunk = None
 
     if chunk.type == "response.output_text.delta":
         id = getattr(chunk, "item_id", None)
@@ -1261,7 +1314,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
     elif chunk.type == "response.output_item.done":
         item = chunk.item
         if item.type == "function_call_output":
-            return ToolMessageChunk(
+            lc_chunk = ToolMessageChunk(
                 content=item.output,
                 tool_call_id=item.call_id,
             )
@@ -1333,7 +1386,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                 content.append(item)
     elif chunk.type == "response.created":
         id = chunk.response.id if chunk.response else None
-        return AIMessageChunk(content="", id=id)
+        lc_chunk = AIMessageChunk(content="", id=id)
     elif chunk.type == "response.completed":
         # This indicates the response is done
         return None
@@ -1345,10 +1398,12 @@ def _convert_responses_api_chunk_to_lc_chunk(
 
     # Only return a chunk if we have content or tool calls
     if content or tool_call_chunks:
-        return AIMessageChunk(
+        lc_chunk = AIMessageChunk(
             content=content,
             tool_call_chunks=tool_call_chunks,
             id=id,
         )
 
-    return None
+    if hasattr(chunk, "custom_outputs"):
+        lc_chunk.custom_outputs = chunk.custom_outputs
+    return lc_chunk

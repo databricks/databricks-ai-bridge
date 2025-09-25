@@ -772,3 +772,22 @@ def test_chat_databricks_with_gpt_oss():
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
     assert isinstance(response.content, str)
+
+
+def test_chat_databricks_custom_outputs():
+    llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
+    response = llm.invoke(
+        "What is the 10th fibonacci number?",
+        custom_inputs={"key": "value"},
+    )
+    assert response.custom_outputs["key"] == "value"
+
+
+def test_chat_databricks_custom_outputs_stream():
+    llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
+    response = llm.stream(
+        "What is the 10th fibonacci number?",
+        custom_inputs={"key": "value"},
+    )
+
+    assert any(chunk.custom_outputs["key"] == "value" for chunk in response)
