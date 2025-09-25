@@ -780,7 +780,6 @@ def test_chat_databricks_custom_outputs():
         "What is the 10th fibonacci number?",
         custom_inputs={"key": "value"},
     )
-    print(response)
     assert response.custom_outputs["key"] == "value"
 
 
