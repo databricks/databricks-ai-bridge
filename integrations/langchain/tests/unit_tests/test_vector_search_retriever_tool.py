@@ -345,3 +345,140 @@ def test_kwargs_override_both_num_results_and_query_type() -> None:
         query_type="HYBRID",  # Should use overridden value
         filter={},
     )
+
+
+def test_enhanced_filter_description_with_column_metadata() -> None:
+    """Test that the tool args_schema includes enhanced filter descriptions with column metadata."""
+    from unittest.mock import Mock
+
+    # Mock table info with column metadata
+    mock_column1 = Mock()
+    mock_column1.name = "category"
+    mock_column1.type_name.name = "STRING"
+
+    mock_column2 = Mock()
+    mock_column2.name = "price"
+    mock_column2.type_name.name = "FLOAT"
+
+    mock_column3 = Mock()
+    mock_column3.name = "__internal_column"  # Should be excluded
+    mock_column3.type_name.name = "STRING"
+
+    mock_table_info = Mock()
+    mock_table_info.columns = [mock_column1, mock_column2, mock_column3]
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = Mock()
+        mock_ws_client.tables.get.return_value = mock_table_info
+        mock_ws_client_class.return_value = mock_ws_client
+
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        # Check that the args_schema includes enhanced filter description
+        args_schema = vector_search_tool.args_schema
+        filter_field = args_schema.model_fields["filters"]
+
+        # Should include available columns in description
+        assert "Available columns for filtering: category (STRING), price (FLOAT)" in filter_field.description
+
+        # Should include comprehensive filter syntax
+        assert "Inclusion:" in filter_field.description
+        assert "Exclusion:" in filter_field.description
+        assert "Comparisons:" in filter_field.description
+        assert "Pattern match:" in filter_field.description
+        assert "OR logic:" in filter_field.description
+
+        # Should include examples
+        assert "Examples:" in filter_field.description
+        assert 'Filter by category:' in filter_field.description
+        assert 'Filter by price range:' in filter_field.description
+
+
+def test_enhanced_filter_description_without_column_metadata() -> None:
+    """Test that the tool args_schema gracefully handles missing column metadata."""
+    from unittest.mock import Mock
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = Mock()
+        mock_ws_client.tables.get.side_effect = Exception("Cannot retrieve table info")
+        mock_ws_client_class.return_value = mock_ws_client
+
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        # Check that the args_schema still includes filter description
+        args_schema = vector_search_tool.args_schema
+        filter_field = args_schema.model_fields["filters"]
+
+        # Should not include available columns section
+        assert "Available columns for filtering:" not in filter_field.description
+
+        # Should still include comprehensive filter syntax
+        assert "Inclusion:" in filter_field.description
+        assert "Exclusion:" in filter_field.description
+        assert "Comparisons:" in filter_field.description
+        assert "Pattern match:" in filter_field.description
+        assert "OR logic:" in filter_field.description
+
+        # Should still include examples
+        assert "Examples:" in filter_field.description
+
+
+def test_filter_parameter_exposed_when_filters_predefined() -> None:
+    """Test that filters parameter is still exposed even when filters are predefined."""
+    # Initialize tool with predefined filters
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX,
+        filters={"status": "active", "category": "electronics"}
+    )
+
+    # The filters parameter should still be exposed to allow LLM to add additional filters
+    args_schema = vector_search_tool.args_schema
+    assert "filters" in args_schema.model_fields
+
+    # Test that predefined and LLM-generated filters are properly combined
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke({
+        "query": "what electronics are available",
+        "filters": [FilterItem(key="brand", value="Apple")]
+    })
+
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what electronics are available",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter={"status": "active", "category": "electronics", "brand": "Apple"},  # Combined filters
+    )
+
+
+def test_filter_item_serialization() -> None:
+    """Test that FilterItem objects are properly converted to dictionaries."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    # Test various filter types
+    filters = [
+        FilterItem(key="category", value="electronics"),
+        FilterItem(key="price >=", value=100),
+        FilterItem(key="status NOT", value="discontinued"),
+        FilterItem(key="tags", value=["wireless", "bluetooth"]),
+    ]
+
+    vector_search_tool.invoke({
+        "query": "find products",
+        "filters": filters
+    })
+
+    expected_filters = {
+        "category": "electronics",
+        "price >=": 100,
+        "status NOT": "discontinued",
+        "tags": ["wireless", "bluetooth"]
+    }
+
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="find products",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter=expected_filters,
+    )
