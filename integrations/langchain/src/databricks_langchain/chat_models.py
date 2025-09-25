@@ -224,6 +224,34 @@ class ChatDatabricks(BaseChatModel):
 
         To use tool calls, your model endpoint must support ``tools`` parameter. See [Function calling on Databricks](https://python.langchain.com/docs/integrations/chat/databricks/#function-calling-on-databricks) for more information.
 
+    **Custom inputs and outputs**:
+
+        Pass additional context or configuration to the model using the ``custom_inputs`` keyword argument.
+        Access model-specific metadata from the ``custom_outputs`` attribute of the response.
+
+        .. code-block:: python
+
+            # Pass custom inputs to the model
+            messages = [("human", "Hello, how are you?")]
+            custom_inputs = {"user_id": "12345", "session_id": "abc123"}
+
+            response = llm.invoke(messages, custom_inputs=custom_inputs)
+            print(response.content)
+
+            # Access custom outputs from the response (if provided by the model)
+            if hasattr(response, "custom_outputs"):
+                print(f"Custom outputs: {response.custom_outputs}")
+
+        .. code-block:: python
+
+            # Custom inputs also work with streaming
+            for chunk in llm.stream(messages, custom_inputs=custom_inputs):
+                print(chunk.content, end="")
+
+                # Check for custom outputs in chunks
+                if hasattr(chunk, "custom_outputs"):
+                    print(f"Custom outputs: {chunk.custom_outputs}")
+
     """  # noqa: E501
 
     model_config = ConfigDict(populate_by_name=True)
