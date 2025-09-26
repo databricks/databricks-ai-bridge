@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## databricks-langchain 0.8.1 (2025-09-26)
+
+### Bugfix
+- Add custom input/output support to ChatDatabricks
+
 ## databricks-ai-bridge 0.6.0, databricks-langchain 0.6.0, databricks-openai 0.5.0, databricks-mcp 0.2.0 (2025-06-02)
 
 ### Improvements
