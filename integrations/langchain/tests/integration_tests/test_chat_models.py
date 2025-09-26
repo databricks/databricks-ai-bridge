@@ -791,3 +791,34 @@ def test_chat_databricks_custom_outputs_stream():
     )
 
     assert any(chunk.custom_outputs["key"] == "value" for chunk in response)
+
+
+def test_chat_databricks_token_count():
+    import mlflow
+
+    mlflow.set_experiment("4435237072766312")
+    mlflow.langchain.autolog()
+    llm = ChatDatabricks(model="databricks-gpt-oss-120b")
+    # response = llm.invoke("What is the 100th fibonacci number?")
+    # assert response.content is not None
+    # assert response.response_metadata["prompt_tokens"] > 0
+    # assert response.response_metadata["completion_tokens"] > 0
+    # assert response.response_metadata["total_tokens"] > 0
+    # assert (
+    #     response.response_metadata["total_tokens"]
+    #     == response.response_metadata["prompt_tokens"]
+    #     + response.response_metadata["completion_tokens"]
+    # )
+
+    chunks = list(llm.stream("What is the 100th fibonacci number?"))
+    last_chunk = chunks[-1]
+    print(chunks)
+    assert False
+    assert last_chunk.usage_metadata is not None
+    assert last_chunk.usage_metadata["input_tokens"] > 0
+    assert last_chunk.usage_metadata["output_tokens"] > 0
+    assert last_chunk.usage_metadata["total_tokens"] > 0
+    assert (
+        last_chunk.usage_metadata["total_tokens"]
+        == last_chunk.usage_metadata["input_tokens"] + last_chunk.usage_metadata["output_tokens"]
+    )
