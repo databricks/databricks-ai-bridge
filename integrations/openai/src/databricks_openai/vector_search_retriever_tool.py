@@ -16,7 +16,7 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from openai import OpenAI, pydantic_function_tool
 from openai.types.chat import ChatCompletionToolParam
@@ -145,8 +145,22 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         tool_name = self._get_tool_name()
 
+        # Create a custom input model with enhanced filter description
+        filter_description = self._get_filter_param_description()
+
+        class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+            filters: Optional[List[FilterItem]] = Field(
+                default=None,
+                description=filter_description,
+            )
+
         self.tool = pydantic_function_tool(
-            VectorSearchRetrieverToolInput,
+            EnhancedVectorSearchRetrieverToolInput,
             name=tool_name,
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
