@@ -230,7 +230,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
 
 
 def test_chat_model_stream_usage_chunk_emission():
-    """Test that stream_usage=True emits a final usage-only chunk with empty content."""
+    """Test that stream_usage=True emits a final usage-only chunk with empty content by default."""
     from unittest.mock import Mock, patch
 
     mock_usage = Mock()
@@ -262,7 +262,7 @@ def test_chat_model_stream_usage_chunk_emission():
         messages = [HumanMessage(content="Hello")]
 
         # Test with stream_usage=True
-        chunks = list(llm.stream(messages, stream_usage=True))
+        chunks = list(llm.stream(messages))
 
         # Find the usage chunk (empty content with usage_metadata)
         usage_chunks = [
