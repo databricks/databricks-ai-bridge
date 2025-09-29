@@ -9,7 +9,7 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
 )
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from databricks_langchain import DatabricksEmbeddings
 from databricks_langchain.vectorstores import DatabricksVectorSearch
@@ -71,6 +71,22 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             (self.embedding.endpoint if isinstance(self.embedding, DatabricksEmbeddings) else None),
             IndexDetails(dbvs.index),
         )
+
+        # Create a custom args_schema with enhanced filter description
+        filter_description = self._get_filter_param_description()
+
+        class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+            filters: Optional[List[FilterItem]] = Field(
+                default=None,
+                description=filter_description,
+            )
+
+        self.args_schema = EnhancedVectorSearchRetrieverToolInput
 
         return self
 
