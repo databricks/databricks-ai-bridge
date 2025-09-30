@@ -1,7 +1,7 @@
 import random
 from datetime import datetime, timedelta
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pandas as pd
 import pytest
@@ -104,6 +104,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
     # patch MAX_ITERATIONS to 2 for this test and sleep to avoid delays
     with (
         patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
+        patch("databricks_ai_bridge.genie.ITERATION_FREQUENCY", 0.1),
         patch("time.sleep", return_value=None),
     ):
         mock_workspace_client.genie._api.do.side_effect = [
@@ -112,7 +113,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
             {"status": "EXECUTING_QUERY"},
         ]
         result = genie.poll_for_result("123", "456")
-        assert result.result == "Genie query timed out after 2 iterations of 5 seconds"
+        assert result.result == "Genie query timed out after 2 iterations of 0.1 seconds"
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -341,7 +342,18 @@ def test_parse_query_result_trims_large_data(max_tokens):
     """
     with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", max_tokens):
         base_date = datetime(2023, 1, 1)
-        names = ["Alice", "Bob", "Charlie", "David", "Eve", "Frank", "Grace", "Hank", "Ivy", "Jack"]
+        names = [
+            "Alice",
+            "Bob",
+            "Charlie",
+            "David",
+            "Eve",
+            "Frank",
+            "Grace",
+            "Hank",
+            "Ivy",
+            "Jack",
+        ]
 
         data_array = [
             [
@@ -442,3 +454,85 @@ def test_parse_query_result_with_timestamp_formats():
             }
         ).to_markdown()
     )
+
+
+def test_poll_for_result_creates_genie_timeline_span(genie, mock_workspace_client):
+    with (
+        patch("mlflow.start_span") as mock_start_span,
+        patch("mlflow.tracking.MlflowClient") as MockClient,
+    ):
+        mock_span = MagicMock()
+        mock_span.trace_id = "trace_123"
+        mock_span.span_id = "span_456"
+        mock_start_span.return_value.__enter__.return_value = mock_span
+
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
+        ]
+
+        genie.poll_for_result("123", "456")
+
+        mock_start_span.assert_called_once_with(name="genie_timeline", span_type="CHAIN")
+
+
+def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_client):
+    with (
+        patch("mlflow.start_span") as mock_start_span,
+        patch("mlflow.tracking.MlflowClient") as MockClient,
+        patch("time.sleep", return_value=None),
+    ):
+        mock_client = MockClient.return_value
+        mock_parent_span = MagicMock()
+        mock_parent_span.trace_id = "trace_123"
+        mock_parent_span.span_id = "parent_456"
+        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+
+        mock_child_span = MagicMock()
+        mock_child_span.span_id = "child_789"
+        mock_client.start_span.return_value = mock_child_span
+
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "EXECUTING_QUERY"},
+            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
+        ]
+
+        genie.poll_for_result("123", "456")
+
+        # Verify span was created for EXECUTING_QUERY
+        mock_client.start_span.assert_called_once()
+        start_kwargs = mock_client.start_span.call_args[1]
+        assert start_kwargs["name"] == "executing_query"
+        assert start_kwargs["trace_id"] == "trace_123"
+        assert start_kwargs["parent_id"] == "parent_456"
+        assert start_kwargs["span_type"] == "CHAIN"
+
+
+def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_client):
+    with (
+        patch("mlflow.start_span") as mock_start_span,
+        patch("mlflow.tracking.MlflowClient") as MockClient,
+        patch("time.sleep", return_value=None),
+    ):
+        mock_client = MockClient.return_value
+        mock_parent_span = MagicMock()
+        mock_parent_span.trace_id = "trace_123"
+        mock_parent_span.span_id = "parent_456"
+        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+
+        mock_child_span = MagicMock()
+        mock_child_span.span_id = "child_789"
+        mock_client.start_span.return_value = mock_child_span
+
+        mock_workspace_client.genie._api.do.side_effect = [
+            {"status": "EXECUTING_QUERY"},
+            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
+        ]
+
+        genie.poll_for_result("123", "456")
+
+        # Verify span was closed when transitioning to COMPLETED
+        mock_client.end_span.assert_called_once()
+        end_kwargs = mock_client.end_span.call_args[1]
+        assert end_kwargs["trace_id"] == "trace_123"
+        assert end_kwargs["span_id"] == "child_789"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
