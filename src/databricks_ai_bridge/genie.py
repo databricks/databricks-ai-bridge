@@ -10,8 +10,15 @@ import pandas as pd
 from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000
-MAX_ITERATIONS = 500
+MAX_ITERATIONS = 2500  # for 250 s total
 ITERATION_FREQUENCY = 0.1  # seconds
+
+TERMINAL_STATES = {
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "QUERY_RESULT_EXPIRED",
+}
 
 
 # Define a function to count tokens
@@ -136,6 +143,28 @@ def _truncate_result(dataframe):
     return truncated_result
 
 
+def _end_current_span(client, parent_trace_id, current_span, final_state, error=None):
+    """helper function to safely end a span with exception handling."""
+
+    if current_span is None:
+        return None
+
+    try:
+        attributes = {"final_state": final_state}
+        if error is not None:
+            attributes["error"] = error
+
+        client.end_span(
+            trace_id=parent_trace_id,
+            span_id=current_span.span_id,
+            attributes=attributes,
+        )
+    except mlflow.exceptions.MlflowTracingException as e:
+        logging.warning(f"Failed to end span for {final_state}: {e}")
+
+    return None
+
+
 class Genie:
     def __init__(
         self,
@@ -240,46 +269,40 @@ class Genie:
 
                     # On status change: end previous span, start a new one (excluding terminal states)
                     if current_status != last_status:
-                        # END previous span
-                        if current_span is not None:
-                            client.end_span(
-                                trace_id=parent_trace_id,
-                                span_id=current_span.span_id,
-                                attributes={"final_state": last_status},
-                            )
-                            current_span = None
-
                         # START new span for non-terminal states
-                        if current_status not in {
-                            "COMPLETED",
-                            "FAILED",
-                            "CANCELLED",
-                            "QUERY_RESULT_EXPIRED",
-                        }:
-                            current_span = client.start_span(
-                                name=current_status.lower(),
-                                trace_id=parent_trace_id,
-                                parent_id=parent_span_id,
-                                span_type="CHAIN",
-                                attributes={
-                                    "state": current_status,
-                                    "conversation_id": conversation_id,
-                                    "message_id": message_id,
-                                },
+                        if current_status not in TERMINAL_STATES:
+                            # END previous span
+                            current_span = _end_current_span(
+                                client, parent_trace_id, current_span, last_status
                             )
+                            # START new span
+                            try:
+                                current_span = client.start_span(
+                                    name=current_status.lower(),
+                                    trace_id=parent_trace_id,
+                                    parent_id=parent_span_id,
+                                    span_type="CHAIN",
+                                    attributes={
+                                        "state": current_status,
+                                        "conversation_id": conversation_id,
+                                        "message_id": message_id,
+                                    },
+                                )
+                            except mlflow.exceptions.MlflowTracingException as e:
+                                logging.warning(f"Failed to create span for {current_status}: {e}")
+                                current_span = None
 
                         logging.debug(f"Status: {last_status} → {current_status}")
                         last_status = current_status
 
                     if current_status == "COMPLETED":
                         # close any open child timeline span before ending
-                        if current_span is not None:
-                            client.end_span(
-                                trace_id=parent_trace_id,
-                                span_id=current_span.span_id,
-                                attributes={"final_state": current_status},
-                            )
-                            current_span = None
+                        current_span = _end_current_span(
+                            client,
+                            parent_trace_id,
+                            current_span,
+                            current_status,
+                        )
 
                         attachment = next((r for r in resp["attachments"] if "query" in r), None)
                         if attachment:
@@ -304,27 +327,20 @@ class Genie:
 
                     elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
                         # close any open child timeline span before ending
-                        if current_span is not None:
-                            client.end_span(
-                                trace_id=parent_trace_id,
-                                span_id=current_span.span_id,
-                                attributes={"final_state": current_status},
-                            )
-                            current_span = None
+                        current_span = _end_current_span(
+                            client, parent_trace_id, current_span, current_status
+                        )
                         return GenieResponse(result=f"Genie query {current_status.lower()}.")
 
                     elif current_status == "FAILED":
                         # close any open child timeline span before ending
-                        if current_span is not None:
-                            client.end_span(
-                                trace_id=parent_trace_id,
-                                span_id=current_span.span_id,
-                                attributes={
-                                    "final_state": current_status,
-                                    "error": resp.get("error", "Unknown error"),
-                                },
-                            )
-                            current_span = None
+                        current_span = _end_current_span(
+                            client,
+                            parent_trace_id,
+                            current_span,
+                            current_status,
+                            resp.get("error", "Unknown error"),
+                        )
                         return GenieResponse(
                             result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
                         )
@@ -334,14 +350,14 @@ class Genie:
                         time.sleep(ITERATION_FREQUENCY)  # faster poll rate
 
                 # timeout path / end of while loop — close any open spans
-                if current_span is not None:
-                    client.end_span(
-                        trace_id=parent_trace_id,
-                        span_id=current_span.span_id,
-                        attributes={"final_state": "TIMEOUT"},
-                    )
+                current_span = _end_current_span(
+                    client,
+                    parent_trace_id,
+                    current_span,
+                    "TIMEOUT",
+                )
                 return GenieResponse(
-                    f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds",
+                    f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds (total {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds)",
                     conversation_id=conversation_id,
                 )
 
