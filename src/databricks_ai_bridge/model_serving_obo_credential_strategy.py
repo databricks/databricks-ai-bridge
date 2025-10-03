@@ -172,9 +172,12 @@ class ModelServingUserCredentials(CredentialsStrategy):
             if not header_factory:
                 raise ValueError(
                     "Unable to authenticate using model_serving_user_credentials in Databricks Model Serving Environment. "
-                    "Please ensure you have specified UserAuthPolicy when logging the agent model and On Behalf of User Authorization for Agents is enabled in your workspace. "
-                    "Refer to the documentation here for more information: https://docs.databricks.com/aws/en/generative-ai/agent-framework/authenticate-on-behalf-of-user. "
-                    "If the issue persists, contact Databricks Support"
+                    "This error typically occurs when the WorkspaceClient is instantiated at model-loading time rather than within a predict() or predict_stream() call. "
+                    "Please ensure you instantiate the WorkspaceClient inside your predict() or predict_stream() function. "
+                    "Additionally, verify that you have specified UserAuthPolicy when logging the agent model and that "
+                    "On Behalf of User Authorization for Agents is enabled in your workspace. "
+                    "Refer to the documentation for more information: https://docs.databricks.com/aws/en/generative-ai/agent-framework/authenticate-on-behalf-of-user. "
+                    "If the issue persists, contact Databricks Support."
                 )
             return header_factory
         else:
