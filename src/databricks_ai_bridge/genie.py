@@ -10,8 +10,8 @@ import pandas as pd
 from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000
-MAX_ITERATIONS = 2500  # for 250 s total
-ITERATION_FREQUENCY = 0.1  # seconds
+MAX_ITERATIONS = 500  # for 250 s total
+ITERATION_FREQUENCY = 0.5  # seconds
 
 TERMINAL_STATES = {
     "COMPLETED",
