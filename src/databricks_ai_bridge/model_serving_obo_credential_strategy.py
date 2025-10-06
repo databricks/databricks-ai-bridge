@@ -173,7 +173,7 @@ class ModelServingUserCredentials(CredentialsStrategy):
                 raise ValueError(
                     "Unable to detect credentials for user authorization. "
                     "This error has two common causes: "
-                    "(1) Improper OBO configuration - ensure you logged your model with a UserAuthPolicy and that the "Agent Framework: On-Behalf-Of-User Authorization" preview is enabled in your workspace. "
+                    "(1) Improper OBO configuration - ensure you logged your model with a UserAuthPolicy and that the 'Agent Framework: On-Behalf-Of-User Authorization' preview is enabled in your workspace. "
                     "(2) WorkspaceClient instantiation outside of predict()/predict_stream() - ensure you instantiate the WorkspaceClient inside your predict() or predict_stream() function, not at model-loading time. "
                     "See https://docs.databricks.com/aws/en/generative-ai/agent-framework/authenticate-on-behalf-of-user for details. "
                     "If the issue persists, contact Databricks Support."
