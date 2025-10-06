@@ -269,12 +269,13 @@ class Genie:
 
                     # On status change: end previous span, start a new one (excluding terminal states)
                     if current_status != last_status:
+                        # END previous span
+                        current_span = _end_current_span(
+                            client, parent_trace_id, current_span, last_status
+                        )
+
                         # START new span for non-terminal states
                         if current_status not in TERMINAL_STATES:
-                            # END previous span
-                            current_span = _end_current_span(
-                                client, parent_trace_id, current_span, last_status
-                            )
                             # START new span
                             try:
                                 current_span = client.start_span(
@@ -296,14 +297,6 @@ class Genie:
                         last_status = current_status
 
                     if current_status == "COMPLETED":
-                        # close any open child timeline span before ending
-                        current_span = _end_current_span(
-                            client,
-                            parent_trace_id,
-                            current_span,
-                            current_status,
-                        )
-
                         attachment = next((r for r in resp["attachments"] if "query" in r), None)
                         if attachment:
                             query_obj = attachment["query"]
@@ -326,21 +319,9 @@ class Genie:
                             )
 
                     elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
-                        # close any open child timeline span before ending
-                        current_span = _end_current_span(
-                            client, parent_trace_id, current_span, current_status
-                        )
                         return GenieResponse(result=f"Genie query {current_status.lower()}.")
 
                     elif current_status == "FAILED":
-                        # close any open child timeline span before ending
-                        current_span = _end_current_span(
-                            client,
-                            parent_trace_id,
-                            current_span,
-                            current_status,
-                            resp.get("error", "Unknown error"),
-                        )
                         return GenieResponse(
                             result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
                         )
@@ -354,7 +335,7 @@ class Genie:
                     client,
                     parent_trace_id,
                     current_span,
-                    "TIMEOUT",
+                    last_status,
                 )
                 return GenieResponse(
                     f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds (total {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds)",

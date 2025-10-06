@@ -539,7 +539,7 @@ def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_clien
         end_kwargs = mock_client.end_span.call_args[1]
         assert end_kwargs["trace_id"] == "trace_123"
         assert end_kwargs["span_id"] == "child_789"
-        assert end_kwargs["attributes"]["final_state"] == "COMPLETED"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_client):
@@ -597,7 +597,7 @@ def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
         assert result.result == "Genie query cancelled."
         mock_client.end_span.assert_called_once()
         end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "CANCELLED"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
@@ -626,7 +626,7 @@ def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
         assert result.result == "Genie query failed with error: some error"
         mock_client.end_span.assert_called_once()
         end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "FAILED"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspace_client):
@@ -655,7 +655,7 @@ def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspa
         assert result.result == "Genie query query_result_expired."
         mock_client.end_span.assert_called_once()
         end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "QUERY_RESULT_EXPIRED"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspace_client):
@@ -686,7 +686,7 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
         assert "timed out" in result.result
         mock_client.end_span.assert_called_once()
         end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "TIMEOUT"
+        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_workspace_client):
