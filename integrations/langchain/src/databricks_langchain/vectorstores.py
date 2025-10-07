@@ -644,9 +644,16 @@ class DatabricksVectorSearch(VectorStore):
         """
         if self._index_details.is_databricks_managed_embeddings():
             raise NotImplementedError(_NON_MANAGED_EMB_ONLY_MSG % "max_marginal_relevance_search")
+        else:
+            # The value for `query_text` needs to be specified only for hybrid search.
+            if query_type is not None and query_type.upper() == "HYBRID":
+                query_text = query
+            else:
+                query_text = None
 
         query_vector = self._embeddings.embed_query(query)  # type: ignore[union-attr]
         docs = self.max_marginal_relevance_search_by_vector(
+            query,
             query_vector,
             k,
             fetch_k,
@@ -679,6 +686,7 @@ class DatabricksVectorSearch(VectorStore):
 
     def max_marginal_relevance_search_by_vector(
         self,
+        query: str,
         embedding: List[float],
         k: int = 4,
         fetch_k: int = 20,
@@ -718,7 +726,7 @@ class DatabricksVectorSearch(VectorStore):
         embedding_column = self._index_details.embedding_vector_column["name"]
         search_resp = self.index.similarity_search(
             columns=list(set(self._columns + [embedding_column])),
-            query_text=None,
+            query_text=query,
             query_vector=embedding,
             filters=filter,
             num_results=fetch_k,
