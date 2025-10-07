@@ -3,8 +3,8 @@ from datetime import datetime, timedelta
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import mlflow
+import pandas as pd
 import pytest
 
 from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
