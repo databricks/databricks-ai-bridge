@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## databricks-langchain 0.8.2 (2025-10-13)
+
+### Bugfix
+- ChatDatabricks: turn on stream usage by default
+- Use MMR, hybrid search and self-managed embeddings together in the langchain DatabricksVectorSearch object
+
 ## databricks-langchain 0.8.1 (2025-09-26)
 
 ### Bugfix
