@@ -42,11 +42,52 @@ print("="*80)
 filter_param = dbvs_tool.tool['function']['parameters']['properties']['filters']
 print(json.dumps(filter_param, indent=2))
 
+# Show the full tool schema to inspect descriptions
+print("\n" + "="*80)
+print("Full Tool Schema (for inspection):")
+print("="*80)
+print(json.dumps(dbvs_tool.tool, indent=2))
+
 # Create OpenAI client pointing to Databricks using the workspace_client's config
 client = OpenAI(
     api_key=workspace_client.config.token,
     base_url=workspace_client.config.host + "/serving-endpoints"
 )
+
+# Let's also query the index to see what actual values exist for product_category
+print("\n" + "="*80)
+print("Sample data from the index (to see actual category values):")
+print("="*80)
+try:
+    # Query without filters to see what's actually in the index
+    sample_results = dbvs_tool.execute(
+        query="product",
+        openai_client=client
+    )
+    print(f"\nFound {len(sample_results)} sample results:")
+
+    # Extract unique product categories
+    categories = set()
+    for doc in sample_results:
+        # The doc content should have the category
+        content = doc.get('page_content', '') or doc.get('content', '')
+        # Try to extract category from the content
+        if '<product_category>' in content:
+            start = content.find('<product_category>') + len('<product_category>')
+            end = content.find('</product_category>')
+            if end > start:
+                category = content[start:end]
+                categories.add(category)
+
+    if categories:
+        print(f"\nActual product_category values found: {sorted(categories)}")
+    else:
+        print("\nCouldn't extract categories from sample results")
+        print("\nFirst result structure:")
+        if sample_results:
+            print(json.dumps(sample_results[0], indent=2)[:500])
+except Exception as e:
+    print(f"Error fetching sample data: {e}")
 
 # Example 1: Query that should trigger a filter
 print("\n" + "="*80)

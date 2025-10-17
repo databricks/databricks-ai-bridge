@@ -161,12 +161,19 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 "Optional filters to refine vector search results as an array of key-value pairs. "
             )
 
-            # Try to get column information from the index
+            # Try to get column information from Unity Catalog
             try:
+                from databricks.sdk import WorkspaceClient
+
+                if self.workspace_client:
+                    table_info = self.workspace_client.tables.get(full_name=self.index_name)
+                else:
+                    table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
                 column_info = []
-                for column_info_item in self._index.describe()["columns"]:
-                    name = column_info_item["name"]
-                    col_type = column_info_item.get("type", "")
+                for column_info_item in table_info.columns:
+                    name = column_info_item.name
+                    col_type = column_info_item.type_name.name
                     if not name.startswith("__"):
                         column_info.append((name, col_type))
 
