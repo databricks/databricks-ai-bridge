@@ -282,6 +282,8 @@ def test_vector_search_client_model_serving_environment():
                     workspace_client=w,
                 )
                 mockVSClient.assert_called_once_with(
+                    workspace_url=None,
+                    personal_access_token=None,
                     disable_notice=True,
                     credential_strategy=CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS,
                 )
@@ -295,7 +297,12 @@ def test_vector_search_client_non_model_serving_environment():
             embedding_model_name="text-embedding-3-small",
             tool_description="desc",
         )
-        mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+        mockVSClient.assert_called_once_with(
+            workspace_url=None,
+            personal_access_token=None,
+            disable_notice=True,
+            credential_strategy=None
+        )
 
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
@@ -307,7 +314,12 @@ def test_vector_search_client_non_model_serving_environment():
                 tool_description="desc",
                 workspace_client=w,
             )
-            mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+            mockVSClient.assert_called_once_with(
+                workspace_url="https://testDogfod.com",
+                personal_access_token="fakeToken",
+                disable_notice=True,
+                credential_strategy=None
+            )
 
 
 def test_kwargs_are_passed_through() -> None:
@@ -428,7 +440,7 @@ def test_get_filter_param_description_with_column_metadata() -> None:
 
 def test_enhanced_filter_description_used_in_tool_schema() -> None:
     """Test that the tool schema includes comprehensive filter descriptions."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
 
     # Check that the tool schema includes enhanced filter description
     tool_schema = vector_search_tool.tool
@@ -453,7 +465,7 @@ def test_enhanced_filter_description_without_column_metadata() -> None:
         mock_ws_client.tables.get.side_effect = Exception("Cannot retrieve table info")
         mock_ws_client_class.return_value = mock_ws_client
 
-        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
 
         # Check that the tool schema still includes filter description
         tool_schema = vector_search_tool.tool
@@ -473,30 +485,40 @@ def test_enhanced_filter_description_without_column_metadata() -> None:
         assert "Examples:" in filter_param["description"]
 
 
-def test_filter_parameter_not_exposed_when_filters_predefined() -> None:
-    """Test that filters parameter is still exposed even when filters are predefined."""
-    # Initialize tool with predefined filters
+def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
+    """Test that using both dynamic_filter and predefined filters raises an error."""
+    # Try to initialize tool with both dynamic_filter=True and predefined filters
+    with pytest.raises(ValueError, match="Cannot use both dynamic_filter=True and predefined filters"):
+        init_vector_search_tool(
+            DELTA_SYNC_INDEX,
+            filters={"status": "active", "category": "electronics"},
+            dynamic_filter=True
+        )
+
+
+def test_predefined_filters_work_without_dynamic_filter() -> None:
+    """Test that predefined filters work correctly when dynamic_filter is False."""
+    # Initialize tool with only predefined filters (dynamic_filter=False by default)
     vector_search_tool = init_vector_search_tool(
         DELTA_SYNC_INDEX,
         filters={"status": "active", "category": "electronics"}
     )
 
-    # The filters parameter should still be exposed to allow LLM to add additional filters
+    # The filters parameter should NOT be exposed since dynamic_filter=False
     tool_schema = vector_search_tool.tool
-    assert "filters" in tool_schema["function"]["parameters"]["properties"]
+    assert "filters" not in tool_schema["function"]["parameters"]["properties"]
 
-    # Test that predefined and LLM-generated filters are properly combined
+    # Test that predefined filters are used
     vector_search_tool._index.similarity_search = MagicMock()
 
     vector_search_tool.execute(
-        query="what electronics are available",
-        filters=[FilterItem(key="brand", value="Apple")]
+        query="what electronics are available"
     )
 
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
         query_text="what electronics are available",
-        filters={"status": "active", "category": "electronics", "brand": "Apple"},  # Combined filters
+        filters={"status": "active", "category": "electronics"},  # Only predefined filters
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,

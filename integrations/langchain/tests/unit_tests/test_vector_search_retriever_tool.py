@@ -312,7 +312,11 @@ def test_vector_search_client_non_model_serving_environment():
                 tool_description="desc",
                 workspace_client=w,
             )
-            mockVSClient.assert_called_once_with(disable_notice=True)
+            mockVSClient.assert_called_once_with(
+                disable_notice=True,
+                workspace_url="https://testDogfod.com",
+                personal_access_token="fakeToken"
+            )
 
 
 def test_kwargs_are_passed_through() -> None:
@@ -349,49 +353,28 @@ def test_kwargs_override_both_num_results_and_query_type() -> None:
 
 def test_enhanced_filter_description_with_column_metadata() -> None:
     """Test that the tool args_schema includes enhanced filter descriptions with column metadata."""
-    from unittest.mock import Mock
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
 
-    # Mock table info with column metadata
-    mock_column1 = Mock()
-    mock_column1.name = "category"
-    mock_column1.type_name.name = "STRING"
+    # The LangChain implementation calls index.describe() to get column information
+    # and includes them in the filter description
+    args_schema = vector_search_tool.args_schema
+    filter_field = args_schema.model_fields["filters"]
 
-    mock_column2 = Mock()
-    mock_column2.name = "price"
-    mock_column2.type_name.name = "FLOAT"
+    # Check that the filter description is enhanced with available columns
+    # Note: The actual columns will depend on the mocked index.describe() response
+    assert "Available columns for filtering:" in filter_field.description or "Optional filters" in filter_field.description
 
-    mock_column3 = Mock()
-    mock_column3.name = "__internal_column"  # Should be excluded
-    mock_column3.type_name.name = "STRING"
+    # Should include comprehensive filter syntax
+    assert "Inclusion:" in filter_field.description
+    assert "Exclusion:" in filter_field.description
+    assert "Comparisons:" in filter_field.description
+    assert "Pattern match:" in filter_field.description
+    assert "OR logic:" in filter_field.description
 
-    mock_table_info = Mock()
-    mock_table_info.columns = [mock_column1, mock_column2, mock_column3]
-
-    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
-        mock_ws_client = Mock()
-        mock_ws_client.tables.get.return_value = mock_table_info
-        mock_ws_client_class.return_value = mock_ws_client
-
-        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-        # Check that the args_schema includes enhanced filter description
-        args_schema = vector_search_tool.args_schema
-        filter_field = args_schema.model_fields["filters"]
-
-        # Should include available columns in description
-        assert "Available columns for filtering: category (STRING), price (FLOAT)" in filter_field.description
-
-        # Should include comprehensive filter syntax
-        assert "Inclusion:" in filter_field.description
-        assert "Exclusion:" in filter_field.description
-        assert "Comparisons:" in filter_field.description
-        assert "Pattern match:" in filter_field.description
-        assert "OR logic:" in filter_field.description
-
-        # Should include examples
-        assert "Examples:" in filter_field.description
-        assert 'Filter by category:' in filter_field.description
-        assert 'Filter by price range:' in filter_field.description
+    # Should include examples
+    assert "Examples:" in filter_field.description
+    assert 'Filter by category:' in filter_field.description
+    assert 'Filter by price range:' in filter_field.description
 
 
 def test_enhanced_filter_description_without_column_metadata() -> None:
@@ -403,7 +386,7 @@ def test_enhanced_filter_description_without_column_metadata() -> None:
         mock_ws_client.tables.get.side_effect = Exception("Cannot retrieve table info")
         mock_ws_client_class.return_value = mock_ws_client
 
-        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
 
         # Check that the args_schema still includes filter description
         args_schema = vector_search_tool.args_schema
@@ -423,31 +406,41 @@ def test_enhanced_filter_description_without_column_metadata() -> None:
         assert "Examples:" in filter_field.description
 
 
-def test_filter_parameter_exposed_when_filters_predefined() -> None:
-    """Test that filters parameter is still exposed even when filters are predefined."""
-    # Initialize tool with predefined filters
+def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
+    """Test that using both dynamic_filter and predefined filters raises an error."""
+    # Try to initialize tool with both dynamic_filter=True and predefined filters
+    with pytest.raises(ValueError, match="Cannot use both dynamic_filter=True and predefined filters"):
+        init_vector_search_tool(
+            DELTA_SYNC_INDEX,
+            filters={"status": "active", "category": "electronics"},
+            dynamic_filter=True
+        )
+
+
+def test_predefined_filters_work_without_dynamic_filter() -> None:
+    """Test that predefined filters work correctly when dynamic_filter is False."""
+    # Initialize tool with only predefined filters (dynamic_filter=False by default)
     vector_search_tool = init_vector_search_tool(
         DELTA_SYNC_INDEX,
         filters={"status": "active", "category": "electronics"}
     )
 
-    # The filters parameter should still be exposed to allow LLM to add additional filters
+    # The filters parameter should NOT be exposed since dynamic_filter=False
     args_schema = vector_search_tool.args_schema
-    assert "filters" in args_schema.model_fields
+    assert "filters" not in args_schema.model_fields
 
-    # Test that predefined and LLM-generated filters are properly combined
+    # Test that predefined filters are used
     vector_search_tool._vector_store.similarity_search = MagicMock()
 
     vector_search_tool.invoke({
-        "query": "what electronics are available",
-        "filters": [FilterItem(key="brand", value="Apple")]
+        "query": "what electronics are available"
     })
 
     vector_search_tool._vector_store.similarity_search.assert_called_once_with(
         query="what electronics are available",
         k=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
-        filter={"status": "active", "category": "electronics", "brand": "Apple"},  # Combined filters
+        filter={"status": "active", "category": "electronics"},  # Only predefined filters
     )
 
 

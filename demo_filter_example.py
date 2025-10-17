@@ -28,7 +28,8 @@ print(f"\nCreating VectorSearchRetrieverTool for index: {index_name}")
 dbvs_tool = VectorSearchRetrieverTool(
     index_name=index_name,
     num_results=3,
-    workspace_client=workspace_client
+    workspace_client=workspace_client,
+    dynamic_filter=True
 )
 
 print(f"\nTool created: {dbvs_tool.tool['function']['name']}")

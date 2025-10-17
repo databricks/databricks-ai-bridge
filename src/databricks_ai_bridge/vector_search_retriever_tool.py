@@ -11,7 +11,7 @@ from mlflow.models.resources import (
     DatabricksVectorSearchIndex,
     Resource,
 )
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, validator
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
@@ -103,6 +103,23 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     include_score: Optional[bool] = Field(
         False, description="When true, will return the similarity score with the metadata."
     )
+    dynamic_filter: bool = Field(
+        False,
+        description="When true, enables LLM-generated filter parameters in the tool schema. "
+        "This allows LLMs to dynamically generate filters based on natural language queries. "
+        "Cannot be used together with predefined filters (filters parameter).",
+    )
+
+    @model_validator(mode="after")
+    def validate_filter_configuration(self):
+        """Validate that dynamic_filter and filters are not both enabled."""
+        if self.dynamic_filter and self.filters:
+            raise ValueError(
+                "Cannot use both dynamic_filter=True and predefined filters. "
+                "Please either enable dynamic_filter for LLM-generated filters, "
+                "or provide predefined filters via the filters parameter, but not both."
+            )
+        return self
 
     @validator("tool_name")
     def validate_tool_name(cls, tool_name):

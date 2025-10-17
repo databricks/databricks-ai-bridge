@@ -154,22 +154,36 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         tool_name = self._get_tool_name()
 
-        # Create a custom input model with enhanced filter description
-        filter_description = self._get_filter_param_description()
+        # Create tool input model based on dynamic_filter setting
+        if self.dynamic_filter:
+            # Create a custom input model with enhanced filter description
+            filter_description = self._get_filter_param_description()
 
-        class EnhancedVectorSearchRetrieverToolInput(BaseModel):
-            model_config = ConfigDict(extra="allow")
-            query: str = Field(
-                description="The string used to query the index with and identify the most similar "
-                "vectors and return the associated documents."
-            )
-            filters: Optional[List[FilterItem]] = Field(
-                default=None,
-                description=filter_description,
-            )
+            class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+                model_config = ConfigDict(extra="allow")
+                query: str = Field(
+                    description="The string used to query the index with and identify the most similar "
+                    "vectors and return the associated documents."
+                )
+                filters: Optional[List[FilterItem]] = Field(
+                    default=None,
+                    description=filter_description,
+                )
+
+            tool_input_class = EnhancedVectorSearchRetrieverToolInput
+        else:
+            # Use basic input model without filters
+            class BasicVectorSearchRetrieverToolInput(BaseModel):
+                model_config = ConfigDict(extra="allow")
+                query: str = Field(
+                    description="The string used to query the index with and identify the most similar "
+                    "vectors and return the associated documents."
+                )
+
+            tool_input_class = BasicVectorSearchRetrieverToolInput
 
         self.tool = pydantic_function_tool(
-            EnhancedVectorSearchRetrieverToolInput,
+            tool_input_class,
             name=tool_name,
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
