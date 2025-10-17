@@ -10,7 +10,15 @@ import pandas as pd
 from databricks.sdk import WorkspaceClient
 
 MAX_TOKENS_OF_DATA = 20000
-MAX_ITERATIONS = 50
+MAX_ITERATIONS = 500  # for 250 s total
+ITERATION_FREQUENCY = 0.5  # seconds
+
+TERMINAL_STATES = {
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "QUERY_RESULT_EXPIRED",
+}
 
 
 # Define a function to count tokens
@@ -135,6 +143,28 @@ def _truncate_result(dataframe):
     return truncated_result
 
 
+def _end_current_span(client, parent_trace_id, current_span, final_state, error=None):
+    """helper function to safely end a span with exception handling."""
+
+    if current_span is None:
+        return None
+
+    try:
+        attributes = {"final_state": final_state}
+        if error is not None:
+            attributes["error"] = error
+
+        client.end_span(
+            trace_id=parent_trace_id,
+            span_id=current_span.span_id,
+            attributes=attributes,
+        )
+    except mlflow.exceptions.MlflowTracingException as e:
+        logging.warning(f"Failed to end span for {final_state}: {e}")
+
+    return None
+
+
 class Genie:
     def __init__(
         self,
@@ -195,7 +225,7 @@ class Genie:
                     return GenieResponse(result, query_str, description, returned_conversation_id)
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
-                    time.sleep(5)
+                    time.sleep(ITERATION_FREQUENCY)
                 else:
                     return GenieResponse(
                         f"No query result: {resp['state']}",
@@ -213,45 +243,104 @@ class Genie:
         @mlflow.trace()
         def poll_result():
             iteration_count = 0
-            while iteration_count < MAX_ITERATIONS:
-                iteration_count += 1
-                resp = self.genie._api.do(
-                    "GET",
-                    f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
-                    headers=self.headers,
-                )
-                returned_conversation_id = resp.get("conversation_id", None)
-                if resp["status"] == "COMPLETED":
-                    attachment = next((r for r in resp["attachments"] if "query" in r), None)
-                    if attachment:
-                        query_obj = attachment["query"]
-                        description = query_obj.get("description", "")
-                        query_str = query_obj.get("query", "")
-                        attachment_id = attachment["attachment_id"]
-                        return poll_query_results(
-                            attachment_id, query_str, description, returned_conversation_id
-                        )
-                    if resp["status"] == "COMPLETED":
-                        text_content = next(r for r in resp["attachments"] if "text" in r)["text"][
-                            "content"
-                        ]
-                        return GenieResponse(
-                            result=text_content, conversation_id=returned_conversation_id
-                        )
-                elif resp["status"] in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
-                    return GenieResponse(result=f"Genie query {resp['status'].lower()}.")
-                elif resp["status"] == "FAILED":
-                    return GenieResponse(
-                        result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
+
+            # use MLflow client to get parent of any new spans we create from the current active span
+            # (parenting keeps spans in the same trace)
+            client = mlflow.tracking.MlflowClient()
+            with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
+                parent_trace_id = parent.trace_id if parent else None
+                parent_span_id = parent.span_id if parent else None
+
+                # Track last status from API and the current child span
+                last_status = None
+                current_span = None
+
+                while iteration_count < MAX_ITERATIONS:
+                    iteration_count += 1
+                    resp = self.genie._api.do(
+                        "GET",
+                        f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
+                        headers=self.headers,
                     )
-                # includes EXECUTING_QUERY, Genie can retry after this status
-                else:
-                    logging.debug(f"Waiting...: {resp['status']}")
-                    time.sleep(5)
-            return GenieResponse(
-                f"Genie query timed out after {MAX_ITERATIONS} iterations of 5 seconds",
-                conversation_id=conversation_id,
-            )
+                    returned_conversation_id = resp.get("conversation_id", None)
+
+                    # get current status from API response
+                    current_status = resp["status"]
+
+                    # On status change: end previous span, start a new one (excluding terminal states)
+                    if current_status != last_status:
+                        # END previous span
+                        current_span = _end_current_span(
+                            client, parent_trace_id, current_span, last_status
+                        )
+
+                        # START new span for non-terminal states
+                        if current_status not in TERMINAL_STATES:
+                            # START new span
+                            try:
+                                current_span = client.start_span(
+                                    name=current_status.lower(),
+                                    trace_id=parent_trace_id,
+                                    parent_id=parent_span_id,
+                                    span_type="CHAIN",
+                                    attributes={
+                                        "state": current_status,
+                                        "conversation_id": conversation_id,
+                                        "message_id": message_id,
+                                    },
+                                )
+                            except mlflow.exceptions.MlflowTracingException as e:
+                                logging.warning(f"Failed to create span for {current_status}: {e}")
+                                current_span = None
+
+                        logging.debug(f"Status: {last_status} → {current_status}")
+                        last_status = current_status
+
+                    if current_status == "COMPLETED":
+                        attachment = next((r for r in resp["attachments"] if "query" in r), None)
+                        if attachment:
+                            query_obj = attachment["query"]
+                            description = query_obj.get("description", "")
+                            query_str = query_obj.get("query", "")
+                            attachment_id = attachment["attachment_id"]
+                            return poll_query_results(
+                                attachment_id,
+                                query_str,
+                                description,
+                                returned_conversation_id,
+                            )
+                        if current_status == "COMPLETED":
+                            text_content = next(r for r in resp["attachments"] if "text" in r)[
+                                "text"
+                            ]["content"]
+                            return GenieResponse(
+                                result=text_content,
+                                conversation_id=returned_conversation_id,
+                            )
+
+                    elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
+                        return GenieResponse(result=f"Genie query {current_status.lower()}.")
+
+                    elif current_status == "FAILED":
+                        return GenieResponse(
+                            result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
+                        )
+                    # includes EXECUTING_QUERY, Genie can retry after this status
+                    else:
+                        logging.debug(f"Status: {current_status}")
+                        time.sleep(ITERATION_FREQUENCY)  # faster poll rate
+
+                # timeout path / end of while loop — close any open spans
+                current_span = _end_current_span(
+                    client,
+                    parent_trace_id,
+                    current_span,
+                    last_status,
+                )
+                return GenieResponse(
+                    f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds (total {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds)",
+                    conversation_id=conversation_id,
+                )
 
         return poll_result()
 

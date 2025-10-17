@@ -230,7 +230,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
 
 
 def test_chat_model_stream_usage_chunk_emission():
-    """Test that stream_usage=True emits a final usage-only chunk with empty content."""
+    """Test that stream_usage=True emits a final usage-only chunk with empty content by default."""
     from unittest.mock import Mock, patch
 
     mock_usage = Mock()
@@ -262,7 +262,7 @@ def test_chat_model_stream_usage_chunk_emission():
         messages = [HumanMessage(content="Hello")]
 
         # Test with stream_usage=True
-        chunks = list(llm.stream(messages, stream_usage=True))
+        chunks = list(llm.stream(messages))
 
         # Find the usage chunk (empty content with usage_metadata)
         usage_chunks = [
@@ -785,7 +785,6 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
 
 
 def test_convert_responses_api_chunk_to_lc_chunk_function_call_output():
-    """Test _convert_responses_api_chunk_to_lc_chunk with function call output."""
     chunk = ResponseOutputItemDoneEvent.model_construct(
         type="response.output_item.done",
         item=ResponseFunctionToolCallOutputItem.model_construct(
@@ -1124,7 +1123,6 @@ def test_chat_databricks_init_sets_client():
 
 
 def test_prepare_inputs_basic():
-    """Test _prepare_inputs method with basic parameters."""
     llm = ChatDatabricks(model="test-model", temperature=0.7, max_tokens=100, stop=["stop"], n=2)
 
     messages = [HumanMessage(content="Hello")]
@@ -1143,7 +1141,6 @@ def test_prepare_inputs_basic():
 
 
 def test_prepare_inputs_with_responses_api():
-    """Test _prepare_inputs method with responses API."""
     llm = ChatDatabricks(model="test-model", use_responses_api=True, temperature=0.5)
 
     messages = [HumanMessage(content="Hello")]
@@ -1206,3 +1203,231 @@ def test_convert_dict_to_message_with_non_string_content():
         content='[{"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]}, {"type": "text", "text": "asdf"}]'
     )
     assert result == expected
+
+
+### Test custom_inputs and custom_outputs functionality ###
+
+
+def test_prepare_inputs_with_custom_inputs():
+    llm = ChatDatabricks(model="test-model")
+
+    messages = [HumanMessage(content="Hello")]
+    custom_inputs = {"user_id": "123", "session_id": "abc"}
+    result = llm._prepare_inputs(messages, custom_inputs=custom_inputs)
+
+    assert "extra_body" in result
+    assert result["extra_body"]["custom_inputs"] == custom_inputs
+
+    result = llm._prepare_inputs(messages, custom_inputs=None)
+    # When custom_inputs is None, extra_body should not be added
+    assert "extra_body" not in result
+
+
+def test_generate_with_custom_inputs():
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Hello!",
+        }
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage = None
+        mock_response.model = "test-model"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+        custom_inputs = {"user_id": "123"}
+
+        # Call _generate with custom_inputs
+        result = llm._generate(messages, custom_inputs=custom_inputs)
+
+        # Verify client was called with prepared inputs that include custom_inputs
+        mock_client.chat.completions.create.assert_called_once()
+        call_args = mock_client.chat.completions.create.call_args[1]
+        assert "extra_body" in call_args
+        assert call_args["extra_body"]["custom_inputs"] == custom_inputs
+
+
+def test_stream_with_custom_inputs():
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        # Mock streaming response
+        mock_chunk = Mock()
+        mock_chunk.choices = [Mock()]
+        mock_chunk.choices[0].delta.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Hello",
+        }
+        mock_chunk.choices[0].finish_reason = "stop"
+        mock_chunk.usage = None
+        mock_client.chat.completions.create.return_value = iter([mock_chunk])
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+        custom_inputs = {"session_id": "abc"}
+
+        # Call stream with custom_inputs
+        list(llm.stream(messages, custom_inputs=custom_inputs))
+
+        # Verify client was called with prepared inputs that include custom_inputs
+        mock_client.chat.completions.create.assert_called_once()
+        call_args = mock_client.chat.completions.create.call_args[1]
+        assert "extra_body" in call_args
+        assert call_args["extra_body"]["custom_inputs"] == custom_inputs
+
+
+def test_convert_dict_to_message_with_custom_outputs():
+    message_dict = {
+        "role": "assistant",
+        "content": "Hello!",
+        "custom_outputs": {"confidence": 0.95, "reasoning": "high confidence"},
+    }
+    result = _convert_dict_to_message(message_dict)
+
+    assert isinstance(result, AIMessage)
+    assert result.content == "Hello!"
+    assert hasattr(result, "custom_outputs")
+    assert result.custom_outputs == {"confidence": 0.95, "reasoning": "high confidence"}
+
+
+def test_convert_dict_to_message_without_custom_outputs():
+    message_dict = {"role": "assistant", "content": "Hello!"}
+    result = _convert_dict_to_message(message_dict)
+
+    assert isinstance(result, AIMessage)
+    assert result.content == "Hello!"
+    # Should not have custom_outputs attribute when not provided
+    assert not hasattr(result, "custom_outputs")
+
+
+def test_convert_dict_to_message_chunk_with_custom_outputs():
+    chunk_dict = {
+        "role": "assistant",
+        "content": "Hello",
+        "custom_outputs": {"stream_id": "xyz123"},
+    }
+    result = _convert_dict_to_message_chunk(chunk_dict, "assistant")
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == "Hello"
+    assert hasattr(result, "custom_outputs")
+    assert result.custom_outputs == {"stream_id": "xyz123"}
+
+
+def test_convert_dict_to_message_chunk_without_custom_outputs():
+    chunk_dict = {"role": "assistant", "content": "Hello"}
+    result = _convert_dict_to_message_chunk(chunk_dict, "assistant")
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == "Hello"
+    # Should not have custom_outputs attribute when not provided
+    assert not hasattr(result, "custom_outputs")
+
+
+def test_convert_responses_api_response_with_custom_outputs():
+    llm = ChatDatabricks(model="test-model", use_responses_api=True)
+
+    # Create a simple object with custom_outputs since Response.model_construct doesn't support it
+    class MockResponse:
+        def __init__(self):
+            self.id = "response_123"
+            self.custom_outputs = {"model_version": "v2.1", "processing_time": 150}
+            self.error = None
+            self.output = [
+                ResponseOutputMessage.model_construct(
+                    type="message",
+                    content=[
+                        ResponseOutputText.model_construct(
+                            type="output_text", text="Hello!", id="text_123"
+                        )
+                    ],
+                )
+            ]
+
+    response = MockResponse()
+    result = llm._convert_responses_api_response_to_chat_result(response)
+
+    assert isinstance(result, ChatResult)
+    message = result.generations[0].message
+    assert isinstance(message, AIMessage)
+    assert hasattr(message, "custom_outputs")
+    assert message.custom_outputs == {"model_version": "v2.1", "processing_time": 150}
+
+
+def test_convert_chatagent_response_with_custom_outputs():
+    llm = ChatDatabricks(model="test-model")
+
+    response = SimpleNamespace(
+        messages=[{"role": "assistant", "content": "Hello from ChatAgent!"}],
+        custom_outputs={"agent_version": "1.0", "tokens_used": 25},
+    )
+
+    result = llm._convert_chatagent_response_to_chat_result(response)
+
+    assert isinstance(result, ChatResult)
+    message = result.generations[0].message
+    assert isinstance(message, AIMessage)
+    assert hasattr(message, "custom_outputs")
+    assert message.custom_outputs == {"agent_version": "1.0", "tokens_used": 25}
+
+
+def test_convert_responses_api_chunk_with_custom_outputs():
+    chunk = ResponseTextDeltaEvent.model_construct(
+        type="response.output_text.delta",
+        item_id="item_123",
+        delta="Hello",
+        custom_outputs={"chunk_index": 0},
+    )
+
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == [{"type": "text", "text": "Hello"}]
+    assert hasattr(result, "custom_outputs")
+    assert result.custom_outputs == {"chunk_index": 0}
+
+
+def test_invoke_with_custom_inputs_integration():
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        # Mock successful response with custom_outputs
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Response with custom outputs",
+            "custom_outputs": {"confidence": 0.99},
+        }
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.usage = None
+        mock_response.model = "test-model"
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Test message")]
+        custom_inputs = {"user_id": "test_user", "context": "unit_test"}
+
+        # Test public invoke method with custom_inputs
+        result = llm.invoke(messages, custom_inputs=custom_inputs)
+
+        # Verify the result
+        assert isinstance(result, AIMessage)
+        assert result.content == "Response with custom outputs"
+        assert hasattr(result, "custom_outputs")
+        assert result.custom_outputs == {"confidence": 0.99}
+
+        # Verify the API call included custom_inputs
+        mock_client.chat.completions.create.assert_called_once()
+        call_args = mock_client.chat.completions.create.call_args[1]
+        assert "extra_body" in call_args
+        assert call_args["extra_body"]["custom_inputs"] == custom_inputs

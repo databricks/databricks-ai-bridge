@@ -772,3 +772,51 @@ def test_chat_databricks_with_gpt_oss():
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
     assert isinstance(response.content, str)
+
+
+def test_chat_databricks_custom_outputs():
+    llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
+    response = llm.invoke(
+        "What is the 10th fibonacci number?",
+        custom_inputs={"key": "value"},
+    )
+    assert response.custom_outputs["key"] == "value"
+
+
+def test_chat_databricks_custom_outputs_stream():
+    llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
+    response = llm.stream(
+        "What is the 10th fibonacci number?",
+        custom_inputs={"key": "value"},
+    )
+
+    assert any(chunk.custom_outputs["key"] == "value" for chunk in response)
+
+
+def test_chat_databricks_token_count():
+    import mlflow
+
+    mlflow.set_experiment("4435237072766312")
+    mlflow.langchain.autolog()
+    llm = ChatDatabricks(model="databricks-gpt-oss-120b")
+    response = llm.invoke("What is the 100th fibonacci number?")
+    assert response.content is not None
+    assert response.response_metadata["prompt_tokens"] > 0
+    assert response.response_metadata["completion_tokens"] > 0
+    assert response.response_metadata["total_tokens"] > 0
+    assert (
+        response.response_metadata["total_tokens"]
+        == response.response_metadata["prompt_tokens"]
+        + response.response_metadata["completion_tokens"]
+    )
+
+    chunks = list(llm.stream("What is the 100th fibonacci number?"))
+    last_chunk = chunks[-1]
+    assert last_chunk.usage_metadata is not None
+    assert last_chunk.usage_metadata["input_tokens"] > 0
+    assert last_chunk.usage_metadata["output_tokens"] > 0
+    assert last_chunk.usage_metadata["total_tokens"] > 0
+    assert (
+        last_chunk.usage_metadata["total_tokens"]
+        == last_chunk.usage_metadata["input_tokens"] + last_chunk.usage_metadata["output_tokens"]
+    )
