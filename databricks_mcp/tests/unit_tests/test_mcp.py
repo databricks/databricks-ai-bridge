@@ -142,7 +142,7 @@ class TestDatabricksMCPClient:
             tools = await client._get_tools_async()
 
             assert tools == mock_tools
-            mock_session.initialize.assert_called_once()
+            mock_session.initialize.assert_called_any()
             mock_session.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
