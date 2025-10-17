@@ -16,7 +16,7 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from openai import OpenAI, pydantic_function_tool
 from openai.types.chat import ChatCompletionToolParam
@@ -110,13 +110,22 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
         credential_strategy = None
-        if (
-            self.workspace_client is not None
-            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
-        ):
-            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+        workspace_url = None
+        personal_access_token = None
+
+        if self.workspace_client is not None:
+            if self.workspace_client.config.auth_type == "model_serving_user_credentials":
+                credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+            else:
+                # Use workspace_client's host and token for VectorSearchClient
+                workspace_url = self.workspace_client.config.host
+                personal_access_token = self.workspace_client.config.token
+
         self._index = VectorSearchClient(
-            disable_notice=True, credential_strategy=credential_strategy
+            workspace_url=workspace_url,
+            personal_access_token=personal_access_token,
+            disable_notice=True,
+            credential_strategy=credential_strategy
         ).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
@@ -145,8 +154,75 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         tool_name = self._get_tool_name()
 
+        # Create tool input model based on dynamic_filter setting
+        if self.dynamic_filter:
+            # Create a custom input model with enhanced filter description
+            base_description = (
+                "Optional filters to refine vector search results as an array of key-value pairs. "
+            )
+
+            # Try to get column information from Unity Catalog
+            try:
+                from databricks.sdk import WorkspaceClient
+
+                if self.workspace_client:
+                    table_info = self.workspace_client.tables.get(full_name=self.index_name)
+                else:
+                    table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
+                column_info = []
+                for column_info_item in table_info.columns:
+                    name = column_info_item.name
+                    col_type = column_info_item.type_name.name
+                    if not name.startswith("__"):
+                        column_info.append((name, col_type))
+
+                if column_info:
+                    base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
+            except Exception:
+                pass
+
+            filter_description = (
+                base_description +
+                "Supports the following operators:\n\n"
+                '- Inclusion: [{"key": "column", "value": value}] or [{"key": "column", "value": [value1, value2]}] (matches if the column equals any of the provided values)\n'
+                '- Exclusion: [{"key": "column NOT", "value": value}]\n'
+                '- Comparisons: [{"key": "column <", "value": value}], [{"key": "column >=", "value": value}], etc.\n'
+                '- Pattern match: [{"key": "column LIKE", "value": "word"}] (matches full tokens separated by whitespace)\n'
+                '- OR logic: [{"key": "column1 OR column2", "value": [value1, value2]}] '
+                "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)\n\n"
+                "Examples:\n"
+                '- Filter by category: [{"key": "category", "value": "electronics"}]\n'
+                '- Filter by price range: [{"key": "price >=", "value": 100}, {"key": "price <", "value": 500}]\n'
+                '- Exclude specific status: [{"key": "status NOT", "value": "archived"}]\n'
+                '- Pattern matching: [{"key": "description LIKE", "value": "wireless"}]'
+            )
+
+            class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+                model_config = ConfigDict(extra="allow")
+                query: str = Field(
+                    description="The string used to query the index with and identify the most similar "
+                    "vectors and return the associated documents."
+                )
+                filters: Optional[List[FilterItem]] = Field(
+                    default=None,
+                    description=filter_description,
+                )
+
+            tool_input_class = EnhancedVectorSearchRetrieverToolInput
+        else:
+            # Use basic input model without filters
+            class BasicVectorSearchRetrieverToolInput(BaseModel):
+                model_config = ConfigDict(extra="allow")
+                query: str = Field(
+                    description="The string used to query the index with and identify the most similar "
+                    "vectors and return the associated documents."
+                )
+
+            tool_input_class = BasicVectorSearchRetrieverToolInput
+
         self.tool = pydantic_function_tool(
-            VectorSearchRetrieverToolInput,
+            tool_input_class,
             name=tool_name,
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),
