@@ -142,7 +142,7 @@ class TestDatabricksMCPClient:
             tools = await client._get_tools_async()
 
             assert tools == mock_tools
-            mock_session.initialize.assert_called_any()
+            mock_session.initialize.assert_called_once()
             mock_session.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
@@ -153,16 +153,12 @@ class TestDatabricksMCPClient:
         mock_session.initialize = AsyncMock()
         mock_session.call_tool = AsyncMock(return_value=mock_result)
 
-        async def session_enter(*args, **kwargs):
-            await mock_session.initialize()
-            return mock_session
-
         with (
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
             patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
         ):
             mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
-            mock_session_class.return_value.__aenter__.side_effect = session_enter
+            mock_session_class.return_value.__aenter__.return_value = mock_session
 
             workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
             client = DatabricksMCPClient(
