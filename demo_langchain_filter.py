@@ -94,7 +94,7 @@ print(f"\nQuery: {manual_query}")
 print(f"Filters: {json.dumps(manual_filters, indent=2)}")
 
 try:
-    results = retriever_tool._run(query=manual_query, filters=manual_filters)
+    results = retriever_tool.invoke({"query": manual_query, "filters": manual_filters})
     print(f"\nFound {len(results)} results:")
     for i, doc in enumerate(results[:2], 1):
         print(f"\n{i}. Content: {doc.page_content[:200]}...")
