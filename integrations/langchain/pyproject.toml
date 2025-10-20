@@ -14,7 +14,7 @@ dependencies = [
     "databricks-ai-bridge>=0.4.2",
     "mlflow>=2.20.1",
     "pydantic>2.10.0",
-    "unitycatalog-langchain[databricks]>=0.2.0",
+    "unitycatalog-langchain[databricks]>=0.2.0", # TODO: update this to 0.3.0 once released
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
 ]

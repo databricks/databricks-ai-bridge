@@ -13,7 +13,7 @@ import os
 from typing import Annotated
 
 import pytest
-from langchain.agents import create_agent
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import (
     AIMessage,
@@ -28,7 +28,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode, create_react_agent, tools_condition
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -412,7 +412,7 @@ def test_chat_databricks_langgraph(model):
     )
     tools = [add, multiply]
 
-    app = create_agent(model, tools)
+    app = create_react_agent(model, tools)
     response = app.invoke({"messages": [("human", "What is (10 + 5) * 3?")]})
     assert "45" in response["messages"][-1].content
 
