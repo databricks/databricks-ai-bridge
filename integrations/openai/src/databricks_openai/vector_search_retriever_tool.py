@@ -156,32 +156,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         # Create tool input model based on dynamic_filter setting
         if self.dynamic_filter:
-            # Create a custom input model with enhanced filter description
-            # Use the mixin's method to get consistent filter description with fallback guidance
-            filter_description = self._get_filter_param_description()
-
-            class EnhancedVectorSearchRetrieverToolInput(BaseModel):
-                model_config = ConfigDict(extra="allow")
-                query: str = Field(
-                    description="The string used to query the index with and identify the most similar "
-                    "vectors and return the associated documents."
-                )
-                filters: Optional[List[FilterItem]] = Field(
-                    default=None,
-                    description=filter_description,
-                )
-
-            tool_input_class = EnhancedVectorSearchRetrieverToolInput
+            tool_input_class = self._create_enhanced_input_model()
         else:
-            # Use basic input model without filters
-            class BasicVectorSearchRetrieverToolInput(BaseModel):
-                model_config = ConfigDict(extra="allow")
-                query: str = Field(
-                    description="The string used to query the index with and identify the most similar "
-                    "vectors and return the associated documents."
-                )
-
-            tool_input_class = BasicVectorSearchRetrieverToolInput
+            tool_input_class = self._create_basic_input_model()
 
         self.tool = pydantic_function_tool(
             tool_input_class,

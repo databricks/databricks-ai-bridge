@@ -201,6 +201,35 @@ class VectorSearchRetrieverToolMixin(BaseModel):
 
         return base_description
 
+    def _create_enhanced_input_model(self):
+        """Create an input model with filter parameters enabled."""
+        filter_description = self._get_filter_param_description()
+
+        class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+            filters: Optional[List[FilterItem]] = Field(
+                default=None,
+                description=filter_description,
+            )
+
+        return EnhancedVectorSearchRetrieverToolInput
+
+    def _create_basic_input_model(self):
+        """Create an input model without filter parameters."""
+
+        class BasicVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+
+        return BasicVectorSearchRetrieverToolInput
+
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():
             source_table = index_details.index_spec.get("source_table", "")
