@@ -282,8 +282,6 @@ def test_vector_search_client_model_serving_environment():
                     workspace_client=w,
                 )
                 mockVSClient.assert_called_once_with(
-                    workspace_url=None,
-                    personal_access_token=None,
                     disable_notice=True,
                     credential_strategy=CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS,
                 )
@@ -297,12 +295,7 @@ def test_vector_search_client_non_model_serving_environment():
             embedding_model_name="text-embedding-3-small",
             tool_description="desc",
         )
-        mockVSClient.assert_called_once_with(
-            workspace_url=None,
-            personal_access_token=None,
-            disable_notice=True,
-            credential_strategy=None
-        )
+        mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
 
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
@@ -314,12 +307,7 @@ def test_vector_search_client_non_model_serving_environment():
                 tool_description="desc",
                 workspace_client=w,
             )
-            mockVSClient.assert_called_once_with(
-                workspace_url="https://testDogfod.com",
-                personal_access_token="fakeToken",
-                disable_notice=True,
-                credential_strategy=None
-            )
+            mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
 
 
 def test_kwargs_are_passed_through() -> None:

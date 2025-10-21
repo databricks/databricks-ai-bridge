@@ -110,22 +110,13 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
         credential_strategy = None
-        workspace_url = None
-        personal_access_token = None
-
-        if self.workspace_client is not None:
-            if self.workspace_client.config.auth_type == "model_serving_user_credentials":
-                credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-            else:
-                # Use workspace_client's host and token for VectorSearchClient
-                workspace_url = self.workspace_client.config.host
-                personal_access_token = self.workspace_client.config.token
-
+        if (
+            self.workspace_client is not None
+            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
+        ):
+            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
         self._index = VectorSearchClient(
-            workspace_url=workspace_url,
-            personal_access_token=personal_access_token,
-            disable_notice=True,
-            credential_strategy=credential_strategy
+            disable_notice=True, credential_strategy=credential_strategy
         ).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
