@@ -178,8 +178,11 @@ class VectorSearchRetrieverToolMixin(BaseModel):
                 col_type = column_info_item.type_name.name
                 if not name.startswith("__"):
                     column_info.append((name, col_type))
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning(
+                f"Unable to fetch table metadata for index {self.index_name}. "
+                f"Filter descriptions will not include column information. Error: {e}"
+            )
 
         if column_info:
             base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
