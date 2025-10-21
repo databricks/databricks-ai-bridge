@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mcp"
-version = "0.4.0.dev0"
+version = "0.4.0"
 description = "MCP helpers for Databricks"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.9.1",
     "databricks-sdk>=0.49.0",
-    "databricks-ai-bridge>=0.4.2",
+    "databricks-ai-bridge>=0.9.0",
     "mlflow>=3.1"
 ]
 
