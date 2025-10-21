@@ -75,40 +75,8 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         # Create args_schema based on dynamic_filter setting
         if self.dynamic_filter:
             # Create a custom args_schema with enhanced filter description
-            # Get column information from the vector store's index
-            base_description = (
-                "Optional filters to refine vector search results as an array of key-value pairs. "
-            )
-
-            # Try to get column information from the index
-            try:
-                column_info = []
-                for column_info_item in dbvs.index.describe()["columns"]:
-                    name = column_info_item["name"]
-                    col_type = column_info_item.get("type", "")
-                    if not name.startswith("__"):
-                        column_info.append((name, col_type))
-
-                if column_info:
-                    base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
-            except Exception:
-                pass
-
-            filter_description = (
-                base_description +
-                "Supports the following operators:\n\n"
-                '- Inclusion: [{"key": "column", "value": value}] or [{"key": "column", "value": [value1, value2]}] (matches if the column equals any of the provided values)\n'
-                '- Exclusion: [{"key": "column NOT", "value": value}]\n'
-                '- Comparisons: [{"key": "column <", "value": value}], [{"key": "column >=", "value": value}], etc.\n'
-                '- Pattern match: [{"key": "column LIKE", "value": "word"}] (matches full tokens separated by whitespace)\n'
-                '- OR logic: [{"key": "column1 OR column2", "value": [value1, value2]}] '
-                "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)\n\n"
-                "Examples:\n"
-                '- Filter by category: [{"key": "category", "value": "electronics"}]\n'
-                '- Filter by price range: [{"key": "price >=", "value": 100}, {"key": "price <", "value": 500}]\n'
-                '- Exclude specific status: [{"key": "status NOT", "value": "archived"}]\n'
-                '- Pattern matching: [{"key": "description LIKE", "value": "wireless"}]'
-            )
+            # Use the mixin's method to get consistent filter description with fallback guidance
+            filter_description = self._get_filter_param_description()
 
             class EnhancedVectorSearchRetrieverToolInput(BaseModel):
                 model_config = ConfigDict(extra="allow")

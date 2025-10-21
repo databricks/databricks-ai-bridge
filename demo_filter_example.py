@@ -161,6 +161,60 @@ try:
 except Exception as e:
     print(f"Error executing tool: {e}")
 
+# Example 3: Recommended fallback pattern - search without filters first
+print("\n" + "="*80)
+print("Example 3: Recommended Fallback Pattern (search without filters first)")
+print("="*80)
+print("\nThis demonstrates the recommended approach: try without filters first,")
+print("then optionally narrow with filters if you have good results.")
+
+# Step 1: Search WITHOUT filters first
+print("\nStep 1: Searching WITHOUT filters to get broad results...")
+try:
+    broad_results = dbvs_tool.execute(
+        query="product documentation",
+        openai_client=client
+    )
+    print(f"Found {len(broad_results)} results without filters")
+    if broad_results:
+        print("\nSample categories from broad search:")
+        categories_found = set()
+        for doc in broad_results:
+            content = doc.get('page_content', '') or doc.get('content', '')
+            if '<product_category>' in content:
+                start = content.find('<product_category>') + len('<product_category>')
+                end = content.find('</product_category>')
+                if end > start:
+                    category = content[start:end]
+                    categories_found.add(category)
+        print(f"  Categories available: {sorted(categories_found)}")
+except Exception as e:
+    print(f"Error: {e}")
+    broad_results = []
+
+# Step 2: Now that we know actual categories, we can filter more effectively
+if broad_results and categories_found:
+    print("\nStep 2: Now narrowing with a filter based on actual data...")
+    # Use one of the actual categories we found
+    actual_category = sorted(categories_found)[0]
+    print(f"Filtering for category: {actual_category}")
+
+    try:
+        filtered_results = dbvs_tool.execute(
+            query="product documentation",
+            filters=[{"key": "product_category", "value": actual_category}],
+            openai_client=client
+        )
+        print(f"Found {len(filtered_results)} results with filter")
+        if filtered_results:
+            print(f"\nFirst result from {actual_category} category:")
+            print(json.dumps(filtered_results[0], indent=2)[:300] + "...")
+    except Exception as e:
+        print(f"Error: {e}")
+
 print("\n" + "="*80)
 print("Demo complete!")
 print("="*80)
+print("\nKey Takeaway: The fallback pattern (search without filters first) helps avoid")
+print("zero results due to incorrect filter values, while still allowing filters")
+print("to narrow results when you have accurate filter information.")

@@ -159,6 +159,8 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         """Generate a comprehensive filter parameter description including available columns."""
         base_description = (
             "Optional filters to refine vector search results as an array of key-value pairs. "
+            "IMPORTANT: If unsure about filter values, try searching WITHOUT filters first to get broad results, "
+            "then optionally add filters to narrow down if needed. This ensures you don't miss relevant results due to incorrect filter values. "
         )
 
         # Try to get column information
