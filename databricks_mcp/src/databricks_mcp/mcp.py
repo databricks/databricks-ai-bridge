@@ -153,6 +153,7 @@ class DatabricksMCPClient:
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
                 return await session.call_tool(tool_name, arguments)
 
     def _extract_genie_id(self) -> str:
