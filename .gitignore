@@ -18,3 +18,5 @@ dist/
 *.egg-info/
 Pipfile
 docs/build
+
+**/uv.lock
