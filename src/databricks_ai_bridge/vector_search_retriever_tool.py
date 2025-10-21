@@ -163,29 +163,23 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             "then optionally add filters to narrow down if needed. This ensures you don't miss relevant results due to incorrect filter values. "
         )
 
-        # Try to get column information
+        # Get column information from Unity Catalog
+        # This is required for dynamic filters to provide accurate column metadata to the LLM
+        from databricks.sdk import WorkspaceClient
+
+        if self.workspace_client:
+            table_info = self.workspace_client.tables.get(full_name=self.index_name)
+        else:
+            table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
         column_info = []
-        try:
-            from databricks.sdk import WorkspaceClient
+        for column_info_item in table_info.columns:
+            name = column_info_item.name
+            col_type = column_info_item.type_name.name
+            if not name.startswith("__"):
+                column_info.append((name, col_type))
 
-            if self.workspace_client:
-                table_info = self.workspace_client.tables.get(full_name=self.index_name)
-            else:
-                table_info = WorkspaceClient().tables.get(full_name=self.index_name)
-
-            for column_info_item in table_info.columns:
-                name = column_info_item.name
-                col_type = column_info_item.type_name.name
-                if not name.startswith("__"):
-                    column_info.append((name, col_type))
-        except Exception as e:
-            _logger.warning(
-                f"Unable to fetch table metadata for index {self.index_name}. "
-                f"Filter descriptions will not include column information. Error: {e}"
-            )
-
-        if column_info:
-            base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
+        base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
 
         base_description += (
             "Supports the following operators:\n\n"

@@ -422,8 +422,8 @@ def test_get_filter_param_description_with_column_metadata() -> None:
 
         # Should include examples
         assert "Examples:" in description
-        assert 'Filter by category:' in description
-        assert 'Filter by price range:' in description
+        assert "Filter by category:" in description
+        assert "Filter by price range:" in description
 
 
 def test_enhanced_filter_description_used_in_tool_schema() -> None:
@@ -446,41 +446,16 @@ def test_enhanced_filter_description_used_in_tool_schema() -> None:
     assert "column" in filter_param["description"]
 
 
-def test_enhanced_filter_description_without_column_metadata() -> None:
-    """Test that the tool schema gracefully handles missing column metadata."""
-    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
-        mock_ws_client = Mock()
-        mock_ws_client.tables.get.side_effect = Exception("Cannot retrieve table info")
-        mock_ws_client_class.return_value = mock_ws_client
-
-        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
-
-        # Check that the tool schema still includes filter description
-        tool_schema = vector_search_tool.tool
-        filter_param = tool_schema["function"]["parameters"]["properties"]["filters"]
-
-        # Should not include available columns section
-        assert "Available columns for filtering:" not in filter_param["description"]
-
-        # Should still include comprehensive filter syntax
-        assert "Inclusion:" in filter_param["description"]
-        assert "Exclusion:" in filter_param["description"]
-        assert "Comparisons:" in filter_param["description"]
-        assert "Pattern match:" in filter_param["description"]
-        assert "OR logic:" in filter_param["description"]
-
-        # Should still include examples
-        assert "Examples:" in filter_param["description"]
-
-
 def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
     """Test that using both dynamic_filter and predefined filters raises an error."""
     # Try to initialize tool with both dynamic_filter=True and predefined filters
-    with pytest.raises(ValueError, match="Cannot use both dynamic_filter=True and predefined filters"):
+    with pytest.raises(
+        ValueError, match="Cannot use both dynamic_filter=True and predefined filters"
+    ):
         init_vector_search_tool(
             DELTA_SYNC_INDEX,
             filters={"status": "active", "category": "electronics"},
-            dynamic_filter=True
+            dynamic_filter=True,
         )
 
 
@@ -488,8 +463,7 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
     """Test that predefined filters work correctly when dynamic_filter is False."""
     # Initialize tool with only predefined filters (dynamic_filter=False by default)
     vector_search_tool = init_vector_search_tool(
-        DELTA_SYNC_INDEX,
-        filters={"status": "active", "category": "electronics"}
+        DELTA_SYNC_INDEX, filters={"status": "active", "category": "electronics"}
     )
 
     # The filters parameter should NOT be exposed since dynamic_filter=False
@@ -499,9 +473,7 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
     # Test that predefined filters are used
     vector_search_tool._index.similarity_search = MagicMock()
 
-    vector_search_tool.execute(
-        query="what electronics are available"
-    )
+    vector_search_tool.execute(query="what electronics are available")
 
     vector_search_tool._index.similarity_search.assert_called_once_with(
         columns=vector_search_tool.columns,
@@ -526,16 +498,13 @@ def test_filter_item_serialization() -> None:
         FilterItem(key="tags", value=["wireless", "bluetooth"]),
     ]
 
-    vector_search_tool.execute(
-        "find products",
-        filters=filters
-    )
+    vector_search_tool.execute("find products", filters=filters)
 
     expected_filters = {
         "category": "electronics",
         "price >=": 100,
         "status NOT": "discontinued",
-        "tags": ["wireless", "bluetooth"]
+        "tags": ["wireless", "bluetooth"],
     }
 
     vector_search_tool._index.similarity_search.assert_called_once_with(
