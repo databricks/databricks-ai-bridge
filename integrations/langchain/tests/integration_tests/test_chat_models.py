@@ -244,9 +244,9 @@ def test_chat_databricks_tool_calls(model, tool_choice):
         return
 
     # Models should make at least one tool call when tool_choice is not "none"
-    assert (
-        len(response.tool_calls) >= 1
-    ), f"Expected at least 1 tool call, got {len(response.tool_calls)}"
+    assert len(response.tool_calls) >= 1, (
+        f"Expected at least 1 tool call, got {len(response.tool_calls)}"
+    )
 
     # The first tool call should be for GetWeather
     first_call = response.tool_calls[0]
@@ -268,9 +268,9 @@ def test_chat_databricks_tool_calls(model, tool_choice):
         ]
     )
     # Should call GetWeather tool for the followup question
-    assert (
-        len(response.tool_calls) >= 1
-    ), f"Expected at least 1 tool call, got {len(response.tool_calls)}"
+    assert len(response.tool_calls) >= 1, (
+        f"Expected at least 1 tool call, got {len(response.tool_calls)}"
+    )
     tool_call = response.tool_calls[0]
     assert tool_call["name"] == "GetWeather", f"Expected GetWeather tool, got {tool_call['name']}"
     assert "location" in tool_call["args"], f"Expected location in args, got {tool_call['args']}"
@@ -584,8 +584,12 @@ def test_chat_databricks_chatagent_invoke():
                     ):
                         python_tool_used = True
 
-    assert has_tool_calls, f"Expected ChatAgent to use tool calls for fibonacci computation. Content: {response.content}"
-    assert python_tool_used, f"Expected ChatAgent to use python execution tool for fibonacci computation. Content: {response.content}"
+    assert has_tool_calls, (
+        f"Expected ChatAgent to use tool calls for fibonacci computation. Content: {response.content}"
+    )
+    assert python_tool_used, (
+        f"Expected ChatAgent to use python execution tool for fibonacci computation. Content: {response.content}"
+    )
 
 
 @pytest.mark.st_endpoints
