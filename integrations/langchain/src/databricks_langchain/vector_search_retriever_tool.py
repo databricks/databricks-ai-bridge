@@ -9,7 +9,7 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
 )
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from databricks_langchain import DatabricksEmbeddings
 from databricks_langchain.vectorstores import DatabricksVectorSearch

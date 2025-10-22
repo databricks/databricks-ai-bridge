@@ -12,11 +12,10 @@ from databricks_ai_bridge.utils.vector_search import (
 )
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
-    VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from openai import OpenAI, pydantic_function_tool
 from openai.types.chat import ChatCompletionToolParam
