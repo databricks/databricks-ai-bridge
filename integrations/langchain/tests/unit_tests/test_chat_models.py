@@ -1077,8 +1077,8 @@ def test_chat_databricks_responses_api_stream():
         messages = [HumanMessage(content="Hello")]
         chunks = list(llm.stream(messages))
 
-        # Should get chunks for the text deltas but skip the duplicate done event
-        assert len(chunks) == 2  # Two text delta chunks
+        # receives one additional chunk that is empty content, chunk_position=last
+        assert len(chunks) == 3
 
         # Check first chunk
         assert isinstance(chunks[0], AIMessageChunk)

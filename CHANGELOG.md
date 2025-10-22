@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.9.0 databricks-langchain 0.9.0 databricks-mcp 0.4.0 (2025-10-21)
+- Langchain V1 compatability
+- Improve OBO user authz error message with guidance on WorkspaceClient instantiation
+- Higher visibility of Genie API's execution steps in MLflow traces
+- Add OBO Debug Mode 
+- MCP: Fixed the mcp tools_calls which required MCP_Session_id which is obtained in the session via initialize call
+
+
+## databricks-ai-bridge 0.8.1 databricks-langchain 0.8.2 (2025-10-13)
+- Higher visibility of Genie API's execution steps in MLflow traces
+- ChatDatabricks: turn on stream usage by default
+- Use MMR, hybrid search and self-managed embeddings together in the langchain DatabricksVectorSearch object
+
+
 ## databricks-ai-bridge 0.6.0, databricks-langchain 0.6.0, databricks-openai 0.5.0, databricks-mcp 0.2.0 (2025-06-02)
 
 ### Improvements
