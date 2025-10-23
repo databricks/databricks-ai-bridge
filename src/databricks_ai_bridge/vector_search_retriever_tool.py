@@ -167,17 +167,32 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         # This is required for dynamic filters to provide accurate column metadata to the LLM
         from databricks.sdk import WorkspaceClient
 
-        if self.workspace_client:
-            table_info = self.workspace_client.tables.get(full_name=self.index_name)
-        else:
-            table_info = WorkspaceClient().tables.get(full_name=self.index_name)
-
         column_info = []
-        for column_info_item in table_info.columns:
-            name = column_info_item.name
-            col_type = column_info_item.type_name.name
-            if not name.startswith("__"):
-                column_info.append((name, col_type))
+        try:
+            if self.workspace_client:
+                table_info = self.workspace_client.tables.get(full_name=self.index_name)
+            else:
+                table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
+            for column_info_item in table_info.columns:
+                name = column_info_item.name
+                col_type = column_info_item.type_name.name
+                if not name.startswith("__"):
+                    column_info.append((name, col_type))
+        except Exception as e:
+            raise ValueError(
+                f"Failed to retrieve table metadata for index '{self.index_name}'. "
+                f"Table metadata is required when dynamic_filter=True to provide accurate column information to the LLM. "
+                f"Please ensure the table exists and you have permissions to access it. Error: {e}"
+            ) from e
+
+        # Validate that we got column information
+        if not column_info:
+            raise ValueError(
+                f"No valid columns found in table metadata for index '{self.index_name}'. "
+                f"Table metadata is required when dynamic_filter=True to provide accurate column information to the LLM. "
+                f"Please ensure the table has columns defined."
+            )
 
         base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
 

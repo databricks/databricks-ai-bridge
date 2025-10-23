@@ -376,6 +376,46 @@ def test_enhanced_filter_description_with_column_metadata() -> None:
     assert "Filter by price range:" in filter_field.description
 
 
+def test_enhanced_filter_description_fails_on_table_metadata_error() -> None:
+    """Test that tool initialization fails with clear error when table metadata cannot be retrieved."""
+    # Mock WorkspaceClient to raise an exception when accessing table metadata
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_ws_client.tables.get.side_effect = Exception("Permission denied")
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because we can't get table metadata
+        with pytest.raises(
+            ValueError,
+            match="Failed to retrieve table metadata for index.*Permission denied",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
+def test_enhanced_filter_description_fails_on_empty_columns() -> None:
+    """Test that tool initialization fails when table has no valid columns."""
+    # Mock WorkspaceClient to return a table with no valid columns (all start with __)
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_table = MagicMock()
+        mock_column = MagicMock()
+        mock_column.name = "__internal_column"
+        mock_column.type_name = MagicMock()
+        mock_column.type_name.name = "STRING"
+        mock_table.columns = [mock_column]
+        mock_ws_client.tables.get.return_value = mock_table
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because there are no valid columns
+        with pytest.raises(
+            ValueError,
+            match="No valid columns found in table metadata for index",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
 def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
     """Test that using both dynamic_filter and predefined filters raises an error."""
     # Try to initialize tool with both dynamic_filter=True and predefined filters
