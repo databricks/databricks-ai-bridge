@@ -72,6 +72,12 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             IndexDetails(dbvs.index),
         )
 
+        # Create args_schema based on dynamic_filter setting
+        if self.dynamic_filter:
+            self.args_schema = self._create_enhanced_input_model()
+        else:
+            self.args_schema = self._create_basic_input_model()
+
         return self
 
     @vector_search_retriever_tool_trace

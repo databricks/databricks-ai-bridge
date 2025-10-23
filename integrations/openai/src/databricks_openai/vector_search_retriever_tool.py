@@ -12,7 +12,6 @@ from databricks_ai_bridge.utils.vector_search import (
 )
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
-    VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
@@ -145,8 +144,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         tool_name = self._get_tool_name()
 
+        # Create tool input model based on dynamic_filter setting
+        if self.dynamic_filter:
+            tool_input_class = self._create_enhanced_input_model()
+        else:
+            tool_input_class = self._create_basic_input_model()
+
         self.tool = pydantic_function_tool(
-            VectorSearchRetrieverToolInput,
+            tool_input_class,
             name=tool_name,
             description=self.tool_description
             or self._get_default_tool_description(self._index_details),

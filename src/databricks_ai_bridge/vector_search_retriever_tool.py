@@ -11,7 +11,7 @@ from mlflow.models.resources import (
     DatabricksVectorSearchIndex,
     Resource,
 )
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, validator
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
@@ -103,6 +103,23 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     include_score: Optional[bool] = Field(
         False, description="When true, will return the similarity score with the metadata."
     )
+    dynamic_filter: bool = Field(
+        False,
+        description="When true, enables LLM-generated filter parameters in the tool schema. "
+        "This allows LLMs to dynamically generate filters based on natural language queries. "
+        "Cannot be used together with predefined filters (filters parameter).",
+    )
+
+    @model_validator(mode="after")
+    def validate_filter_configuration(self):
+        """Validate that dynamic_filter and filters are not both enabled."""
+        if self.dynamic_filter and self.filters:
+            raise ValueError(
+                "Cannot use both dynamic_filter=True and predefined filters. "
+                "Please either enable dynamic_filter for LLM-generated filters, "
+                "or provide predefined filters via the filters parameter, but not both."
+            )
+        return self
 
     @validator("tool_name")
     def validate_tool_name(cls, tool_name):
@@ -137,6 +154,93 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             _logger.warning(
                 "Unable to retrieve column information automatically. Please manually specify column names, types, and descriptions in the tool description to help LLMs apply filters correctly."
             )
+
+    def _get_filter_param_description(self) -> str:
+        """Generate a comprehensive filter parameter description including available columns."""
+        base_description = (
+            "Optional filters to refine vector search results as an array of key-value pairs. "
+            "IMPORTANT: If unsure about filter values, try searching WITHOUT filters first to get broad results, "
+            "then optionally add filters to narrow down if needed. This ensures you don't miss relevant results due to incorrect filter values. "
+        )
+
+        # Get column information from Unity Catalog
+        # This is required for dynamic filters to provide accurate column metadata to the LLM
+        from databricks.sdk import WorkspaceClient
+
+        column_info = []
+        try:
+            if self.workspace_client:
+                table_info = self.workspace_client.tables.get(full_name=self.index_name)
+            else:
+                table_info = WorkspaceClient().tables.get(full_name=self.index_name)
+
+            for column_info_item in table_info.columns:
+                name = column_info_item.name
+                col_type = column_info_item.type_name.name
+                if not name.startswith("__"):
+                    column_info.append((name, col_type))
+        except Exception as e:
+            raise ValueError(
+                f"Failed to retrieve table metadata for index '{self.index_name}'. "
+                f"Table metadata is required when dynamic_filter=True to provide accurate column information to the LLM. "
+                f"Please ensure the table exists and you have permissions to access it. Error: {e}"
+            ) from e
+
+        # Validate that we got column information
+        if not column_info:
+            raise ValueError(
+                f"No valid columns found in table metadata for index '{self.index_name}'. "
+                f"Table metadata is required when dynamic_filter=True to provide accurate column information to the LLM. "
+                f"Please ensure the table has columns defined."
+            )
+
+        base_description += f"Available columns for filtering: {', '.join([f'{name} ({col_type})' for name, col_type in column_info])}. "
+
+        base_description += (
+            "Supports the following operators:\n\n"
+            '- Inclusion: [{"key": "column", "value": value}] or [{"key": "column", "value": [value1, value2]}] (matches if the column equals any of the provided values)\n'
+            '- Exclusion: [{"key": "column NOT", "value": value}]\n'
+            '- Comparisons: [{"key": "column <", "value": value}], [{"key": "column >=", "value": value}], etc.\n'
+            '- Pattern match: [{"key": "column LIKE", "value": "word"}] (matches full tokens separated by whitespace)\n'
+            '- OR logic: [{"key": "column1 OR column2", "value": [value1, value2]}] '
+            "(matches if column1 equals value1 or column2 equals value2; matches are position-specific)\n\n"
+            "Examples:\n"
+            '- Filter by category: [{"key": "category", "value": "electronics"}]\n'
+            '- Filter by price range: [{"key": "price >=", "value": 100}, {"key": "price <", "value": 500}]\n'
+            '- Exclude specific status: [{"key": "status NOT", "value": "archived"}]\n'
+            '- Pattern matching: [{"key": "description LIKE", "value": "wireless"}]'
+        )
+
+        return base_description
+
+    def _create_enhanced_input_model(self):
+        """Create an input model with filter parameters enabled."""
+        filter_description = self._get_filter_param_description()
+
+        class EnhancedVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+            filters: Optional[List[FilterItem]] = Field(
+                default=None,
+                description=filter_description,
+            )
+
+        return EnhancedVectorSearchRetrieverToolInput
+
+    def _create_basic_input_model(self):
+        """Create an input model without filter parameters."""
+
+        class BasicVectorSearchRetrieverToolInput(BaseModel):
+            model_config = ConfigDict(extra="allow")
+            query: str = Field(
+                description="The string used to query the index with and identify the most similar "
+                "vectors and return the associated documents."
+            )
+
+        return BasicVectorSearchRetrieverToolInput
 
     def _get_default_tool_description(self, index_details: IndexDetails) -> str:
         if index_details.is_delta_sync_index():

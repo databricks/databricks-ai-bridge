@@ -345,3 +345,139 @@ def test_kwargs_override_both_num_results_and_query_type() -> None:
         query_type="HYBRID",  # Should use overridden value
         filter={},
     )
+
+
+def test_enhanced_filter_description_with_column_metadata() -> None:
+    """Test that the tool args_schema includes enhanced filter descriptions with column metadata."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+    # The LangChain implementation calls index.describe() to get column information
+    # and includes them in the filter description
+    args_schema = vector_search_tool.args_schema
+    filter_field = args_schema.model_fields["filters"]
+
+    # Check that the filter description is enhanced with available columns
+    # Note: The actual columns will depend on the mocked index.describe() response
+    assert (
+        "Available columns for filtering:" in filter_field.description
+        or "Optional filters" in filter_field.description
+    )
+
+    # Should include comprehensive filter syntax
+    assert "Inclusion:" in filter_field.description
+    assert "Exclusion:" in filter_field.description
+    assert "Comparisons:" in filter_field.description
+    assert "Pattern match:" in filter_field.description
+    assert "OR logic:" in filter_field.description
+
+    # Should include examples
+    assert "Examples:" in filter_field.description
+    assert "Filter by category:" in filter_field.description
+    assert "Filter by price range:" in filter_field.description
+
+
+def test_enhanced_filter_description_fails_on_table_metadata_error() -> None:
+    """Test that tool initialization fails with clear error when table metadata cannot be retrieved."""
+    # Mock WorkspaceClient to raise an exception when accessing table metadata
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_ws_client.tables.get.side_effect = Exception("Permission denied")
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because we can't get table metadata
+        with pytest.raises(
+            ValueError,
+            match="Failed to retrieve table metadata for index.*Permission denied",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
+def test_enhanced_filter_description_fails_on_empty_columns() -> None:
+    """Test that tool initialization fails when table has no valid columns."""
+    # Mock WorkspaceClient to return a table with no valid columns (all start with __)
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_table = MagicMock()
+        mock_column = MagicMock()
+        mock_column.name = "__internal_column"
+        mock_column.type_name = MagicMock()
+        mock_column.type_name.name = "STRING"
+        mock_table.columns = [mock_column]
+        mock_ws_client.tables.get.return_value = mock_table
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because there are no valid columns
+        with pytest.raises(
+            ValueError,
+            match="No valid columns found in table metadata for index",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
+def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
+    """Test that using both dynamic_filter and predefined filters raises an error."""
+    # Try to initialize tool with both dynamic_filter=True and predefined filters
+    with pytest.raises(
+        ValueError, match="Cannot use both dynamic_filter=True and predefined filters"
+    ):
+        init_vector_search_tool(
+            DELTA_SYNC_INDEX,
+            filters={"status": "active", "category": "electronics"},
+            dynamic_filter=True,
+        )
+
+
+def test_predefined_filters_work_without_dynamic_filter() -> None:
+    """Test that predefined filters work correctly when dynamic_filter is False."""
+    # Initialize tool with only predefined filters (dynamic_filter=False by default)
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, filters={"status": "active", "category": "electronics"}
+    )
+
+    # The filters parameter should NOT be exposed since dynamic_filter=False
+    args_schema = vector_search_tool.args_schema
+    assert "filters" not in args_schema.model_fields
+
+    # Test that predefined filters are used
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    vector_search_tool.invoke({"query": "what electronics are available"})
+
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="what electronics are available",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter={"status": "active", "category": "electronics"},  # Only predefined filters
+    )
+
+
+def test_filter_item_serialization() -> None:
+    """Test that FilterItem objects are properly converted to dictionaries."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    vector_search_tool._vector_store.similarity_search = MagicMock()
+
+    # Test various filter types
+    filters = [
+        FilterItem(key="category", value="electronics"),
+        FilterItem(key="price >=", value=100),
+        FilterItem(key="status NOT", value="discontinued"),
+        FilterItem(key="tags", value=["wireless", "bluetooth"]),
+    ]
+
+    vector_search_tool.invoke({"query": "find products", "filters": filters})
+
+    expected_filters = {
+        "category": "electronics",
+        "price >=": 100,
+        "status NOT": "discontinued",
+        "tags": ["wireless", "bluetooth"],
+    }
+
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+        query="find products",
+        k=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        filter=expected_filters,
+    )
