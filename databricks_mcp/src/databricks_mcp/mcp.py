@@ -134,13 +134,23 @@ class DatabricksMCPClient:
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
-        async with streamablehttp_client(
-            url=self.server_url,
-            auth=DatabricksOAuthClientProvider(self.client),
-        ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                return (await session.list_tools()).tools
+        if self.client.auth_type == "cp_s2s":
+            headers = self.client.config.authenticate()
+            async with streamablehttp_client(
+                url=self.server_url,
+                headers=headers
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    return (await session.list_tools()).tools
+        else:
+            async with streamablehttp_client(
+                url=self.server_url,
+                auth=DatabricksOAuthClientProvider(self.client),
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    return (await session.list_tools()).tools
 
     async def _call_tools_async(
         self,
@@ -148,13 +158,23 @@ class DatabricksMCPClient:
         arguments: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
-        async with streamablehttp_client(
-            url=self.server_url,
-            auth=DatabricksOAuthClientProvider(self.client),
-        ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                return await session.call_tool(tool_name, arguments)
+        if self.client.auth_type == "cp_s2s":
+            headers = self.client.config.authenticate()
+            async with streamablehttp_client(
+                url=self.server_url,
+                headers=headers
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    return (await session.list_tools()).tools
+        else:
+            async with streamablehttp_client(
+                url=self.server_url,
+                auth=DatabricksOAuthClientProvider(self.client),
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    return await session.call_tool(tool_name, arguments)
 
     def _extract_genie_id(self) -> str:
         """Extract the Genie space ID from the URL."""
