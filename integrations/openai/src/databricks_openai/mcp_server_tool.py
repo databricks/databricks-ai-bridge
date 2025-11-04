@@ -46,6 +46,7 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
             retry_backoff_seconds_base,
             message_handler,
         )
+        print(self.name)
 
     def create_streams(
         self,
