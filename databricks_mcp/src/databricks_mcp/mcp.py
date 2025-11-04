@@ -134,7 +134,7 @@ class DatabricksMCPClient:
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
-        if self.client.auth_type == "cp_s2s":
+        if self.client.config.auth_type == "cp_s2s":
             headers = self.client.config.authenticate()
             async with streamablehttp_client(
                 url=self.server_url,
@@ -158,7 +158,7 @@ class DatabricksMCPClient:
         arguments: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
-        if self.client.auth_type == "cp_s2s":
+        if self.client.config.auth_type == "cp_s2s":
             headers = self.client.config.authenticate()
             async with streamablehttp_client(
                 url=self.server_url,
