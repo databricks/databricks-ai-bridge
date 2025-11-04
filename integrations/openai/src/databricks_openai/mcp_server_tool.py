@@ -1,7 +1,17 @@
+from contextlib import AbstractAsyncContextManager
+from typing import Any
+
+from agents.agent import AgentBase
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
+from agents.run_context import RunContextWrapper
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksOAuthClientProvider
+from mcp import Tool as MCPTool
 from mcp.client.session import MessageHandlerFnT
+from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
+from mcp.shared.message import SessionMessage
+from mcp.types import CallToolResult, GetPromptResult, ListPromptsResult
 
 
 class _McpServerUrlTool(MCPServerStreamableHttp):
@@ -19,6 +29,8 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
         retry_backoff_seconds_base: float = 1.0,
         message_handler: MessageHandlerFnT | None = None,
     ):
+        self.workspace_client = workspace_client
+        self.authentication_headers = authentication_headers
         params = MCPServerStreamableHttpParams(
             url=url,
             headers=authentication_headers,
@@ -30,7 +42,7 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
             client_session_timeout_seconds,
             tool_filter,
             use_structured_content,
-            max_retry_attemps,
+            max_retry_attempts,
             retry_backoff_seconds_base,
             message_handler,
         )
@@ -44,13 +56,13 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
-        if authentication_headers is not None:
+        if self.authentication_headers is not None:
             return streamablehttp_client(
                 url=self.params["url"], headers=self.params.get("headers", None)
             )
         else:
             return streamablehttp_client(
-                url=self.params["url"], auth=DatabricksOAuthClientProvider(workspace_client)
+                url=self.params["url"], auth=DatabricksOAuthClientProvider(self.workspace_client)
             )
 
     async def list_tools(
