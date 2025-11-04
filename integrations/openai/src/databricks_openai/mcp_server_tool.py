@@ -148,6 +148,14 @@ class McpServerTool(MCPServerStreamableHttp):
                 url=f"https://{current_host}/api/2.0/mcp/external/{connection_name}",
                 authentication_headers=authentication_headers,
                 workspace_client=workspace_client,
+                cache_tools_list=cache_tools_list,
+                name=name,
+                client_session_timeout_seconds=client_session_timeout_seconds,
+                tool_filter=tool_filter,
+                use_structured_content=use_structured_content,
+                max_retry_attempts=max_retry_attempts,
+                retry_backoff_seconds_base=retry_backoff_seconds_base,
+                message_handler=message_handler
             )
         elif app_name is not None:
             try:
