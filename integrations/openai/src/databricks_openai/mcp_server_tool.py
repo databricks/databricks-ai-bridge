@@ -1,5 +1,6 @@
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
 from databricks.sdk import WorkspaceClient
+from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import MessageHandlerFnT
 
 
@@ -7,7 +8,7 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
     def __init__(
         self,
         url: str,
-        headers: dict[str, str] = None,
+        authentication_headers: dict[str, str] = None,
         workspace_client: WorkspaceClient = None,
         cache_tools_list: bool = False,
         name: str | None = None,
@@ -20,10 +21,67 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
     ):
         params = MCPServerStreamableHttpParams(
             url=url,
-            headers=headers,
-            workspace_client=workspace_client,
+            headers=authentication_headers,
         )
-        super().__init__(params, cache_tools_list, name, client_session_timeout_seconds, tool_filter, use_structured_content, max_retry_attemps, retry_backoff_seconds_base, message_handler)
+        super().__init__(
+            params,
+            cache_tools_list,
+            name,
+            client_session_timeout_seconds,
+            tool_filter,
+            use_structured_content,
+            max_retry_attemps,
+            retry_backoff_seconds_base,
+            message_handler,
+        )
+
+    def create_streams(
+        self,
+    ) -> AbstractAsyncContextManager[
+        tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+            GetSessionIdCallback | None,
+        ]
+    ]:
+        if authentication_headers is not None:
+            return streamablehttp_client(
+                url=self.params["url"], headers=self.params.get("headers", None)
+            )
+        else:
+            return streamablehttp_client(
+                url=self.params["url"], auth=DatabricksOAuthClientProvider(workspace_client)
+            )
+
+    async def list_tools(
+        self,
+        run_context: RunContextWrapper[Any] | None = None,
+        agent: AgentBase | None = None,
+    ) -> list[MCPTool]:
+        if self.session is None:
+            await self.connect()
+
+        super().list_tools(run_context, agent)
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+        if self.session is None:
+            await self.connect()
+        super().call_tool(tool_name, arguments)
+
+    async def list_prompts(
+        self,
+    ) -> ListPromptsResult:
+        if self.session is None:
+            await self.connect()
+        super().list_prompts()
+
+    async def get_prompt(
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> GetPromptResult:
+        if self.session is None:
+            await self.connect()
+
+        super().get_prompt(name, arguments)
 
 
 class McpServerTool(MCPServerStreamableHttp):
@@ -32,7 +90,7 @@ class McpServerTool(MCPServerStreamableHttp):
         url: str = None,
         connection_name: str = None,
         app_name: str = None,
-        headers: dict[str, str] = None,
+        authentication_headers: dict[str, str] = None,
         workspace_client: WorkspaceClient = None,
         # Parameters for MCPServerStreamableHttp that can be optionally configured by the users
         cache_tools_list: bool = False,
@@ -60,7 +118,7 @@ class McpServerTool(MCPServerStreamableHttp):
         if url is not None:
             return _McpServerUrlTool(
                 url=url,
-                headers=headers,
+                authentication_headers=authentication_headers,
                 workspace_client=workspace_client,
                 cache_tools_list=cache_tools_list,
                 name=name,
@@ -75,7 +133,7 @@ class McpServerTool(MCPServerStreamableHttp):
             current_host = workspace_client.config.host
             return _McpServerUrlTool(
                 url=f"https://{current_host}/api/2.0/mcp/external/{connection_name}",
-                headers=headers,
+                authentication_headers=authentication_headers,
                 workspace_client=workspace_client,
             )
         elif app_name is not None:
@@ -90,7 +148,7 @@ class McpServerTool(MCPServerStreamableHttp):
                 )
             return _McpServerUrlTool(
                 url=app.url,
-                headers=headers,
+                authentication_headers=authentication_headers,
                 workspace_client=workspace_client,
                 cache_tools_list=cache_tools_list,
                 name=name,
