@@ -48,11 +48,9 @@ class McpServer(MCPServerStreamableHttp):
 
         if url is not None:
             params["url"] = url,
-            params["headers"] = {**params.headers, **headers}
         elif connection_name is not None:
             current_host = workspace_client.config.host
-            params["url"] = url=f"{current_host}/api/2.0/mcp/external/{connection_name}"
-            params["headers"] = {**params.headers, **headers}
+            params["url"] = f"{current_host}/api/2.0/mcp/external/{connection_name}"
         elif app_name is not None:
             try:
                 app = workspace_client.apps.get(app_name)
@@ -64,7 +62,11 @@ class McpServer(MCPServerStreamableHttp):
                     f"App {app_name} does not have a valid URL. Please ensure the app is deployed and is running."
                 )
             params["url"] = f"{app.url}/mcp"
-            params["headers"] = {**params.headers, **headers}
+
+        if headers is not None:
+            existing_headers = params.get("headers", {})
+            params["headers"] = {**existing_headers, **headers}
+            
         super().__init__(
             params=params,
             cache_tools_list=cache_tools_list,
