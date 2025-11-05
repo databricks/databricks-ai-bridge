@@ -57,6 +57,8 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
+        print("URL")
+        print(self.params["url"])
         if self.authentication_headers is not None:
             return streamablehttp_client(
                 url=self.params["url"], headers=self.params.get("headers", None)
@@ -71,30 +73,37 @@ class _McpServerUrlTool(MCPServerStreamableHttp):
         run_context: RunContextWrapper[Any] | None = None,
         agent: AgentBase | None = None,
     ) -> list[MCPTool]:
-        if self.session is None:
-            await self.connect()
-
-        super().list_tools(run_context, agent)
+        async with self:
+            if self.session is None:
+                await self.connect()
+            print("CALLING SUPER LIST TOOLS")
+            tools = await super().list_tools(run_context, agent)
+            print("TOOLS")
+            print("RETURNING TOOLS")
+            return tools
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
-        if self.session is None:
-            await self.connect()
-        super().call_tool(tool_name, arguments)
+        async with self:
+            if self.session is None:
+                await self.connect()
+            return await super().call_tool(tool_name, arguments)
 
     async def list_prompts(
         self,
     ) -> ListPromptsResult:
-        if self.session is None:
-            await self.connect()
-        super().list_prompts()
+        async with self:
+            if self.session is None:
+                await self.connect()
+            return await super().list_prompts()
 
     async def get_prompt(
         self, name: str, arguments: dict[str, Any] | None = None
     ) -> GetPromptResult:
-        if self.session is None:
-            await self.connect()
+        async with self:
+            if self.session is None:
+                await self.connect()
 
-        super().get_prompt(name, arguments)
+            return await super().get_prompt(name, arguments)
 
 
 class McpServerTool(MCPServerStreamableHttp):
@@ -145,7 +154,7 @@ class McpServerTool(MCPServerStreamableHttp):
         elif connection_name is not None:
             current_host = workspace_client.config.host
             return _McpServerUrlTool(
-                url=f"https://{current_host}/api/2.0/mcp/external/{connection_name}",
+                url=f"{current_host}/api/2.0/mcp/external/{connection_name}",
                 authentication_headers=authentication_headers,
                 workspace_client=workspace_client,
                 cache_tools_list=cache_tools_list,
