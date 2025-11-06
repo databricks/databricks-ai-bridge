@@ -48,6 +48,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
     def __init__(self, workspace_client: WorkspaceClient = None):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
+
         current_host = workspace_client.config.host
         super().__init__(
             base_url=f"{current_host}/serving-endpoints",

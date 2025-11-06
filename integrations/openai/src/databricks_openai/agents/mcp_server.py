@@ -28,6 +28,7 @@ class McpServer(MCPServerStreamableHttp):
         retry_backoff_seconds_base: float = 1.0,
         message_handler: MessageHandlerFnT | None = None,
     ):
+        # Ensure exactly one of url, connection_name, or app_name is provided
         provided_params = [param for param in [url, connection_name, app_name] if param is not None]
         if len(provided_params) == 0:
             raise ValueError(
