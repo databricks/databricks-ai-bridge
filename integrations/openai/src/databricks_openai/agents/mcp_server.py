@@ -3,6 +3,7 @@ from contextlib import AbstractAsyncContextManager
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.credentials_provider import OAuthCredentialsProvider
 from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import MessageHandlerFnT
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
@@ -15,7 +16,6 @@ class McpServer(MCPServerStreamableHttp):
         url: str = None,
         connection_name: str = None,
         app_name: str = None,
-        headers: dict[str, str] = None,
         workspace_client: WorkspaceClient = None,
         # Parameters for MCPServerStreamableHttp that can be optionally configured by the users
         params: MCPServerStreamableHttpParams = None,
@@ -37,7 +37,7 @@ class McpServer(MCPServerStreamableHttp):
             raise ValueError(
                 "Only one of 'url', 'connection_name', or 'app_name' can be provided at a time"
             )
-
+        # Configure Workspace Client
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -46,12 +46,18 @@ class McpServer(MCPServerStreamableHttp):
         if params is None:
             params = MCPServerStreamableHttpParams()
 
+        # Configure URL in Params
         if url is not None:
-            params["url"] = url,
+            params["url"] = url
         elif connection_name is not None:
             current_host = workspace_client.config.host
             params["url"] = f"{current_host}/api/2.0/mcp/external/{connection_name}"
         elif app_name is not None:
+            # Check if the current Workspace Client has an OAuth Token
+            if not isinstance(workspace_client.config._header_factory, OAuthCredentialsProvider):
+                raise ValueError(
+                    f"Error settuping MCP Server for Databricks App: {app_name}. Querying MCP Servers on Databricks Apps requires an OAuth Token. Please ensure the workspace client is configured with an OAuth Token. Refer to documentation at https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local?language=Python for more information"
+                )
             try:
                 app = workspace_client.apps.get(app_name)
             except Exception as e:
@@ -63,10 +69,6 @@ class McpServer(MCPServerStreamableHttp):
                 )
             params["url"] = f"{app.url}/mcp"
 
-        if headers is not None:
-            existing_headers = params.get("headers", {})
-            params["headers"] = {**existing_headers, **headers}
-            
         super().__init__(
             params=params,
             cache_tools_list=cache_tools_list,
