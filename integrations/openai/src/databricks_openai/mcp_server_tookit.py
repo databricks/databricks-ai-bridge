@@ -1,5 +1,8 @@
-from typing import Callable
+from typing import Callable, List
 
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+from databricks_mcp import DatabricksMCPClient
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel
 
