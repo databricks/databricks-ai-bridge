@@ -88,6 +88,7 @@ class McpServerToolkit:
                     name=unique_tool_name, spec=tool_spec, exec_fn=self.create_exec_fn(tool.name)
                 )
             )
+        return tool_infos
 
     def create_exec_fn(self, tool_name):
         def exec_fn(**kwargs):
