@@ -19,30 +19,22 @@ class McpServerToolkit:
         url: str = None,
         app_name: str = None,
         connection_name: str = None,
-        name=None,
+        name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
         provided_params = [param for param in [url, connection_name, app_name] if param is not None]
-        if len(provided_params) == 0:
+        if len(provided_params) != 1:
             raise ValueError(
                 "Exactly one of 'url', 'connection_name', or 'app_name' must be provided"
             )
-        if len(provided_params) > 1:
-            raise ValueError(
-                "Only one of 'url', 'connection_name', or 'app_name' can be provided at a time"
-            )
 
-        if workspace_client is None:
-            workspace_client = WorkspaceClient()
-
-        self.workspace_client = workspace_client
+        self.workspace_client = workspace_client or WorkspaceClient()
         self.name = name
         self.url = url
+
         if connection_name is not None:
-            if self.name is None:
-                self.name = connection_name
-            current_host = workspace_client.config.host
-            self.url = f"{current_host}/api/2.0/mcp/external/{connection_name}"
+            self.name = self.name or connection_name
+            self.url = f"{self.workspace_client.config.host}/api/2.0/mcp/external/{connection_name}"
         elif app_name is not None:
             if self.name is None:
                 self.name = app_name
@@ -64,15 +56,14 @@ class McpServerToolkit:
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
     def get_tools(self) -> List[ToolInfo]:
-        tool_infos = []
-        all_tools = []
         try:
             all_tools = self.databricks_mcp_client.list_tools()
         except Exception as e:
             raise ValueError(f"Error listing tools from {self.name} MCP Server: {e}") from e
 
+        tool_infos = []
         for tool in all_tools:
-            unique_tool_name = self.name + "__" + tool.name if self.name else tool.name
+            unique_tool_name = f"{self.name}__{tool.name}" if self.name else tool.name
             tool_spec = {
                 "type": "function",
                 "function": {
@@ -83,14 +74,14 @@ class McpServerToolkit:
             }
             tool_infos.append(
                 ToolInfo(
-                    name=unique_tool_name, spec=tool_spec, exec_fn=self.create_exec_fn(tool.name)
+                    name=unique_tool_name, spec=tool_spec, exec_fn=self._create_exec_fn(tool.name)
                 )
             )
         return tool_infos
 
-    def create_exec_fn(self, tool_name):
+    def _create_exec_fn(self, tool_name: str) -> Callable:
         def exec_fn(**kwargs):
             response = self.databricks_mcp_client.call_tool(tool_name, kwargs)
-            return "".join([c.text for c in response.content])
+            return "".join(c.text for c in response.content)
 
         return exec_fn
