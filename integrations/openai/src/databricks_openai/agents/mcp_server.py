@@ -1,4 +1,5 @@
 from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 import mlflow
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
@@ -9,6 +10,7 @@ from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import MessageHandlerFnT
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
+from mcp.types import CallToolResult
 from mlflow.entities import SpanType
 
 
