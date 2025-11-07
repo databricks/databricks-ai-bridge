@@ -9,6 +9,7 @@ from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import MessageHandlerFnT
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
+from mlflow.entities import SpanType
 
 
 class McpServer(MCPServerStreamableHttp):
