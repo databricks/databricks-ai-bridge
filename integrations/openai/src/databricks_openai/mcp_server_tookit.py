@@ -40,7 +40,7 @@ class McpServerToolkit:
                 self.name = app_name
             if not isinstance(workspace_client.config._header_factory, OAuthCredentialsProvider):
                 raise ValueError(
-                    f"Error settuping MCP Server for Databricks App: {app_name}. Querying MCP Servers on Databricks Apps requires an OAuth Token. Please ensure the workspace client is configured with an OAuth Token. Refer to documentation at https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local?language=Python for more information"
+                    f"Error setting up MCP Server for Databricks App: {app_name}. Querying MCP Servers on Databricks Apps requires an OAuth Token. Please ensure the workspace client is configured with an OAuth Token. Refer to documentation at https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local?language=Python for more information"
                 )
             try:
                 app = workspace_client.apps.get(app_name)
