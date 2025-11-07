@@ -1,5 +1,6 @@
 from contextlib import AbstractAsyncContextManager
 
+import mlflow
 from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from databricks.sdk import WorkspaceClient
@@ -81,6 +82,10 @@ class McpServer(MCPServerStreamableHttp):
             retry_backoff_seconds_base=retry_backoff_seconds_base,
             message_handler=message_handler,
         )
+
+    @mlflow.trace(span_type=SpanType.TOOL)
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+        return await super().call_tool(tool_name, arguments)
 
     def create_streams(
         self,
