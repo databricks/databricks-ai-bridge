@@ -16,7 +16,7 @@ from unitycatalog.ai.core.base import set_uc_function_client
 from unitycatalog.ai.core.databricks import DatabricksFunctionClient
 from unitycatalog.ai.openai.toolkit import UCFunctionToolkit
 
-from databricks_openai.mcp_server_tookit import McpServerToolkit
+from databricks_openai.mcp_server_tookit import McpServerToolkit, ToolInfo
 from databricks_openai.utils.clients import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.vector_search_retriever_tool import VectorSearchRetrieverTool
 
@@ -29,4 +29,5 @@ __all__ = [
     "DatabricksOpenAI",
     "AsyncDatabricksOpenAI",
     "McpServerToolkit",
+    "ToolInfo",
 ]
