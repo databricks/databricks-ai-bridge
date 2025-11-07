@@ -12,6 +12,7 @@ import pytest
 # with the actual packages continue to work unchanged.
 # ---------------------------------------------------------------------------
 
+
 def _ensure_optional_modules() -> None:
     if "psycopg" not in sys.modules:
         psycopg_mod = types.ModuleType("psycopg")
@@ -91,9 +92,7 @@ def _ensure_optional_modules() -> None:
             pass
 
         strategy_mod.ModelServingUserCredentials = ModelServingUserCredentials
-        sys.modules[
-            "databricks_ai_bridge.model_serving_obo_credential_strategy"
-        ] = strategy_mod
+        sys.modules["databricks_ai_bridge.model_serving_obo_credential_strategy"] = strategy_mod
 
 
 _ensure_optional_modules()
@@ -144,9 +143,7 @@ def _make_workspace(
     credential_token: str = "token-1",
 ):
     workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(
-        token=credential_token
-    )
+    workspace.database.generate_database_credential.return_value = MagicMock(token=credential_token)
     if sp_application_id is None:
         workspace.current_service_principal.me.side_effect = RuntimeError("missing sp")
     else:
