@@ -204,43 +204,6 @@ class LakebasePool:
         self.close()
 
 
-def build_lakebase_pool(
-    *,
-    workspace_client: WorkspaceClient,
-    instance_name: str,
-    host: str,
-    database: str,
-    username: Optional[str] = None,
-    port: int = DEFAULT_PORT,
-    sslmode: str = DEFAULT_SSLMODE,
-    min_size: int = DEFAULT_MIN_SIZE,
-    max_size: int = DEFAULT_MAX_SIZE,
-    timeout: float = DEFAULT_TIMEOUT,
-    token_cache_minutes: int = DEFAULT_CACHE_MINUTES,
-    open_pool: bool = True,
-    connection_kwargs: Optional[dict[str, object]] = None,
-    probe: bool = True,
-) -> ConnectionPool:
-    """Backward-compatible helper that returns the raw psycopg pool."""
-    lakebase = LakebasePool(
-        workspace_client=workspace_client,
-        instance_name=instance_name,
-        host=host,
-        database=database,
-        username=username,
-        port=port,
-        sslmode=sslmode,
-        min_size=min_size,
-        max_size=max_size,
-        timeout=timeout,
-        token_cache_minutes=token_cache_minutes,
-        open_pool=open_pool,
-        connection_kwargs=connection_kwargs,
-        probe=probe,
-    )
-    return lakebase.pool
-
-
 @contextmanager
 def pooled_connection(
     pool: Union[ConnectionPool, LakebasePool],
@@ -295,4 +258,3 @@ def make_checkpointer(pool: Union[ConnectionPool, LakebasePool]) -> PooledPostgr
         return pool.make_checkpointer()
 
     return PooledPostgresSaver(pool)
-
