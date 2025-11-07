@@ -10,11 +10,10 @@ from threading import Lock
 from typing import Generator, Optional, Union
 
 import psycopg
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
-
 from databricks.sdk import WorkspaceClient
 from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 __all__ = [
     "LakebasePool",

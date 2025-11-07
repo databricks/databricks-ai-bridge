@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Provide lightweight stubs for optional dependencies. Each stub is only
 # installed when the real module is unavailable so that local environments
@@ -33,7 +32,7 @@ def _ensure_optional_modules() -> None:
 
         rows_mod.dict_row = dict_row
         sys.modules["psycopg.rows"] = rows_mod
-        setattr(psycopg_mod, "rows", rows_mod)
+        psycopg_mod.rows = rows_mod
 
     if "psycopg_pool" not in sys.modules:
         pool_mod = types.ModuleType("psycopg_pool")
@@ -99,14 +98,15 @@ def _ensure_optional_modules() -> None:
 
 _ensure_optional_modules()
 
-from databricks_ai_bridge.lakebase import (  # noqa: E402  - import after stubs
+from databricks_ai_bridge.lakebase import (
     LakebasePool,
     PooledPostgresSaver,
     RotatingCredentialConnection,
     make_checkpointer,
     pooled_connection,
 )
-try:  # noqa: E402 - import after stubs
+
+try:
     from psycopg.rows import dict_row  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback when stubbed manually
     dict_row = sys.modules["psycopg.rows"].dict_row  # type: ignore[attr-defined]
