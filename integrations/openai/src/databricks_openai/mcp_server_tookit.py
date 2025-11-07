@@ -62,8 +62,6 @@ class McpServerToolkit:
             self.url = f"{app.url}/mcp"
 
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
-        if self.name is None:
-            self.name = self.url
 
     def get_tools(self) -> List[ToolInfo]:
         tool_infos = []
@@ -71,10 +69,10 @@ class McpServerToolkit:
         try:
             all_tools = self.databricks_mcp_client.list_tools()
         except Exception as e:
-            raise ValueError(f"Error listing tools from MCP Server: {e}") from e
+            raise ValueError(f"Error listing tools from {self.name} MCP Server: {e}") from e
 
         for tool in all_tools:
-            unique_tool_name = self.name + "__" + tool.name
+            unique_tool_name = self.name + "__" + tool.name if self.name else tool.name
             tool_spec = {
                 "type": "function",
                 "function": {
