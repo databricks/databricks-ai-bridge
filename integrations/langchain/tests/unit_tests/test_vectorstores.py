@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.vector_search.client import VectorSearchIndex  # type: ignore
+from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
@@ -22,11 +23,14 @@ from tests.utils.vector_search import (
 
 
 def init_vector_search(
-    index_name: str, columns: Optional[List[str]] = None
+    index_name: str,
+    columns: Optional[List[str]] = None,
+    reranker: Optional[Reranker] = None,
 ) -> DatabricksVectorSearch:
     kwargs: Dict[str, Any] = {
         "index_name": index_name,
         "columns": columns,
+        "reranker": reranker,
     }
     if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
@@ -256,6 +260,7 @@ def test_similarity_search(index_name: str, query_type: Optional[str]) -> None:
             filters=filters,
             num_results=limit,
             query_type=query_type,
+            reranker=None,
         )
     else:
         vectorsearch.index.similarity_search.assert_called_once_with(
@@ -265,6 +270,7 @@ def test_similarity_search(index_name: str, query_type: Optional[str]) -> None:
             filters=filters,
             num_results=limit,
             query_type=query_type,
+            reranker=None,
         )
     assert len(search_result) == len(INPUT_TEXTS)
     assert sorted([d.page_content for d in search_result]) == sorted(INPUT_TEXTS)
@@ -289,6 +295,7 @@ def test_similarity_search_hybrid(index_name: str) -> None:
             filters=filters,
             num_results=limit,
             query_type="HYBRID",
+            reranker=None,
         )
     else:
         vectorsearch.index.similarity_search.assert_called_once_with(
@@ -298,6 +305,7 @@ def test_similarity_search_hybrid(index_name: str) -> None:
             filters=filters,
             num_results=limit,
             query_type="HYBRID",
+            reranker=None,
         )
     assert len(search_result) == len(INPUT_TEXTS)
     assert sorted([d.page_content for d in search_result]) == sorted(INPUT_TEXTS)
@@ -309,6 +317,7 @@ def test_similarity_search_passing_kwargs() -> None:
     query = "foo"
     filters = {"some filter": True}
     query_type = "ANN"
+    reranker = DatabricksReranker(columns_to_rerank=["id", "text", "text_vector"])
 
     search_result = vectorsearch.similarity_search(
         query,
@@ -318,6 +327,7 @@ def test_similarity_search_passing_kwargs() -> None:
         score_threshold=0.5,
         num_results=10,
         random_parameters="not included",
+        reranker=reranker,
     )
     vectorsearch.index.similarity_search.assert_called_once_with(
         columns=["id", "text"],
@@ -327,6 +337,7 @@ def test_similarity_search_passing_kwargs() -> None:
         query_type=query_type,
         num_results=5,  # maintained
         score_threshold=0.5,  # passed
+        reranker=reranker,
     )
 
 
@@ -346,10 +357,58 @@ def test_mmr_search(
     query = INPUT_TEXTS[0]
     filters = {"some filter": True}
     limit = 1
+    reranker = DatabricksReranker(columns_to_rerank=["id", "text", "text_vector"])
 
-    search_result = vectorsearch.max_marginal_relevance_search(query, k=limit, filters=filters)
+    search_result = vectorsearch.max_marginal_relevance_search(
+        query, k=limit, filters=filters, reranker=reranker
+    )
     assert [doc.page_content for doc in search_result] == [INPUT_TEXTS[0]]
     assert [set(doc.metadata.keys()) for doc in search_result] == [expected_columns]
+
+
+@pytest.mark.parametrize(
+    "reranker", [None, DatabricksReranker(columns_to_rerank=["id", "text", "text_vector"])]
+)
+def test_reranker_similarity_search_with_score(reranker: Optional[DatabricksReranker]):
+    vectorsearch = init_vector_search(DIRECT_ACCESS_INDEX, reranker=reranker)
+
+    query = INPUT_TEXTS[0]
+    filters = {"some filter": True}
+    limit = 1
+    search_result = vectorsearch.similarity_search_with_score(query, k=limit, filter=filters)
+    vectorsearch.index.similarity_search.assert_called_once_with(
+        columns=["id", "text"],
+        query_text=None,
+        query_vector=EMBEDDING_MODEL.embed_query(query),
+        filters=filters,
+        num_results=limit,
+        query_type=None,
+        reranker=reranker,
+    )
+    assert len(search_result) == len(INPUT_TEXTS)
+    assert sorted([d.page_content for (d, _score) in search_result]) == sorted(INPUT_TEXTS)
+    assert all(["id" in d.metadata for (d, _score) in search_result])
+
+
+@pytest.mark.parametrize(
+    "reranker", [None, DatabricksReranker(columns_to_rerank=["id", "text", "text_vector"])]
+)
+def test_reranker_backward_compatibility(reranker: Optional[DatabricksReranker]):
+    vectorsearch = init_vector_search(DIRECT_ACCESS_INDEX)
+
+    query = INPUT_TEXTS[0]
+    filters = {"some filter": True}
+    limit = 1
+    vectorsearch.similarity_search_with_score(query, k=limit, filter=filters, reranker=reranker)
+    vectorsearch.index.similarity_search.assert_called_once_with(
+        columns=["id", "text"],
+        query_text=None,
+        query_vector=EMBEDDING_MODEL.embed_query(query),
+        filters=filters,
+        num_results=limit,
+        query_type=None,
+        reranker=reranker,
+    )
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES - {DELTA_SYNC_INDEX})
@@ -437,6 +496,7 @@ def test_similarity_search_by_vector(index_name: str, query_type: Optional[str])
         num_results=limit,
         query_type=query_type,
         query_text=None,
+        reranker=None,
     )
     assert len(search_result) == len(INPUT_TEXTS)
     assert sorted([d.page_content for d in search_result]) == sorted(INPUT_TEXTS)
@@ -449,9 +509,15 @@ def test_similarity_search_by_vector_hybrid(index_name: str) -> None:
     query_embedding = EMBEDDING_MODEL.embed_query("foo")
     filters = {"some filter": True}
     limit = 7
+    reranker = DatabricksReranker(columns_to_rerank=["id", "text"])
 
     search_result = vectorsearch.similarity_search_by_vector(
-        query_embedding, k=limit, filter=filters, query_type="HYBRID", query="foo"
+        query_embedding,
+        k=limit,
+        filter=filters,
+        query_type="HYBRID",
+        query="foo",
+        reranker=reranker,
     )
     vectorsearch.index.similarity_search.assert_called_once_with(
         columns=["id", "text"],
@@ -460,6 +526,7 @@ def test_similarity_search_by_vector_hybrid(index_name: str) -> None:
         num_results=limit,
         query_type="HYBRID",
         query_text="foo",
+        reranker=reranker,
     )
     assert len(search_result) == len(INPUT_TEXTS)
     assert sorted([d.page_content for d in search_result]) == sorted(INPUT_TEXTS)

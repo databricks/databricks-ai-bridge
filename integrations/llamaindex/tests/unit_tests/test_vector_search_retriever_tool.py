@@ -7,6 +7,7 @@ import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
 from databricks.vector_search.client import VectorSearchIndex
+from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
@@ -57,6 +58,7 @@ def init_vector_search_tool(
     embedding: Optional[BaseEmbedding] = None,
     text_column: Optional[str] = None,
     filters: Optional[Dict[str, Any]] = None,
+    reranker: Optional[Reranker] = None,
     **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
     kwargs.update(
@@ -68,6 +70,7 @@ def init_vector_search_tool(
             "embedding": embedding,
             "text_column": text_column,
             "filters": filters,
+            "reranker": reranker,
         }
     )
     if index_name != DELTA_SYNC_INDEX:
@@ -207,6 +210,7 @@ def test_kwargs_are_passed_through() -> None:
         filters={},
         score_threshold=0.5,
         debug_level=2,
+        reranker=None,
     )
 
 
@@ -224,6 +228,7 @@ def test_filters_are_passed_through() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
+        reranker=None,
     )
 
 
@@ -241,6 +246,7 @@ def test_filters_are_combined() -> None:
         num_results=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
         query_vector=None,
+        reranker=None,
     )
 
 
@@ -256,4 +262,44 @@ def test_kwargs_override_both_num_results_and_query_type() -> None:
         num_results=3,  # Should use overridden value
         query_type="HYBRID",  # Should use overridden value
         query_vector=None,
+        reranker=None,
+    )
+
+
+def test_reranker_is_passed_through() -> None:
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+    )
+    vector_search_tool.call(
+        query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={"country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+        reranker=vector_search_tool.reranker,
+    )
+
+
+def test_reranker_is_overriden() -> None:
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+    )
+    overridden_reranker = DatabricksReranker(columns_to_rerank=["country2"])
+    vector_search_tool.call(
+        query="what cities are in Germany",
+        filters=[FilterItem(key="country", value="Germany")],
+        reranker=overridden_reranker,
+    )
+    vector_search_tool._index.similarity_search.assert_called_once_with(
+        columns=vector_search_tool.columns,
+        query_text="what cities are in Germany",
+        filters={"country": "Germany"},
+        num_results=vector_search_tool.num_results,
+        query_type=vector_search_tool.query_type,
+        query_vector=None,
+        reranker=overridden_reranker,
     )

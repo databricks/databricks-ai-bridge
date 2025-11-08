@@ -60,6 +60,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             "columns": self.columns,
             "workspace_client": self.workspace_client,
             "include_score": self.include_score,
+            "reranker": self.reranker,
         }
         dbvs = DatabricksVectorSearch(**kwargs)
         self._vector_store = dbvs

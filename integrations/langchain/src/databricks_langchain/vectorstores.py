@@ -18,6 +18,7 @@ from typing import (
 
 import numpy as np
 from databricks.sdk import WorkspaceClient
+from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
     RetrieverSchema,
@@ -74,6 +75,10 @@ class DatabricksVectorSearch(VectorStore):
                     Allows you to pass in values like ``service_principal_client_id``
                     and ``service_principal_client_secret`` to allow for
                     service principal authentication instead of personal access token authentication.
+        reranker: Optional reranker to apply on the top results. Pass an instance of
+                    ``databricks.vector_search.reranker.DatabricksReranker`` with
+                    ``columns_to_rerank=[...]``. The reranker reorders the initial results using
+                    the specified text columns.
 
     **Instantiate**:
 
@@ -105,6 +110,17 @@ class DatabricksVectorSearch(VectorStore):
                 index_name="<your-index-name>",
                 embedding=OpenAIEmbeddings(),
                 text_column="document_content",
+            )
+
+        If you want Databricks to rerank the results, you can provide a reranker when initializing the vector store:
+
+        .. code-block:: python
+
+            from databricks.vector_search.reranker import DatabricksReranker
+
+            vector_store = DatabricksVectorSearch(
+                index_name="<your-index-name>",
+                reranker=DatabricksReranker(columns_to_rerank=["column1", "column2"]),
             )
 
     **Add Documents**:
@@ -229,6 +245,7 @@ class DatabricksVectorSearch(VectorStore):
         workspace_client: Optional[WorkspaceClient] = None,
         client_args: Optional[Dict[str, Any]] = None,
         include_score: bool = False,
+        reranker: Optional[DatabricksReranker] = None,
     ):
         if not isinstance(index_name, str):
             raise ValueError(
@@ -296,6 +313,7 @@ class DatabricksVectorSearch(VectorStore):
             other_columns=self._columns,
         )
         self._include_score = include_score
+        self._reranker = reranker
 
     @property
     def embeddings(self) -> Optional[Embeddings]:
@@ -406,6 +424,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Dict[str, Any]] = None,
         *,
         query_type: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to query.
@@ -415,6 +434,7 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
@@ -427,6 +447,7 @@ class DatabricksVectorSearch(VectorStore):
             k=k,
             filter=filter,
             query_type=query_type,
+            reranker=reranker,
             **kwargs,
         )
         return [doc for doc, _ in docs_with_score]
@@ -445,6 +466,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Dict[str, Any]] = None,
         *,
         query_type: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Return docs most similar to query, along with scores.
@@ -454,6 +476,7 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
@@ -482,6 +505,7 @@ class DatabricksVectorSearch(VectorStore):
                 "filters": filter,
                 "num_results": k,
                 "query_type": query_type,
+                "reranker": reranker or self._reranker,
             }
         )
         search_resp = self.index.similarity_search(**kwargs)
@@ -516,6 +540,7 @@ class DatabricksVectorSearch(VectorStore):
         *,
         query_type: Optional[str] = None,
         query: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs most similar to embedding vector.
@@ -525,6 +550,7 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
@@ -541,6 +567,7 @@ class DatabricksVectorSearch(VectorStore):
             filter=filter,
             query_type=query_type,
             query=query,
+            reranker=reranker,
             **kwargs,
         )
         return [doc for doc, _ in docs_with_score]
@@ -562,6 +589,7 @@ class DatabricksVectorSearch(VectorStore):
         *,
         query_type: Optional[str] = None,
         query: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         """Return docs most similar to embedding vector, along with scores.
@@ -575,6 +603,7 @@ class DatabricksVectorSearch(VectorStore):
             k: Number of Documents to return. Defaults to 4.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
@@ -605,6 +634,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=k,
             query_type=query_type,
+            reranker=reranker or self._reranker,
             **kwargs,
         )
         return parse_vector_search_response(
@@ -623,6 +653,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Dict[str, Any]] = None,
         *,
         query_type: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance.
@@ -644,6 +675,7 @@ class DatabricksVectorSearch(VectorStore):
                         Defaults to 0.5.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
         Returns:
             List of Documents selected by maximal marginal relevance.
         """
@@ -665,6 +697,7 @@ class DatabricksVectorSearch(VectorStore):
             lambda_mult=lambda_mult,
             filter=filter,
             query_type=query_type,
+            reranker=reranker,
         )
         return docs
 
@@ -699,6 +732,7 @@ class DatabricksVectorSearch(VectorStore):
         filter: Optional[Any] = None,
         *,
         query_type: Optional[str] = None,
+        reranker: Optional[Reranker] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Return docs selected using the maximal marginal relevance.
@@ -720,6 +754,7 @@ class DatabricksVectorSearch(VectorStore):
                         Defaults to 0.5.
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
+            reranker: Allows reranking the results. Defaults to None.
         Returns:
             List of Documents selected by maximal marginal relevance.
         """
@@ -736,6 +771,7 @@ class DatabricksVectorSearch(VectorStore):
             filters=filter,
             num_results=fetch_k,
             query_type=query_type,
+            reranker=reranker or self._reranker,
             **kwargs,
         )
 
