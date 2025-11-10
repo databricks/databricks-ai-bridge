@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import logging
 import sys
 import types
 from unittest.mock import MagicMock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Provide lightweight stubs for optional dependencies. Each stub is only
@@ -43,6 +42,8 @@ def _ensure_optional_modules() -> None:
                 raise RuntimeError("tests must monkeypatch psycopg_pool.ConnectionPool")
 
         pool_mod.ConnectionPool = ConnectionPool
+        pool_mod.PoolClosed = type("PoolClosed", (Exception,), {})
+        pool_mod.PoolTimeout = type("PoolTimeout", (Exception,), {})
         sys.modules["psycopg_pool"] = pool_mod
 
     databricks_pkg = sys.modules.setdefault("databricks", types.ModuleType("databricks"))
@@ -97,10 +98,11 @@ def _ensure_optional_modules() -> None:
 
 _ensure_optional_modules()
 
+from psycopg_pool import PoolClosed
+
 from databricks_ai_bridge.lakebase import (
     LakebasePool,
     PooledPostgresSaver,
-    RotatingCredentialConnection,
     make_checkpointer,
     pooled_connection,
 )
@@ -114,26 +116,6 @@ except ModuleNotFoundError:  # pragma: no cover - fallback when stubbed manually
 # ---------------------------------------------------------------------------
 # Fixtures and shared helpers
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def reset_rotating_connection():
-    cls = RotatingCredentialConnection
-    original_state = (
-        cls.workspace_client,
-        cls.instance_name,
-        cls._cached_token,
-        cls._cache_ts,
-        cls._cache_duration_sec,
-    )
-    yield
-    (
-        cls.workspace_client,
-        cls.instance_name,
-        cls._cached_token,
-        cls._cache_ts,
-        cls._cache_duration_sec,
-    ) = original_state
 
 
 def _make_workspace(
@@ -177,7 +159,8 @@ def _make_connection_pool_class(log, connection_value="pooled-conn"):
             self,
             *,
             conninfo,
-            connection_class,
+            connection_class=None,
+            connection_factory=None,
             min_size,
             max_size,
             timeout,
@@ -186,6 +169,7 @@ def _make_connection_pool_class(log, connection_value="pooled-conn"):
         ):
             self.conninfo = conninfo
             self.connection_class = connection_class
+            self.connection_factory = connection_factory
             self.min_size = min_size
             self.max_size = max_size
             self.timeout = timeout
@@ -224,9 +208,6 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     FakeConnectionPool = _make_connection_pool_class(log)
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
 
-    RotatingCredentialConnection._cached_token = "stale"
-    RotatingCredentialConnection._cache_ts = 42.0
-
     workspace = _make_workspace(credential_token="fresh-token")
 
     pool = LakebasePool(
@@ -241,7 +222,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
         max_size=8,
         timeout=7.5,
         token_cache_minutes=15,
-        open_pool=False,
+        open=False,
         connection_kwargs={"application_name": "pytest"},
         probe=False,
     )
@@ -250,7 +231,8 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.conninfo == (
         "dbname=analytics user=explicit host=db.host port=15432 sslmode=disable"
     )
-    assert fake_pool.connection_class is RotatingCredentialConnection
+    assert fake_pool.connection_class is None
+    assert callable(fake_pool.connection_factory)
     assert fake_pool.min_size == 2
     assert fake_pool.max_size == 8
     assert fake_pool.timeout == 7.5
@@ -258,11 +240,12 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.kwargs["autocommit"] is True
     assert fake_pool.kwargs["row_factory"] is dict_row
     assert fake_pool.kwargs["application_name"] == "pytest"
-    assert RotatingCredentialConnection.workspace_client is workspace
-    assert RotatingCredentialConnection.instance_name == "lake-instance"
-    assert RotatingCredentialConnection._cache_duration_sec == 15 * 60
-    assert RotatingCredentialConnection._cached_token is None
-    assert RotatingCredentialConnection._cache_ts is None
+    factory = pool._connection_factory
+    assert fake_pool.connection_factory is factory
+    assert factory.workspace_client is workspace
+    assert factory.instance_name == "lake-instance"
+    assert factory._cache_duration_sec == 15 * 60
+    assert factory._cached_token is None
 
 
 def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
@@ -286,7 +269,7 @@ def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
         max_size=4,
         timeout=5.0,
         token_cache_minutes=10,
-        open_pool=False,
+        open=False,
         probe=False,
     )
 
@@ -315,7 +298,7 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
         max_size=4,
         timeout=5.0,
         token_cache_minutes=10,
-        open_pool=False,
+        open=False,
         probe=False,
     )
 
@@ -352,7 +335,7 @@ def test_pooled_connection_with_lakebase_pool(monkeypatch):
         database="analytics",
         username="explicit",
         probe=False,
-        open_pool=False,
+        open=False,
     )
 
     with pooled_connection(lake_pool) as conn:
@@ -416,3 +399,32 @@ def test_pooled_postgres_saver_returns_connection_to_pool():
 
     assert pool.putconn_calls == [{"conn": 1}]
     assert saver._conn is None
+
+
+def test_pooled_postgres_saver_release_logs_pool_errors(caplog):
+    class ErrorPool:
+        def __init__(self, exc):
+            self.exc = exc
+            self.conn = object()
+            self.get_calls = 0
+
+        def getconn(self):
+            self.get_calls += 1
+            return self.conn
+
+        def putconn(self, conn):
+            raise self.exc
+
+    scenarios = [
+        (PoolClosed("pool closed"), "DEBUG", "Pool unavailable for connection return"),
+        (Exception("boom"), "ERROR", "Unexpected error returning connection to pool"),
+    ]
+
+    for exc, level, message in scenarios:
+        pool = ErrorPool(exc)
+        saver = PooledPostgresSaver(pool)
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            saver.close()
+        assert saver._conn is None
+        assert any(record.levelname == level and message in record.message for record in caplog.records)

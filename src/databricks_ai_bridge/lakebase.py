@@ -7,13 +7,13 @@ import uuid
 import weakref
 from contextlib import contextmanager
 from threading import Lock
-from typing import Generator, Optional, Union
+from typing import Any, Generator, Optional, Union
 
 import psycopg
 from databricks.sdk import WorkspaceClient
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolClosed, PoolTimeout
 
 __all__ = [
     "LakebasePool",
@@ -32,55 +32,64 @@ DEFAULT_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
 DEFAULT_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "30.0"))
 DEFAULT_SSLMODE = os.getenv("DB_SSL_MODE", "require")
 DEFAULT_PORT = int(os.getenv("DB_PORT", "5432"))
+DEFAULT_HOST = os.getenv("DB_HOST")
+DEFAULT_DATABASE = os.getenv("DB_NAME", "databricks_postgres")
 
 
-class RotatingCredentialConnection(psycopg.Connection):
+class RotatingCredentialConnectionFactory:
     """
-    psycopg `Connection` that injects a Lakehouse (Postgres) OAuth token
-    at connect-time. Tokens are minted with `WorkspaceClient` and cached
-    for *N* minutes to avoid repeated API calls.
+    Callable factory that injects a Lakebase (Postgres) OAuth token when a new
+    psycopg connection is created. Tokens are minted with ``WorkspaceClient``
+    and cached
     """
 
-    workspace_client: Optional[WorkspaceClient] = None
-    instance_name: Optional[str] = None
+    def __init__(
+        self,
+        *,
+        workspace_client: WorkspaceClient,
+        instance_name: str,
+        cache_duration_sec: int,
+    ) -> None:
+        self.workspace_client = workspace_client
+        self.instance_name = instance_name
+        self._cache_lock = Lock()
+        self._cached_token: Optional[str] = None
+        self._cache_ts: Optional[float] = None
+        self._cache_duration_sec = cache_duration_sec
 
-    _cache_lock = Lock()
-    _cached_token: Optional[str] = None
-    _cache_ts: Optional[float] = None
-    _cache_duration_sec: int = DEFAULT_CACHE_MINUTES * 60
+    def _mint_token(self) -> str:
+        try:
+            cred = self.workspace_client.database.generate_database_credential(
+                request_id=str(uuid.uuid4()),
+                instance_names=[self.instance_name],
+            )
+        except Exception as exc:  # pragma: no cover - surfaced to user
+            raise ConnectionError(
+                f"Failed to obtain credential for Lakebase instance "
+                f"'{self.instance_name}'. Ensure the caller has access."
+            ) from exc
 
-    @classmethod
-    def _mint_token(cls) -> str:
-        if not cls.workspace_client or not cls.instance_name:
-            raise RuntimeError("RotatingCredentialConnection not initialized.")
-
-        cred = cls.workspace_client.database.generate_database_credential(
-            request_id=str(uuid.uuid4()),
-            instance_names=[cls.instance_name],
-        )
         return cred.token
 
-    @classmethod
-    def _get_token(cls) -> str:
-        now = time.time()
-        with cls._cache_lock:
+    def _get_token(self) -> str:
+        with self._cache_lock:
+            now = time.time()
             if (
-                cls._cached_token
-                and cls._cache_ts
-                and (now - cls._cache_ts) < cls._cache_duration_sec
+                self._cached_token
+                and self._cache_ts
+                and (now - self._cache_ts) < self._cache_duration_sec
             ):
-                return cls._cached_token
+                return self._cached_token
 
-            token = cls._mint_token()
-            cls._cached_token = token
-            cls._cache_ts = now
+            token = self._mint_token()
+            self._cached_token = token
+            self._cache_ts = now
             return token
 
-    @classmethod
-    def connect(cls, conninfo: str = "", **kwargs):  # type: ignore[override]
+    def __call__(self, conninfo: str = "", **kwargs) -> psycopg.Connection:
         kwargs = dict(kwargs)
-        kwargs["password"] = cls._get_token()
-        return super().connect(conninfo=conninfo, **kwargs)
+        kwargs["password"] = self._get_token()
+        return psycopg.connect(conninfo, **kwargs)
 
 
 def _infer_username(w: WorkspaceClient) -> str:
@@ -90,17 +99,10 @@ def _infer_username(w: WorkspaceClient) -> str:
         if sp and getattr(sp, "application_id", None):
             return sp.application_id
     except Exception:
-        logger.debug("Falling back to current_user for Lakehouse credentials.")
+        logger.debug("Could not get service principal, using current user for Lakebase credentials.")
 
     user = w.current_user.me()
     return user.user_name
-
-
-def _reset_token_cache() -> None:
-    """Reset the cached OAuth token (useful for tests)."""
-
-    RotatingCredentialConnection._cached_token = None
-    RotatingCredentialConnection._cache_ts = None
 
 
 class LakebasePool:
@@ -109,21 +111,49 @@ class LakebasePool:
     def __init__(
         self,
         *,
-        workspace_client: WorkspaceClient,
         instance_name: str,
-        host: str,
-        database: str,
+        workspace_client: WorkspaceClient | None = None,
+        host: str | None = None,
+        database: str | None = None,
         username: Optional[str] = None,
-        port: int = DEFAULT_PORT,
-        sslmode: str = DEFAULT_SSLMODE,
-        min_size: int = DEFAULT_MIN_SIZE,
-        max_size: int = DEFAULT_MAX_SIZE,
-        timeout: float = DEFAULT_TIMEOUT,
-        token_cache_minutes: int = DEFAULT_CACHE_MINUTES,
-        open_pool: bool = True,
+        port: Optional[int] = None,
+        sslmode: Optional[str] = None,
+        token_cache_minutes: Optional[int] = None,
         connection_kwargs: Optional[dict[str, object]] = None,
         probe: bool = True,
+        **pool_kwargs: object,
     ) -> None:
+        if workspace_client is None:
+            workspace_client = WorkspaceClient()
+
+        if host is None:
+            host = DEFAULT_HOST
+        if host is None:
+            raise ValueError(
+                "Lakebase host must be provided. Specify the host argument or set the DB_HOST environment variable."
+            )
+
+        if database is None:
+            database = DEFAULT_DATABASE
+        if port is None:
+            port = DEFAULT_PORT
+        if sslmode is None:
+            sslmode = DEFAULT_SSLMODE
+        cache_minutes = (
+            DEFAULT_CACHE_MINUTES if token_cache_minutes is None else int(token_cache_minutes)
+        )
+
+        pool_kwargs = dict(pool_kwargs)
+        for reserved in ("conninfo", "connection_class", "kwargs"):
+            if reserved in pool_kwargs:
+                raise TypeError(
+                    f"Argument '{reserved}' cannot be overridden."
+                )
+        min_size = int(pool_kwargs.pop("min_size", DEFAULT_MIN_SIZE))
+        max_size = int(pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE))
+        timeout = float(pool_kwargs.pop("timeout", DEFAULT_TIMEOUT))
+        open_flag = pool_kwargs.pop("open", True)
+
         self.workspace_client = workspace_client
         self.instance_name = instance_name
         self.host = host
@@ -134,12 +164,17 @@ class LakebasePool:
         self.min_size = min_size
         self.max_size = max_size
         self.timeout = timeout
-        self.token_cache_minutes = token_cache_minutes
+        self.token_cache_minutes = cache_minutes
+        self.pool_config = dict(pool_kwargs)
+        self.pool_config.update(
+            {"min_size": min_size, "max_size": max_size, "timeout": timeout, "open": open_flag}
+        )
 
-        RotatingCredentialConnection.workspace_client = workspace_client
-        RotatingCredentialConnection.instance_name = instance_name
-        RotatingCredentialConnection._cache_duration_sec = token_cache_minutes * 60
-        _reset_token_cache()
+        self._connection_factory = RotatingCredentialConnectionFactory(
+            workspace_client=workspace_client,
+            instance_name=instance_name,
+            cache_duration_sec=cache_minutes * 60,
+        )
 
         conninfo = (
             f"dbname={database} user={self.username} host={host} port={port} sslmode={sslmode}"
@@ -158,12 +193,13 @@ class LakebasePool:
 
         self._pool = ConnectionPool(
             conninfo=conninfo,
-            connection_class=RotatingCredentialConnection,
+            connection_factory=self._connection_factory,
+            kwargs=default_kwargs,
             min_size=min_size,
             max_size=max_size,
             timeout=timeout,
-            open=open_pool,
-            kwargs=default_kwargs,
+            open=open_flag,
+            **pool_kwargs,
         )
 
         if probe:
@@ -180,7 +216,7 @@ class LakebasePool:
             database,
             min_size,
             max_size,
-            token_cache_minutes,
+            cache_minutes,
         )
 
     @property
@@ -203,6 +239,50 @@ class LakebasePool:
         self.close()
 
 
+# Build lakebase pool instance with only instance name required
+def build_lakebase_pool(
+    *,
+    instance_name: str,
+    workspace_client: WorkspaceClient | None = None,
+    host: str | None = None,
+    database: str | None = None,
+    username: Optional[str] = None,
+    port: Optional[int] = None,
+    sslmode: Optional[str] = None,
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    timeout: Optional[float] = None,
+    token_cache_minutes: Optional[int] = None,
+    open_pool: Optional[bool] = None,
+    connection_kwargs: Optional[dict[str, object]] = None,
+    probe: bool = True,
+    **pool_kwargs: Any,
+) -> ConnectionPool:
+    if min_size is not None:
+        pool_kwargs["min_size"] = min_size
+    if max_size is not None:
+        pool_kwargs["max_size"] = max_size
+    if timeout is not None:
+        pool_kwargs["timeout"] = timeout
+    if open_pool is not None:
+        pool_kwargs["open"] = open_pool
+
+    lakebase = LakebasePool(
+        instance_name=instance_name,
+        workspace_client=workspace_client,
+        host=host,
+        database=database,
+        username=username,
+        port=port,
+        sslmode=sslmode,
+        token_cache_minutes=token_cache_minutes,
+        connection_kwargs=connection_kwargs,
+        probe=probe,
+        **pool_kwargs,
+    )
+    return lakebase.pool
+
+
 @contextmanager
 def pooled_connection(
     pool: Union[ConnectionPool, LakebasePool],
@@ -216,7 +296,7 @@ def pooled_connection(
 
 
 class PooledPostgresSaver(PostgresSaver):
-    """PostgresSaver that automatically returns its connection to the pool."""
+    """LangGraph PostgresSaver keeps one database connection checked out from a connection pool."""
 
     def __init__(self, pool: ConnectionPool):
         self._pool = pool
@@ -228,6 +308,10 @@ class PooledPostgresSaver(PostgresSaver):
         if self._conn is not None:
             try:
                 self._pool.putconn(self._conn)
+            except (PoolClosed, PoolTimeout) as e:  # pragma: no cover - expected cleanup path
+                logger.debug("Pool unavailable for connection return: %s", e)
+            except Exception as e:  # pragma: no cover - unexpected
+                logger.error("Unexpected error returning connection to pool: %s", e, exc_info=True)
             finally:
                 self._conn = None
 
