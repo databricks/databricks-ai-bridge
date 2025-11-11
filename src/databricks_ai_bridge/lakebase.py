@@ -36,61 +36,73 @@ DEFAULT_HOST = os.getenv("DB_HOST")
 DEFAULT_DATABASE = os.getenv("DB_NAME", "databricks_postgres")
 
 
-class RotatingCredentialConnectionFactory:
+class RotatingCredentialConnection(psycopg.Connection):
     """
-    Callable factory that injects a Lakebase (Postgres) OAuth token when a new
-    psycopg connection is created. Tokens are minted with ``WorkspaceClient``
-    and cached
+    Base psycopg connection that injects a Lakebase (Postgres) OAuth token at
+    connect-time. Concrete subclasses are generated per pool so that token
+    caches don't leak across pools.
     """
 
-    def __init__(
-        self,
-        *,
-        workspace_client: WorkspaceClient,
-        instance_name: str,
-        cache_duration_sec: int,
-    ) -> None:
-        self.workspace_client = workspace_client
-        self.instance_name = instance_name
-        self._cache_lock = Lock()
-        self._cached_token: Optional[str] = None
-        self._cache_ts: Optional[float] = None
-        self._cache_duration_sec = cache_duration_sec
+    workspace_client: Optional[WorkspaceClient] = None
+    instance_name: Optional[str] = None
+    cache_duration_sec: int = DEFAULT_CACHE_MINUTES * 60
 
-    def _mint_token(self) -> str:
+    _cache_lock = Lock()
+    _cached_token: Optional[str] = None
+    _cache_ts: Optional[float] = None
+
+    @classmethod
+    def _mint_token(cls) -> str:
+        if not cls.workspace_client or not cls.instance_name:
+            raise RuntimeError("RotatingCredentialConnection not initialized.")
+
         try:
-            cred = self.workspace_client.database.generate_database_credential(
+            cred = cls.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
-                instance_names=[self.instance_name],
+                instance_names=[cls.instance_name],
             )
         except Exception as exc:  # pragma: no cover - surfaced to user
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
-                f"'{self.instance_name}'. Ensure the caller has access."
+                f"'{cls.instance_name}'. Ensure the caller has access."
             ) from exc
 
         return cred.token
 
-    def _get_token(self) -> str:
-        with self._cache_lock:
+    @classmethod
+    def _get_token(cls) -> str:
+        with cls._cache_lock:
             now = time.time()
-            if (
-                self._cached_token
-                and self._cache_ts
-                and (now - self._cache_ts) < self._cache_duration_sec
-            ):
-                return self._cached_token
+            if cls._cached_token and cls._cache_ts and (now - cls._cache_ts) < cls.cache_duration_sec:
+                return cls._cached_token
 
-            token = self._mint_token()
-            self._cached_token = token
-            self._cache_ts = now
+            token = cls._mint_token()
+            cls._cached_token = token
+            cls._cache_ts = now
             return token
 
-    def __call__(self, conninfo: str = "", **kwargs) -> psycopg.Connection:
+    @classmethod
+    def connect(cls, conninfo: str = "", **kwargs):
         kwargs = dict(kwargs)
-        kwargs["password"] = self._get_token()
-        return psycopg.connect(conninfo, **kwargs)
+        kwargs["password"] = cls._get_token()
+        return super().connect(conninfo, **kwargs)
 
+
+def _make_rotating_connection_class(
+    workspace_client: WorkspaceClient, instance_name: str, cache_duration_sec: int
+) -> type[RotatingCredentialConnection]:
+    return type(
+        f"LakebaseRotatingConnection_{instance_name}",
+        (RotatingCredentialConnection,),
+        {
+            "workspace_client": workspace_client,
+            "instance_name": instance_name,
+            "cache_duration_sec": cache_duration_sec,
+            "_cache_lock": Lock(),
+            "_cached_token": None,
+            "_cache_ts": None,
+        },
+    )
 
 def _infer_username(w: WorkspaceClient) -> str:
     """Resolve a default username preferring service-principal identity."""
@@ -170,12 +182,6 @@ class LakebasePool:
             {"min_size": min_size, "max_size": max_size, "timeout": timeout, "open": open_flag}
         )
 
-        self._connection_factory = RotatingCredentialConnectionFactory(
-            workspace_client=workspace_client,
-            instance_name=instance_name,
-            cache_duration_sec=cache_minutes * 60,
-        )
-
         conninfo = (
             f"dbname={database} user={self.username} host={host} port={port} sslmode={sslmode}"
         )
@@ -191,16 +197,25 @@ class LakebasePool:
         if connection_kwargs:
             default_kwargs.update(connection_kwargs)
 
-        self._pool = ConnectionPool(
+        connection_class = _make_rotating_connection_class(
+            workspace_client=workspace_client,
+            instance_name=instance_name,
+            cache_duration_sec=cache_minutes * 60,
+        )
+
+        pool_params = dict(
             conninfo=conninfo,
-            connection_factory=self._connection_factory,
             kwargs=default_kwargs,
             min_size=min_size,
             max_size=max_size,
             timeout=timeout,
             open=open_flag,
+            connection_class=connection_class,
             **pool_kwargs,
         )
+
+        self._pool = ConnectionPool(**pool_params)
+        self._connection_class = connection_class
 
         if probe:
             try:

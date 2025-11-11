@@ -5,6 +5,7 @@ import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
+
 # create lightweight stand-ins for modules for testing
 def _ensure_optional_modules() -> None:
     if "psycopg" not in sys.modules:
@@ -269,7 +270,6 @@ class RecordingConnectionPool:
         *,
         conninfo,
         connection_class=None,
-        connection_factory=None,
         kwargs,
         min_size,
         max_size,
@@ -279,7 +279,6 @@ class RecordingConnectionPool:
     ):
         self.conninfo = conninfo
         self.connection_class = connection_class
-        self.connection_factory = connection_factory
         self.kwargs = kwargs
         self.min_size = min_size
         self.max_size = max_size
@@ -344,7 +343,7 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
         fake_pool.conninfo
         == "dbname=analytics user=test@databricks.com host=db-host port=5432 sslmode=require"
     )
-    assert callable(fake_pool.connection_factory)
+    assert fake_pool.connection_class is not None
     assert fake_pool.min_size == 2
     assert fake_pool.max_size == 5
     assert fake_pool.timeout == 9.5

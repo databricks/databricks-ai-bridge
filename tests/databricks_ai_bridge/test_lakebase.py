@@ -100,6 +100,7 @@ _ensure_optional_modules()
 
 from psycopg_pool import PoolClosed
 
+import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import (
     LakebasePool,
     PooledPostgresSaver,
@@ -159,8 +160,7 @@ def _make_connection_pool_class(log, connection_value="pooled-conn"):
             self,
             *,
             conninfo,
-            connection_class=None,
-            connection_factory=None,
+            connection_class,
             min_size,
             max_size,
             timeout,
@@ -169,7 +169,6 @@ def _make_connection_pool_class(log, connection_value="pooled-conn"):
         ):
             self.conninfo = conninfo
             self.connection_class = connection_class
-            self.connection_factory = connection_factory
             self.min_size = min_size
             self.max_size = max_size
             self.timeout = timeout
@@ -231,8 +230,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.conninfo == (
         "dbname=analytics user=explicit host=db.host port=15432 sslmode=disable"
     )
-    assert fake_pool.connection_class is None
-    assert callable(fake_pool.connection_factory)
+    assert fake_pool.connection_class is not None
     assert fake_pool.min_size == 2
     assert fake_pool.max_size == 8
     assert fake_pool.timeout == 7.5
@@ -240,12 +238,8 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.kwargs["autocommit"] is True
     assert fake_pool.kwargs["row_factory"] is dict_row
     assert fake_pool.kwargs["application_name"] == "pytest"
-    factory = pool._connection_factory
-    assert fake_pool.connection_factory is factory
-    assert factory.workspace_client is workspace
-    assert factory.instance_name == "lake-instance"
-    assert factory._cache_duration_sec == 15 * 60
-    assert factory._cached_token is None
+    assert fake_pool.connection_class is pool._connection_class
+    assert issubclass(fake_pool.connection_class, lakebase.RotatingCredentialConnection)
 
 
 def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
