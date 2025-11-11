@@ -16,6 +16,8 @@ import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import RunLifecycleStateV2State, TerminationTypeType
 
+from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
+
 
 @pytest.mark.timeout(3600)
 def test_vectorstore():
@@ -44,3 +46,18 @@ def test_vectorstore():
     result = response.result(timeout=timedelta(seconds=3600))
     assert result.status.state == RunLifecycleStateV2State.TERMINATED
     assert result.status.termination_details.type == TerminationTypeType.SUCCESS
+
+
+def test_vs_tool_with_workspace_client():
+    # tested manually with SP creds and PAT creds
+    w = WorkspaceClient()
+    vs_tool = VectorSearchRetrieverTool(index_name="main.default.cities_index", workspace_client=w)
+    index = vs_tool._vector_store.index
+    assert index is not None
+    if w.config.auth_type == "pat":
+        assert index.personal_access_token is not None
+    elif w.config.auth_type == "oauth-m2m":
+        assert index.service_principal_client_id is not None
+        assert index.service_principal_client_secret is not None
+    else:
+        raise ValueError(f"Unsupported auth type: {w.config.auth_type}")
