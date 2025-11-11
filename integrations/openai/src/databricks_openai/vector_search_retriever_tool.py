@@ -75,6 +75,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     e.g. `score_threshold`. Also, see documentation for
     :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for additional supported constructor
     arguments not listed below, including `query_type` and `num_results`.
+
+    WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.
     """
 
     text_column: Optional[str] = Field(
