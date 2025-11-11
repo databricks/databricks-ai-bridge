@@ -8,8 +8,7 @@ Create a conda environment and install dev requirements
 conda create --name databricks-ai-dev-env python=3.10
 conda activate databricks-ai-dev-env
 pip install -e ".[dev]"
-pip install -r requirements/lint-requirements.txt
-pip install -r requirements/dev-requirements.txt
+pip install -e ".[doc]"
 ```
 
 If you are working with integration packages install them as well
