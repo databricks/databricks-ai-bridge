@@ -315,9 +315,13 @@ def test_vector_search_client_with_pat_workspace_client():
 
 
 def test_vector_search_client_with_sp_workspace_client():
-    w = WorkspaceClient(
-        host="testDogfod.com", client_id="fakeClientId", client_secret="fakeClientSecret"
-    )
+    # Create a proper mock workspace client that passes isinstance check
+    w = create_autospec(WorkspaceClient, instance=True)
+    w.config.auth_type = "oauth-m2m"
+    w.config.host = "testDogfod.com"
+    w.config.client_id = "fakeClientId"
+    w.config.client_secret = "fakeClientSecret"
+
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             VectorSearchRetrieverTool(
@@ -329,6 +333,7 @@ def test_vector_search_client_with_sp_workspace_client():
             )
             mockVSClient.assert_called_once_with(
                 disable_notice=True,
+                workspace_url="testDogfod.com",
                 service_principal_client_id="fakeClientId",
                 service_principal_client_secret="fakeClientSecret",
             )

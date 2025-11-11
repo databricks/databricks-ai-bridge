@@ -2,7 +2,7 @@ import json
 import os
 import threading
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import mlflow
 import pytest
@@ -302,18 +302,45 @@ def test_vector_search_client_non_model_serving_environment():
         )
         mockVSClient.assert_called_once_with(disable_notice=True)
 
+
+def test_vector_search_client_with_pat_workspace_client():
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             mock_instance = mockVSClient.return_value
             mock_instance.get_index.side_effect = _get_index
-            vsTool = VectorSearchRetrieverTool(
+            VectorSearchRetrieverTool(
                 index_name="test.delta_sync.index",
                 tool_description="desc",
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(
                 disable_notice=True, personal_access_token="fakeToken"
+            )
+
+
+def test_vector_search_client_with_sp_workspace_client():
+    # Create a proper mock workspace client that passes isinstance check
+    w = create_autospec(WorkspaceClient, instance=True)
+    w.config.auth_type = "oauth-m2m"
+    w.config.host = "testDogfod.com"
+    w.config.client_id = "fakeClientId"
+    w.config.client_secret = "fakeClientSecret"
+
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+            mock_instance = mockVSClient.return_value
+            mock_instance.get_index.side_effect = _get_index
+            VectorSearchRetrieverTool(
+                index_name="test.delta_sync.index",
+                tool_description="desc",
+                workspace_client=w,
+            )
+            mockVSClient.assert_called_once_with(
+                disable_notice=True,
+                workspace_url="testDogfod.com",
+                service_principal_client_id="fakeClientId",
+                service_principal_client_secret="fakeClientSecret",
             )
 
 
