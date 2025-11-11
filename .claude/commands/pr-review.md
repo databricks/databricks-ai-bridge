@@ -1,5 +1,5 @@
 ---
-allowed-tools: Read, Skill, Bash, Grep, Glob, mcp__review__fetch_diff
+allowed-tools: Read, Skill, Bash, Grep, Glob
 argument-hint: [extra_context]
 description: Review a GitHub pull request and display all issues found in Claude Code
 ---
@@ -39,9 +39,14 @@ Automatically review a GitHub pull request and display all found issues in Claud
   - Parse the output to extract owner, repo, PR number, title, and description
 - If neither method works, inform the user that no PR was found and exit
 
-### 2. Fetch PR Diff
+### 2. Fetch PR Diff and Existing Comments
 
-- Use `mcp__review__fetch_diff` tool to fetch the PR diff
+- Use `gh pr diff <PR_NUMBER> --repo <owner/repo>` to fetch the PR diff
+- Use the `fetch_unresolved_comments` skill to get existing unresolved review comments:
+  ```
+  /skill fetch_unresolved_comments <owner> <repo> <PR_NUMBER>
+  ```
+- Parse the returned comment data to identify lines that already have unresolved issues to avoid duplicate reports
 
 ### 3. Review Changed Lines
 
@@ -65,10 +70,13 @@ issues = [
     "severity": "error|warning|info", 
     "category": "bug|style|performance|security",
     "description": "Detailed issue description",
-    "suggestion": "Recommended fix"
+    "suggestion": "Recommended fix",
+    "is_duplicate": false // true if similar issue already commented on this line
   }
 ]
 ```
+
+**Important**: Before adding an issue to the list, check the existing unresolved comments from step 2. If there's already an unresolved comment on the same line(s) or covering a similar concern, mark the issue as duplicate to avoid redundant reports.
 
 ### 4. Present Complete Analysis
 
@@ -83,21 +91,28 @@ After reviewing all changed files, display a comprehensive summary in Claude Cod
 ```
 ## PR Review Results
 
-**Total Issues Found: X**
+**Total Issues Found: X (Y new, Z already commented)**
 - 🔴 Errors: X
 - 🟡 Warnings: X  
 - 🔵 Info: X
 
-### path/to/file1.py
-🔴 **Line 42-45 [Bug]:** Description here
+### path/to/file1.py:42-45
+🔴 **[Bug]:** Description here
    → Suggestion: Fix recommendation
 
-🟡 **Line 67 [Style]:** Description here  
+### path/to/file2.js:67
+🟡 **[Style]:** Description here  
    → Suggestion: Fix recommendation
 
-### path/to/file2.js
-🔴 **Line 23 [Security]:** Description here
+### path/to/file3.py:23
+🔴 **[Security]:** Description here
    → Suggestion: Fix recommendation
+   ⚠️ *Similar issue already commented on this PR*
 ```
+
+**Format Notes:**
+- Use `file:line` or `file:line-endline` format for direct IDE navigation
+- Mark duplicate/already-commented issues with ⚠️ warning
+- Group issues by file, with each issue as a separate section for easy clicking
 
 If **no issues found**, display: "✅ **No issues found** - All changes look good!"
