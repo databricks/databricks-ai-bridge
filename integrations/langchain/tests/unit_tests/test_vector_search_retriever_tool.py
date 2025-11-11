@@ -312,7 +312,9 @@ def test_vector_search_client_non_model_serving_environment():
                 tool_description="desc",
                 workspace_client=w,
             )
-            mockVSClient.assert_called_once_with(disable_notice=True)
+            mockVSClient.assert_called_once_with(
+                disable_notice=True, personal_access_token="fakeToken"
+            )
 
 
 def test_kwargs_are_passed_through() -> None:

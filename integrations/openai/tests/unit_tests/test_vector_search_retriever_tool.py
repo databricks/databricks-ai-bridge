@@ -295,19 +295,43 @@ def test_vector_search_client_non_model_serving_environment():
             embedding_model_name="text-embedding-3-small",
             tool_description="desc",
         )
-        mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+        mockVSClient.assert_called_once_with(disable_notice=True)
 
+
+def test_vector_search_client_with_pat_workspace_client():
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
-            vsTool = VectorSearchRetrieverTool(
+            VectorSearchRetrieverTool(
                 index_name="catalog.schema.my_index_name",
                 text_column="abc",
                 embedding_model_name="text-embedding-3-small",
                 tool_description="desc",
                 workspace_client=w,
             )
-            mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
+            mockVSClient.assert_called_once_with(
+                disable_notice=True, personal_access_token="fakeToken"
+            )
+
+
+def test_vector_search_client_with_sp_workspace_client():
+    w = WorkspaceClient(
+        host="testDogfod.com", client_id="fakeClientId", client_secret="fakeClientSecret"
+    )
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+            VectorSearchRetrieverTool(
+                index_name="catalog.schema.my_index_name",
+                text_column="abc",
+                embedding_model_name="text-embedding-3-small",
+                tool_description="desc",
+                workspace_client=w,
+            )
+            mockVSClient.assert_called_once_with(
+                disable_notice=True,
+                service_principal_client_id="fakeClientId",
+                service_principal_client_secret="fakeClientSecret",
+            )
 
 
 def test_kwargs_are_passed_through() -> None:
