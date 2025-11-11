@@ -56,10 +56,8 @@ def test_vs_tool_with_workspace_client():
     assert index is not None
     if w.config.auth_type == "pat":
         assert index.personal_access_token is not None
-        assert False
     elif w.config.auth_type == "oauth-m2m":
         assert index.service_principal_client_id is not None
         assert index.service_principal_client_secret is not None
-        assert False
     else:
         raise ValueError(f"Unsupported auth type: {w.config.auth_type}")
