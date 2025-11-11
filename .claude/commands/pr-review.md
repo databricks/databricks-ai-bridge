@@ -1,12 +1,12 @@
 ---
-allowed-tools: Read, Skill, Bash, Grep, Glob, mcp__review__fetch_diff, mcp__review__add_pr_review_comment
+allowed-tools: Read, Skill, Bash, Grep, Glob, mcp__review__fetch_diff
 argument-hint: [extra_context]
-description: Review a GitHub pull request and add review comments for issues found
+description: Review a GitHub pull request and display all issues found in Claude Code
 ---
 
 # Review Pull Request
 
-Automatically review a GitHub pull request and provide feedback on code quality, style guide violations, and potential bugs.
+Automatically review a GitHub pull request and display all found issues in Claude Code with detailed analysis and suggestions.
 
 ## Usage
 
@@ -54,12 +54,50 @@ Carefully examine **only the changed lines** (added or modified) in the diff for
 
 **Important**: Ignore unchanged/context lines and pre-existing code.
 
-### 4. Decision Point
+**Collect all issues** in a structured format before presenting them:
 
-- If **no issues found** → Output "No issues found" and exit successfully
-- If **issues found** → Output all of them and exit successfully
+```
+issues = [
+  {
+    "file": "path/to/file.py",
+    "line": 42,
+    "end_line": 45, // (optional, for multi-line issues)
+    "severity": "error|warning|info", 
+    "category": "bug|style|performance|security",
+    "description": "Detailed issue description",
+    "suggestion": "Recommended fix"
+  }
+]
+```
 
-**Tool parameters:**
+### 4. Present Complete Analysis
 
-- Single-line comment: Set `subject_type` to `line`, specify `line`
-- Multi-line comment: Set `subject_type` to `line`, specify both `start_line` and `line`
+After reviewing all changed files, display a comprehensive summary in Claude Code:
+
+- **Group by file and severity** for clear organization
+- **Display statistics**: Total issues, breakdown by severity and category
+- **Use navigation-friendly format**: Include `file:line` references for easy IDE navigation
+- **Show detailed descriptions** and suggested fixes for each issue
+
+**Output format:**
+```
+## PR Review Results
+
+**Total Issues Found: X**
+- 🔴 Errors: X
+- 🟡 Warnings: X  
+- 🔵 Info: X
+
+### path/to/file1.py
+🔴 **Line 42-45 [Bug]:** Description here
+   → Suggestion: Fix recommendation
+
+🟡 **Line 67 [Style]:** Description here  
+   → Suggestion: Fix recommendation
+
+### path/to/file2.js
+🔴 **Line 23 [Security]:** Description here
+   → Suggestion: Fix recommendation
+```
+
+If **no issues found**, display: "✅ **No issues found** - All changes look good!"
