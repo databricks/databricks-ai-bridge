@@ -75,6 +75,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     e.g. `score_threshold`. Also, see documentation for
     :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for additional supported constructor
     arguments not listed below, including `query_type` and `num_results`.
+
+    WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.
     """
 
     text_column: Optional[str] = Field(
@@ -108,15 +110,22 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             raise ValueError(
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
-        credential_strategy = None
-        if (
-            self.workspace_client is not None
-            and self.workspace_client.config.auth_type == "model_serving_user_credentials"
-        ):
-            credential_strategy = CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-        self._index = VectorSearchClient(
-            disable_notice=True, credential_strategy=credential_strategy
-        ).get_index(index_name=self.index_name)
+        client_args = {
+            "disable_notice": True,
+        }
+        if self.workspace_client is not None:
+            config = self.workspace_client.config
+            if config.auth_type == "model_serving_user_credentials":
+                client_args.setdefault(
+                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                )
+            elif config.auth_type == "pat":
+                client_args.setdefault("personal_access_token", config.token)
+            elif config.auth_type == "oauth-m2m":
+                client_args.setdefault("workspace_url", config.host)
+                client_args.setdefault("service_principal_client_id", config.client_id)
+                client_args.setdefault("service_principal_client_secret", config.client_secret)
+        self._index = VectorSearchClient(**client_args).get_index(index_name=self.index_name)
         self._index_details = IndexDetails(self._index)
         self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
         self.columns = validate_and_get_return_columns(

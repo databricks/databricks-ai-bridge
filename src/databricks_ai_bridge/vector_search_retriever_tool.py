@@ -91,7 +91,8 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     )
     workspace_client: Optional[WorkspaceClient] = Field(
         None,
-        description="When specified, will use workspace client credential strategy to instantiate VectorSearchClient",
+        description="WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret) "
+        "or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.",
     )
     doc_uri: Optional[str] = Field(
         None, description="The URI for the document, used for rendering a link in the UI."

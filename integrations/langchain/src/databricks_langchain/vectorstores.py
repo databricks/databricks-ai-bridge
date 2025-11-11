@@ -254,13 +254,18 @@ class DatabricksVectorSearch(VectorStore):
         try:
             client_args = client_args or {}
             client_args.setdefault("disable_notice", True)
-            if (
-                workspace_client is not None
-                and workspace_client.config.auth_type == "model_serving_user_credentials"
-            ):
-                client_args.setdefault(
-                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-                )
+            if workspace_client is not None:
+                config = workspace_client.config
+                if config.auth_type == "model_serving_user_credentials":
+                    client_args.setdefault(
+                        "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                    )
+                elif config.auth_type == "pat":
+                    client_args.setdefault("personal_access_token", config.token)
+                elif config.auth_type == "oauth-m2m":
+                    client_args.setdefault("workspace_url", config.host)
+                    client_args.setdefault("service_principal_client_id", config.client_id)
+                    client_args.setdefault("service_principal_client_secret", config.client_secret)
             self.index = VectorSearchClient(**client_args).get_index(
                 endpoint_name=endpoint, index_name=index_name
             )
