@@ -421,4 +421,6 @@ def test_pooled_postgres_saver_release_logs_pool_errors(caplog):
         with caplog.at_level(logging.DEBUG):
             saver.close()
         assert saver._conn is None
-        assert any(record.levelname == level and message in record.message for record in caplog.records)
+        assert any(
+            record.levelname == level and message in record.message for record in caplog.records
+        )

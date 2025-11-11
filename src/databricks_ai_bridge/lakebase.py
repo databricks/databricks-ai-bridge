@@ -73,7 +73,11 @@ class RotatingCredentialConnection(psycopg.Connection):
     def _get_token(cls) -> str:
         with cls._cache_lock:
             now = time.time()
-            if cls._cached_token and cls._cache_ts and (now - cls._cache_ts) < cls.cache_duration_sec:
+            if (
+                cls._cached_token
+                and cls._cache_ts
+                and (now - cls._cache_ts) < cls.cache_duration_sec
+            ):
                 return cls._cached_token
 
             token = cls._mint_token()
@@ -104,6 +108,7 @@ def _make_rotating_connection_class(
         },
     )
 
+
 def _infer_username(w: WorkspaceClient) -> str:
     """Resolve a default username preferring service-principal identity."""
     try:
@@ -111,7 +116,9 @@ def _infer_username(w: WorkspaceClient) -> str:
         if sp and getattr(sp, "application_id", None):
             return sp.application_id
     except Exception:
-        logger.debug("Could not get service principal, using current user for Lakebase credentials.")
+        logger.debug(
+            "Could not get service principal, using current user for Lakebase credentials."
+        )
 
     user = w.current_user.me()
     return user.user_name
@@ -158,9 +165,7 @@ class LakebasePool:
         pool_kwargs = dict(pool_kwargs)
         for reserved in ("conninfo", "connection_class", "kwargs"):
             if reserved in pool_kwargs:
-                raise TypeError(
-                    f"Argument '{reserved}' cannot be overridden."
-                )
+                raise TypeError(f"Argument '{reserved}' cannot be overridden.")
         min_size = int(pool_kwargs.pop("min_size", DEFAULT_MIN_SIZE))
         max_size = int(pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE))
         timeout = float(pool_kwargs.pop("timeout", DEFAULT_TIMEOUT))

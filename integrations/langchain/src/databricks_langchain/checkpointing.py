@@ -1,32 +1,60 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-try:  # pragma: no cover - optional dependency guard
+if TYPE_CHECKING:  # pragma: no cover - typing only
     from databricks.sdk import WorkspaceClient
-    from databricks_ai_bridge.lakebase import (
-        LakebasePool,
-        PooledPostgresSaver,
-    )
-except ModuleNotFoundError as exc:  # pragma: no cover - handled at runtime
-    LakebasePool = None  # type: ignore[assignment]
-    PooledPostgresSaver = None  # type: ignore[assignment]
-    WorkspaceClient = None  # type: ignore[assignment]
-    _IMPORT_ERROR = exc
+else:  # pragma: no cover - runtime fallback when dependency absent
+    WorkspaceClient = Any  # type: ignore
+
+_IMPORT_ERROR: ModuleNotFoundError | None = None
+_LAKEBASE_DEPS: dict[str, Any] | None = None
+_CHECKPOINT_SAVER_CLASS: type | None = None
 
 
-if PooledPostgresSaver is None:
-    class CheckpointSaver:  # type: ignore[override]
-        """Runtime guard that informs the user about missing optional dependencies."""
+def _load_dependencies() -> dict[str, Any] | None:
+    """Attempt to import Lakebase dependencies lazily."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            raise ModuleNotFoundError(
-                "CheckpointSaver requires databricks-ai-bridge[lakebase] and psycopg to be installed."
-            ) from _IMPORT_ERROR
-else:
+    global _IMPORT_ERROR, _LAKEBASE_DEPS
 
-    class CheckpointSaver(PooledPostgresSaver):
+    if _LAKEBASE_DEPS is not None:
+        return _LAKEBASE_DEPS
 
+    try:  # pragma: no cover - import guarded at runtime
+        from databricks_ai_bridge.lakebase import (
+            LakebasePool,
+            PooledPostgresSaver,
+        )
+    except ModuleNotFoundError as exc:  # pragma: no cover - surfaced to caller
+        _IMPORT_ERROR = exc
+        return None
+
+    _LAKEBASE_DEPS = {
+        "LakebasePool": LakebasePool,
+        "PooledPostgresSaver": PooledPostgresSaver,
+    }
+    _IMPORT_ERROR = None
+    return _LAKEBASE_DEPS
+
+
+def _ensure_checkpoint_saver_class() -> type:
+    """Materialise the concrete CheckpointSaver class when deps are present."""
+
+    global _CHECKPOINT_SAVER_CLASS
+
+    if _CHECKPOINT_SAVER_CLASS is not None:
+        return _CHECKPOINT_SAVER_CLASS
+
+    deps = _load_dependencies()
+    if not deps:
+        raise ModuleNotFoundError(
+            "CheckpointSaver requires databricks-ai-bridge[lakebase] and psycopg to be installed."
+        ) from _IMPORT_ERROR
+
+    LakebasePool = deps["LakebasePool"]
+    PooledPostgresSaver = deps["PooledPostgresSaver"]
+
+    class _CheckpointSaverImpl(PooledPostgresSaver):
         def __init__(
             self,
             *,
@@ -59,8 +87,6 @@ else:
             super().__init__(self._lakebase.pool)
 
         def close(self) -> None:  # type: ignore[override]
-            """Return the connection to the pool and close the underlying pool."""
-
             super().close()
             if self._close_pool:
                 self._lakebase.close()
@@ -69,6 +95,18 @@ else:
             previous = self._close_pool
             self._close_pool = False
             try:
-                super().__exit__(exc_type, exc, tb)
+                return super().__exit__(exc_type, exc, tb)
             finally:
                 self._close_pool = previous
+
+    _CHECKPOINT_SAVER_CLASS = _CheckpointSaverImpl
+    globals()["CheckpointSaver"] = _CheckpointSaverImpl
+    return _CHECKPOINT_SAVER_CLASS
+
+
+class CheckpointSaver:  # type: ignore[override]
+    def __new__(cls, *args: Any, **kwargs: Any):
+        impl = _ensure_checkpoint_saver_class()
+        instance = impl.__new__(impl)
+        impl.__init__(instance, *args, **kwargs)
+        return instance
