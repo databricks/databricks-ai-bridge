@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import types
 from unittest.mock import MagicMock
@@ -222,7 +223,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
         min_size=2,
         max_size=8,
         timeout=7.5,
-        token_cache_minutes=15,
+        token_cache_seconds=900,
         open=False,
         connection_kwargs={"application_name": "pytest"},
     )
@@ -241,6 +242,27 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.kwargs["application_name"] == "pytest"
     assert fake_pool.connection_class is pool._connection_class
     assert issubclass(fake_pool.connection_class, lakebase.RotatingCredentialConnection)
+
+
+def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
+    FakeConnectionPool = _make_connection_pool_class([])
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+
+    workspace = _make_workspace()
+    with caplog.at_level(logging.INFO):
+        LakebasePool(
+            workspace_client=workspace,
+            instance_name="lake-instance",
+            host="db.host",
+            database="analytics",
+            token_cache_seconds=7200,
+        )
+
+    assert any(
+        record.levelno == logging.INFO
+        and re.search(r"cache=7200s$", record.getMessage())
+        for record in caplog.records
+    )
 
 
 def test_lakebase_pool_requires_host(monkeypatch):
@@ -288,7 +310,7 @@ def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
         min_size=1,
         max_size=4,
         timeout=5.0,
-        token_cache_minutes=10,
+        token_cache_seconds=600,
         open=False,
     )
 
@@ -316,7 +338,7 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
         min_size=1,
         max_size=4,
         timeout=5.0,
-        token_cache_minutes=10,
+        token_cache_seconds=600,
         open=False,
     )
 

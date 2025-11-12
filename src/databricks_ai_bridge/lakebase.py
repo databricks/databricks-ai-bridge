@@ -26,7 +26,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_MINUTES = int(os.getenv("DB_TOKEN_CACHE_MINUTES", "50"))
+DEFAULT_CACHE_SECONDS = int(os.getenv("DB_TOKEN_CACHE_SECONDS", str(50 * 60)))
 DEFAULT_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
 DEFAULT_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
 DEFAULT_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "30.0"))
@@ -46,7 +46,7 @@ class RotatingCredentialConnection(psycopg.Connection):
 
     workspace_client: Optional[WorkspaceClient] = None
     instance_name: Optional[str] = None
-    cache_duration_sec: int = DEFAULT_CACHE_MINUTES * 60
+    cache_duration_sec: int = DEFAULT_CACHE_SECONDS
 
     _cache_lock = Lock()
     _cached_token: Optional[str] = None
@@ -138,7 +138,7 @@ class LakebasePool:
         username: Optional[str] = None,
         port: Optional[int] = None,
         sslmode: Optional[str] = None,
-        token_cache_minutes: Optional[int] = None,
+        token_cache_seconds: Optional[int] = None,
         connection_kwargs: Optional[dict[str, object]] = None,
         **pool_kwargs: object,
     ) -> None:
@@ -163,8 +163,8 @@ class LakebasePool:
             port = DEFAULT_PORT
         if sslmode is None:
             sslmode = DEFAULT_SSLMODE
-        cache_minutes = (
-            DEFAULT_CACHE_MINUTES if token_cache_minutes is None else int(token_cache_minutes)
+        cache_seconds = (
+            DEFAULT_CACHE_SECONDS if token_cache_seconds is None else int(token_cache_seconds)
         )
 
         pool_kwargs = dict(pool_kwargs)
@@ -186,7 +186,7 @@ class LakebasePool:
         self.min_size = min_size
         self.max_size = max_size
         self.timeout = timeout
-        self.token_cache_minutes = cache_minutes
+        self.token_cache_seconds = cache_seconds
         self.pool_config = dict(pool_kwargs)
         self.pool_config.update(
             {"min_size": min_size, "max_size": max_size, "timeout": timeout, "open": open_flag}
@@ -210,7 +210,7 @@ class LakebasePool:
         connection_class = _make_rotating_connection_class(
             workspace_client=workspace_client,
             instance_name=instance_name,
-            cache_duration_sec=cache_minutes * 60,
+            cache_duration_sec=cache_seconds,
         )
 
         pool_params = dict(
@@ -228,12 +228,12 @@ class LakebasePool:
         self._connection_class = connection_class
 
         logger.info(
-            "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%smin",
+            "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
             host,
             database,
             min_size,
             max_size,
-            cache_minutes,
+            cache_seconds,
         )
 
     @property
@@ -268,7 +268,7 @@ def build_lakebase_pool(
     min_size: Optional[int] = None,
     max_size: Optional[int] = None,
     timeout: Optional[float] = None,
-    token_cache_minutes: Optional[int] = None,
+    token_cache_seconds: Optional[int] = None,
     open_pool: Optional[bool] = None,
     connection_kwargs: Optional[dict[str, object]] = None,
     **pool_kwargs: Any,
@@ -289,7 +289,7 @@ def build_lakebase_pool(
         username=username,
         port=port,
         sslmode=sslmode,
-        token_cache_minutes=token_cache_minutes,
+        token_cache_seconds=token_cache_seconds,
         connection_kwargs=connection_kwargs,
         **pool_kwargs,
     )
