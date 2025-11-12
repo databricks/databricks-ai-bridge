@@ -11,6 +11,7 @@ dependencies = [
   "typing_extensions",
   "pydantic",
   "databricks-sdk>=0.49.0",
+  "databricks-vectorsearch>=0.50",
   "pandas",
   "tiktoken>=0.8.0",
   "tabulate>=0.9.0",
@@ -38,7 +39,6 @@ dev = [
   "pytest",
   "mlflow",
   "ruff==0.12.10",
-  "databricks-vectorsearch>=0.50",
 ]
 doc = [
   "docutils>=0.21.2",

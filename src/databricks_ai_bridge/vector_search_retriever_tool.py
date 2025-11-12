@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import mlflow
 from databricks.sdk import WorkspaceClient
+from databricks.vector_search.reranker import Reranker
 from mlflow.entities import SpanType
 from mlflow.models.resources import (
     DatabricksServingEndpoint,
@@ -109,6 +110,12 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         description="When true, enables LLM-generated filter parameters in the tool schema. "
         "This allows LLMs to dynamically generate filters based on natural language queries. "
         "Cannot be used together with predefined filters (filters parameter).",
+    )
+    reranker: Optional["Reranker"] = Field(
+        None,
+        description="When specified, will reranker the search results to improve relevance. "
+        "\n\nRead more about reranking at: "
+        "https://www.databricks.com/blog/reranking-mosaic-ai-vector-search-faster-smarter-retrieval-rag-agents",
     )
 
     @model_validator(mode="after")

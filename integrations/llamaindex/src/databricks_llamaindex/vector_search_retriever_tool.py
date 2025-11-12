@@ -120,6 +120,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             # Allow kwargs to override the default values upon invocation
             num_results = kwargs.pop("num_results", self.num_results)
             query_type = kwargs.pop("query_type", self.query_type)
+            reranker = kwargs.pop("reranker", self.reranker)
 
             # Ensure that we don't have duplicate keys
             kwargs.update(
@@ -130,6 +131,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
                     "filters": combined_filters,
                     "num_results": num_results,
                     "query_type": query_type,
+                    "reranker": reranker,
                 }
             )
             search_resp = self._index.similarity_search(**kwargs)
