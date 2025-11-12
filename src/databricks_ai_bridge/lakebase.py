@@ -170,17 +170,29 @@ class LakebasePool:
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
-        if host is None:
-            host = DEFAULT_HOST
-        if host is None:
+        resolved_instance = instance_name or LAKEBASE_NAME
+        if resolved_instance is None:
             raise ValueError(
-                "Lakebase host must be provided. Specify the host argument or set the DB_HOST environment variable."
+                "Lakebase instance name must be provided. Specify the instance_name argument or set the LAKEBASE_NAME environment variable."
             )
 
-        if instance_name is None:
-            host = LAKEBASE_NAME
-        if instance_name is None:
-            raise ValueError("Lakebase instance name must be provided. Specify the lakebase instance name or set the LAKEBASE_NAME environemtn variable.")
+        resolved_host = host or DEFAULT_HOST
+        if resolved_host is None:
+            try:
+                instance = workspace_client.database.get_database_instance(resolved_instance)
+            except Exception as exc:  # pragma: no cover - propagated to caller
+                raise ValueError(
+                    "Lakebase host must be provided. Unable to resolve host from workspace metadata."
+                ) from exc
+
+            resolved_host = getattr(instance, "read_write_dns", None) or getattr(
+                instance, "read_only_dns", None
+            )
+
+        if resolved_host is None:
+            raise ValueError(
+                "Lakebase host must be provided. Make sure your Lakebase instance name is correct, specify the host argument, set DB_HOST, or ensure the workspace instance metadata exposes read_write_dns."
+            )
 
         if database is None:
             database = DEFAULT_DATABASE
@@ -202,8 +214,8 @@ class LakebasePool:
         open_flag = pool_kwargs.pop("open", True)
 
         self.workspace_client = workspace_client
-        self.instance_name = instance_name
-        self.host = host
+        self.instance_name = resolved_instance
+        self.host = resolved_host
         self.database = database
         self.username = username or _infer_username(workspace_client)
         self.port = port
@@ -218,7 +230,7 @@ class LakebasePool:
         )
 
         conninfo = (
-            f"dbname={database} user={self.username} host={host} port={port} sslmode={sslmode}"
+            f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
         )
 
         default_kwargs: dict[str, object] = {
@@ -254,7 +266,7 @@ class LakebasePool:
 
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
-            host,
+            resolved_host,
             database,
             min_size,
             max_size,
@@ -284,8 +296,8 @@ class LakebasePool:
 # Build lakebase pool instance with only instance name required
 def build_lakebase_pool(
     *,
-    host: str,
     instance_name: str,
+    host: str | None = None,
     database: str | None = None,
     username: Optional[str] = None,
     port: Optional[int] = None,

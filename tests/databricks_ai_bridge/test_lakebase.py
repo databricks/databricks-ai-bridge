@@ -130,6 +130,10 @@ def _make_workspace(
 ):
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token=credential_token)
+    instance = MagicMock()
+    instance.read_write_dns = "db.host"
+    instance.read_only_dns = "db-ro.host"
+    workspace.database.get_database_instance.return_value = instance
     if sp_application_id is None:
         workspace.current_service_principal.me.side_effect = RuntimeError("missing sp")
     else:
@@ -265,17 +269,20 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
     )
 
 
-def test_lakebase_pool_requires_host(monkeypatch):
+def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     FakeConnectionPool = _make_connection_pool_class([])
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
 
     workspace = _make_workspace()
-    with pytest.raises(ValueError, match="Lakebase host must be provided"):
-        LakebasePool(
-            workspace_client=workspace,
-            instance_name="lake-instance",
-            host=None,
-        )
+    workspace.database.get_database_instance.return_value.read_write_dns = "rw.host"
+    workspace.database.get_database_instance.return_value.read_only_dns = "ro.host"
+
+    pool = LakebasePool(
+        workspace_client=workspace,
+        instance_name="lake-instance",
+    )
+
+    assert pool.host == "rw.host"
 
 
 def test_lakebase_pool_requires_instance_name(monkeypatch):
@@ -286,7 +293,22 @@ def test_lakebase_pool_requires_instance_name(monkeypatch):
     with pytest.raises(ValueError, match="Lakebase instance name must be provided"):
         LakebasePool(
             workspace_client=workspace,
-            host="db.host",
+            instance_name=None,  # type: ignore[arg-type]
+        )
+
+
+def test_lakebase_pool_raises_when_host_unavailable(monkeypatch):
+    FakeConnectionPool = _make_connection_pool_class([])
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+
+    workspace = _make_workspace()
+    workspace.database.get_database_instance.return_value = MagicMock(read_write_dns=None, read_only_dns=None)
+
+    with pytest.raises(ValueError, match="Lakebase host must be provided"):
+        LakebasePool(
+            workspace_client=workspace,
+            instance_name="lake-instance",
+            host=None,
         )
 
 
