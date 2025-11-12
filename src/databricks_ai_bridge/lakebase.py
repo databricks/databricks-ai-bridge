@@ -33,6 +33,7 @@ DEFAULT_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "30.0"))
 DEFAULT_SSLMODE = os.getenv("DB_SSL_MODE", "require")
 DEFAULT_PORT = int(os.getenv("DB_PORT", "5432"))
 DEFAULT_HOST = os.getenv("DB_HOST")
+LAKEBASE_NAME = os.getenv("LAKEBASE_NAME")
 DEFAULT_DATABASE = os.getenv("DB_NAME", "databricks_postgres")
 
 
@@ -130,9 +131,9 @@ class LakebasePool:
     def __init__(
         self,
         *,
-        instance_name: str,
-        workspace_client: WorkspaceClient | None = None,
+        instance_name: str | None = None,
         host: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
         database: str | None = None,
         username: Optional[str] = None,
         port: Optional[int] = None,
@@ -150,6 +151,11 @@ class LakebasePool:
             raise ValueError(
                 "Lakebase host must be provided. Specify the host argument or set the DB_HOST environment variable."
             )
+
+        if instance_name is None:
+            host = LAKEBASE_NAME
+        if instance_name is None:
+            raise ValueError("Lakebase instance name must be provided. Specify the lakebase instance name or set the LAKEBASE_NAME environemtn variable.")
 
         if database is None:
             database = DEFAULT_DATABASE
@@ -253,9 +259,8 @@ class LakebasePool:
 # Build lakebase pool instance with only instance name required
 def build_lakebase_pool(
     *,
+    host: str,
     instance_name: str,
-    workspace_client: WorkspaceClient | None = None,
-    host: str | None = None,
     database: str | None = None,
     username: Optional[str] = None,
     port: Optional[int] = None,
@@ -278,9 +283,8 @@ def build_lakebase_pool(
         pool_kwargs["open"] = open_pool
 
     lakebase = LakebasePool(
-        instance_name=instance_name,
-        workspace_client=workspace_client,
         host=host,
+        instance_name=instance_name,
         database=database,
         username=username,
         port=port,

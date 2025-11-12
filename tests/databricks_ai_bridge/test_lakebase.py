@@ -5,6 +5,8 @@ import sys
 import types
 from unittest.mock import MagicMock
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Provide lightweight stubs for optional dependencies. Each stub is only
 # installed when the real module is unavailable so that local environments
@@ -239,6 +241,31 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert fake_pool.kwargs["application_name"] == "pytest"
     assert fake_pool.connection_class is pool._connection_class
     assert issubclass(fake_pool.connection_class, lakebase.RotatingCredentialConnection)
+
+
+def test_lakebase_pool_requires_host(monkeypatch):
+    FakeConnectionPool = _make_connection_pool_class([])
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+
+    workspace = _make_workspace()
+    with pytest.raises(ValueError, match="Lakebase host must be provided"):
+        LakebasePool(
+            workspace_client=workspace,
+            instance_name="lake-instance",
+            host=None,
+        )
+
+
+def test_lakebase_pool_requires_instance_name(monkeypatch):
+    FakeConnectionPool = _make_connection_pool_class([])
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+
+    workspace = _make_workspace()
+    with pytest.raises(ValueError, match="Lakebase instance name must be provided"):
+        LakebasePool(
+            workspace_client=workspace,
+            host="db.host",
+        )
 
 
 def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
