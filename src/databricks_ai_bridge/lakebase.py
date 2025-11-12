@@ -126,7 +126,32 @@ def _infer_username(w: WorkspaceClient) -> str:
 
 
 class LakebasePool:
-    """Wrapper around a psycopg connection pool with rotating credentials."""
+    """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
+    host:
+        Lakebase instance hostname, e.g.
+        ``instance-xxxx.database.cloud.databricks.com``
+        (can retrieve from connection details page in Databricks workspace)
+    instance_name:
+        User-set name on Lakebase Instance
+        (can retrieve from connection details page in Databricks workspace)
+    workspace_client:
+        Optional `WorkspaceClient` to use; default client is created otherwise.
+    database:
+        Database name for lakebase instance. Defaults to ``databricks_postgres``.
+    username:
+        Postgres username
+    port:
+        TCP port for Postgres connections. Defaults to ``5432``.
+    sslmode:
+        libpq SSL mode. Defaults to ``require``.
+    token_cache_seconds:
+        Lifetime for cached OAuth tokens in seconds. Defaults to 50 minutes
+        (3000 seconds).
+    connection_kwargs:
+        Extra keyword arguments forwarded to ``psycopg.connect``
+    **pool_kwargs:
+        Additional options passed to ``psycopg_pool.ConnectionPool``
+    """
 
     def __init__(
         self,
