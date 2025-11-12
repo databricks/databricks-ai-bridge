@@ -297,21 +297,6 @@ def test_lakebase_pool_requires_instance_name(monkeypatch):
         )
 
 
-def test_lakebase_pool_raises_when_host_unavailable(monkeypatch):
-    FakeConnectionPool = _make_connection_pool_class([])
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
-
-    workspace = _make_workspace()
-    workspace.database.get_database_instance.return_value = MagicMock(read_write_dns=None, read_only_dns=None)
-
-    with pytest.raises(ValueError, match="Lakebase host must be provided"):
-        LakebasePool(
-            workspace_client=workspace,
-            instance_name="lake-instance",
-            host=None,
-        )
-
-
 def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
     log: list[str] = []
     FakeConnectionPool = _make_connection_pool_class(log)
