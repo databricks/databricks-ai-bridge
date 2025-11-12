@@ -18,7 +18,7 @@ from unitycatalog.ai.core.databricks import DatabricksFunctionClient
 from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogTool
 
 from databricks_langchain.chat_models import ChatDatabricks
-from databricks_langchain.checkpointing import CheckpointSaver
+from databricks_langchain.checkpoint import CheckpointSaver
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
