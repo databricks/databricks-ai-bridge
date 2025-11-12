@@ -229,9 +229,7 @@ class LakebasePool:
             {"min_size": min_size, "max_size": max_size, "timeout": timeout, "open": open_flag}
         )
 
-        conninfo = (
-            f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
-        )
+        conninfo = f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
 
         default_kwargs: dict[str, object] = {
             "autocommit": True,
