@@ -17,7 +17,7 @@ class CheckpointSaver(PooledPostgresSaver):
         username: Optional[str] = None,
         port: Optional[int] = None,
         sslmode: Optional[str] = None,
-        token_cache_minutes: Optional[int] = None,
+        token_cache_seconds: Optional[int] = None,
         connection_kwargs: Optional[dict[str, object]] = None,
         **pool_kwargs: object,
     ) -> None:
@@ -29,7 +29,7 @@ class CheckpointSaver(PooledPostgresSaver):
             username=username,
             port=port,
             sslmode=sslmode,
-            token_cache_minutes=token_cache_minutes,
+            token_cache_seconds=token_cache_seconds,
             connection_kwargs=connection_kwargs,
             **pool_kwargs,
         )
