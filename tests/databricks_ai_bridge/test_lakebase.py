@@ -223,7 +223,6 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
         token_cache_minutes=15,
         open=False,
         connection_kwargs={"application_name": "pytest"},
-        probe=False,
     )
 
     fake_pool = pool.pool
@@ -264,7 +263,6 @@ def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
         timeout=5.0,
         token_cache_minutes=10,
         open=False,
-        probe=False,
     )
 
     assert pool.username == "service_principal_client_id"
@@ -293,7 +291,6 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
         timeout=5.0,
         token_cache_minutes=10,
         open=False,
-        probe=False,
     )
 
     assert pool.username == "test@databricks.com"
@@ -328,7 +325,6 @@ def test_pooled_connection_with_lakebase_pool(monkeypatch):
         host="db.host",
         database="analytics",
         username="explicit",
-        probe=False,
         open=False,
     )
 

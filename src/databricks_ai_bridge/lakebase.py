@@ -139,7 +139,6 @@ class LakebasePool:
         sslmode: Optional[str] = None,
         token_cache_minutes: Optional[int] = None,
         connection_kwargs: Optional[dict[str, object]] = None,
-        probe: bool = True,
         **pool_kwargs: object,
     ) -> None:
         if workspace_client is None:
@@ -222,14 +221,6 @@ class LakebasePool:
         self._pool = ConnectionPool(**pool_params)
         self._connection_class = connection_class
 
-        if probe:
-            try:
-                with self._pool.connection() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-            except Exception:
-                self._pool.close()
-                raise
-
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%smin",
             host,
@@ -275,7 +266,6 @@ def build_lakebase_pool(
     token_cache_minutes: Optional[int] = None,
     open_pool: Optional[bool] = None,
     connection_kwargs: Optional[dict[str, object]] = None,
-    probe: bool = True,
     **pool_kwargs: Any,
 ) -> ConnectionPool:
     if min_size is not None:
@@ -297,7 +287,6 @@ def build_lakebase_pool(
         sslmode=sslmode,
         token_cache_minutes=token_cache_minutes,
         connection_kwargs=connection_kwargs,
-        probe=probe,
         **pool_kwargs,
     )
     return lakebase.pool
