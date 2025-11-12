@@ -15,9 +15,10 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
+from pydantic import Field, PrivateAttr, model_validator
+
 from openai import OpenAI, pydantic_function_tool
 from openai.types.chat import ChatCompletionToolParam
-from pydantic import Field, PrivateAttr, model_validator
 
 _logger = logging.getLogger(__name__)
 

@@ -2,6 +2,7 @@ from typing import Callable, List
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+from databricks.sdk.errors.platform import NotFound
 from databricks_mcp import DatabricksMCPClient
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel
@@ -38,13 +39,15 @@ class McpServerToolkit:
         elif app_name is not None:
             if self.name is None:
                 self.name = app_name
-            if not isinstance(workspace_client.config._header_factory, OAuthCredentialsProvider):
+            if not isinstance(
+                self.workspace_client.config._header_factory, OAuthCredentialsProvider
+            ):
                 raise ValueError(
                     f"Error setting up MCP Server for Databricks App: {app_name}. Querying MCP Servers on Databricks Apps requires an OAuth Token. Please ensure the workspace client is configured with an OAuth Token. Refer to documentation at https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local?language=Python for more information"
                 )
             try:
-                app = workspace_client.apps.get(app_name)
-            except Exception as e:
+                app = self.workspace_client.apps.get(app_name)
+            except NotFound as e:
                 raise ValueError(f"App {app_name} not found") from e
 
             if app.url is None:
@@ -82,6 +85,6 @@ class McpServerToolkit:
     def _create_exec_fn(self, tool_name: str) -> Callable:
         def exec_fn(**kwargs):
             response = self.databricks_mcp_client.call_tool(tool_name, kwargs)
-            return "".join(c.text for c in response.content)
+            return "".join(c.text for c in (response.content or []))
 
         return exec_fn
