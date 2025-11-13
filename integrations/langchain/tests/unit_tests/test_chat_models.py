@@ -50,9 +50,11 @@ from databricks_langchain.chat_models import (
 )
 from tests.utils.chat_models import (  # noqa: F401
     _MOCK_CHAT_RESPONSE,
+    _MOCK_STREAM_DELTA_RESPONSE,
     _MOCK_STREAM_RESPONSE,
     llm,
     mock_client,
+    mock_client_delta,
 )
 
 
@@ -191,6 +193,18 @@ def test_chat_model_stream(llm: ChatDatabricks) -> None:
     )
     for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
         assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
+
+
+def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks) -> None:
+    res = llm.stream(
+        [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "36939 * 8922.4", "custom_outputs": {"foo": "bar"}},
+        ]
+    )
+    for chunk, expected in zip(res, _MOCK_STREAM_DELTA_RESPONSE):
+        assert chunk.custom_outputs == expected["custom_outputs"]
+        assert chunk.content == expected["delta"]["content"]
 
 
 def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
