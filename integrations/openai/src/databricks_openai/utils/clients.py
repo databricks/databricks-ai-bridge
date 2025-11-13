@@ -3,30 +3,22 @@ from httpx import AsyncClient, Auth, Client, Request
 from openai import AsyncOpenAI, OpenAI
 
 
+class BearerAuth(Auth):
+    def __init__(self, get_headers_func):
+        self.get_headers_func = get_headers_func
+
+    def auth_flow(self, request: Request) -> Request:
+        auth_headers = self.get_headers_func()
+        request.headers["Authorization"] = auth_headers["Authorization"]
+        yield request
+
+
 def _get_authorized_http_client(workspace_client):
-    class BearerAuth(Auth):
-        def __init__(self, get_headers_func):
-            self.get_headers_func = get_headers_func
-
-        def auth_flow(self, request: Request) -> Request:
-            auth_headers = self.get_headers_func()
-            request.headers["Authorization"] = auth_headers["Authorization"]
-            yield request
-
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
     return Client(auth=databricks_token_auth)
 
 
 def _get_authorized_async_http_client(workspace_client):
-    class BearerAuth(Auth):
-        def __init__(self, get_headers_func):
-            self.get_headers_func = get_headers_func
-
-        def auth_flow(self, request: Request) -> Request:
-            auth_headers = self.get_headers_func()
-            request.headers["Authorization"] = auth_headers["Authorization"]
-            yield request
-
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
     return AsyncClient(auth=databricks_token_auth)
 

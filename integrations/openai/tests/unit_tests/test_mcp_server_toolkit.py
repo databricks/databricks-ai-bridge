@@ -2,8 +2,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.credentials_provider import OAuthCredentialsProvider
-from databricks.sdk.service.apps import App
 
 
 @pytest.fixture
@@ -11,14 +9,6 @@ def mock_workspace_client():
     mock_client = MagicMock(spec=WorkspaceClient)
     mock_client.config.host = "https://test.databricks.com"
     mock_client.config._header_factory = MagicMock()
-    return mock_client
-
-
-@pytest.fixture
-def mock_oauth_workspace_client():
-    mock_client = MagicMock(spec=WorkspaceClient)
-    mock_client.config.host = "https://test.databricks.com"
-    mock_client.config._header_factory = MagicMock(spec=OAuthCredentialsProvider)
     return mock_client
 
 
@@ -45,24 +35,6 @@ def mock_mcp_response():
 
 class TestMcpServerToolkitInit:
     @pytest.mark.parametrize(
-        "kwargs",
-        [
-            {},
-            {"url": "https://test.com/mcp", "connection_name": "test-conn"},
-            {"url": "https://test.com/mcp", "connection_name": "test-conn", "app_name": "test-app"},
-        ],
-    )
-    def test_parameter_validation_errors(self, kwargs):
-        with patch("databricks_openai.mcp_server_toolkit.WorkspaceClient"):
-            from databricks_openai.mcp_server_toolkit import McpServerToolkit
-
-            with pytest.raises(
-                ValueError,
-                match="Exactly one of 'url', 'connection_name', or 'app_name' must be provided",
-            ):
-                McpServerToolkit(**kwargs)
-
-    @pytest.mark.parametrize(
         "init_kwargs,expected_url,expected_name",
         [
             ({"url": "https://test.com/mcp"}, "https://test.com/mcp", None),
@@ -71,21 +43,9 @@ class TestMcpServerToolkitInit:
                 "https://test.com/mcp",
                 "custom-name",
             ),
-            (
-                {"connection_name": "test-connection"},
-                "https://test.databricks.com/api/2.0/mcp/external/test-connection",
-                "test-connection",
-            ),
-            (
-                {"connection_name": "test-connection", "name": "custom-name"},
-                "https://test.databricks.com/api/2.0/mcp/external/test-connection",
-                "custom-name",
-            ),
         ],
     )
-    def test_init_with_url_and_connection(
-        self, mock_workspace_client, init_kwargs, expected_url, expected_name
-    ):
+    def test_init_with_url(self, mock_workspace_client, init_kwargs, expected_url, expected_name):
         with patch(
             "databricks_openai.mcp_server_toolkit.WorkspaceClient",
             return_value=mock_workspace_client,
@@ -99,62 +59,7 @@ class TestMcpServerToolkitInit:
                 assert toolkit.url == expected_url
                 assert toolkit.name == expected_name
                 assert toolkit.workspace_client == mock_workspace_client
-                if "url" in init_kwargs:
-                    mock_mcp_client.assert_called_once_with(expected_url, mock_workspace_client)
-
-    @pytest.mark.parametrize(
-        "custom_name,expected_name", [(None, "test-app"), ("custom-name", "custom-name")]
-    )
-    def test_init_with_app_name_success(
-        self, mock_oauth_workspace_client, custom_name, expected_name
-    ):
-        mock_app = App(name="test-app", url="https://test-app.databricks.com")
-        mock_oauth_workspace_client.apps.get.return_value = mock_app
-
-        with patch("databricks_openai.mcp_server_toolkit.DatabricksMCPClient") as mock_mcp_client:
-            from databricks_openai.mcp_server_toolkit import McpServerToolkit
-
-            kwargs = {"app_name": "test-app", "workspace_client": mock_oauth_workspace_client}
-            if custom_name:
-                kwargs["name"] = custom_name
-            toolkit = McpServerToolkit(**kwargs)
-            assert toolkit.url == "https://test-app.databricks.com/mcp"
-            assert toolkit.name == expected_name
-            mock_mcp_client.assert_called_once_with(
-                "https://test-app.databricks.com/mcp", mock_oauth_workspace_client
-            )
-
-    @pytest.mark.parametrize(
-        "client_fixture,setup_fn,expected_error",
-        [
-            (
-                "mock_workspace_client",
-                None,
-                "Error setting up MCP Server for Databricks App.*requires an OAuth Token",
-            ),
-            (
-                "mock_oauth_workspace_client",
-                lambda c: setattr(c.apps.get, "side_effect", Exception("App not found")),
-                "App test-app not found",
-            ),
-            (
-                "mock_oauth_workspace_client",
-                lambda c: setattr(
-                    c.apps, "get", MagicMock(return_value=App(name="test-app", url=None))
-                ),
-                "App test-app does not have a valid URL.*deployed and is running",
-            ),
-        ],
-    )
-    def test_app_name_errors(self, request, client_fixture, setup_fn, expected_error):
-        client = request.getfixturevalue(client_fixture)
-        if setup_fn:
-            setup_fn(client)
-
-        from databricks_openai.mcp_server_toolkit import McpServerToolkit
-
-        with pytest.raises(ValueError, match=expected_error):
-            McpServerToolkit(app_name="test-app", workspace_client=client)
+                mock_mcp_client.assert_called_once_with(expected_url, mock_workspace_client)
 
     def test_init_with_custom_workspace_client(self, mock_workspace_client):
         with patch("databricks_openai.mcp_server_toolkit.DatabricksMCPClient"):
@@ -176,7 +81,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [mock_mcp_tool]
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -190,7 +99,7 @@ class TestMcpServerToolkitGetTools:
                 assert tools[0].spec["function"]["name"] == "test-server__test_tool"
                 assert tools[0].spec["function"]["description"] == "A test tool"
                 assert tools[0].spec["function"]["parameters"] == mock_mcp_tool.inputSchema
-                assert callable(tools[0].exec_fn)
+                assert callable(tools[0].execute)
 
     def test_get_tools_with_multiple_tools(self, mock_workspace_client):
         tools_data = [("tool_one", "First tool"), ("tool_two", "Second tool")]
@@ -212,7 +121,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = mock_tools
+
+                async def mock_async():
+                    return mock_tools
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -238,7 +151,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [mock_mcp_tool]
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -261,7 +178,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [tool]
+
+                async def mock_async():
+                    return [tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -280,7 +201,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = tools_list
+
+                async def mock_async():
+                    return tools_list
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -298,7 +223,11 @@ class TestMcpServerToolkitGetTools:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.side_effect = Exception("Connection error")
+
+                async def mock_error():
+                    raise Exception("Connection error")
+
+                mock_mcp_client_instance._get_tools_async = mock_error
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
@@ -336,7 +265,11 @@ class TestMcpServerToolkitExecFn:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [mock_mcp_tool]
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_instance.call_tool.return_value = mock_mcp_response
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
@@ -344,7 +277,7 @@ class TestMcpServerToolkitExecFn:
 
                 toolkit = McpServerToolkit(url="https://test.com/mcp", name="test-server")
                 tools = toolkit.get_tools()
-                result = tools[0].exec_fn(**call_kwargs)
+                result = tools[0].execute(**call_kwargs)
 
                 assert result == expected_result
                 mock_mcp_client_instance.call_tool.assert_called_once_with(
@@ -363,7 +296,11 @@ class TestMcpServerToolkitExecFn:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [mock_mcp_tool]
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_instance.call_tool.return_value = empty_response
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
@@ -371,7 +308,7 @@ class TestMcpServerToolkitExecFn:
 
                 toolkit = McpServerToolkit(url="https://test.com/mcp")
                 tools = toolkit.get_tools()
-                assert tools[0].exec_fn() == ""
+                assert tools[0].execute() == ""
 
     def test_exec_fn_multiple_calls(self, mock_workspace_client, mock_mcp_tool):
         responses = []
@@ -388,7 +325,11 @@ class TestMcpServerToolkitExecFn:
                 "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
             ) as mock_mcp_client_class:
                 mock_mcp_client_instance = MagicMock()
-                mock_mcp_client_instance.list_tools.return_value = [mock_mcp_tool]
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
                 mock_mcp_client_instance.call_tool.side_effect = responses
                 mock_mcp_client_class.return_value = mock_mcp_client_instance
 
@@ -397,8 +338,8 @@ class TestMcpServerToolkitExecFn:
                 toolkit = McpServerToolkit(url="https://test.com/mcp")
                 tools = toolkit.get_tools()
 
-                assert tools[0].exec_fn(param="first") == "Response 1"
-                assert tools[0].exec_fn(param="second") == "Response 2"
+                assert tools[0].execute(param="first") == "Response 1"
+                assert tools[0].execute(param="second") == "Response 2"
                 assert mock_mcp_client_instance.call_tool.call_count == 2
 
 
@@ -418,9 +359,68 @@ class TestToolInfo:
             },
         }
 
-        tool_info = ToolInfo(name="test_tool", spec=tool_spec, exec_fn=dummy_fn)
+        tool_info = ToolInfo(name="test_tool", spec=tool_spec, execute=dummy_fn)
         assert tool_info.name == "test_tool"
         assert tool_info.spec == tool_spec
-        assert tool_info.exec_fn == dummy_fn
-        assert tool_info.exec_fn() == "test"
-        assert tool_info.exec_fn(5) == 10
+        assert tool_info.execute == dummy_fn
+        assert tool_info.execute() == "test"
+        assert tool_info.execute(5) == 10
+
+
+class TestMcpServerToolkitAsyncGetTools:
+    @pytest.mark.asyncio
+    async def test_async_get_tools_with_single_tool(self, mock_workspace_client, mock_mcp_tool):
+        with patch(
+            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch(
+                "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
+            ) as mock_mcp_client_class:
+                mock_mcp_client_instance = MagicMock()
+
+                # Use an async mock for the async method
+                async def mock_get_tools_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_get_tools_async
+                mock_mcp_client_class.return_value = mock_mcp_client_instance
+
+                from databricks_openai.mcp_server_toolkit import McpServerToolkit
+
+                toolkit = McpServerToolkit(url="https://test.com/mcp", name="test-server")
+                tools = await toolkit.async_get_tools()
+
+                assert len(tools) == 1
+                assert tools[0].name == "test-server__test_tool"
+                assert tools[0].spec["type"] == "function"
+                assert tools[0].spec["function"]["name"] == "test-server__test_tool"
+                assert tools[0].spec["function"]["description"] == "A test tool"
+                assert tools[0].spec["function"]["parameters"] == mock_mcp_tool.inputSchema
+                assert callable(tools[0].execute)
+
+    @pytest.mark.asyncio
+    async def test_async_get_tools_error(self, mock_workspace_client):
+        with patch(
+            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch(
+                "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
+            ) as mock_mcp_client_class:
+                mock_mcp_client_instance = MagicMock()
+
+                async def mock_error():
+                    raise Exception("Connection error")
+
+                mock_mcp_client_instance._get_tools_async = mock_error
+                mock_mcp_client_class.return_value = mock_mcp_client_instance
+
+                from databricks_openai.mcp_server_toolkit import McpServerToolkit
+
+                toolkit = McpServerToolkit(url="https://test.com/mcp", name="test-server")
+                with pytest.raises(
+                    ValueError,
+                    match="Error listing tools from test-server MCP Server: Connection error",
+                ):
+                    await toolkit.async_get_tools()

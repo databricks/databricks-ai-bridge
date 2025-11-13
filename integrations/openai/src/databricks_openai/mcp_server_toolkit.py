@@ -1,8 +1,7 @@
+import asyncio
 from typing import Callable, List
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.credentials_provider import OAuthCredentialsProvider
-from databricks.sdk.errors.platform import NotFound
 from databricks_mcp import DatabricksMCPClient
 from openai.types.chat import ChatCompletionToolParam
 from pydantic import BaseModel
@@ -11,56 +10,97 @@ from pydantic import BaseModel
 class ToolInfo(BaseModel):
     name: str
     spec: ChatCompletionToolParam
-    exec_fn: Callable
+    execute: Callable
 
 
 class McpServerToolkit:
+    """Toolkit for accessing MCP server tools with the OpenAI SDK.
+
+    This class provides a simplified interface to MCP (Model Context Protocol) servers,
+    automatically converting MCP tools into tool specifications for the OpenAI SDK. It's
+    designed for easy integration with OpenAI clients and agents that use function calling.
+
+    The toolkit handles authentication with Databricks, fetches available tools from the
+    MCP server, and provides execution functions for each tool.
+
+    Args:
+        url: The URL of the MCP server to connect to.
+
+        name: A readable name for the MCP server. This name will be used as a prefix for
+            tool names to avoid conflicts when using multiple MCP servers (e.g., "server_name__tool_name").
+            If not provided, tool names will not be prefixed.
+
+        workspace_client: Databricks WorkspaceClient to use for authentication. Pass a custom
+            WorkspaceClient to set up your own authentication method. If not provided, a default
+            WorkspaceClient will be created using standard Databricks authentication resolution.
+
+    Example:
+        Step 1: Create toolkit and get tools from MCP server
+
+        .. code-block:: python
+
+            from databricks_openai import McpServerToolkit
+            from openai import OpenAI
+
+            toolkit = McpServerToolkit(url="https://my-mcp-server.com/mcp", name="my_tools")
+            tools = toolkit.get_tools()
+            tool_specs = [tool.spec for tool in tools]
+
+        Step 2: Call model with MCP tools defined
+
+        .. code-block:: python
+
+            client = OpenAI()
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Help me search for information about Databricks."},
+            ]
+            first_response = client.chat.completions.create(
+                model="gpt-4o", messages=messages, tools=tool_specs
+            )
+
+        Step 3: Execute function code – parse the model's response and handle tool calls
+
+        .. code-block:: python
+
+            import json
+
+            tool_call = first_response.choices[0].message.tool_calls[0]
+            args = json.loads(tool_call.function.arguments)
+
+            # Find and execute the appropriate tool
+            tool_to_execute = next(t for t in tools if t.name == tool_call.function.name)
+            result = tool_to_execute.execute(**args)
+
+        Step 4: Supply model with results – so it can incorporate them into its final response
+
+        .. code-block:: python
+
+            messages.append(first_response.choices[0].message)
+            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
+            second_response = client.chat.completions.create(
+                model="gpt-4o", messages=messages, tools=tool_specs
+            )
+    """
+
     def __init__(
         self,
         url: str = None,
-        app_name: str = None,
-        connection_name: str = None,
         name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
-        provided_params = [param for param in [url, connection_name, app_name] if param is not None]
-        if len(provided_params) != 1:
-            raise ValueError(
-                "Exactly one of 'url', 'connection_name', or 'app_name' must be provided"
-            )
-
         self.workspace_client = workspace_client or WorkspaceClient()
         self.name = name
         self.url = url
 
-        if connection_name is not None:
-            self.name = self.name or connection_name
-            self.url = f"{self.workspace_client.config.host}/api/2.0/mcp/external/{connection_name}"
-        elif app_name is not None:
-            if self.name is None:
-                self.name = app_name
-            if not isinstance(
-                self.workspace_client.config._header_factory, OAuthCredentialsProvider
-            ):
-                raise ValueError(
-                    f"Error setting up MCP Server for Databricks App: {app_name}. Querying MCP Servers on Databricks Apps requires an OAuth Token. Please ensure the workspace client is configured with an OAuth Token. Refer to documentation at https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local?language=Python for more information"
-                )
-            try:
-                app = self.workspace_client.apps.get(app_name)
-            except NotFound as e:
-                raise ValueError(f"App {app_name} not found") from e
-
-            if app.url is None:
-                raise ValueError(
-                    f"App {app_name} does not have a valid URL. Please ensure the app is deployed and is running."
-                )
-            self.url = f"{app.url}/mcp"
-
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
     def get_tools(self) -> List[ToolInfo]:
+        return asyncio.run(self.async_get_tools())
+
+    async def async_get_tools(self) -> List[ToolInfo]:
         try:
-            all_tools = self.databricks_mcp_client.list_tools()
+            all_tools = await self.databricks_mcp_client._get_tools_async()
         except Exception as e:
             raise ValueError(f"Error listing tools from {self.name} MCP Server: {e}") from e
 
@@ -77,7 +117,7 @@ class McpServerToolkit:
             }
             tool_infos.append(
                 ToolInfo(
-                    name=unique_tool_name, spec=tool_spec, exec_fn=self._create_exec_fn(tool.name)
+                    name=unique_tool_name, spec=tool_spec, execute=self._create_exec_fn(tool.name)
                 )
             )
         return tool_infos
