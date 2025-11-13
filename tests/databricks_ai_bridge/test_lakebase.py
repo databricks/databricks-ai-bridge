@@ -107,7 +107,6 @@ import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import (
     LakebasePool,
     PooledPostgresSaver,
-    make_checkpointer,
     pooled_connection,
 )
 
@@ -345,39 +344,6 @@ def test_pooled_connection_with_lakebase_pool(monkeypatch):
 
     assert log == ["pool_connection", "ctx_enter", "ctx_exit"]
     assert lake_pool.pool.context.entered and lake_pool.pool.context.exited
-
-
-def test_make_checkpointer_uses_wrapper_method(monkeypatch):
-    sentinel = object()
-    wrapper = object.__new__(LakebasePool)
-    monkeypatch.setattr(wrapper, "make_checkpointer", lambda: sentinel, raising=False)
-
-    assert make_checkpointer(wrapper) is sentinel
-
-
-def test_make_checkpointer_returns_pooled_saver_for_raw_pool():
-    class DummyPool:
-        def __init__(self):
-            self.conn = object()
-            self.put_calls = []
-            self.get_calls = 0
-
-        def getconn(self):
-            self.get_calls += 1
-            return self.conn
-
-        def putconn(self, conn):
-            self.put_calls.append(conn)
-
-    dummy_pool = DummyPool()
-    saver = make_checkpointer(dummy_pool)
-
-    assert isinstance(saver, PooledPostgresSaver)
-    assert dummy_pool.get_calls == 1
-
-    saver.close()
-    saver.close()  # idempotent
-    assert dummy_pool.put_calls == [dummy_pool.conn]
 
 
 def test_pooled_postgres_saver_returns_connection_to_pool():

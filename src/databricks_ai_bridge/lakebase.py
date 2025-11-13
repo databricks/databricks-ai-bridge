@@ -19,7 +19,6 @@ __all__ = [
     "RotatingCredentialConnection",
     "build_lakebase_pool",
     "pooled_connection",
-    "make_checkpointer",
     "PooledPostgresSaver",
 ]
 
@@ -238,9 +237,6 @@ class LakebasePool:
     def connection(self):
         return self._pool.connection()
 
-    def make_checkpointer(self) -> PooledPostgresSaver:
-        return PooledPostgresSaver(self._pool)
-
     def close(self) -> None:
         self._pool.close()
 
@@ -308,20 +304,3 @@ class PooledPostgresSaver(PostgresSaver):
 
     def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
         self.close()
-
-
-def make_checkpointer(pool: Union[ConnectionPool, LakebasePool]) -> PooledPostgresSaver:
-    """
-    Create a LangGraph `PostgresSaver` backed by a pooled connection.
-
-    The returned saver keeps a dedicated connection checked out until
-    `close()` is invoked (or the object is GC'ed). Use it as a context
-    manager to ensure timely release:
-
-    >>> with make_checkpointer(pool) as saver:
-    ...     graph = workflow.compile(checkpointer=saver)
-    """
-    if isinstance(pool, LakebasePool):
-        return pool.make_checkpointer()
-
-    return PooledPostgresSaver(pool)
