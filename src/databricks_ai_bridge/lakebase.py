@@ -244,7 +244,7 @@ class LakebasePool:
 
         connection_class = _make_rotating_connection_class(
             workspace_client=workspace_client,
-            instance_name=instance_name,
+            instance_name=resolved_instance,
             cache_duration_sec=cache_seconds,
         )
 
