@@ -638,6 +638,8 @@ class ChatDatabricks(BaseChatModel):
                         "role": delta.get("role"),
                         "content": delta.get("content", ""),
                     }
+                    if hasattr(chunk, "custom_outputs"):
+                        chunk_delta_dict["custom_outputs"] = chunk.custom_outputs
                     chunk_message = _convert_dict_to_message_chunk(
                         chunk_delta_dict, first_chunk_role
                     )

@@ -118,6 +118,29 @@ _MOCK_STREAM_RESPONSE = [
     },
 ]
 
+_MOCK_STREAM_DELTA_RESPONSE = [
+    {
+        "id": "chatcmpl_bb1fce87-f14e-4ae1-ac22-89facc74898a",
+        "object": "chat.completion.chunk",
+        "created": 1721877054,
+        "model": "meta-llama-3.1-70b-instruct-072424",
+        "choices": [],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 20, "total_tokens": 50},
+        "delta": {"role": "assistant", "content": "36939"},
+        "custom_outputs": {"custom_output_key_1": "value_1"},
+    },
+    {
+        "id": "chatcmpl_bb1fce87-f14e-4ae1-ac22-89facc74898a",
+        "object": "chat.completion.chunk",
+        "created": 1721877054,
+        "model": "meta-llama-3.1-70b-instruct-072424",
+        "choices": [],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 22, "total_tokens": 52},
+        "delta": {"role": "assistant", "content": "x"},
+        "custom_outputs": {"custom_output_key_2": "value_2"},
+    },
+]
+
 
 @pytest.fixture(autouse=True)
 def mock_client() -> Generator:
@@ -173,6 +196,41 @@ def mock_client() -> Generator:
             return create_mock_response()
 
     openai_client.chat.completions.create.side_effect = mock_create_completion
+
+    with (
+        mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client),
+        mock.patch(
+            "databricks_langchain.chat_models.get_openai_client", return_value=openai_client
+        ),
+    ):
+        yield
+
+
+@pytest.fixture
+def mock_client_delta() -> Generator:
+    """Separate fixture for tests that need delta format responses."""
+    from openai.types.chat import ChatCompletionChunk
+    from openai.types.completion_usage import CompletionUsage
+
+    def mock_openai_stream_delta():
+        for chunk_data in _MOCK_STREAM_DELTA_RESPONSE:
+            usage_data = chunk_data.get("usage")
+            chunk = ChatCompletionChunk(
+                id=chunk_data["id"],
+                choices=[],
+                created=chunk_data["created"],
+                model=chunk_data["model"],
+                object="chat.completion.chunk",
+                delta=chunk_data["delta"],
+                custom_outputs=chunk_data["custom_outputs"],
+                usage=CompletionUsage(**usage_data) if usage_data else None,
+            )
+            chunk.choices = None
+            yield chunk
+
+    # Mock OpenAI client
+    openai_client = mock.MagicMock()
+    openai_client.chat.completions.create.return_value = mock_openai_stream_delta()
 
     with (
         mock.patch("databricks_langchain.utils.get_openai_client", return_value=openai_client),
