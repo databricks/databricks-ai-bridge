@@ -222,7 +222,6 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
         instance_name="lake-instance",
     )
 
-
     fake_pool = pool.pool
     assert fake_pool.conninfo == (
         "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"

@@ -255,6 +255,11 @@ class RecordingConnectionPool:
         self.log = log
         self.connection_value = connection_value
         self.kwargs = None
+        self.conninfo = ""
+        self.connection_class = None
+        self.getconn_calls = 0
+        self.putconn_calls = []
+        self.closed = False
 
     def __call__(
         self,
@@ -311,7 +316,6 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     saver = CheckpointSaver(
         database_instance="lakebase-instance",
         workspace_client=workspace,
-        token_cache_seconds=7200,
     )
 
     assert isinstance(saver, lakebase.PooledPostgresSaver)

@@ -25,7 +25,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_SECONDS = 50 * 60
+DEFAULT_CACHE_SECONDS = 50 * 60  # Cache token for 50 minutes
 DEFAULT_MIN_SIZE = 1
 DEFAULT_MAX_SIZE = 10
 DEFAULT_TIMEOUT = 30.0
@@ -146,7 +146,6 @@ class LakebasePool:
         *,
         instance_name: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        token_cache_seconds: Optional[int] = None,
         **pool_kwargs: object,
     ) -> None:
         if workspace_client is None:
@@ -179,24 +178,20 @@ class LakebasePool:
         database = DEFAULT_DATABASE
         port = DEFAULT_PORT
         sslmode = DEFAULT_SSLMODE
-        cache_seconds = (
-            DEFAULT_CACHE_SECONDS if token_cache_seconds is None else int(token_cache_seconds)
-        )
+        cache_seconds = DEFAULT_CACHE_SECONDS
 
         self.workspace_client = workspace_client
         self.instance_name = resolved_instance
         self.host = resolved_host
         self.database = database
-        self.username = DEFAULT_USERNAME or _infer_username(workspace_client)
         self.port = port
         self.sslmode = sslmode
         self.token_cache_seconds = cache_seconds
+        self.username = DEFAULT_USERNAME or _infer_username(workspace_client)
         typed_pool_kwargs = dict(pool_kwargs)
-        self.pool_config = typed_pool_kwargs
+        self.pool_config = dict(typed_pool_kwargs)
 
-        conninfo = (
-            f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
-        )
+        conninfo = f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
 
         default_kwargs: dict[str, object] = {
             "autocommit": True,
@@ -267,7 +262,6 @@ def build_lakebase_pool(
     lakebase = LakebasePool(
         instance_name=instance_name,
         workspace_client=workspace_client,
-        token_cache_seconds=token_cache_seconds,
         **pool_kwargs,
     )
     return lakebase.pool
