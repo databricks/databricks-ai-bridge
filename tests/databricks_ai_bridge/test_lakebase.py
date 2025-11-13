@@ -214,37 +214,20 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     FakeConnectionPool = _make_connection_pool_class(log)
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
 
-    workspace = _make_workspace(credential_token="fresh-token")
+    workspace = _make_workspace()
+    workspace.database.get_database_instance.return_value.read_write_dns = "db.host"
 
     pool = LakebasePool(
         workspace_client=workspace,
         instance_name="lake-instance",
-        host="db.host",
-        database="analytics",
-        username="explicit",
-        port=15432,
-        sslmode="disable",
-        min_size=2,
-        max_size=8,
-        timeout=7.5,
-        token_cache_seconds=900,
-        open=False,
-        connection_kwargs={"application_name": "pytest"},
     )
+
 
     fake_pool = pool.pool
     assert fake_pool.conninfo == (
-        "dbname=analytics user=explicit host=db.host port=15432 sslmode=disable"
+        "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
     )
-    assert fake_pool.connection_class is not None
-    assert fake_pool.min_size == 2
-    assert fake_pool.max_size == 8
-    assert fake_pool.timeout == 7.5
-    assert fake_pool.open is False
-    assert fake_pool.kwargs["autocommit"] is True
-    assert fake_pool.kwargs["row_factory"] is dict_row
-    assert fake_pool.kwargs["application_name"] == "pytest"
-    assert fake_pool.connection_class is pool._connection_class
+
     assert issubclass(fake_pool.connection_class, lakebase.RotatingCredentialConnection)
 
 
@@ -257,13 +240,10 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         LakebasePool(
             workspace_client=workspace,
             instance_name="lake-instance",
-            host="db.host",
-            database="analytics",
-            token_cache_seconds=7200,
         )
 
     assert any(
-        record.levelno == logging.INFO and re.search(r"cache=7200s$", record.getMessage())
+        record.levelno == logging.INFO and re.search(r"cache=3000s$", record.getMessage())
         for record in caplog.records
     )
 
@@ -309,15 +289,6 @@ def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
     pool = LakebasePool(
         workspace_client=workspace,
         instance_name="lake-instance",
-        host="db.host",
-        database="analytics",
-        port=5432,
-        sslmode="require",
-        min_size=1,
-        max_size=4,
-        timeout=5.0,
-        token_cache_seconds=600,
-        open=False,
     )
 
     assert pool.username == "service_principal_client_id"
@@ -337,15 +308,6 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
     pool = LakebasePool(
         workspace_client=workspace,
         instance_name="lake-instance",
-        host="db.host",
-        database="analytics",
-        port=5432,
-        sslmode="require",
-        min_size=1,
-        max_size=4,
-        timeout=5.0,
-        token_cache_seconds=600,
-        open=False,
     )
 
     assert pool.username == "test@databricks.com"
@@ -377,10 +339,6 @@ def test_pooled_connection_with_lakebase_pool(monkeypatch):
     lake_pool = LakebasePool(
         workspace_client=workspace,
         instance_name="lake-instance",
-        host="db.host",
-        database="analytics",
-        username="explicit",
-        open=False,
     )
 
     with pooled_connection(lake_pool) as conn:

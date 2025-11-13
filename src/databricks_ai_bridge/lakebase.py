@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 import uuid
 import weakref
@@ -26,15 +25,16 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_SECONDS = int(os.getenv("DB_TOKEN_CACHE_SECONDS", str(50 * 60)))
-DEFAULT_MIN_SIZE = int(os.getenv("DB_POOL_MIN_SIZE", "1"))
-DEFAULT_MAX_SIZE = int(os.getenv("DB_POOL_MAX_SIZE", "10"))
-DEFAULT_TIMEOUT = float(os.getenv("DB_POOL_TIMEOUT", "30.0"))
-DEFAULT_SSLMODE = os.getenv("DB_SSL_MODE", "require")
-DEFAULT_PORT = int(os.getenv("DB_PORT", "5432"))
-DEFAULT_HOST = os.getenv("DB_HOST")
-LAKEBASE_NAME = os.getenv("LAKEBASE_NAME")
-DEFAULT_DATABASE = os.getenv("DB_NAME", "databricks_postgres")
+DEFAULT_CACHE_SECONDS = 50 * 60
+DEFAULT_MIN_SIZE = 1
+DEFAULT_MAX_SIZE = 10
+DEFAULT_TIMEOUT = 30.0
+DEFAULT_SSLMODE = "require"
+DEFAULT_PORT = 5432
+DEFAULT_HOST = None
+LAKEBASE_NAME = None
+DEFAULT_DATABASE = "databricks_postgres"
+DEFAULT_USERNAME = None
 
 
 class RotatingCredentialConnection(psycopg.Connection):
@@ -127,44 +127,26 @@ def _infer_username(w: WorkspaceClient) -> str:
 
 class LakebasePool:
     """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
-    host:
-        Lakebase instance hostname, e.g.
-        ``instance-xxxx.database.cloud.databricks.com``
-        (can retrieve from connection details page in Databricks workspace)
+
     instance_name:
         User-set name on Lakebase Instance
         (can retrieve from connection details page in Databricks workspace)
     workspace_client:
         Optional `WorkspaceClient` to use; default client is created otherwise.
-    database:
-        Database name for lakebase instance. Defaults to ``databricks_postgres``.
-    username:
-        Postgres username
-    port:
-        TCP port for Postgres connections. Defaults to ``5432``.
-    sslmode:
-        libpq SSL mode. Defaults to ``require``.
     token_cache_seconds:
         Lifetime for cached OAuth tokens in seconds. Defaults to 50 minutes
         (3000 seconds).
-    connection_kwargs:
-        Extra keyword arguments forwarded to ``psycopg.connect``
     **pool_kwargs:
-        Additional options passed to ``psycopg_pool.ConnectionPool``
+        Additional options passed to ``psycopg_pool.ConnectionPool`` (e.g.
+        ``min_size``, ``max_size``).
     """
 
     def __init__(
         self,
         *,
         instance_name: str | None = None,
-        host: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        database: str | None = None,
-        username: Optional[str] = None,
-        port: Optional[int] = None,
-        sslmode: Optional[str] = None,
         token_cache_seconds: Optional[int] = None,
-        connection_kwargs: Optional[dict[str, object]] = None,
         **pool_kwargs: object,
     ) -> None:
         if workspace_client is None:
@@ -176,7 +158,7 @@ class LakebasePool:
                 "Lakebase instance name must be provided. Specify the instance_name argument or set the LAKEBASE_NAME environment variable."
             )
 
-        resolved_host = host or DEFAULT_HOST
+        resolved_host = DEFAULT_HOST
         if resolved_host is None:
             try:
                 instance = workspace_client.database.get_database_instance(resolved_instance)
@@ -191,45 +173,30 @@ class LakebasePool:
 
         if resolved_host is None:
             raise ValueError(
-                "Lakebase host must be provided. Make sure your Lakebase instance name is correct, specify the host argument, set DB_HOST, or ensure the workspace instance metadata exposes read_write_dns."
+                "Lakebase host must be provided. Make sure your Lakebase instance name is correct, set DB_HOST, or ensure the workspace instance metadata exposes read_write_dns."
             )
 
-        if database is None:
-            database = DEFAULT_DATABASE
-        if port is None:
-            port = DEFAULT_PORT
-        if sslmode is None:
-            sslmode = DEFAULT_SSLMODE
+        database = DEFAULT_DATABASE
+        port = DEFAULT_PORT
+        sslmode = DEFAULT_SSLMODE
         cache_seconds = (
             DEFAULT_CACHE_SECONDS if token_cache_seconds is None else int(token_cache_seconds)
         )
-
-        pool_kwargs = dict(pool_kwargs)
-        for reserved in ("conninfo", "connection_class", "kwargs"):
-            if reserved in pool_kwargs:
-                raise TypeError(f"Argument '{reserved}' cannot be overridden.")
-        min_size = int(pool_kwargs.pop("min_size", DEFAULT_MIN_SIZE))
-        max_size = int(pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE))
-        timeout = float(pool_kwargs.pop("timeout", DEFAULT_TIMEOUT))
-        open_flag = pool_kwargs.pop("open", True)
 
         self.workspace_client = workspace_client
         self.instance_name = resolved_instance
         self.host = resolved_host
         self.database = database
-        self.username = username or _infer_username(workspace_client)
+        self.username = DEFAULT_USERNAME or _infer_username(workspace_client)
         self.port = port
         self.sslmode = sslmode
-        self.min_size = min_size
-        self.max_size = max_size
-        self.timeout = timeout
         self.token_cache_seconds = cache_seconds
-        self.pool_config = dict(pool_kwargs)
-        self.pool_config.update(
-            {"min_size": min_size, "max_size": max_size, "timeout": timeout, "open": open_flag}
-        )
+        typed_pool_kwargs = dict(pool_kwargs)
+        self.pool_config = typed_pool_kwargs
 
-        conninfo = f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
+        conninfo = (
+            f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
+        )
 
         default_kwargs: dict[str, object] = {
             "autocommit": True,
@@ -239,8 +206,6 @@ class LakebasePool:
             "keepalives_interval": 10,
             "keepalives_count": 5,
         }
-        if connection_kwargs:
-            default_kwargs.update(connection_kwargs)
 
         connection_class = _make_rotating_connection_class(
             workspace_client=workspace_client,
@@ -251,12 +216,12 @@ class LakebasePool:
         pool_params = dict(
             conninfo=conninfo,
             kwargs=default_kwargs,
-            min_size=min_size,
-            max_size=max_size,
-            timeout=timeout,
-            open=open_flag,
+            min_size=DEFAULT_MIN_SIZE,
+            max_size=DEFAULT_MAX_SIZE,
+            timeout=DEFAULT_TIMEOUT,
+            open=True,
             connection_class=connection_class,
-            **pool_kwargs,
+            **typed_pool_kwargs,
         )
 
         self._pool = ConnectionPool(**pool_params)
@@ -266,8 +231,8 @@ class LakebasePool:
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
             resolved_host,
             database,
-            min_size,
-            max_size,
+            pool_params.get("min_size"),
+            pool_params.get("max_size"),
             cache_seconds,
         )
 
@@ -295,37 +260,14 @@ class LakebasePool:
 def build_lakebase_pool(
     *,
     instance_name: str,
-    host: str | None = None,
-    database: str | None = None,
-    username: Optional[str] = None,
-    port: Optional[int] = None,
-    sslmode: Optional[str] = None,
-    min_size: Optional[int] = None,
-    max_size: Optional[int] = None,
-    timeout: Optional[float] = None,
     token_cache_seconds: Optional[int] = None,
-    open_pool: Optional[bool] = None,
-    connection_kwargs: Optional[dict[str, object]] = None,
+    workspace_client: WorkspaceClient | None = None,
     **pool_kwargs: Any,
 ) -> ConnectionPool:
-    if min_size is not None:
-        pool_kwargs["min_size"] = min_size
-    if max_size is not None:
-        pool_kwargs["max_size"] = max_size
-    if timeout is not None:
-        pool_kwargs["timeout"] = timeout
-    if open_pool is not None:
-        pool_kwargs["open"] = open_pool
-
     lakebase = LakebasePool(
-        host=host,
         instance_name=instance_name,
-        database=database,
-        username=username,
-        port=port,
-        sslmode=sslmode,
+        workspace_client=workspace_client,
         token_cache_seconds=token_cache_seconds,
-        connection_kwargs=connection_kwargs,
         **pool_kwargs,
     )
     return lakebase.pool

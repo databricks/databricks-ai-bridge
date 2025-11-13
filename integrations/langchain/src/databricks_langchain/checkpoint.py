@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from databricks.sdk import WorkspaceClient
@@ -36,26 +36,15 @@ def _checkpoint_saver_impl() -> type:
             *,
             database_instance: str,
             workspace_client: WorkspaceClient | None = None,
-            host: str | None = None,
-            database: str | None = None,
-            username: Optional[str] = None,
-            port: Optional[int] = None,
-            sslmode: Optional[str] = None,
             token_cache_seconds: Optional[int] = None,
-            connection_kwargs: Optional[dict[str, object]] = None,
             **pool_kwargs: object,
         ) -> None:
+            typed_pool_kwargs: Dict[str, object] = dict(pool_kwargs)
             self._lakebase = LakebasePool(
                 instance_name=database_instance,
-                host=host,
                 workspace_client=workspace_client,
-                database=database,
-                username=username,
-                port=port,
-                sslmode=sslmode,
                 token_cache_seconds=token_cache_seconds,
-                connection_kwargs=connection_kwargs,
-                **pool_kwargs,
+                **typed_pool_kwargs,
             )
             self._close_pool = True
             super().__init__(self._lakebase.pool)

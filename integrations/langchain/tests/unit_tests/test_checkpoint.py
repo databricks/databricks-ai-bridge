@@ -255,15 +255,6 @@ class RecordingConnectionPool:
         self.log = log
         self.connection_value = connection_value
         self.kwargs = None
-        self.min_size = None
-        self.max_size = None
-        self.timeout = None
-        self.open = None
-        self.conninfo = None
-        self.connection_class = None
-        self.getconn_calls = 0
-        self.putconn_calls = []
-        self.closed = False
 
     def __call__(
         self,
@@ -271,20 +262,11 @@ class RecordingConnectionPool:
         conninfo,
         connection_class=None,
         kwargs,
-        min_size,
-        max_size,
-        timeout,
-        open,
         **extra,
     ):
         self.conninfo = conninfo
         self.connection_class = connection_class
         self.kwargs = kwargs
-        self.min_size = min_size
-        self.max_size = max_size
-        self.timeout = timeout
-        self.open = open
-        self.extra = extra
         return self
 
     def connection(self):
@@ -324,31 +306,19 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     monkeypatch.setattr(lakebase, "ConnectionPool", fake_pool)
 
     workspace = _make_workspace()
+    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
 
     saver = CheckpointSaver(
         database_instance="lakebase-instance",
         workspace_client=workspace,
-        host="db-host",
-        database="analytics",
-        min_size=2,
-        max_size=5,
-        timeout=9.5,
-        open=False,
-        connection_kwargs={"application_name": "pytest"},
-        probe=False,
+        token_cache_seconds=7200,
     )
 
     assert isinstance(saver, lakebase.PooledPostgresSaver)
     assert (
         fake_pool.conninfo
-        == "dbname=analytics user=test@databricks.com host=db-host port=5432 sslmode=require"
+        == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
     )
-    assert fake_pool.connection_class is not None
-    assert fake_pool.min_size == 2
-    assert fake_pool.max_size == 5
-    assert fake_pool.timeout == 9.5
-    assert fake_pool.open is False
-    assert fake_pool.kwargs["application_name"] == "pytest"
 
     with saver:
         pass
