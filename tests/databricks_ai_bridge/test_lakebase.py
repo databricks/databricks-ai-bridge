@@ -6,12 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import databricks_ai_bridge.lakebase as lakebase
-from databricks_ai_bridge.lakebase import LakebasePool, pooled_connection
-
 pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 
+import databricks_ai_bridge.lakebase as lakebase
+from databricks_ai_bridge.lakebase import LakebasePool, pooled_connection
 
 # ---------------------------------------------------------------------------
 # Fixtures and shared helpers
