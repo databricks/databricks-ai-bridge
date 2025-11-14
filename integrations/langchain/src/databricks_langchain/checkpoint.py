@@ -27,7 +27,6 @@ class CheckpointSaver(BaseCheckpointSaver):
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: object,
     ) -> None:
-
         self._lakebase = LakebasePool(
             instance_name=database_instance,
             workspace_client=workspace_client,
