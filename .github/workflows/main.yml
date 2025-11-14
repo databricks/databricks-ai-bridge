@@ -50,6 +50,31 @@ jobs:
         run: |
           pytest tests/
 
+  lakebase_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install deps (root extras + langchain integration)
+        run: |
+          pip install .[dev,lakebase]
+          pip install integrations/langchain[dev]
+
+      - name: Run lakebase + checkpoint tests
+        run: |
+          pytest tests/databricks_ai_bridge/test_lakebase.py -q
+          pytest integrations/langchain/tests/unit_tests/test_checkpoint.py -q
+
   langchain_test:
     runs-on: ubuntu-latest
     strategy:
@@ -67,6 +92,7 @@ jobs:
         run: |
           pip install .
           pip install integrations/langchain[dev]
+          pip install .[lakebase]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
