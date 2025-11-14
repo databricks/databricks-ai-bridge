@@ -16,7 +16,7 @@ __all__ = ["LakebasePool"]
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_SECONDS = 50 * 60  # Cache token for 50 minutes
+DEFAULT_TOKEN_CACHE_DURATION_SECONDS = 50 * 60  # Cache token for 50 minutes
 DEFAULT_MIN_SIZE = 1
 DEFAULT_MAX_SIZE = 10
 DEFAULT_TIMEOUT = 30.0
@@ -32,7 +32,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
 
     workspace_client: Optional[WorkspaceClient] = None
     instance_name: Optional[str] = None
-    token_cache_duration_seconds: int = DEFAULT_CACHE_SECONDS
+    token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS
 
     _cache_lock = Lock()
     _cached_token: Optional[str] = None
@@ -73,7 +73,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
             return token
 
     @classmethod
-    def connect(cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs):
+    def connect(cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs: Any) -> "_RotatingCredentialConnection":
         kwargs = dict(kwargs)
         kwargs["password"] = cls._get_token()
         return super().connect(conninfo, **kwargs)
@@ -182,23 +182,14 @@ class LakebasePool:
                 "Ensure the instance exposes `read_write_dns` or `read_only_dns` in workspace metadata."
             )
 
-        database = DEFAULT_DATABASE
-        port = DEFAULT_PORT
-        sslmode = DEFAULT_SSLMODE
-        token_cache_duration_seconds = DEFAULT_CACHE_SECONDS
-
         self.workspace_client = workspace_client
         self.instance_name = instance_name
         self.host = resolved_host
-        self.database = database
-        self.port = port
-        self.sslmode = sslmode
-        self.token_cache_duration_seconds = token_cache_duration_seconds
         self.username = _infer_username(workspace_client)
         typed_pool_kwargs = dict(pool_kwargs)
         self.pool_config = dict(typed_pool_kwargs)
 
-        conninfo = f"dbname={database} user={self.username} host={resolved_host} port={port} sslmode={sslmode}"
+        conninfo = f"dbname={DEFAULT_DATABASE} user={self.username} host={resolved_host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
 
         default_kwargs: dict[str, object] = {
             "autocommit": True,
@@ -212,7 +203,7 @@ class LakebasePool:
         self._connection_class = create_connection_class(
             workspace_client=workspace_client,
             instance_name=instance_name,
-            token_cache_duration_seconds=token_cache_duration_seconds,
+            token_cache_duration_seconds=DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         )
 
         pool_params = dict(
@@ -231,10 +222,10 @@ class LakebasePool:
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
             resolved_host,
-            database,
+            DEFAULT_DATABASE,
             pool_params.get("min_size"),
             pool_params.get("max_size"),
-            token_cache_duration_seconds,
+            DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         )
 
     @property
