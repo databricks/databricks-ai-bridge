@@ -20,6 +20,7 @@ DEFAULT_TOKEN_CACHE_DURATION_SECONDS = 50 * 60  # Cache token for 50 minutes
 DEFAULT_MIN_SIZE = 1
 DEFAULT_MAX_SIZE = 10
 DEFAULT_TIMEOUT = 30.0
+# Default values from https://docs.databricks.com/aws/en/oltp/projects/connect-overview#connection-string-components
 DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
