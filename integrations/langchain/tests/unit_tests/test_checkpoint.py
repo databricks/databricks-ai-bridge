@@ -75,6 +75,7 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
     workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
     workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
     saver = CheckpointSaver(

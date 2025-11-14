@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from threading import Lock
-from typing import Any, Generator, Optional, Type, Union
+from typing import Optional, Type
 
 import psycopg
 from databricks.sdk import WorkspaceClient
