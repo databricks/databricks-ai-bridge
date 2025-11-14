@@ -67,7 +67,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install .
+          pip install .[dev]
       - name: Run lakebase tests
         run: |
           pytest tests/databricks_ai_bridge/test_lakebase.py -q
