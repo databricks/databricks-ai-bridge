@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from threading import Lock
-from typing import Any, Generator, Optional, Union, Type
+from typing import Any, Generator, Optional, Type, Union
 
 import psycopg
 from databricks.sdk import WorkspaceClient
@@ -54,7 +54,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
                 request_id=str(uuid.uuid4()),
                 instance_names=[cls.instance_name],
             )
-        except Exception as exc:  # pragma: no cover - surfaced to user
+        except Exception as exc:
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
                 f"'{cls.instance_name}'. Ensure the caller has access."

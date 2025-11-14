@@ -6,8 +6,6 @@ import sys
 import types
 from unittest.mock import MagicMock
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Provide lightweight stubs for optional dependencies. Each stub is only
 # installed when the real module is unavailable so that local environments

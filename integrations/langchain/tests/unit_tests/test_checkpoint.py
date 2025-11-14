@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-
 from databricks_ai_bridge import lakebase
+
 from databricks_langchain import CheckpointSaver
 
 pytest.importorskip("psycopg")
