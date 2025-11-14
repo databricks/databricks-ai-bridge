@@ -223,7 +223,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
         "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
     )
 
-    assert issubclass(fake_pool.connection_class, lakebase.RotatingCredentialConnection)
+    assert issubclass(fake_pool.connection_class, lakebase._RotatingCredentialConnection)
 
 
 def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):

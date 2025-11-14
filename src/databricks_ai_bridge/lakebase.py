@@ -14,7 +14,6 @@ from psycopg_pool import ConnectionPool
 
 __all__ = [
     "LakebasePool",
-    "RotatingCredentialConnection",
     "build_lakebase_pool",
     "pooled_connection",
 ]
@@ -33,7 +32,7 @@ DEFAULT_DATABASE = "databricks_postgres"
 DEFAULT_USERNAME = None
 
 
-class RotatingCredentialConnection(psycopg.Connection):
+class _RotatingCredentialConnection(psycopg.Connection):
     """
     Base psycopg connection that injects a Lakebase (Postgres) OAuth token at
     connect-time. Concrete subclasses are generated per pool so that token
@@ -89,12 +88,38 @@ class RotatingCredentialConnection(psycopg.Connection):
         return super().connect(conninfo, **kwargs)
 
 
-def _make_rotating_connection_class(
+def create_connection_class(
     workspace_client: WorkspaceClient, instance_name: str, cache_duration_sec: int
-) -> type[RotatingCredentialConnection]:
+) -> type[_RotatingCredentialConnection]:
+    """
+    Create a psycopg `Connection` subclass that automatically injects a
+    Lakebase OAuth token at connect-time with token refresh handled
+
+    Parameters
+    ----------
+    workspace_client : WorkspaceClient
+        The Databricks workspace client used to mint credentials.
+    instance_name : str
+        The Lakebase instance name
+    cache_duration_sec : int, optional
+        Seconds to cache the minted token before refreshing. Defaults to 50 minutes/3000 sec
+
+    Returns
+    -------
+    Type[psycopg.Connection]
+        A subclass suitable for passing to psycopg / psycopg_pool as
+        `connection_class`.
+
+    Example
+    -------
+    >>> w = WorkspaceClient()
+    >>> ConnectionClass = create_connection_class(w, "my-lakebase")
+    >>> conn = ConnectionClass.connect("connection-string")
+    """
+
     return type(
         f"LakebaseRotatingConnection_{instance_name}",
-        (RotatingCredentialConnection,),
+        (_RotatingCredentialConnection,),
         {
             "workspace_client": workspace_client,
             "instance_name": instance_name,
@@ -157,7 +182,7 @@ class LakebasePool:
         if resolved_host is None:
             try:
                 instance = workspace_client.database.get_database_instance(resolved_instance)
-            except Exception as exc:  # pragma: no cover - propagated to caller
+            except Exception as exc:
                 raise ValueError(
                     "Lakebase host must be provided. Unable to resolve host from workspace metadata."
                 ) from exc
@@ -198,7 +223,7 @@ class LakebasePool:
             "keepalives_count": 5,
         }
 
-        connection_class = _make_rotating_connection_class(
+        connection_class = create_connection_class(
             workspace_client=workspace_client,
             instance_name=resolved_instance,
             cache_duration_sec=cache_seconds,
