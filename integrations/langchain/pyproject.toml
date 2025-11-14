@@ -17,6 +17,7 @@ dependencies = [
     "unitycatalog-langchain[databricks]>=0.3.0",
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
+    "langgraph-checkpoint-postgres==2.0.21",
 ]
 
 [project.optional-dependencies]
