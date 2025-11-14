@@ -96,9 +96,9 @@ class McpServerToolkit:
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
     def get_tools(self) -> List[ToolInfo]:
-        return asyncio.run(self.async_get_tools())
+        return asyncio.run(self.aget_tools())
 
-    async def async_get_tools(self) -> List[ToolInfo]:
+    async def aget_tools(self) -> List[ToolInfo]:
         try:
             all_tools = await self.databricks_mcp_client._get_tools_async()
         except Exception as e:

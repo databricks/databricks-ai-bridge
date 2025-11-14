@@ -23,6 +23,7 @@ class McpServer(MCPServerStreamableHttp):
         self,
         url: str | None = None,
         workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = 20.0,
         # Parameters for MCPServerStreamableHttp that can be optionally configured by the users
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
@@ -34,20 +35,35 @@ class McpServer(MCPServerStreamableHttp):
             Databricks-Specific Parameters:
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-            url: Direct URL to the MCP server
+            url: Direct URL to the MCP server. Provide the URL here or in `params`, not both.
+                If both are provided with different values, a ValueError will be raised.
 
             workspace_client: Databricks WorkspaceClient to use for authentication and API calls.
                 Pass a custom WorkspaceClient to set up your own authentication method. If not
                 provided, a default WorkspaceClient will be created using standard Databricks
                 authentication resolution.
 
+            timeout: Timeout for the initial HTTP connection request in seconds. Controls how long
+                to wait when establishing the connection to the MCP server. Defaults to 20 seconds.
+                Provide the timeout here or in `params`, not both. If both are provided with different
+                values, a ValueError will be raised.
+
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             Parameters Inherited from MCPServerStreamableHttp:
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             params: Additional parameters to configure the underlying MCPServerStreamableHttp.
-                This can include custom headers, timeouts, and httpx_client_factory. See
-                MCPServerStreamableHttpParams for available options. If not provided, default
+                This can include:
+                - url (str): MCP server URL (use this OR the `url` parameter, not both)
+                - headers (dict): Custom HTTP headers
+                - timeout (float | timedelta): HTTP connection timeout (use this OR the `timeout` parameter, not both)
+                - sse_read_timeout (float | timedelta): Timeout for Server-Sent Events (SSE) read operations
+                    in seconds. Controls how long to wait for responses from the MCP server during tool
+                    calls and other operations. Defaults to 5 minutes (300 seconds). Increase this for
+                    long-running tool operations.
+                - terminate_on_close (bool): Terminate connection on close. Defaults to True.
+                - httpx_client_factory: Custom HTTP client factory for advanced HTTP configuration
+                See MCPServerStreamableHttpParams for complete options. If not provided, default
                 parameters will be used.
 
             **mcpserver_kwargs: Additional keyword arguments to pass to the parent
@@ -68,13 +84,12 @@ class McpServer(MCPServerStreamableHttp):
 
                 from agents import Agent, Runner
                 from databricks_openai.agents import McpServer
-                from agents.mcp import MCPServerStreamableHttpParams
 
                 async with (
                     McpServer(
                         url="https://<workspace-url>/api/2.0/mcp/functions/system/ai",
                         name="system-ai",
-                        params=MCPServerStreamableHttpParams(timeout=20.0),
+                        timeout=30.0,
                     ) as mcp_server,
                 ):
                     agent = Agent(
@@ -95,14 +110,37 @@ class McpServer(MCPServerStreamableHttp):
         if params is None:
             params = MCPServerStreamableHttpParams()
 
+        if url is None and params.get("url") is None:
+            raise ValueError(
+                "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
+            )
+
         if url is not None and params.get("url") is not None and url != params.get("url"):
             raise ValueError(
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
 
-        # Configure URL in Params
+        if url is not None and params.get("url") is not None and url != params.get("url"):
+            raise ValueError(
+                "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
+            )
+
+        # Validate timeout parameter
+        if (
+            timeout is not None
+            and params.get("timeout") is not None
+            and timeout != params.get("timeout")
+        ):
+            raise ValueError(
+                "Different timeouts provided in timeout and the MCPServerStreamableHttpParams. Please provide only one of them."
+            )
+
+        # Configure URL and timeout in Params
         if url is not None:
             params["url"] = url
+
+        if timeout is not None:
+            params["timeout"] = timeout
 
         super().__init__(params=params, **mcpserver_kwargs)
 

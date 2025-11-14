@@ -389,7 +389,7 @@ class TestMcpServerToolkitAsyncGetTools:
                 from databricks_openai.mcp_server_toolkit import McpServerToolkit
 
                 toolkit = McpServerToolkit(url="https://test.com/mcp", name="test-server")
-                tools = await toolkit.async_get_tools()
+                tools = await toolkit.aget_tools()
 
                 assert len(tools) == 1
                 assert tools[0].name == "test-server__test_tool"
@@ -423,4 +423,4 @@ class TestMcpServerToolkitAsyncGetTools:
                     ValueError,
                     match="Error listing tools from test-server MCP Server: Connection error",
                 ):
-                    await toolkit.async_get_tools()
+                    await toolkit.aget_tools()
