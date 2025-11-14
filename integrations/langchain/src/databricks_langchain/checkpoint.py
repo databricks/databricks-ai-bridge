@@ -1,20 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-try:  # pragma: no cover - optional dependency guard
-    from langgraph.checkpoint.base import BaseCheckpointSaver
-except ModuleNotFoundError:  # pragma: no cover - fallback when langgraph missing
-
-    class BaseCheckpointSaver:  # type: ignore[misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
-            raise ModuleNotFoundError("CheckpointSaver requires langgraph to be installed.")
-
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from databricks.sdk import WorkspaceClient
-else:  # pragma: no cover - runtime fallback when dependency absent
-    WorkspaceClient = Any  # type: ignore
+from databricks.sdk import WorkspaceClient
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 
 def _load_checkpoint_saver_deps():

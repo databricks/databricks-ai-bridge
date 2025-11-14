@@ -2,113 +2,15 @@ from __future__ import annotations
 
 import logging
 import re
-import sys
-import types
 from unittest.mock import MagicMock
 
-# ---------------------------------------------------------------------------
-# Provide lightweight stubs for optional dependencies. Each stub is only
-# installed when the real module is unavailable so that local environments
-# with the actual packages continue to work unchanged.
-# ---------------------------------------------------------------------------
-
-
-def _ensure_optional_modules() -> None:
-    if "psycopg" not in sys.modules:
-        psycopg_mod = types.ModuleType("psycopg")
-
-        class _Connection:  # pragma: no cover - simple structural stub
-            pass
-
-        psycopg_mod.Connection = _Connection
-        sys.modules["psycopg"] = psycopg_mod
-    else:
-        psycopg_mod = sys.modules["psycopg"]
-
-    if "psycopg.rows" not in sys.modules:
-        rows_mod = types.ModuleType("psycopg.rows")
-
-        def dict_row(record):  # pragma: no cover - behaviour exercised indirectly
-            return record
-
-        rows_mod.dict_row = dict_row
-        sys.modules["psycopg.rows"] = rows_mod
-        psycopg_mod.rows = rows_mod
-
-    if "psycopg_pool" not in sys.modules:
-        pool_mod = types.ModuleType("psycopg_pool")
-
-        class ConnectionPool:  # pragma: no cover - patched in tests
-            def __init__(self, *args, **kwargs):
-                raise RuntimeError("tests must monkeypatch psycopg_pool.ConnectionPool")
-
-        pool_mod.ConnectionPool = ConnectionPool
-        pool_mod.PoolClosed = type("PoolClosed", (Exception,), {})
-        pool_mod.PoolTimeout = type("PoolTimeout", (Exception,), {})
-        sys.modules["psycopg_pool"] = pool_mod
-
-    databricks_pkg = sys.modules.setdefault("databricks", types.ModuleType("databricks"))
-    if not getattr(databricks_pkg, "__path__", None):
-        databricks_pkg.__path__ = []
-
-    if "databricks.sdk" not in sys.modules:
-        sdk_mod = types.ModuleType("databricks.sdk")
-        sdk_mod.__path__ = []
-
-        class WorkspaceClient:  # pragma: no cover - not instantiated in tests
-            pass
-
-        sdk_mod.WorkspaceClient = WorkspaceClient
-        sys.modules["databricks.sdk"] = sdk_mod
-        databricks_pkg.sdk = sdk_mod
-
-    langgraph_mod = sys.modules.setdefault("langgraph", types.ModuleType("langgraph"))
-    if not getattr(langgraph_mod, "__path__", None):
-        langgraph_mod.__path__ = []
-
-    if "langgraph.checkpoint" not in sys.modules:
-        checkpoint_mod = types.ModuleType("langgraph.checkpoint")
-        checkpoint_mod.__path__ = []
-        sys.modules["langgraph.checkpoint"] = checkpoint_mod
-        langgraph_mod.checkpoint = checkpoint_mod
-    else:
-        checkpoint_mod = sys.modules["langgraph.checkpoint"]
-
-    if "langgraph.checkpoint.postgres" not in sys.modules:
-        postgres_mod = types.ModuleType("langgraph.checkpoint.postgres")
-
-        class PostgresSaver:  # pragma: no cover - behaviour exercised via wrapper
-            def __init__(self, conn):
-                self._conn = conn
-
-        postgres_mod.PostgresSaver = PostgresSaver
-        sys.modules["langgraph.checkpoint.postgres"] = postgres_mod
-        checkpoint_mod.postgres = postgres_mod
-
-    if "databricks_ai_bridge.model_serving_obo_credential_strategy" not in sys.modules:
-        strategy_mod = types.ModuleType(
-            "databricks_ai_bridge.model_serving_obo_credential_strategy"
-        )
-
-        class ModelServingUserCredentials:  # pragma: no cover - structural stub
-            pass
-
-        strategy_mod.ModelServingUserCredentials = ModelServingUserCredentials
-        sys.modules["databricks_ai_bridge.model_serving_obo_credential_strategy"] = strategy_mod
-
-
-_ensure_optional_modules()
+import pytest
 
 import databricks_ai_bridge.lakebase as lakebase
-from databricks_ai_bridge.lakebase import (
-    LakebasePool,
-    pooled_connection,
-)
+from databricks_ai_bridge.lakebase import LakebasePool, pooled_connection
 
-try:
-    from psycopg.rows import dict_row  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - fallback when stubbed manually
-    dict_row = sys.modules["psycopg.rows"].dict_row  # type: ignore[attr-defined]
+pytest.importorskip("psycopg")
+pytest.importorskip("psycopg_pool")
 
 
 # ---------------------------------------------------------------------------
