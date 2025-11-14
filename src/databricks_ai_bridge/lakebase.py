@@ -73,7 +73,9 @@ class _RotatingCredentialConnection(psycopg.Connection):
             return token
 
     @classmethod
-    def connect(cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs: Any) -> "_RotatingCredentialConnection":
+    def connect(
+        cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs: Any
+    ) -> "_RotatingCredentialConnection":
         kwargs = dict(kwargs)
         kwargs["password"] = cls._get_token()
         return super().connect(conninfo, **kwargs)
