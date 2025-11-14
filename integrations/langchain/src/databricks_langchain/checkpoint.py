@@ -4,19 +4,9 @@ from collections.abc import Callable
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from databricks_ai_bridge.lakebase import LakebasePool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-
-
-def _load_checkpoint_saver_deps():
-    try:
-        from databricks_ai_bridge.lakebase import LakebasePool
-        from langgraph.checkpoint.postgres import PostgresSaver
-    except ModuleNotFoundError as exc:  # pragma: no cover
-        raise ModuleNotFoundError(
-            "CheckpointSaver requires databricks-ai-bridge[lakebase] and langgraph-checkpoint-postgres."
-        ) from exc
-
-    return LakebasePool, PostgresSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 
 
 def _delegate(name: str) -> Callable[..., Any]:
@@ -37,7 +27,6 @@ class CheckpointSaver(BaseCheckpointSaver):
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: object,
     ) -> None:
-        LakebasePool, PostgresSaver = _load_checkpoint_saver_deps()
 
         self._lakebase = LakebasePool(
             instance_name=database_instance,
