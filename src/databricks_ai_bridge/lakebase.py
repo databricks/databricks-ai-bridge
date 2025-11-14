@@ -3,23 +3,20 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-import weakref
 from contextlib import contextmanager
 from threading import Lock
 from typing import Any, Generator, Optional, Union
 
 import psycopg
 from databricks.sdk import WorkspaceClient
-from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool, PoolClosed, PoolTimeout
+from psycopg_pool import ConnectionPool
 
 __all__ = [
     "LakebasePool",
     "RotatingCredentialConnection",
     "build_lakebase_pool",
     "pooled_connection",
-    "PooledPostgresSaver",
 ]
 
 logger = logging.getLogger(__name__)
@@ -132,7 +129,7 @@ class LakebasePool:
         (can retrieve from connection details page in Databricks workspace)
     workspace_client:
         Optional `WorkspaceClient` to use; default client is created otherwise.
-    token_cache_seconds:
+    token_cache_duration_seconds:
         Lifetime for cached OAuth tokens in seconds. Defaults to 50 minutes
         (3000 seconds).
     **pool_kwargs:
@@ -273,34 +270,3 @@ def pooled_connection(
 
     with connection_ctx as conn:
         yield conn
-
-
-class PooledPostgresSaver(PostgresSaver):
-    """LangGraph PostgresSaver keeps one database connection checked out from a connection pool."""
-
-    def __init__(self, pool: ConnectionPool):
-        self._pool = pool
-        self._conn = pool.getconn()
-        super().__init__(self._conn)
-        self._finalizer = weakref.finalize(self, self._release)
-
-    def _release(self) -> None:
-        if self._conn is not None:
-            try:
-                self._pool.putconn(self._conn)
-            except (PoolClosed, PoolTimeout) as e:  # pragma: no cover - expected cleanup path
-                logger.debug("Pool unavailable for connection return: %s", e)
-            except Exception as e:  # pragma: no cover - unexpected
-                logger.error("Unexpected error returning connection to pool: %s", e, exc_info=True)
-            finally:
-                self._conn = None
-
-    def close(self) -> None:
-        self._release()
-        self._finalizer.detach()
-
-    def __enter__(self) -> PooledPostgresSaver:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
-        self.close()

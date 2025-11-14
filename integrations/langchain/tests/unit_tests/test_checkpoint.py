@@ -318,11 +318,11 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
         workspace_client=workspace,
     )
 
-    assert isinstance(saver, lakebase.PooledPostgresSaver)
     assert (
         fake_pool.conninfo
         == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
     )
+    assert isinstance(saver, CheckpointSaver)
 
     with saver:
         pass

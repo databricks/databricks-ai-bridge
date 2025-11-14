@@ -101,12 +101,9 @@ def _ensure_optional_modules() -> None:
 
 _ensure_optional_modules()
 
-from psycopg_pool import PoolClosed
-
 import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import (
     LakebasePool,
-    PooledPostgresSaver,
     pooled_connection,
 )
 
@@ -344,57 +341,3 @@ def test_pooled_connection_with_lakebase_pool(monkeypatch):
 
     assert log == ["pool_connection", "ctx_enter", "ctx_exit"]
     assert lake_pool.pool.context.entered and lake_pool.pool.context.exited
-
-
-def test_pooled_postgres_saver_returns_connection_to_pool():
-    log: list[str] = []
-    FakeConnectionPool = _make_connection_pool_class(log, connection_value={"conn": 1})
-    pool = FakeConnectionPool(
-        conninfo="",
-        connection_class=None,
-        min_size=1,
-        max_size=1,
-        timeout=1.0,
-        open=True,
-        kwargs={},
-    )
-
-    saver = PooledPostgresSaver(pool)
-    assert pool.getconn_calls == 1
-
-    with saver:
-        pass
-
-    assert pool.putconn_calls == [{"conn": 1}]
-    assert saver._conn is None
-
-
-def test_pooled_postgres_saver_release_logs_pool_errors(caplog):
-    class ErrorPool:
-        def __init__(self, exc):
-            self.exc = exc
-            self.conn = object()
-            self.get_calls = 0
-
-        def getconn(self):
-            self.get_calls += 1
-            return self.conn
-
-        def putconn(self, conn):
-            raise self.exc
-
-    scenarios = [
-        (PoolClosed("pool closed"), "DEBUG", "Pool unavailable for connection return"),
-        (Exception("boom"), "ERROR", "Unexpected error returning connection to pool"),
-    ]
-
-    for exc, level, message in scenarios:
-        pool = ErrorPool(exc)
-        saver = PooledPostgresSaver(pool)
-        caplog.clear()
-        with caplog.at_level(logging.DEBUG):
-            saver.close()
-        assert saver._conn is None
-        assert any(
-            record.levelname == level and message in record.message for record in caplog.records
-        )
