@@ -27,9 +27,7 @@ DEFAULT_DATABASE = "databricks_postgres"
 
 class _RotatingCredentialConnection(psycopg.Connection):
     """
-    Base psycopg connection that injects a Lakebase (Postgres) OAuth token at
-    connect-time. Concrete subclasses are generated per pool so that token
-    caches don't leak across pools.
+    Note: Don't use - use create_connection_class instead to avoid leaking tokens
     """
 
     workspace_client: Optional[WorkspaceClient] = None

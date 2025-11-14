@@ -67,8 +67,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install .[dev,lakebase]
-          pip install integrations/langchain[dev]
+          pip install .
       - name: Run lakebase tests
         run: |
           pytest tests/databricks_ai_bridge/test_lakebase.py -q
@@ -90,7 +89,6 @@ jobs:
         run: |
           pip install .
           pip install integrations/langchain[dev]
-          pip install .[lakebase]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
