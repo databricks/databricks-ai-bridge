@@ -2,11 +2,10 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import mlflow
-from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams, ToolFilter
+from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksOAuthClientProvider
-from mcp.client.session import MessageHandlerFnT
 from mcp.client.streamable_http import GetSessionIdCallback, streamablehttp_client
 from mcp.shared.message import SessionMessage
 from mcp.types import CallToolResult
@@ -26,14 +25,7 @@ class McpServer(MCPServerStreamableHttp):
         workspace_client: WorkspaceClient | None = None,
         # Parameters for MCPServerStreamableHttp that can be optionally configured by the users
         params: MCPServerStreamableHttpParams | None = None,
-        cache_tools_list: bool = False,
-        name: str | None = None,
-        client_session_timeout_seconds: float | None = 5,
-        tool_filter: ToolFilter | None = None,
-        use_structured_content: bool = False,
-        max_retry_attempts: int = 0,
-        retry_backoff_seconds_base: float = 1.0,
-        message_handler: MessageHandlerFnT | None = None,
+        **mcpserver_kwargs: object,
     ):
         """Create a new Databricks MCP server.
 
@@ -58,47 +50,41 @@ class McpServer(MCPServerStreamableHttp):
                 MCPServerStreamableHttpParams for available options. If not provided, default
                 parameters will be used.
 
-            cache_tools_list: Whether to cache the tools list. If `True`, the tools list will be
-                cached and only fetched from the server once. If `False`, the tools list will be
-                fetched from the server on each call to `list_tools()`. The cache can be
-                invalidated by calling `invalidate_tools_cache()`. You should set this to `True`
-                if you know the server will not change its tools list, because it can drastically
-                improve latency (by avoiding a round-trip to the server every time). Defaults to False.
-
-            name: A readable name for the server. If not provided, a name will be automatically
-                generated based on the URL.
-
-            client_session_timeout_seconds: The read timeout passed to the MCP ClientSession.
-                Defaults to 5 seconds.
-
-            tool_filter: The tool filter to use for filtering tools. Can be a static filter
-                (dict with `allowed_tool_names` and/or `blocked_tool_names`) or a callable
-                for dynamic filtering.
-
-            use_structured_content: Whether to use `tool_result.structured_content` when calling
-                an MCP tool. Defaults to False for backwards compatibility - most MCP servers
-                still include the structured content in the `tool_result.content`, and using it
-                by default will cause duplicate content. You can set this to True if you know the
-                server will not duplicate the structured content in the `tool_result.content`.
-
-            max_retry_attempts: Number of times to retry failed list_tools/call_tool calls.
-                Defaults to 0 (no retries).
-
-            retry_backoff_seconds_base: The base delay, in seconds, used for exponential
-                backoff between retries. Defaults to 1.0.
-
-            message_handler: Optional handler invoked for session messages as delivered by the
-                ClientSession.
+            **mcpserver_kwargs: Additional keyword arguments to pass to the parent
+                MCPServerStreamableHttp class. Supports:
+                - cache_tools_list (bool): Cache tools list to avoid repeated fetches. Defaults to False.
+                - name (str): Readable name for the server. Auto-generated from URL if not provided.
+                - client_session_timeout_seconds (float): Read timeout for MCP ClientSession. Defaults to 5.
+                - tool_filter (ToolFilter): Static filter (dict) or callable for filtering tools.
+                - use_structured_content (bool): Use tool_result.structured_content. Defaults to False.
+                - max_retry_attempts (int): Retry attempts for failed calls. Defaults to 0.
+                - retry_backoff_seconds_base (float): Base delay for exponential backoff. Defaults to 1.0.
+                - message_handler (MessageHandlerFnT): Handler for session messages.
 
         Example:
-            >>> # Connect using a direct URL
-            >>> server = McpServer(url="https://example.com/mcp")
-            >>>
-            >>> # Connect using a direct URL with custom params
-            >>> params = MCPServerStreamableHttpParams(
-            ...     url="https://example.com/mcp", headers={"X-Custom-Header": "value"}, timeout=10
-            ... )
-            >>> server = McpServer(params=params, cache_tools_list=True)
+            Using MCP servers with an OpenAI Agent:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+                from agents.mcp import MCPServerStreamableHttpParams
+
+                async with (
+                    McpServer(
+                        url="https://<workspace-url>/api/2.0/mcp/functions/system/ai",
+                        name="system-ai",
+                        params=MCPServerStreamableHttpParams(timeout=20.0),
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
         """
         # Configure Workspace Client
         if workspace_client is None:
@@ -109,21 +95,16 @@ class McpServer(MCPServerStreamableHttp):
         if params is None:
             params = MCPServerStreamableHttpParams()
 
+        if url is not None and params.get("url") is not None and url != params.get("url"):
+            raise ValueError(
+                "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
+            )
+
         # Configure URL in Params
         if url is not None:
             params["url"] = url
 
-        super().__init__(
-            params=params,
-            cache_tools_list=cache_tools_list,
-            name=name,
-            client_session_timeout_seconds=client_session_timeout_seconds,
-            tool_filter=tool_filter,
-            use_structured_content=use_structured_content,
-            max_retry_attempts=max_retry_attempts,
-            retry_backoff_seconds_base=retry_backoff_seconds_base,
-            message_handler=message_handler,
-        )
+        super().__init__(params=params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:

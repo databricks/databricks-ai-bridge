@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from agents.mcp import MCPServerStreamableHttpParams
 from databricks.sdk import WorkspaceClient
 
 
@@ -61,6 +62,52 @@ class TestMcpServerInit:
                 max_retry_attempts=3,
                 retry_backoff_seconds_base=2.0,
             )
+            assert server.workspace_client == mock_workspace_client
+
+    @pytest.mark.parametrize(
+        "url,params_dict,expected_url,expected_extra",
+        [
+            # URL in params dict only
+            (None, {"url": "https://from-params.com/mcp"}, "https://from-params.com/mcp", {}),
+            # URL param only
+            ("https://test.com/mcp", None, "https://test.com/mcp", {}),
+            # URL param with same URL in params
+            ("https://test.com/mcp", {"url": "https://test.com/mcp"}, "https://test.com/mcp", {}),
+            # URL param with params dict (no URL in dict)
+            (
+                "https://test.com/mcp",
+                {"headers": {"Custom-Header": "value"}},
+                "https://test.com/mcp",
+                {"headers": {"Custom-Header": "value"}},
+            ),
+            # Complete params dict with URL, headers, timeout
+            (
+                None,
+                {
+                    "url": "https://test.com/mcp",
+                    "headers": {"Custom-Header": "value"},
+                    "timeout": 15,
+                },
+                "https://test.com/mcp",
+                {"headers": {"Custom-Header": "value"}, "timeout": 15},
+            ),
+        ],
+    )
+    def test_init_url_and_params_combinations(
+        self, mock_workspace_client, url, params_dict, expected_url, expected_extra
+    ):
+        """Test various combinations of url and params initialization"""
+        with patch(
+            "databricks_openai.agents.mcp_server.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            from databricks_openai.agents.mcp_server import McpServer
+
+            params: MCPServerStreamableHttpParams | None = params_dict  # type: ignore
+            server = McpServer(url=url, params=params)
+            assert server.params["url"] == expected_url
+            for key, value in expected_extra.items():
+                assert server.params[key] == value
             assert server.workspace_client == mock_workspace_client
 
 
