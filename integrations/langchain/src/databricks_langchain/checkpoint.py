@@ -90,5 +90,5 @@ class CheckpointSaver(BaseCheckpointSaver):
     adelete_thread = _delegate("adelete_thread")
     get_next_version = _delegate("get_next_version")
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> Any:  # for forward-compatibility
         return getattr(self._inner, name)

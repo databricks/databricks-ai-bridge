@@ -12,14 +12,6 @@ pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
 
-def _make_workspace():
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-    return workspace
-
-
 class RecordingConnectionPool:
     def __init__(self, log, connection_value="conn"):
         self.log = log
@@ -80,8 +72,10 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     fake_pool = RecordingConnectionPool(log, connection_value="lake-conn")
     monkeypatch.setattr(lakebase, "ConnectionPool", fake_pool)
 
-    workspace = _make_workspace()
+    workspace = MagicMock()
+    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
     workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
     saver = CheckpointSaver(
         database_instance="lakebase-instance",

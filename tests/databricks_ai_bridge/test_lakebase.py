@@ -10,7 +10,7 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 
 import databricks_ai_bridge.lakebase as lakebase
-from databricks_ai_bridge.lakebase import LakebasePool, pooled_connection
+from databricks_ai_bridge.lakebase import LakebasePool
 
 # ---------------------------------------------------------------------------
 # Fixtures and shared helpers
@@ -194,21 +194,3 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
 
     assert pool.username == "test@databricks.com"
     assert "user=test@databricks.com" in pool.pool.conninfo
-
-
-def test_pooled_connection_with_lakebase_pool(monkeypatch):
-    log: list[str] = []
-    FakeConnectionPool = _make_connection_pool_class(log, connection_value="lake-conn")
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
-
-    workspace = _make_workspace()
-    lake_pool = LakebasePool(
-        workspace_client=workspace,
-        instance_name="lake-instance",
-    )
-
-    with pooled_connection(lake_pool) as conn:
-        assert conn == "lake-conn"
-
-    assert log == ["pool_connection", "ctx_enter", "ctx_exit"]
-    assert lake_pool.pool.context.entered and lake_pool.pool.context.exited

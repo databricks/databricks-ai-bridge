@@ -12,11 +12,7 @@ from databricks.sdk import WorkspaceClient
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-__all__ = [
-    "LakebasePool",
-    "build_lakebase_pool",
-    "pooled_connection",
-]
+__all__ = ["LakebasePool"]
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +34,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
 
     workspace_client: Optional[WorkspaceClient] = None
     instance_name: Optional[str] = None
-    cache_duration_sec: int = DEFAULT_CACHE_SECONDS
+    token_cache_duration_seconds: int = DEFAULT_CACHE_SECONDS
 
     _cache_lock = Lock()
     _cached_token: Optional[str] = None
@@ -69,7 +65,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
             if (
                 cls._cached_token
                 and cls._cache_ts
-                and (now - cls._cache_ts) < cls.cache_duration_sec
+                and (now - cls._cache_ts) < cls.token_cache_duration_seconds
             ):
                 return cls._cached_token
 
@@ -86,7 +82,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
 
 
 def create_connection_class(
-    workspace_client: WorkspaceClient, instance_name: str, cache_duration_sec: int
+    workspace_client: WorkspaceClient, instance_name: str, token_cache_duration_seconds: int
 ) -> type[_RotatingCredentialConnection]:
     """
     Create a psycopg `Connection` subclass that automatically injects a
@@ -98,7 +94,7 @@ def create_connection_class(
         The Databricks workspace client used to mint credentials.
     instance_name : str
         The Lakebase instance name
-    cache_duration_sec : int, optional
+    token_cache_duration_seconds : int, optional
         Seconds to cache the minted token before refreshing. Defaults to 50 minutes/3000 sec
 
     Returns
@@ -120,7 +116,7 @@ def create_connection_class(
         {
             "workspace_client": workspace_client,
             "instance_name": instance_name,
-            "cache_duration_sec": cache_duration_sec,
+            "token_cache_duration_seconds": token_cache_duration_seconds,
             "_cache_lock": Lock(),
             "_cached_token": None,
             "_cache_ts": None,
@@ -218,7 +214,7 @@ class LakebasePool:
         self._connection_class = create_connection_class(
             workspace_client=workspace_client,
             instance_name=instance_name,
-            cache_duration_sec=token_cache_duration_seconds,
+            token_cache_duration_seconds=token_cache_duration_seconds,
         )
 
         pool_params = dict(
@@ -258,30 +254,3 @@ class LakebasePool:
 
     def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
         self.close()
-
-
-# Build lakebase pool instance with only instance name required
-def build_lakebase_pool(
-    *,
-    instance_name: str,
-    workspace_client: WorkspaceClient | None = None,
-    **pool_kwargs: Any,
-) -> ConnectionPool:
-    lakebase = LakebasePool(
-        instance_name=instance_name,
-        workspace_client=workspace_client,
-        **pool_kwargs,
-    )
-    return lakebase.pool
-
-
-@contextmanager
-def pooled_connection(
-    pool: Union[ConnectionPool, LakebasePool],
-) -> Generator[psycopg.Connection, None, None]:
-    """Context manager that yields a pooled psycopg connection."""
-
-    connection_ctx = pool.connection()
-
-    with connection_ctx as conn:
-        yield conn
