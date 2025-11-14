@@ -67,7 +67,7 @@ jobs:
         run: |
           pip install .
           pip install integrations/langchain[dev]
-          pip install [lakebase]
+          pip install .[lakebase]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
