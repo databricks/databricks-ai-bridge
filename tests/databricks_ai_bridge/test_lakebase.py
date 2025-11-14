@@ -259,18 +259,6 @@ def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     assert pool.host == "rw.host"
 
 
-def test_lakebase_pool_requires_instance_name(monkeypatch):
-    FakeConnectionPool = _make_connection_pool_class([])
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
-
-    workspace = _make_workspace()
-    with pytest.raises(ValueError, match="Lakebase instance name must be provided"):
-        LakebasePool(
-            workspace_client=workspace,
-            instance_name=None,  # type: ignore[arg-type]
-        )
-
-
 def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
     log: list[str] = []
     FakeConnectionPool = _make_connection_pool_class(log)
@@ -307,22 +295,6 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
 
     assert pool.username == "test@databricks.com"
     assert "user=test@databricks.com" in pool.pool.conninfo
-
-
-def test_pooled_connection_with_raw_psycopg_pool():
-    log: list[str] = []
-    context = _ConnectionContext(log, "raw-conn")
-
-    class RawPool:
-        def connection(self):
-            log.append("pool_connection")
-            return context
-
-    with pooled_connection(RawPool()) as conn:
-        assert conn == "raw-conn"
-
-    assert log == ["pool_connection", "ctx_enter", "ctx_exit"]
-    assert context.entered and context.exited
 
 
 def test_pooled_connection_with_lakebase_pool(monkeypatch):

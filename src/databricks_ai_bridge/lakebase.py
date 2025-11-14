@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from threading import Lock
-from typing import Any, Generator, Optional, Union
+from typing import Any, Generator, Optional, Union, Type
 
 import psycopg
 from databricks.sdk import WorkspaceClient
@@ -26,10 +26,7 @@ DEFAULT_MAX_SIZE = 10
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
-DEFAULT_HOST = None
-LAKEBASE_NAME = None
 DEFAULT_DATABASE = "databricks_postgres"
-DEFAULT_USERNAME = None
 
 
 class _RotatingCredentialConnection(psycopg.Connection):
@@ -82,7 +79,7 @@ class _RotatingCredentialConnection(psycopg.Connection):
             return token
 
     @classmethod
-    def connect(cls, conninfo: str = "", **kwargs):
+    def connect(cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs):
         kwargs = dict(kwargs)
         kwargs["password"] = cls._get_token()
         return super().connect(conninfo, **kwargs)
@@ -165,50 +162,45 @@ class LakebasePool:
     def __init__(
         self,
         *,
-        instance_name: str | None = None,
+        instance_name: str,
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: object,
     ) -> None:
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
-        resolved_instance = instance_name or LAKEBASE_NAME
-        if resolved_instance is None:
+        # Resolve host from the Lakebase name
+        try:
+            instance = workspace_client.database.get_database_instance(instance_name)
+        except Exception as exc:
             raise ValueError(
-                "Lakebase instance name must be provided. Specify the instance_name argument or set the LAKEBASE_NAME environment variable."
-            )
+                f"Unable to resolve Lakebase host for instance '{instance_name}'. "
+                "Ensure the instance name is correct."
+            ) from exc
 
-        resolved_host = DEFAULT_HOST
-        if resolved_host is None:
-            try:
-                instance = workspace_client.database.get_database_instance(resolved_instance)
-            except Exception as exc:
-                raise ValueError(
-                    "Lakebase host must be provided. Unable to resolve host from workspace metadata."
-                ) from exc
+        resolved_host = getattr(instance, "read_write_dns", None) or getattr(
+            instance, "read_only_dns", None
+        )
 
-            resolved_host = getattr(instance, "read_write_dns", None) or getattr(
-                instance, "read_only_dns", None
-            )
-
-        if resolved_host is None:
+        if not resolved_host:
             raise ValueError(
-                "Lakebase host must be provided. Make sure your Lakebase instance name is correct, set DB_HOST, or ensure the workspace instance metadata exposes read_write_dns."
+                f"Lakebase host not found for instance '{instance_name}'. "
+                "Ensure the instance exposes `read_write_dns` or `read_only_dns` in workspace metadata."
             )
 
         database = DEFAULT_DATABASE
         port = DEFAULT_PORT
         sslmode = DEFAULT_SSLMODE
-        cache_seconds = DEFAULT_CACHE_SECONDS
+        token_cache_duration_seconds = DEFAULT_CACHE_SECONDS
 
         self.workspace_client = workspace_client
-        self.instance_name = resolved_instance
+        self.instance_name = instance_name
         self.host = resolved_host
         self.database = database
         self.port = port
         self.sslmode = sslmode
-        self.token_cache_seconds = cache_seconds
-        self.username = DEFAULT_USERNAME or _infer_username(workspace_client)
+        self.token_cache_duration_seconds = token_cache_duration_seconds
+        self.username = _infer_username(workspace_client)
         typed_pool_kwargs = dict(pool_kwargs)
         self.pool_config = dict(typed_pool_kwargs)
 
@@ -223,10 +215,10 @@ class LakebasePool:
             "keepalives_count": 5,
         }
 
-        connection_class = create_connection_class(
+        self._connection_class = create_connection_class(
             workspace_client=workspace_client,
-            instance_name=resolved_instance,
-            cache_duration_sec=cache_seconds,
+            instance_name=instance_name,
+            cache_duration_sec=token_cache_duration_seconds,
         )
 
         pool_params = dict(
@@ -236,12 +228,11 @@ class LakebasePool:
             max_size=DEFAULT_MAX_SIZE,
             timeout=DEFAULT_TIMEOUT,
             open=True,
-            connection_class=connection_class,
+            connection_class=self._connection_class,
             **typed_pool_kwargs,
         )
 
         self._pool = ConnectionPool(**pool_params)
-        self._connection_class = connection_class
 
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
@@ -249,14 +240,14 @@ class LakebasePool:
             database,
             pool_params.get("min_size"),
             pool_params.get("max_size"),
-            cache_seconds,
+            token_cache_duration_seconds,
         )
 
     @property
     def pool(self) -> ConnectionPool:
         return self._pool
 
-    def connection(self):
+    def connection(self) -> contextmanager[psycopg.Connection]:
         return self._pool.connection()
 
     def close(self) -> None:
@@ -273,7 +264,6 @@ class LakebasePool:
 def build_lakebase_pool(
     *,
     instance_name: str,
-    token_cache_seconds: Optional[int] = None,
     workspace_client: WorkspaceClient | None = None,
     **pool_kwargs: Any,
 ) -> ConnectionPool:
