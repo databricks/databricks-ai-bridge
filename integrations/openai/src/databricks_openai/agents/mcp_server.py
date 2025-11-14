@@ -23,7 +23,7 @@ class McpServer(MCPServerStreamableHttp):
         self,
         url: str | None = None,
         workspace_client: WorkspaceClient | None = None,
-        timeout: float | None = 20.0,
+        timeout: float | None = None,
         # Parameters for MCPServerStreamableHttp that can be optionally configured by the users
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
@@ -120,12 +120,6 @@ class McpServer(MCPServerStreamableHttp):
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
 
-        if url is not None and params.get("url") is not None and url != params.get("url"):
-            raise ValueError(
-                "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
-            )
-
-        # Validate timeout parameter
         if (
             timeout is not None
             and params.get("timeout") is not None
@@ -139,8 +133,8 @@ class McpServer(MCPServerStreamableHttp):
         if url is not None:
             params["url"] = url
 
-        if timeout is not None:
-            params["timeout"] = timeout
+        if params.get("timeout") is None:
+            params["timeout"] = timeout if timeout is not None else 20.0
 
         super().__init__(params=params, **mcpserver_kwargs)
 

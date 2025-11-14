@@ -115,7 +115,7 @@ class TestMcpServerCreateStreams:
     @pytest.mark.parametrize(
         "params,expected_values",
         [
-            (None, {"timeout": 5, "sse_read_timeout": 300, "terminate_on_close": True}),
+            (None, {"timeout": 20, "sse_read_timeout": 300, "terminate_on_close": True}),
             (
                 {
                     "headers": {"Custom-Header": "test-value"},

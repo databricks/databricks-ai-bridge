@@ -24,7 +24,7 @@ class McpServerToolkit:
     MCP server, and provides execution functions for each tool.
 
     Args:
-        url: The URL of the MCP server to connect to.
+        url: The URL of the MCP server to connect to. (Required parameter)
 
         name: A readable name for the MCP server. This name will be used as a prefix for
             tool names to avoid conflicts when using multiple MCP servers (e.g., "server_name__tool_name").
@@ -85,7 +85,7 @@ class McpServerToolkit:
 
     def __init__(
         self,
-        url: str = None,
+        url: str,
         name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
