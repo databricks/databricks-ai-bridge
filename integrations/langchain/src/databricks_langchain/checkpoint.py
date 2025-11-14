@@ -18,12 +18,14 @@ def _load_checkpoint_saver_deps():
 
     return LakebasePool, PostgresSaver
 
+
 def _delegate(name: str) -> Callable[..., Any]:
     def _fn(self, *args: Any, **kwargs: Any) -> Any:
         return getattr(self._inner, name)(*args, **kwargs)
 
     _fn.__name__ = name
     return _fn
+
 
 class CheckpointSaver(BaseCheckpointSaver):
     """LangGraph checkpoint saver backed by a Lakebase connection pool."""
@@ -94,7 +96,7 @@ class CheckpointSaver(BaseCheckpointSaver):
     delete_thread = _delegate("delete_thread")
     aget = _delegate("aget")
     aget_tuple = _delegate("aget_tuple")
-    alist = _delegate("alist") 
+    alist = _delegate("alist")
     aput = _delegate("aput")
     aput_writes = _delegate("aput_writes")
     adelete_thread = _delegate("adelete_thread")
