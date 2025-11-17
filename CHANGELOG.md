@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.9.1 databricks-langchain 0.9.1 databricks-openai 0.6.2 (2025-11-17)
+- Add support for LLM-generated filter parameters in VectorSearchRetrieverTool
+- Support passing in Workspace Client to VSRetrieverTool
+- Fix ChatModel Custom Outputs
+- Vector Search add reranker parameter
+- MCP Open AI Adapters
+
 ## databricks-ai-bridge 0.9.0 databricks-langchain 0.9.0 databricks-mcp 0.4.0 (2025-10-21)
 - Langchain V1 compatability
 - Improve OBO user authz error message with guidance on WorkspaceClient instantiation
