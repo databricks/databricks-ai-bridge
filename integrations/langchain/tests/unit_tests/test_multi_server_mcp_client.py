@@ -1,0 +1,527 @@
+"""Unit tests for DatabricksMultiServerMCPClient and related classes."""
+
+import asyncio
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
+
+import pytest
+from databricks.sdk import WorkspaceClient
+from databricks_langchain.multi_server_mcp_client import (
+    DatabricksMultiServerMCPClient,
+    DatabricksServer,
+    Server,
+)
+
+
+class TestServer:
+    """Tests for the Server class."""
+
+    def test_basic_server_creation(self):
+        """Test creating a basic server with minimal parameters."""
+        server = Server(name="test-server", url="https://example.com/mcp")
+        
+        assert server.name == "test-server"
+        assert server.url == "https://example.com/mcp"
+        assert server.handle_tool_error is None
+
+    @pytest.mark.parametrize(
+        "extra_params",
+        [
+            {"timeout": 30.0},
+            {"headers": {"X-API-Key": "secret"}},
+            {"sse_read_timeout": 60.0},
+            {"timeout": 15.0, "headers": {"Authorization": "Bearer token"}},
+            {"session_kwargs": {"some_param": "value"}},
+        ],
+    )
+    def test_server_accepts_extra_params(self, extra_params: dict[str, Any]):
+        """Test that Server accepts and preserves extra parameters."""
+        server = Server(
+            name="test-server",
+            url="https://example.com/mcp",
+            **extra_params
+        )
+        
+        connection_dict = server.to_connection_dict()
+        
+        # Check that extra params are in connection dict
+        for key, value in extra_params.items():
+            assert connection_dict[key] == value
+
+    def test_server_to_connection_dict_excludes_name(self):
+        """Test that name is excluded from connection dict."""
+        server = Server(name="test-server", url="https://example.com/mcp")
+        connection_dict = server.to_connection_dict()
+        
+        assert "name" not in connection_dict
+        assert "url" in connection_dict
+
+    def test_server_to_connection_dict_excludes_handle_tool_error(self):
+        """Test that handle_tool_error is excluded from connection dict."""
+        server = Server(
+            name="test-server",
+            url="https://example.com/mcp",
+            handle_tool_error=True
+        )
+        connection_dict = server.to_connection_dict()
+        
+        assert "handle_tool_error" not in connection_dict
+        assert "url" in connection_dict
+
+    def test_server_to_connection_dict_adds_transport(self):
+        """Test that transport is added to connection dict."""
+        server = Server(name="test-server", url="https://example.com/mcp")
+        connection_dict = server.to_connection_dict()
+        
+        assert connection_dict["transport"] == "streamable_http"
+
+    def test_server_connection_dict_has_required_fields(self):
+        """Test that connection dict has required fields for streamable_http."""
+        server = Server(
+            name="test-server",
+            url="https://example.com/mcp",
+            timeout=30.0,
+            headers={"X-Custom": "value"}
+        )
+        connection_dict = server.to_connection_dict()
+        
+        # Required fields for streamable_http connection
+        assert "url" in connection_dict
+        assert "transport" in connection_dict
+        assert connection_dict["transport"] == "streamable_http"
+        
+        # Extra fields should be present
+        assert connection_dict["timeout"] == 30.0
+        assert connection_dict["headers"] == {"X-Custom": "value"}
+
+    @pytest.mark.parametrize(
+        "handle_tool_error_value",
+        [
+            True,
+            False,
+            "Custom error message",
+            lambda e: f"Error: {e}",
+            None,
+        ],
+    )
+    def test_server_handle_tool_error_types(self, handle_tool_error_value: Any):
+        """Test that handle_tool_error accepts various types."""
+        server = Server(
+            name="test-server",
+            url="https://example.com/mcp",
+            handle_tool_error=handle_tool_error_value
+        )
+        
+        assert server.handle_tool_error == handle_tool_error_value
+
+
+class TestDatabricksServer:
+    """Tests for the DatabricksServer class."""
+
+    def test_databricks_server_without_workspace_client(self):
+        """Test DatabricksServer creates WorkspaceClient automatically."""
+        with patch("databricks_langchain.multi_server_mcp_client.WorkspaceClient") as mock_ws, \
+             patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+            
+            mock_ws_instance = MagicMock()
+            mock_ws.return_value = mock_ws_instance
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp"
+            )
+            
+            # Should have created WorkspaceClient
+            mock_ws.assert_called_once()
+            # Should have created auth provider
+            mock_auth.assert_called_once_with(mock_ws_instance)
+
+    def test_databricks_server_with_workspace_client(self):
+        """Test DatabricksServer uses provided WorkspaceClient."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client
+            )
+            
+            # Should have used provided client
+            mock_auth.assert_called_once_with(mock_workspace_client)
+            assert server.workspace_client is mock_workspace_client
+
+    def test_databricks_server_excludes_workspace_client_from_connection(self):
+        """Test that workspace_client is excluded from connection dict."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client
+            )
+            
+            connection_dict = server.to_connection_dict()
+            
+            assert "workspace_client" not in connection_dict
+            assert "auth" in connection_dict
+
+    def test_databricks_server_includes_auth_in_connection(self):
+        """Test that auth is included in connection dict."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client
+            )
+            
+            connection_dict = server.to_connection_dict()
+            
+            assert connection_dict["auth"] is mock_auth_instance
+
+    def test_databricks_server_accepts_extra_params(self):
+        """Test that DatabricksServer accepts extra connection params."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client,
+                timeout=45.0,
+                headers={"X-Custom": "header"}
+            )
+            
+            connection_dict = server.to_connection_dict()
+            
+            assert connection_dict["timeout"] == 45.0
+            assert connection_dict["headers"] == {"X-Custom": "header"}
+
+
+class TestDatabricksMultiServerMCPClient:
+    """Tests for the DatabricksMultiServerMCPClient class."""
+
+    def test_client_initialization_with_single_server(self):
+        """Test client initialization with a single server."""
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init:
+            mock_init.return_value = None
+            
+            server = Server(name="test", url="https://example.com/mcp")
+            client = DatabricksMultiServerMCPClient([server])
+            
+            # Check that parent __init__ was called
+            mock_init.assert_called_once()
+            
+            # Check connections dict structure
+            call_kwargs = mock_init.call_args[1]
+            assert "connections" in call_kwargs
+            connections = call_kwargs["connections"]
+            
+            assert "test" in connections
+            assert connections["test"]["url"] == "https://example.com/mcp"
+            assert connections["test"]["transport"] == "streamable_http"
+
+    def test_client_initialization_with_multiple_servers(self):
+        """Test client initialization with multiple servers."""
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init:
+            mock_init.return_value = None
+            
+            servers = [
+                Server(name="server1", url="https://server1.com/mcp"),
+                Server(name="server2", url="https://server2.com/mcp"),
+            ]
+            client = DatabricksMultiServerMCPClient(servers)
+            
+            # Check that parent __init__ was called
+            mock_init.assert_called_once()
+            
+            # Check connections dict structure
+            call_kwargs = mock_init.call_args[1]
+            connections = call_kwargs["connections"]
+            
+            assert len(connections) == 2
+            assert "server1" in connections
+            assert "server2" in connections
+
+    def test_client_stores_server_configs(self):
+        """Test that client stores server configs for later use."""
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init:
+            mock_init.return_value = None
+            
+            server = Server(
+                name="test",
+                url="https://example.com/mcp",
+                handle_tool_error=True
+            )
+            client = DatabricksMultiServerMCPClient([server])
+            
+            # Check that server configs are stored
+            assert hasattr(client, "_server_configs")
+            assert "test" in client._server_configs
+            assert client._server_configs["test"].handle_tool_error is True
+
+    @pytest.mark.asyncio
+    async def test_get_tools_single_server(self):
+        """Test get_tools with a specific server name."""
+        server = Server(
+            name="test",
+            url="https://example.com/mcp",
+            handle_tool_error="Error occurred"
+        )
+        
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init, \
+             patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.get_tools",  new_callable=AsyncMock) as mock_parent_get_tools:
+            
+            mock_init.return_value = None
+            
+            # Create mock tools
+            mock_tool1 = MagicMock()
+            mock_tool2 = MagicMock()
+            mock_tools = [mock_tool1, mock_tool2]
+            mock_parent_get_tools.return_value = mock_tools
+            
+            client = DatabricksMultiServerMCPClient([server])
+            client.connections = {"test": server.to_connection_dict()}
+            
+            tools = await client.get_tools(server_name="test")
+            
+            # Should call parent get_tools with server_name
+            mock_parent_get_tools.assert_called_once_with(server_name="test")
+            
+            # Should apply handle_tool_error to all tools
+            assert mock_tool1.handle_tool_error == "Error occurred"
+            assert mock_tool2.handle_tool_error == "Error occurred"
+            assert tools == mock_tools
+
+    @pytest.mark.asyncio
+    async def test_get_tools_all_servers(self):
+        """Test get_tools without server_name (all servers)."""
+        servers = [
+            Server(name="server1", url="https://server1.com/mcp", handle_tool_error=True),
+            Server(name="server2", url="https://server2.com/mcp", handle_tool_error="Custom error"),
+        ]
+        
+        # Create mock tools for each server
+        mock_tool1 = MagicMock()
+        mock_tool2 = MagicMock()
+        mock_tool3 = MagicMock()
+        
+        # Mock parent get_tools to return different tools for different servers
+        async def mock_get_tools_side_effect(server_name=None):
+            if server_name == "server1":
+                return [mock_tool1, mock_tool2]
+            elif server_name == "server2":
+                return [mock_tool3]
+            return []
+        
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init, \
+             patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.get_tools", new_callable=AsyncMock, side_effect=mock_get_tools_side_effect) as mock_parent_get_tools:
+            
+            mock_init.return_value = None
+            
+            client = DatabricksMultiServerMCPClient(servers)
+            client.connections = {
+                "server1": servers[0].to_connection_dict(),
+                "server2": servers[1].to_connection_dict(),
+            }
+            
+            tools = await client.get_tools()
+            
+            # Should call parent get_tools for each server
+            assert mock_parent_get_tools.call_count == 2
+            
+            # Should apply handle_tool_error from respective servers
+            assert mock_tool1.handle_tool_error is True
+            assert mock_tool2.handle_tool_error is True
+            assert mock_tool3.handle_tool_error == "Custom error"
+            
+            # Should return all tools
+            assert len(tools) == 3
+            assert mock_tool1 in tools
+            assert mock_tool2 in tools
+            assert mock_tool3 in tools
+
+    @pytest.mark.asyncio
+    async def test_get_tools_no_handle_tool_error(self):
+        """Test get_tools when handle_tool_error is None."""
+        server = Server(name="test", url="https://example.com/mcp")
+        
+        # Create mock tool
+        mock_tool = MagicMock()
+        mock_tool.handle_tool_error = "original_value"
+        
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init, \
+             patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.get_tools", new_callable=AsyncMock) as mock_parent_get_tools:
+            
+            mock_init.return_value = None
+            mock_parent_get_tools.return_value = [mock_tool]
+            
+            client = DatabricksMultiServerMCPClient([server])
+            client.connections = {"test": server.to_connection_dict()}
+            
+            tools = await client.get_tools(server_name="test")
+            
+            # Should NOT modify handle_tool_error when it's None in config
+            assert mock_tool.handle_tool_error == "original_value"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_parallel_execution(self):
+        """Test that get_tools executes server requests in parallel."""
+        servers = [
+            Server(name=f"server{i}", url=f"https://server{i}.com/mcp")
+            for i in range(5)
+        ]
+        
+        call_count = 0
+        call_times = []
+        
+        async def mock_get_tools_with_delay(server_name=None):
+            nonlocal call_count
+            call_count += 1
+            call_times.append(asyncio.get_event_loop().time())
+            await asyncio.sleep(0.1)  # Simulate async work
+            return [MagicMock()]
+        
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init, \
+             patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.get_tools", new_callable=AsyncMock, side_effect=mock_get_tools_with_delay) as mock_parent_get_tools:
+            
+            mock_init.return_value = None
+            
+            client = DatabricksMultiServerMCPClient(servers)
+            client.connections = {
+                server.name: server.to_connection_dict()
+                for server in servers
+            }
+            
+            start_time = asyncio.get_event_loop().time()
+            tools = await client.get_tools()
+            end_time = asyncio.get_event_loop().time()
+            
+            # All 5 servers should be called
+            assert call_count == 5
+            
+            # All calls should start around the same time (parallel)
+            # If sequential, would take 0.5s+. Parallel should be ~0.1s
+            elapsed = end_time - start_time
+            assert elapsed < 0.3  # Much less than 5 * 0.1s
+            
+            # Should return tools from all servers
+            assert len(tools) == 5
+
+    @pytest.mark.asyncio
+    async def test_get_tools_with_databricks_server(self):
+        """Test get_tools with DatabricksServer."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        mock_tool = MagicMock()
+        
+        with patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.__init__") as mock_init, \
+             patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth, \
+             patch("databricks_langchain.multi_server_mcp_client.MultiServerMCPClient.get_tools", new_callable=AsyncMock) as mock_parent_get_tools:
+            
+            mock_init.return_value = None
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+            mock_parent_get_tools.return_value = [mock_tool]
+            
+            server = DatabricksServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client,
+                handle_tool_error=True
+            )
+            client = DatabricksMultiServerMCPClient([server])
+            client.connections = {"databricks": server.to_connection_dict()}
+            
+            tools = await client.get_tools(server_name="databricks")
+            
+            # Should apply handle_tool_error
+            assert mock_tool.handle_tool_error is True
+            
+            # Connection should have auth
+            assert "auth" in client.connections["databricks"]
+
+
+class TestConnectionDictCompatibility:
+    """Tests to ensure connection dict compatibility with LangChain."""
+
+    def test_connection_dict_structure_is_flexible(self):
+        """Test that connection dict allows extra fields (forward compatible)."""
+        # This test ensures we won't break if LangChain adds new fields
+        server = Server(
+            name="test",
+            url="https://example.com/mcp",
+            future_field_1="value1",
+            future_field_2=123,
+            nested_config={"key": "value"}
+        )
+        
+        connection_dict = server.to_connection_dict()
+        
+        # Should include extra fields
+        assert connection_dict["future_field_1"] == "value1"
+        assert connection_dict["future_field_2"] == 123
+        assert connection_dict["nested_config"] == {"key": "value"}
+
+    def test_connection_dict_has_transport_field(self):
+        """Test that transport field is always present."""
+        server = Server(name="test", url="https://example.com/mcp")
+        connection_dict = server.to_connection_dict()
+        
+        assert "transport" in connection_dict
+        assert isinstance(connection_dict["transport"], str)
+
+    def test_connection_dict_has_url_field(self):
+        """Test that url field is always present."""
+        server = Server(name="test", url="https://example.com/mcp")
+        connection_dict = server.to_connection_dict()
+        
+        assert "url" in connection_dict
+        assert isinstance(connection_dict["url"], str)
+        assert connection_dict["url"].startswith("http")
+
+    @pytest.mark.parametrize(
+        "field_name",
+        ["name", "handle_tool_error", "workspace_client"],
+    )
+    def test_connection_dict_excludes_internal_fields(self, field_name: str):
+        """Test that internal fields are excluded from connection dict."""
+        # Create servers with fields that should be excluded
+        if field_name == "workspace_client":
+            with patch("databricks_langchain.multi_server_mcp_client.WorkspaceClient") as mock_ws, \
+                 patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider") as mock_auth:
+                mock_ws.return_value = MagicMock()
+                mock_auth.return_value = MagicMock()
+                
+                server = DatabricksServer(
+                    name="test",
+                    url="https://example.com/mcp"
+                )
+        else:
+            server = Server(
+                name="test",
+                url="https://example.com/mcp",
+                handle_tool_error=True
+            )
+        
+        connection_dict = server.to_connection_dict()
+        
+        # Internal fields should not be in connection dict
+        assert field_name not in connection_dict
+
