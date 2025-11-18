@@ -25,3 +25,12 @@ class CheckpointSaver(PostgresSaver):
             **dict(pool_kwargs),
         )
         super().__init__(self._lakebase.pool)
+
+    def __enter__(self):
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and close the connection pool."""
+        self._lakebase.close()
+        return False

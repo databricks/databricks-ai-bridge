@@ -52,7 +52,7 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
     saver = CheckpointSaver(
-        database_instance="lakebase-instance",
+        instance_name="lakebase-instance",
         workspace_client=workspace,
     )
 
