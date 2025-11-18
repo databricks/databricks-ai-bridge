@@ -62,7 +62,7 @@ class LakebasePool:
             instance = workspace_client.database.get_database_instance(instance_name)
         except Exception as exc:
             raise ValueError(
-                f"Unable to resolve Lakebase host for instance '{instance_name}'. "
+                f"Unable to resolve Lakebase instance '{instance_name}'. "
                 "Ensure the instance name is correct."
             ) from exc
 
@@ -73,7 +73,7 @@ class LakebasePool:
         if not resolved_host:
             raise ValueError(
                 f"Lakebase host not found for instance '{instance_name}'. "
-                "Ensure the instance exposes `read_write_dns` or `read_only_dns` in workspace metadata."
+                "Ensure the instance is running and in AVAILABLE state."
             )
 
         self.workspace_client = workspace_client
