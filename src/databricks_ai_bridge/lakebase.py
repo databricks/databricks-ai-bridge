@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from contextlib import contextmanager
 from threading import Lock
-from typing import Optional, Type
+from typing import Optional
 
 import psycopg
 from databricks.sdk import WorkspaceClient
@@ -25,106 +24,6 @@ DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
 
-
-class _RotatingCredentialConnection(psycopg.Connection):
-    """
-    Note: Don't use - use create_connection_class instead to avoid leaking tokens
-    """
-
-    workspace_client: Optional[WorkspaceClient] = None
-    instance_name: Optional[str] = None
-    token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS
-
-    _cache_lock = Lock()
-    _cached_token: Optional[str] = None
-    _cache_ts: Optional[float] = None
-
-    @classmethod
-    def _mint_token(cls) -> str:
-        if not cls.workspace_client or not cls.instance_name:
-            raise RuntimeError("RotatingCredentialConnection not initialized.")
-
-        try:
-            cred = cls.workspace_client.database.generate_database_credential(
-                request_id=str(uuid.uuid4()),
-                instance_names=[cls.instance_name],
-            )
-        except Exception as exc:
-            raise ConnectionError(
-                f"Failed to obtain credential for Lakebase instance "
-                f"'{cls.instance_name}'. Ensure the caller has access."
-            ) from exc
-
-        return cred.token
-
-    @classmethod
-    def _get_token(cls) -> str:
-        with cls._cache_lock:
-            now = time.time()
-            if (
-                cls._cached_token
-                and cls._cache_ts
-                and (now - cls._cache_ts) < cls.token_cache_duration_seconds
-            ):
-                return cls._cached_token
-
-            token = cls._mint_token()
-            cls._cached_token = token
-            cls._cache_ts = now
-            return token
-
-    @classmethod
-    def connect(
-        cls: Type["_RotatingCredentialConnection"], conninfo: str = "", **kwargs: Any
-    ) -> "_RotatingCredentialConnection":
-        kwargs = dict(kwargs)
-        kwargs["password"] = cls._get_token()
-        return super().connect(conninfo, **kwargs)
-
-
-def create_connection_class(
-    workspace_client: WorkspaceClient, instance_name: str, token_cache_duration_seconds: int
-) -> type[_RotatingCredentialConnection]:
-    """
-    Create a psycopg `Connection` subclass that automatically injects a
-    Lakebase OAuth token at connect-time with token refresh handled
-
-    Parameters
-    ----------
-    workspace_client : WorkspaceClient
-        The Databricks workspace client used to mint credentials.
-    instance_name : str
-        The Lakebase instance name
-    token_cache_duration_seconds : int, optional
-        Seconds to cache the minted token before refreshing. Defaults to 50 minutes/3000 sec
-
-    Returns
-    -------
-    Type[psycopg.Connection]
-        A subclass suitable for passing to psycopg / psycopg_pool as
-        `connection_class`.
-
-    Example
-    -------
-    >>> w = WorkspaceClient()
-    >>> ConnectionClass = create_connection_class(w, "my-lakebase")
-    >>> conn = ConnectionClass.connect("connection-string")
-    """
-
-    return type(
-        f"LakebaseRotatingConnection_{instance_name}",
-        (_RotatingCredentialConnection,),
-        {
-            "workspace_client": workspace_client,
-            "instance_name": instance_name,
-            "token_cache_duration_seconds": token_cache_duration_seconds,
-            "_cache_lock": Lock(),
-            "_cached_token": None,
-            "_cache_ts": None,
-        },
-    )
-
-
 def _infer_username(w: WorkspaceClient) -> str:
     """Resolve a default username preferring service-principal identity."""
     try:
@@ -139,21 +38,11 @@ def _infer_username(w: WorkspaceClient) -> str:
     user = w.current_user.me()
     return user.user_name
 
-
 class LakebasePool:
     """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
 
     instance_name:
-        User-set name on Lakebase Instance
-        (can retrieve from connection details page in Databricks workspace)
-    workspace_client:
-        Optional `WorkspaceClient` to use; default client is created otherwise.
-    token_cache_duration_seconds:
-        Lifetime for cached OAuth tokens in seconds. Defaults to 50 minutes
-        (3000 seconds).
-    **pool_kwargs:
-        Additional options passed to ``psycopg_pool.ConnectionPool`` (e.g.
-        ``min_size``, ``max_size``).
+        Name of Lakebase Instance (can retrieve from connection details page in Databricks workspace)
     """
 
     def __init__(
@@ -161,8 +50,10 @@ class LakebasePool:
         *,
         instance_name: str,
         workspace_client: WorkspaceClient | None = None,
+        token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
     ) -> None:
+
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -189,8 +80,23 @@ class LakebasePool:
         self.instance_name = instance_name
         self.host = resolved_host
         self.username = _infer_username(workspace_client)
-        typed_pool_kwargs = dict(pool_kwargs)
-        self.pool_config = dict(typed_pool_kwargs)
+        self.token_cache_duration_seconds = token_cache_duration_seconds
+
+        # Token caching
+        self._cache_lock = Lock()
+        self._cached_token: Optional[str] = None
+        self._cache_ts: Optional[float] = None
+
+        # Create connection pool that fetches a rotating M2M OAuth token
+        # https://docs.databricks.com/aws/en/oltp/instances/query/notebook#psycopg3
+        class RotatingConnection(psycopg.Connection):
+            @classmethod
+            def connect(cls, conninfo: str = "", **kwargs):
+                # Append new password to kwargs
+                kwargs['password'] = self._get_token()
+
+                # Call the superclass's connect method with updated kwargs
+                return super().connect(conninfo, **kwargs)
 
         conninfo = f"dbname={DEFAULT_DATABASE} user={self.username} host={resolved_host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
 
@@ -203,12 +109,6 @@ class LakebasePool:
             "keepalives_count": 5,
         }
 
-        self._connection_class = create_connection_class(
-            workspace_client=workspace_client,
-            instance_name=instance_name,
-            token_cache_duration_seconds=DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
-        )
-
         pool_params = dict(
             conninfo=conninfo,
             kwargs=default_kwargs,
@@ -216,8 +116,8 @@ class LakebasePool:
             max_size=DEFAULT_MAX_SIZE,
             timeout=DEFAULT_TIMEOUT,
             open=True,
-            connection_class=self._connection_class,
-            **typed_pool_kwargs,
+            connection_class=RotatingConnection,
+            **pool_kwargs,
         )
 
         self._pool = ConnectionPool(**pool_params)
@@ -230,19 +130,41 @@ class LakebasePool:
             pool_params.get("max_size"),
             DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         )
+    
+    def _get_token(self) -> str:
+        """Get cached token or mint a new one if expired."""
+        with self._cache_lock:
+            now = time.time()
+            if (
+                self._cached_token
+                and self._cache_ts
+                and (now - self._cache_ts) < self.token_cache_duration_seconds
+            ):
+                return self._cached_token
 
-    @property
-    def pool(self) -> ConnectionPool:
-        return self._pool
+            token = self._mint_token()
+            self._cached_token = token
+            self._cache_ts = now
+            return token
 
-    def connection(self) -> contextmanager[psycopg.Connection]:
+    def _mint_token(self) -> str:
+        try:
+            cred = self.workspace_client.database.generate_database_credential(
+                request_id=str(uuid.uuid4()),
+                instance_names=[self.instance_name],
+            )
+        except Exception as exc:
+            raise ConnectionError(
+                f"Failed to obtain credential for Lakebase instance "
+                f"'{self.instance_name}'. Ensure the caller has access."
+            ) from exc
+
+        return cred.token
+
+    def connection(self):
+        """Get a connection from the pool."""
         return self._pool.connection()
-
+    
     def close(self) -> None:
+        """Close the connection pool."""
         self._pool.close()
-
-    def __enter__(self) -> LakebasePool:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
-        self.close()
