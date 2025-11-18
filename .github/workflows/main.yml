@@ -45,7 +45,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          pip install .[dev]
+          pip install ".[dev, memory]"
       - name: Run tests
         run: |
           pytest tests/
@@ -67,6 +67,7 @@ jobs:
         run: |
           pip install .
           pip install integrations/langchain[dev]
+          pip install .[memory]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
