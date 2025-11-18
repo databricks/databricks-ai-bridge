@@ -39,7 +39,6 @@ class TestConnectionPool:
 
         return _Ctx(self)
 
-
 def test_checkpoint_saver_configures_lakebase(monkeypatch):
     test_pool = TestConnectionPool(connection_value="lake-conn")
     monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)

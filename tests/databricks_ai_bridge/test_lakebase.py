@@ -12,6 +12,7 @@ pytest.importorskip("psycopg_pool")
 import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import LakebasePool
 
+
 def _make_workspace(
     *,
     sp_application_id: str | None = "sp-123",
@@ -33,6 +34,7 @@ def _make_workspace(
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
     return workspace
 
+
 def _make_connection_pool_class():
     class TestConnectionPool:
         def __init__(
@@ -46,6 +48,7 @@ def _make_connection_pool_class():
             self.connection_class = connection_class
 
     return TestConnectionPool
+
 
 def test_lakebase_pool_configures_connection_pool(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
@@ -67,6 +70,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert test_pool.connection_class is not None
     assert issubclass(test_pool.connection_class, lakebase.psycopg.Connection)
 
+
 def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
@@ -83,6 +87,7 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         for record in caplog.records
     )
 
+
 def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
@@ -97,6 +102,7 @@ def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     )
 
     assert pool.host == "rw.host"
+
 
 def test_lakebase_pool_uses_service_principal_username(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
@@ -115,6 +121,7 @@ def test_lakebase_pool_uses_service_principal_username(monkeypatch):
     assert pool.username == "service_principal_client_id"
     assert "user=service_principal_client_id" in pool.pool.conninfo
 
+
 def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
@@ -131,6 +138,7 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
 
     assert pool.username == "test@databricks.com"
     assert "user=test@databricks.com" in pool.pool.conninfo
+
 
 def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
     """Verify that a new token is minted when the cache duration expires."""

@@ -41,7 +41,7 @@ def _infer_username(w: WorkspaceClient) -> str:
 class LakebasePool:
     """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
 
-    instance_name: Name of Lakebase Instance
+    name: Name of Lakebase Instance
     """
 
     def __init__(
@@ -76,7 +76,7 @@ class LakebasePool:
             )
 
         self.workspace_client = workspace_client
-        self.instance_name = name
+        self.name = name
         self.host = resolved_host
         self.username = _infer_username(workspace_client)
         self.token_cache_duration_seconds = token_cache_duration_seconds
@@ -150,12 +150,12 @@ class LakebasePool:
         try:
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
-                instance_names=[self.instance_name],
+                instance_names=[self.name],
             )
         except Exception as exc:
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
-                f"'{self.instance_name}'. Ensure the caller has access."
+                f"'{self.name}'. Ensure the caller has access."
             ) from exc
 
         return cred.token
