@@ -8,7 +8,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 class CheckpointSaver(PostgresSaver):
     """
     LangGraph PostgresSaver using a Lakebase connection pool.
-    
+
     database_instance: Name of Lakebase Instance
     """
 

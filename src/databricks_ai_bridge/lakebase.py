@@ -24,6 +24,7 @@ DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
 
+
 def _infer_username(w: WorkspaceClient) -> str:
     """Get username for database connection with prioritizing service principal first, then user's username."""
     try:
@@ -37,6 +38,7 @@ def _infer_username(w: WorkspaceClient) -> str:
 
     user = w.current_user.me()
     return user.user_name
+
 
 class LakebasePool:
     """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
@@ -52,7 +54,6 @@ class LakebasePool:
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
     ) -> None:
-
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -92,7 +93,7 @@ class LakebasePool:
             @classmethod
             def connect(cls, conninfo: str = "", **kwargs):
                 # Append new password to kwargs
-                kwargs['password'] = self._get_token()
+                kwargs["password"] = self._get_token()
 
                 # Call the superclass's connect method with updated kwargs
                 return super().connect(conninfo, **kwargs)
@@ -129,7 +130,7 @@ class LakebasePool:
             pool_params.get("max_size"),
             self.token_cache_duration_seconds,
         )
-    
+
     def _get_token(self) -> str:
         """Get cached token or mint a new one if expired."""
         with self._cache_lock:
@@ -168,7 +169,7 @@ class LakebasePool:
     def connection(self):
         """Get a connection from the pool."""
         return self._pool.connection()
-    
+
     def close(self) -> None:
         """Close the connection pool."""
         self._pool.close()

@@ -11,6 +11,7 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
+
 class TestConnectionPool:
     def __init__(self, connection_value="conn"):
         self.connection_value = connection_value
@@ -38,6 +39,7 @@ class TestConnectionPool:
                 pass
 
         return _Ctx(self)
+
 
 def test_checkpoint_saver_configures_lakebase(monkeypatch):
     test_pool = TestConnectionPool(connection_value="lake-conn")
