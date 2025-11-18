@@ -52,11 +52,12 @@ def test_query_genie_as_agent(MockWorkspaceClient):
     )
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
-    # Create a proper GenieResponse instance
+    # Create a proper GenieResponse instance with conversation_id
     mock_genie_response = GenieResponse(
         result="It is sunny.",
         query="SELECT * FROM weather",
         description="This is the reasoning for the query",
+        conversation_id="conv-123",  # Add this
     )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
@@ -66,7 +67,10 @@ def test_query_genie_as_agent(MockWorkspaceClient):
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         # Test with include_context=False (default)
         result = _query_genie_as_agent(input_data, genie, "Genie")
-        expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        expected_message = {
+            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "conversation_id": "conv-123",  # Add this
+        }
         assert result == expected_message
 
         # Test with include_context=True
@@ -76,7 +80,8 @@ def test_query_genie_as_agent(MockWorkspaceClient):
                 AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
                 AIMessage(content="SELECT * FROM weather", name="query_sql"),
                 AIMessage(content="It is sunny.", name="query_result"),
-            ]
+            ],
+            "conversation_id": "conv-123",  # Add this
         }
         assert result == expected_messages
 
@@ -127,7 +132,10 @@ def test_query_genie_with_client(mock_workspace_client):
 
     # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result="It is sunny.", query="SELECT weather FROM data", description="Query reasoning"
+        result="It is sunny.",
+        query="SELECT weather FROM data",
+        description="Query reasoning",
+        conversation_id="conv-456",
     )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
@@ -136,7 +144,10 @@ def test_query_genie_with_client(mock_workspace_client):
     # Mock the ask_question method to return our mock response
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
-        expected_message = {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        expected_message = {
+            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "conversation_id": "conv-456",
+        }
         assert result == expected_message
 
 
@@ -156,6 +167,7 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient):
         result="It is sunny.",
         query="SELECT * FROM weather",
         description="This is the reasoning for the query",
+        conversation_id="conv-789",
     )
 
     # Test with include_context=True
@@ -177,6 +189,7 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient):
             AIMessage(content="It is sunny.", name="query_result"),
         ]
         assert result["messages"] == expected_messages
+        assert result["conversation_id"] == "conv-789"  # Add this
 
     mock_client.genie.get_space.assert_called_once()
 
@@ -193,7 +206,10 @@ def test_message_processor_functionality(MockWorkspaceClient):
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
     mock_genie_response = GenieResponse(
-        result="It is sunny.", query="SELECT * FROM weather", description="Query reasoning"
+        result="It is sunny.",
+        query="SELECT * FROM weather",
+        description="Query reasoning",
+        conversation_id="conv-abc",  # Add this
     )
 
     # Test data with multiple messages
@@ -222,8 +238,11 @@ def test_message_processor_functionality(MockWorkspaceClient):
             input_data, genie, "Genie", message_processor=custom_processor
         )
         expected_query = "First message | Assistant response | Second message"
-        mock_ask.assert_called_with(expected_query)
-        assert result == {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        mock_ask.assert_called_with(expected_query, conversation_id=None)  # Update this
+        assert result == {
+            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "conversation_id": "conv-abc",  # Add this
+        }
 
     # Test 2: Last message processor (as requested in the user's example)
     def last_message_processor(messages):
@@ -240,8 +259,11 @@ def test_message_processor_functionality(MockWorkspaceClient):
             input_data, genie, "Genie", message_processor=last_message_processor
         )
         expected_query = "Second message"
-        mock_ask.assert_called_with(expected_query)
-        assert result == {"messages": [AIMessage(content="It is sunny.", name="query_result")]}
+        mock_ask.assert_called_with(expected_query, conversation_id=None)  # Update this
+        assert result == {
+            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "conversation_id": "conv-abc",  # Add this
+        }
 
     # Test 4: GenieAgent end-to-end with message_processor
     with patch.object(genie, "ask_question", return_value=mock_genie_response) as mock_ask:
@@ -257,5 +279,8 @@ def test_message_processor_functionality(MockWorkspaceClient):
         ) as mock_ask_agent:
             result = agent.invoke(input_data)
             expected_query = "Second message"
-            mock_ask_agent.assert_called_once_with(expected_query)
+            mock_ask_agent.assert_called_once_with(
+                expected_query, conversation_id=None
+            )  # Update this
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
+            assert result["conversation_id"] == "conv-abc"  # Add this
