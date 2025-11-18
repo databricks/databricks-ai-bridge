@@ -284,3 +284,132 @@ def test_message_processor_functionality(MockWorkspaceClient):
             )  # Update this
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
             assert result["conversation_id"] == "conv-abc"  # Add this
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_conversation_continuity(MockWorkspaceClient):
+    """Test that conversation_id is passed through correctly for conversation continuity"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+
+    # First response creates a conversation
+    mock_genie_response_1 = GenieResponse(
+        result="First response",
+        query="SELECT * FROM data",
+        description="Query reasoning",
+        conversation_id="conv-new-123",
+    )
+
+    # Second response continues the conversation
+    mock_genie_response_2 = GenieResponse(
+        result="Follow-up response",
+        query="SELECT * FROM data WHERE region='NA'",
+        description="Follow-up query",
+        conversation_id="conv-new-123",
+    )
+
+    genie = Genie("space-id", MockWorkspaceClient)
+
+    # First query - no conversation_id in input
+    input_data_1 = {"messages": [{"role": "user", "content": "Show me data"}]}
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response_1) as mock_ask:
+        result_1 = _query_genie_as_agent(input_data_1, genie, "Genie")
+        # Should be called with conversation_id=None
+        mock_ask.assert_called_with(
+            "I will provide you a chat history, where your name is Genie. Please help with the described information in the chat history.\nuser: Show me data",
+            conversation_id=None,
+        )
+        assert result_1["conversation_id"] == "conv-new-123"
+
+    # Second query - pass conversation_id from previous response
+    input_data_2 = {
+        "messages": [{"role": "user", "content": "Now filter by region"}],
+        "conversation_id": result_1["conversation_id"],
+    }
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response_2) as mock_ask:
+        result_2 = _query_genie_as_agent(input_data_2, genie, "Genie")
+        # Should be called with the conversation_id from previous response
+        mock_ask.assert_called_with(
+            "I will provide you a chat history, where your name is Genie. Please help with the described information in the chat history.\nuser: Now filter by region",
+            conversation_id="conv-new-123",
+        )
+        assert result_2["conversation_id"] == "conv-new-123"
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_dataframe_return(MockWorkspaceClient):
+    """Test that DataFrames are returned correctly with markdown conversion"""
+    import pandas as pd
+
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+
+    # Create a DataFrame result
+    test_df = pd.DataFrame({"name": ["Alice", "Bob"], "age": [25, 30]})
+
+    mock_genie_response = GenieResponse(
+        result=test_df,  # DataFrame result
+        query="SELECT * FROM users",
+        description="Query reasoning",
+        conversation_id="conv-df-123",
+    )
+
+    input_data = {"messages": [{"role": "user", "content": "Show me users"}]}
+    genie = Genie("space-id", MockWorkspaceClient, return_pandas=True)
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+
+        # Should have dataframe field
+        assert "dataframe" in result
+        assert isinstance(result["dataframe"], pd.DataFrame)
+        assert result["dataframe"].equals(test_df)
+
+        # Message content should be markdown
+        assert isinstance(result["messages"][0].content, str)
+        assert "Alice" in result["messages"][0].content
+        assert "Bob" in result["messages"][0].content
+
+        # Should have conversation_id
+        assert result["conversation_id"] == "conv-df-123"
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_string_return_no_dataframe_field(MockWorkspaceClient):
+    """Test that string results don't include dataframe field"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+
+    mock_genie_response = GenieResponse(
+        result="String result",  # String, not DataFrame
+        query="SELECT * FROM data",
+        description="Query reasoning",
+        conversation_id="conv-str-123",
+    )
+
+    input_data = {"messages": [{"role": "user", "content": "Show me data"}]}
+    genie = Genie("space-id", MockWorkspaceClient)
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+
+        # Should NOT have dataframe field
+        assert "dataframe" not in result
+
+        # Message content should be the string
+        assert result["messages"][0].content == "String result"
+        assert result["conversation_id"] == "conv-str-123"
