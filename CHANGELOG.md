@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## databricks-ai-bridge 0.9.1 databricks-langchain 0.9.1 databricks-openai 0.6.2 (2025-11-17)
+## databricks-ai-bridge 0.10.0 databricks-langchain 0.10.0 databricks-openai 0.7.0 (2025-11-18)
 - Add support for LLM-generated filter parameters in VectorSearchRetrieverTool
 - Support passing in Workspace Client to VSRetrieverTool
 - Fix ChatModel Custom Outputs
