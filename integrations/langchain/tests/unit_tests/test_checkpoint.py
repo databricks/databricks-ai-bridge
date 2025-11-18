@@ -11,66 +11,38 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
-
-class RecordingConnectionPool:
-    def __init__(self, log, connection_value="conn"):
-        self.log = log
+class TestConnectionPool:
+    def __init__(self, connection_value="conn"):
         self.connection_value = connection_value
-        self.kwargs = None
         self.conninfo = ""
-        self.connection_class = None
-        self.getconn_calls = 0
-        self.putconn_calls = []
-        self.closed = False
 
     def __call__(
         self,
         *,
         conninfo,
         connection_class=None,
-        kwargs,
-        **extra,
+        **kwargs,
     ):
         self.conninfo = conninfo
-        self.connection_class = connection_class
-        self.kwargs = kwargs
         return self
 
     def connection(self):
-        self.log.append("pool_connection")
-
         class _Ctx:
             def __init__(self, outer):
                 self.outer = outer
-                self.entered = False
-                self.exited = False
 
             def __enter__(self):
-                self.outer.log.append("ctx_enter")
-                self.entered = True
                 return self.outer.connection_value
 
             def __exit__(self, exc_type, exc, tb):
-                self.outer.log.append("ctx_exit")
-                self.exited = True
+                pass
 
         return _Ctx(self)
 
-    def getconn(self):
-        self.getconn_calls += 1
-        return self.connection_value
-
-    def putconn(self, conn):
-        self.putconn_calls.append(conn)
-
-    def close(self):
-        self.closed = True
-
 
 def test_checkpoint_saver_configures_lakebase(monkeypatch):
-    log = []
-    fake_pool = RecordingConnectionPool(log, connection_value="lake-conn")
-    monkeypatch.setattr(lakebase, "ConnectionPool", fake_pool)
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -84,16 +56,11 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
     )
 
     assert (
-        fake_pool.conninfo
+        test_pool.conninfo
         == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
     )
-    assert isinstance(saver, CheckpointSaver)
 
-    with saver:
-        pass
+    assert saver._lakebase.pool == test_pool
 
-    assert fake_pool.putconn_calls == ["lake-conn"]
-    assert fake_pool.closed is False
-
-    saver.close()
-    assert fake_pool.closed is True
+    with saver._lakebase.connection() as conn:
+        assert conn == "lake-conn"

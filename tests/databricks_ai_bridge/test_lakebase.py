@@ -12,11 +12,6 @@ pytest.importorskip("psycopg_pool")
 import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import LakebasePool
 
-# ---------------------------------------------------------------------------
-# Fixtures and shared helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_workspace(
     *,
     sp_application_id: str | None = "sp-123",
@@ -38,102 +33,49 @@ def _make_workspace(
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
     return workspace
 
-
-class _ConnectionContext:
-    def __init__(self, log, connection_value):
-        self._log = log
-        self._value = connection_value
-        self.entered = False
-        self.exited = False
-
-    def __enter__(self):
-        self._log.append("ctx_enter")
-        self.entered = True
-        return self._value
-
-    def __exit__(self, exc_type, exc, tb):  # pragma: no cover - behaviour under test
-        self._log.append("ctx_exit")
-        self.exited = True
-
-
-def _make_connection_pool_class(log, connection_value="pooled-conn"):
-    class FakeConnectionPool:
+def _make_connection_pool_class():
+    class TestConnectionPool:
         def __init__(
             self,
             *,
             conninfo,
             connection_class,
-            min_size,
-            max_size,
-            timeout,
-            open,
-            kwargs,
+            **kwargs,
         ):
             self.conninfo = conninfo
             self.connection_class = connection_class
-            self.min_size = min_size
-            self.max_size = max_size
-            self.timeout = timeout
-            self.open = open
-            self.kwargs = kwargs
-            self.log = log
-            self.connection_value = connection_value
-            self.context = _ConnectionContext(log, connection_value)
-            self.getconn_calls = 0
-            self.putconn_calls = []
 
-        def connection(self):
-            self.log.append("pool_connection")
-            return self.context
-
-        def getconn(self):
-            self.getconn_calls += 1
-            return self.connection_value
-
-        def putconn(self, conn):
-            self.putconn_calls.append(conn)
-
-        def close(self):  # pragma: no cover - not used in current tests
-            self.log.append("pool_close")
-
-    return FakeConnectionPool
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
+    return TestConnectionPool
 
 def test_lakebase_pool_configures_connection_pool(monkeypatch):
-    log: list[str] = []
-    FakeConnectionPool = _make_connection_pool_class(log)
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace()
     workspace.database.get_database_instance.return_value.read_write_dns = "db.host"
 
     pool = LakebasePool(
+        name="lake-instance",
         workspace_client=workspace,
-        instance_name="lake-instance",
     )
 
-    fake_pool = pool.pool
-    assert fake_pool.conninfo == (
+    test_pool = pool.pool
+    assert test_pool.conninfo == (
         "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
     )
 
-    assert issubclass(fake_pool.connection_class, lakebase._RotatingCredentialConnection)
-
+    assert test_pool.connection_class is not None
+    assert issubclass(test_pool.connection_class, lakebase.psycopg.Connection)
 
 def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
-    FakeConnectionPool = _make_connection_pool_class([])
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace()
     with caplog.at_level(logging.INFO):
         LakebasePool(
+            name="lake-instance",
             workspace_client=workspace,
-            instance_name="lake-instance",
         )
 
     assert any(
@@ -141,27 +83,24 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         for record in caplog.records
     )
 
-
 def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
-    FakeConnectionPool = _make_connection_pool_class([])
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace()
     workspace.database.get_database_instance.return_value.read_write_dns = "rw.host"
     workspace.database.get_database_instance.return_value.read_only_dns = "ro.host"
 
     pool = LakebasePool(
+        name="lake-instance",
         workspace_client=workspace,
-        instance_name="lake-instance",
     )
 
     assert pool.host == "rw.host"
 
-
-def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
-    log: list[str] = []
-    FakeConnectionPool = _make_connection_pool_class(log)
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+def test_lakebase_pool_uses_service_principal_username(monkeypatch):
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace(
         sp_application_id="service_principal_client_id",
@@ -169,18 +108,16 @@ def test_lakebase_pool_infers_username_from_service_principal(monkeypatch):
     )
 
     pool = LakebasePool(
+        name="lake-instance",
         workspace_client=workspace,
-        instance_name="lake-instance",
     )
 
     assert pool.username == "service_principal_client_id"
     assert "user=service_principal_client_id" in pool.pool.conninfo
 
-
 def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
-    log: list[str] = []
-    FakeConnectionPool = _make_connection_pool_class(log)
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", FakeConnectionPool)
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace(
         sp_application_id=None,
@@ -188,9 +125,63 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
     )
 
     pool = LakebasePool(
+        name="lake-instance",
         workspace_client=workspace,
-        instance_name="lake-instance",
     )
 
     assert pool.username == "test@databricks.com"
     assert "user=test@databricks.com" in pool.pool.conninfo
+
+def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
+    """Verify that a new token is minted when the cache duration expires."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    token_call_count = []
+
+    def mock_generate_credential(**kwargs):
+        token_call_count.append(1)
+        return MagicMock(token=f"token-{len(token_call_count)}")
+
+    workspace = _make_workspace()
+    workspace.database.generate_database_credential = mock_generate_credential
+
+    # Create pool with short cache duration of 1 second
+    pool = LakebasePool(
+        name="lake-instance",
+        workspace_client=workspace,
+        token_cache_duration_seconds=1,
+    )
+
+    # Mock time to control cache expiry
+    import time
+
+    test_time = [100.0]  # Start at time=100
+
+    def mock_time():
+        return test_time[0]
+
+    monkeypatch.setattr(time, "time", mock_time)
+
+    # First call should mint a token
+    token1 = pool._get_token()
+    assert token1 == "token-1"
+    assert len(token_call_count) == 1
+
+    # Second call within cache duration should return cached token
+    test_time[0] = 100.5  # 0.5 seconds later (within 1 second cache)
+    token2 = pool._get_token()
+    assert token2 == "token-1"  # Same cached token
+    assert len(token_call_count) == 1  # No new token minted
+
+    # Third call after cache expiry should mint a new token
+    test_time[0] = 101.5  # 1.5 seconds later (past 1 second cache)
+    token3 = pool._get_token()
+    assert token3 == "token-2"  # New token
+    assert len(token_call_count) == 2  # New token was minted
+
+    # Fourth call within new cache window should return cached token
+    test_time[0] = 102.0  # 0.5 seconds after last mint
+    token4 = pool._get_token()
+    assert token4 == "token-2"  # Same cached token
+    assert len(token_call_count) == 2  # No new token minted

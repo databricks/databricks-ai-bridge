@@ -7,7 +7,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 
 class CheckpointSaver(PostgresSaver):
     """
-    LangGraph PostgresSaver wired to a Lakebase connection pool.
+    LangGraph PostgresSaver using a Lakebase connection pool.
     """
 
     def __init__(
@@ -18,8 +18,8 @@ class CheckpointSaver(PostgresSaver):
         **pool_kwargs: object,
     ) -> None:
         self._lakebase = LakebasePool(
-            instance_name=database_instance,
+            name=database_instance,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )
-        super().__init__(self._conn)
+        super().__init__(self._lakebase.pool)

@@ -25,7 +25,7 @@ DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
 
 def _infer_username(w: WorkspaceClient) -> str:
-    """Resolve a default username preferring service-principal identity."""
+    """Get username for database connection with prioritizing service principal first, then user's username."""
     try:
         sp = w.current_service_principal.me()
         if sp and getattr(sp, "application_id", None):
@@ -41,14 +41,13 @@ def _infer_username(w: WorkspaceClient) -> str:
 class LakebasePool:
     """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
 
-    instance_name:
-        Name of Lakebase Instance (can retrieve from connection details page in Databricks workspace)
+    instance_name: Name of Lakebase Instance
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        name: str,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
@@ -59,10 +58,10 @@ class LakebasePool:
 
         # Resolve host from the Lakebase name
         try:
-            instance = workspace_client.database.get_database_instance(instance_name)
+            instance = workspace_client.database.get_database_instance(name)
         except Exception as exc:
             raise ValueError(
-                f"Unable to resolve Lakebase host for instance '{instance_name}'. "
+                f"Unable to resolve Lakebase host for instance '{name}'. "
                 "Ensure the instance name is correct."
             ) from exc
 
@@ -72,12 +71,12 @@ class LakebasePool:
 
         if not resolved_host:
             raise ValueError(
-                f"Lakebase host not found for instance '{instance_name}'. "
+                f"Lakebase host not found for instance '{name}'. "
                 "Ensure the instance exposes `read_write_dns` or `read_only_dns` in workspace metadata."
             )
 
         self.workspace_client = workspace_client
-        self.instance_name = instance_name
+        self.instance_name = name
         self.host = resolved_host
         self.username = _infer_username(workspace_client)
         self.token_cache_duration_seconds = token_cache_duration_seconds
@@ -128,7 +127,7 @@ class LakebasePool:
             DEFAULT_DATABASE,
             pool_params.get("min_size"),
             pool_params.get("max_size"),
-            DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+            self.token_cache_duration_seconds,
         )
     
     def _get_token(self) -> str:
@@ -160,6 +159,11 @@ class LakebasePool:
             ) from exc
 
         return cred.token
+
+    @property
+    def pool(self) -> ConnectionPool:
+        """Access the underlying connection pool."""
+        return self._pool
 
     def connection(self):
         """Get a connection from the pool."""
