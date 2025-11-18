@@ -6,6 +6,7 @@
 - Fix ChatModel Custom Outputs
 - Vector Search add reranker parameter
 - MCP Open AI Adapters
+- Add Lakebase Pool Memory/Connection Pooling: LakebasePool and langchain CheckpointSaver
 
 ## databricks-ai-bridge 0.9.0 databricks-langchain 0.9.0 databricks-mcp 0.4.0 (2025-10-21)
 - Langchain V1 compatability
