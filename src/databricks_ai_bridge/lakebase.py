@@ -49,7 +49,7 @@ class LakebasePool:
     def __init__(
         self,
         *,
-        name: str,
+        instance_name: str,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
@@ -59,10 +59,10 @@ class LakebasePool:
 
         # Resolve host from the Lakebase name
         try:
-            instance = workspace_client.database.get_database_instance(name)
+            instance = workspace_client.database.get_database_instance(instance_name)
         except Exception as exc:
             raise ValueError(
-                f"Unable to resolve Lakebase host for instance '{name}'. "
+                f"Unable to resolve Lakebase host for instance '{instance_name}'. "
                 "Ensure the instance name is correct."
             ) from exc
 
@@ -72,12 +72,12 @@ class LakebasePool:
 
         if not resolved_host:
             raise ValueError(
-                f"Lakebase host not found for instance '{name}'. "
+                f"Lakebase host not found for instance '{instance_name}'. "
                 "Ensure the instance exposes `read_write_dns` or `read_only_dns` in workspace metadata."
             )
 
         self.workspace_client = workspace_client
-        self.name = name
+        self.name = instance_name
         self.host = resolved_host
         self.username = _infer_username(workspace_client)
         self.token_cache_duration_seconds = token_cache_duration_seconds

@@ -58,7 +58,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     workspace.database.get_database_instance.return_value.read_write_dns = "db.host"
 
     pool = LakebasePool(
-        name="lake-instance",
+        instance_name="lake-instance",
         workspace_client=workspace,
     )
 
@@ -78,7 +78,7 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
     workspace = _make_workspace()
     with caplog.at_level(logging.INFO):
         LakebasePool(
-            name="lake-instance",
+            instance_name="lake-instance",
             workspace_client=workspace,
         )
 
@@ -97,7 +97,7 @@ def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     workspace.database.get_database_instance.return_value.read_only_dns = "ro.host"
 
     pool = LakebasePool(
-        name="lake-instance",
+        instance_name="lake-instance",
         workspace_client=workspace,
     )
 
@@ -114,7 +114,7 @@ def test_lakebase_pool_uses_service_principal_username(monkeypatch):
     )
 
     pool = LakebasePool(
-        name="lake-instance",
+        instance_name="lake-instance",
         workspace_client=workspace,
     )
 
@@ -132,7 +132,7 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
     )
 
     pool = LakebasePool(
-        name="lake-instance",
+        instance_name="lake-instance",
         workspace_client=workspace,
     )
 
@@ -156,7 +156,7 @@ def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
 
     # Create pool with short cache duration of 1 second
     pool = LakebasePool(
-        name="lake-instance",
+        instance_name="lake-instance",
         workspace_client=workspace,
         token_cache_duration_seconds=1,
     )
