@@ -1,10 +1,9 @@
 from typing import Callable, Optional
 
 import mlflow
+import pandas as pd
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.genie import Genie
-
-import pandas as pd
 
 
 @mlflow.trace()
