@@ -101,7 +101,6 @@ def GenieAgent(
     include_context: bool = False,
     message_processor: Optional[Callable] = None,
     client: Optional["WorkspaceClient"] = None,
-    truncate_results: bool = False,
     return_pandas: bool = False,
 ):
     """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used.
@@ -115,7 +114,6 @@ def GenieAgent(
                             or LangChain Message objects and return a query string. If not provided, the agent will
                             use the chat history to form the query.
         client: Optional WorkspaceClient instance
-        truncate_results: Whether to truncate results to fit within token limits
         return_pandas: Whether to return results as pandas DataFrames (if False, returns markdown strings)
 
 
@@ -158,7 +156,6 @@ def GenieAgent(
     genie = Genie(
         genie_space_id,
         client=client,
-        truncate_results=truncate_results,
         return_pandas=return_pandas,
     )
 
