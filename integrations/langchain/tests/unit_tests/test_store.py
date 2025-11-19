@@ -14,6 +14,7 @@ class TestConnectionPool:
     def __init__(self, connection_value="conn"):
         self.connection_value = connection_value
         self.conninfo = ""
+        self.closed = False
 
     def __call__(
         self,
@@ -37,6 +38,9 @@ class TestConnectionPool:
                 pass
 
         return _Ctx(self)
+
+    def close(self):
+        self.closed = True
 
 
 def test_databricks_store_configures_lakebase(monkeypatch):
@@ -64,5 +68,8 @@ def test_databricks_store_configures_lakebase(monkeypatch):
     with store._lakebase.connection() as conn:
         assert conn == "lake-conn"
 
+    # Verify context manager support
+    assert test_pool.closed is False
     with DatabricksStore(instance_name="lakebase-instance", workspace_client=workspace) as ctx_store:
         assert isinstance(ctx_store, DatabricksStore)
+    assert test_pool.closed is True
