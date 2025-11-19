@@ -1,6 +1,7 @@
 from typing import Callable, Optional
 
 import mlflow
+import pandas as pd
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.genie import Genie
 
@@ -26,9 +27,28 @@ def _query_genie_as_agent(
     include_context: bool = False,
     message_processor: Optional[Callable] = None,
 ):
+    """
+    Query Genie as an agent.
+
+    Args:
+        input: Input dictionary containing messages and optionally a conversation_id
+        genie: Genie instance
+        genie_agent_name: Name of the agent
+        include_context: Whether to include query reasoning and SQL in the response
+        message_processor: Optional function to process messages before querying.
+                            It should accept an input of messages and return a query string.
+                            If not included, this function will do its own message processing.
+
+    Returns:
+        A dictionary containing the messages and conversation_id.
+        If include_context is True, the dictionary will also contain the query_reasoning and query_sql fields.
+        If Genie returned a dataframe because it was told to do returns in Pandas format, the dictionary will also contain the dataframe field.
+    """
     from langchain_core.messages import AIMessage
 
     messages = input.get("messages", [])
+    # Get conversation_id from input state if it exists
+    conversation_id = input.get("conversation_id", None)
 
     # Apply message processor if provided
     if message_processor:
@@ -38,12 +58,13 @@ def _query_genie_as_agent(
         # Concatenate messages to form the chat history
         query += _concat_messages_array(messages)
 
-    # Send the message and wait for a response
-    genie_response = genie.ask_question(query)
+    # Send the message and wait for a response, passing conversation_id if available
+    genie_response = genie.ask_question(query, conversation_id=conversation_id)
 
     query_reasoning = genie_response.description or ""
     query_sql = genie_response.query or ""
-    query_result = genie_response.result or ""
+    query_result = genie_response.result if genie_response.result is not None else ""
+    query_conversation_id = genie_response.conversation_id or ""
 
     # Create a list of AIMessage to return
     messages = []
@@ -51,9 +72,25 @@ def _query_genie_as_agent(
     if include_context:
         messages.append(AIMessage(content=query_reasoning, name="query_reasoning"))
         messages.append(AIMessage(content=query_sql, name="query_sql"))
-    messages.append(AIMessage(content=query_result, name="query_result"))
 
-    return {"messages": messages}
+    # Handle DataFrame vs string results
+    if isinstance(query_result, pd.DataFrame):  # if we asked for Pandas return
+        # Convert to markdown for message display
+        query_result_content = query_result.to_markdown(index=False)
+        messages.append(AIMessage(content=query_result_content, name="query_result"))
+
+        # Return with DataFrame included
+        return {
+            "messages": messages,
+            "conversation_id": query_conversation_id,
+            "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
+        }
+    else:
+        # String result - just add to messages
+        messages.append(AIMessage(content=query_result, name="query_result"))
+
+        # Return without DataFrame field
+        return {"messages": messages, "conversation_id": query_conversation_id}
 
 
 @mlflow.trace(span_type="AGENT")
@@ -64,6 +101,7 @@ def GenieAgent(
     include_context: bool = False,
     message_processor: Optional[Callable] = None,
     client: Optional["WorkspaceClient"] = None,
+    return_pandas: bool = False,
 ):
     """Create a genie agent that can be used to query the API. If a description is not provided, the description of the genie space will be used.
 
@@ -76,6 +114,8 @@ def GenieAgent(
                             or LangChain Message objects and return a query string. If not provided, the agent will
                             use the chat history to form the query.
         client: Optional WorkspaceClient instance
+        return_pandas: Whether to return results as pandas DataFrames (if False, returns markdown strings)
+
 
     Examples:
         # Basic usage
@@ -113,7 +153,11 @@ def GenieAgent(
 
     from langchain_core.runnables import RunnableLambda
 
-    genie = Genie(genie_space_id, client=client)
+    genie = Genie(
+        genie_space_id,
+        client=client,
+        return_pandas=return_pandas,
+    )
 
     # Create a partial function with the genie_space_id pre-filled
     partial_genie_agent = partial(
