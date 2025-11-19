@@ -19,6 +19,7 @@ from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogToo
 
 from databricks_langchain.chat_models import ChatDatabricks
 from databricks_langchain.checkpoint import CheckpointSaver
+from databricks_langchain.store import DatabricksStore
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
@@ -29,6 +30,7 @@ __all__ = [
     "ChatDatabricks",
     "CheckpointSaver",
     "DatabricksEmbeddings",
+    "DatabricksStore",
     "DatabricksVectorSearch",
     "GenieAgent",
     "VectorSearchRetrieverTool",
