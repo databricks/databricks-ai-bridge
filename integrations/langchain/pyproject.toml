@@ -17,7 +17,6 @@ dependencies = [
     "unitycatalog-langchain[databricks]>=0.3.0",
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
-    "langgraph-checkpoint-postgres>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +31,11 @@ integration = [
   "pytest-timeout>=2.3.1",
   "pytest-asyncio",
   "anyio",
+]
+
+memory = [
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "databricks-ai-bridge[memory]>=0.10.0",
 ]
 
 [build-system]

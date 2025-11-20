@@ -67,10 +67,31 @@ jobs:
         run: |
           pip install .
           pip install integrations/langchain[dev]
-          pip install .[memory]
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
+
+  lakebase_memory_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .[memory]
+          pip install "integrations/langchain[dev, memory]"
+      - name: Run tests
+        run: |
+          pytest tests/databricks_ai_bridge/test_lakebase.py
+          pytest integrations/langchain/tests/unit_tests/test_checkpoint.py
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest
