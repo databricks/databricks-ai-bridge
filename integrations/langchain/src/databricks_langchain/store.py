@@ -8,7 +8,7 @@ try:
 
     _store_imports_available = True
 except ImportError:
-    PostgresSaver = object
+    PostgresStore = object
     _store_imports_available = False
 
 
@@ -32,7 +32,7 @@ class DatabricksStore(PostgresStore):
                 "Please install with: pip install databricks-langchain[memory]"
             )
 
-        self._lakebase = LakebasePool(
+        self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
