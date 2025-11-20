@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from databricks.sdk import WorkspaceClient
 
-try:
+if TYPE_CHECKING:
     from databricks_ai_bridge.lakebase import LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
-except ImportError:
-    raise RuntimeError(
+
+try:
+    from langgraph.checkpoint.postgres import PostgresSaver as _PostgresSaverBase
+except ImportError as e:
+    raise ImportError(
         "CheckpointSaver requires databricks-langchain[memory]. "
         "Please install with: pip install databricks-langchain[memory]"
-    ) from None
+    ) from e
 
 
-class CheckpointSaver(PostgresSaver):
+class CheckpointSaver(_PostgresSaverBase):
     """
     LangGraph PostgresSaver using a Lakebase connection pool.
 
@@ -26,7 +31,16 @@ class CheckpointSaver(PostgresSaver):
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: object,
     ) -> None:
-        self._lakebase = LakebasePool(
+        # Lazy import LakebasePool
+        try:
+            from databricks_ai_bridge.lakebase import LakebasePool
+        except ImportError as e:
+            raise ImportError(
+                "LakebasePool requires databricks-ai-bridge[memory]. "
+                "Please install with: pip install databricks-langchain[memory]"
+            ) from e
+
+        self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
