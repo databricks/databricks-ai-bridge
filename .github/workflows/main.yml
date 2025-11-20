@@ -66,8 +66,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install .
-          pip install integrations/langchain[dev]
-          pip install .[memory]
+          pip install "integrations/langchain[dev, memory]"
       - name: Run tests
         run: |
           pytest integrations/langchain/tests/unit_tests
