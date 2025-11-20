@@ -9,6 +9,7 @@ pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
 from databricks_ai_bridge import lakebase
+
 from databricks_langchain import CheckpointSaver
 
 

@@ -12,11 +12,11 @@ try:
     import psycopg
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
-except ImportError:
-    raise RuntimeError(
+except ImportError as e:
+    raise ImportError(
         "LakebasePool requires databricks-ai-bridge[memory]. "
         "Please install with: pip install databricks-ai-bridge[memory]"
-    ) from None
+    ) from e
 
 __all__ = ["LakebasePool"]
 
