@@ -9,14 +9,6 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
-try:
-    from databricks_langchain import CheckpointSaver
-except ImportError:
-    raise RuntimeError(
-        "CheckpointSaver requires databricks-langchain[memory]. "
-        "Please install with: pip install databricks-langchain[memory]"
-    ) from None
-
 
 class TestConnectionPool:
     def __init__(self, connection_value="conn"):

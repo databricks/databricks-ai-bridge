@@ -5,6 +5,7 @@ from databricks.sdk import WorkspaceClient
 try:
     from databricks_ai_bridge.lakebase import LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
+
     _checkpoint_imports_available = True
 except ImportError:
     PostgresSaver = object
