@@ -37,7 +37,8 @@ class DatabricksStore(PostgresStore):
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )
-        super().__init__(self._lakebase.pool)
+        self._conn = self._lakebase.pool.getconn()
+        super().__init__(conn=self._conn)
 
     def __enter__(self):
         """Enter context manager."""
@@ -45,5 +46,8 @@ class DatabricksStore(PostgresStore):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager and close the connection pool."""
+        # Return connection to pool before closing
+        self._lakebase.pool.putconn(self._conn)
         self._lakebase.close()
+        # Return False to propagate errors to caller
         return False
