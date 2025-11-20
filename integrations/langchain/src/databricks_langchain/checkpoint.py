@@ -5,11 +5,10 @@ from databricks.sdk import WorkspaceClient
 try:
     from databricks_ai_bridge.lakebase import LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
-
-    _postgressaver_imported = True
+    _checkpoint_imports_available = True
 except ImportError:
     PostgresSaver = object
-    _postgressaver_imported = False
+    _checkpoint_imports_available = False
 
 
 class CheckpointSaver(PostgresSaver):
@@ -27,7 +26,7 @@ class CheckpointSaver(PostgresSaver):
         **pool_kwargs: object,
     ) -> None:
         # Lazy imports
-        if not _postgressaver_imported:
+        if not _checkpoint_imports_available:
             raise ImportError(
                 "CheckpointSaver requires databricks-langchain[memory]. "
                 "Please install with: pip install databricks-langchain[memory]"
