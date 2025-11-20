@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from databricks_ai_bridge import lakebase
 
-from databricks_langchain import CheckpointSaver
+from databricks_langchain.checkpoint import CheckpointSaver
 
 pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")

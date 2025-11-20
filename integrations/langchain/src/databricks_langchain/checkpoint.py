@@ -5,12 +5,12 @@ from databricks.sdk import WorkspaceClient
 try:
     from databricks_ai_bridge.lakebase import LakebasePool
 except ImportError:
-    raise RuntimeError("psycopg is needed to enable checkpoint feature. Please install with databricks-langchain[memory]")
+    raise RuntimeError("psycopg is needed to enable checkpoint feature. Please install with databricks-langchain[memory]") from None
 
 try:
     from langgraph.checkpoint.postgres import PostgresSaver
 except ImportError:
-    raise RuntimeError("langgraph-checkpoint-postgres is needed to enable checkpoint feature. Please install with databricks-langchain[memory]")
+    raise RuntimeError("langgraph-checkpoint-postgres is needed to enable checkpoint feature. Please install with databricks-langchain[memory]") from None
 
 class CheckpointSaver(PostgresSaver):
     """
