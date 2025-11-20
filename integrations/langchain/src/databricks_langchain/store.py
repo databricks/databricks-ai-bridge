@@ -17,14 +17,8 @@ except ImportError:
 
 class DatabricksStore:
     """
-    Convenience wrapper around LangGraph's PostgresStore that uses a Lakebase
+    Wrapper around LangGraph's PostgresStore that uses a Lakebase
     connection pool and borrows a connection per call.
-
-    Example:
-        store = DatabricksStore(instance_name="my-lakebase")
-        store.setup()  # creates tables if needed
-        store.put(("users", "alice"), "prefs", {"theme": "dark"})
-        items = store.search(("users", "alice"), query="prefs", limit=5)
     """
 
     def __init__(
@@ -46,6 +40,7 @@ class DatabricksStore:
             **pool_kwargs,
         )
         self._pool = self._lakebase.pool
+        self.setup()
 
     def _with_store(self, fn, *args, **kwargs):
         """
@@ -57,20 +52,20 @@ class DatabricksStore:
             return fn(store, *args, **kwargs)
 
     def setup(self) -> None:
-        """Set up the store database tables."""
+        """Set up the store database tables (first time setup)."""
         return self._with_store(lambda s: s.setup())
 
     def put(self, namespace: tuple[str, ...], key: str, value: Any) -> None:
         """Store a value in the store."""
         return self._with_store(lambda s: s.put(namespace, key, value))
 
-    def get(self, namespace: tuple[str, ...], key: str) -> Optional[Any]:
-        """Get a value from the store."""
-        return self._with_store(lambda s: s.get(namespace, key))
+    # def get(self, namespace: tuple[str, ...], key: str) -> Optional[Any]:
+    #     """Get a value from the store."""
+    #     return self._with_store(lambda s: s.get(namespace, key))
 
-    def delete(self, namespace: tuple[str, ...], key: str) -> None:
-        """Delete a value from the store."""
-        return self._with_store(lambda s: s.delete(namespace, key))
+    # def delete(self, namespace: tuple[str, ...], key: str) -> None:
+    #     """Delete a value from the store."""
+    #     return self._with_store(lambda s: s.delete(namespace, key))
 
     def search(
         self,
