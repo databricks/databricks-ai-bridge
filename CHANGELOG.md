@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## databricks-langchain 0.11.0 (2025-11-19)
+- Addresses a dependency import bug introduced with the 0.10.0 release
+- Adds support for passing conversation ID and `return_pandas` to return query results in `pandas` DataFrame format to `databricks_langchain.GenieAgent`
+
 ## databricks-ai-bridge 0.10.0 databricks-langchain 0.10.0 databricks-openai 0.7.0 (2025-11-18)
 - Add support for LLM-generated filter parameters in VectorSearchRetrieverTool
 - Support passing in Workspace Client to VSRetrieverTool
