@@ -3,11 +3,13 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from databricks_ai_bridge import lakebase
 
 pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("langgraph.checkpoint.postgres")
+
+from databricks_ai_bridge import lakebase
+from databricks_langchain import CheckpointSaver
 
 
 class TestConnectionPool:
