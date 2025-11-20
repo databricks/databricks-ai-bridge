@@ -43,8 +43,12 @@ class TestConnectionPool:
 
 
 def test_databricks_store_configures_lakebase(monkeypatch):
-    test_pool = TestConnectionPool(connection_value="lake-conn")
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
     monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+    monkeypatch.setattr(PostgresStore, "setup", MagicMock())
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -65,4 +69,4 @@ def test_databricks_store_configures_lakebase(monkeypatch):
     assert store._lakebase.pool == test_pool
 
     with store._lakebase.connection() as conn:
-        assert conn == "lake-conn"
+        assert conn == mock_conn

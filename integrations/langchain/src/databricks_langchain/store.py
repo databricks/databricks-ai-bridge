@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
 
@@ -59,14 +59,6 @@ class DatabricksStore:
         """Store a value in the store."""
         return self._with_store(lambda s: s.put(namespace, key, value))
 
-    # def get(self, namespace: tuple[str, ...], key: str) -> Optional[Any]:
-    #     """Get a value from the store."""
-    #     return self._with_store(lambda s: s.get(namespace, key))
-
-    # def delete(self, namespace: tuple[str, ...], key: str) -> None:
-    #     """Delete a value from the store."""
-    #     return self._with_store(lambda s: s.delete(namespace, key))
-
     def search(
         self,
         namespace: tuple[str, ...],
@@ -77,23 +69,14 @@ class DatabricksStore:
         """Search for items in the store."""
         return self._with_store(lambda s: s.search(namespace, query=query, limit=limit))
 
-    def list_namespaces(
-        self,
-        *,
-        prefix: Optional[tuple[str, ...]] = None,
-        limit: int = 100,
-    ) -> list[tuple[str, ...]]:
-        """List namespaces in the store."""
-        return self._with_store(lambda s: s.list_namespaces(prefix=prefix, limit=limit))
+    # def close(self) -> None:
+    #     """Close the underlying Lakebase pool."""
+    #     self._lakebase.close()
 
-    def close(self) -> None:
-        """Close the underlying Lakebase pool."""
-        self._lakebase.close()
+    # def __enter__(self) -> "DatabricksStore":
+    #     """Enter context manager."""
+    #     return self
 
-    def __enter__(self) -> "DatabricksStore":
-        """Enter context manager."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context manager and close the connection pool."""
-        self.close()
+    # def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    #     """Exit context manager and close the connection pool."""
+    #     self.close()
