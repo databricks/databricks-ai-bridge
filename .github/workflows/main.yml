@@ -91,7 +91,7 @@ jobs:
       - name: Run tests
         run: |
           pytest tests/databricks_ai_bridge/test_lakebase.py
-          pytest integrations/langchain/tests/unit_tests/test_checkpointing.py
+          pytest integrations/langchain/tests/unit_tests/test_checkpoint.py
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest

@@ -5,17 +5,17 @@ from unittest.mock import MagicMock
 import pytest
 from databricks_ai_bridge import lakebase
 
+pytest.importorskip("psycopg")
+pytest.importorskip("psycopg_pool")
+pytest.importorskip("langgraph.checkpoint.postgres")
+
 try:
-    from databricks_langchain.checkpoint import CheckpointSaver
+    from databricks_langchain import CheckpointSaver
 except ImportError:
     raise RuntimeError(
         "CheckpointSaver requires databricks-langchain[memory]. "
         "Please install with: pip install databricks-langchain[memory]"
     ) from None
-
-pytest.importorskip("psycopg")
-pytest.importorskip("psycopg_pool")
-pytest.importorskip("langgraph.checkpoint.postgres")
 
 
 class TestConnectionPool:
