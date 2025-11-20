@@ -6,10 +6,17 @@ import uuid
 from threading import Lock
 from typing import Optional
 
-import psycopg
 from databricks.sdk import WorkspaceClient
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    raise RuntimeError(
+        "LakebasePool requires databricks-ai-bridge[memory]. "
+        "Please install with: pip install databricks-ai-bridge[memory]"
+    ) from None
 
 __all__ = ["LakebasePool"]
 
@@ -77,7 +84,7 @@ class LakebasePool:
             )
 
         self.workspace_client = workspace_client
-        self.name = instance_name
+        self.instance_name = instance_name
         self.host = resolved_host
         self.username = _infer_username(workspace_client)
         self.token_cache_duration_seconds = token_cache_duration_seconds
@@ -151,12 +158,12 @@ class LakebasePool:
         try:
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
-                instance_names=[self.name],
+                instance_names=[self.instance_name],
             )
         except Exception as exc:
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
-                f"'{self.name}'. Ensure the caller has access."
+                f"'{self.instance_name}'. Ensure the caller has access."
             ) from exc
 
         return cred.token

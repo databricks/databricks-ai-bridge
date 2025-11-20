@@ -35,7 +35,7 @@ integration = [
 
 memory = [
   "langgraph-checkpoint-postgres>=2.0.0",
-  "psycopg[binary,pool]>=3.1",
+  "databricks-ai-bridge[memory]",
 ]
 
 [build-system]
