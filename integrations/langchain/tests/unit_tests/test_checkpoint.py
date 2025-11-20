@@ -3,12 +3,14 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from databricks_ai_bridge import lakebase
 
 try:
     from databricks_langchain.checkpoint import CheckpointSaver
 except ImportError:
     raise RuntimeError(
-        "langgraph-checkpoint-postgres is needed to enable checkpoint feature. Please install with databricks-langchain[memory]"
+        "CheckpointSaver requires databricks-langchain[memory]. "
+        "Please install with: pip install databricks-langchain[memory]"
     ) from None
 
 pytest.importorskip("psycopg")
