@@ -34,24 +34,37 @@ class DatabricksStore:
                 "Install with: pip install 'databricks-langchain[memory]'"
             )
 
-        self._lakebase: LakebasePool = LakebasePool(
-            instance_name=instance_name,
-            workspace_client=workspace_client,
-            **pool_kwargs,
-        )
-        self._pool = self._lakebase.pool
+        # Store initialization parameters for lazy initialization, otherwise 
+        # if we directly iniitalize pool during deployment it will fail
+        self._instance_name = instance_name
+        self._workspace_client = workspace_client
+        self._pool_kwargs = pool_kwargs
+        self._lakebase: Optional[LakebasePool] = None
+        self._pool = None
+        self._setup_called = False
+
+    def _ensure_initialized(self) -> None:
+        """Lazy initialization of LakebasePool on first use after deployment is ready."""
+        if self._lakebase is None:
+            self._lakebase = LakebasePool(
+                instance_name=self._instance_name,
+                workspace_client=self._workspace_client,
+                **self._pool_kwargs,
+            )
+            self._pool = self._lakebase.pool
 
     def _with_store(self, fn, *args, **kwargs):
         """
         Borrow a connection, create a short-lived PostgresStore, call fn(store),
         then return the connection to the pool.
         """
+        self._ensure_initialized()
         with self._pool.connection() as conn:
             store = PostgresStore(conn=conn)
             return fn(store, *args, **kwargs)
 
     def setup(self) -> None:
-        """Set up the store database tables (first time setup)."""
+        """Set up the store database tables."""
         return self._with_store(lambda s: s.setup())
 
     def put(self, namespace: tuple[str, ...], key: str, value: Any) -> None:
@@ -70,7 +83,8 @@ class DatabricksStore:
 
     # def close(self) -> None:
     #     """Close the underlying Lakebase pool."""
-    #     self._lakebase.close()
+    #     if self._lakebase is not None:
+    #         self._lakebase.close()
 
     # def __enter__(self) -> "DatabricksStore":
     #     """Enter context manager."""
