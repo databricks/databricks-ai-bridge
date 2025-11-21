@@ -17,7 +17,8 @@ dependencies = [
     "unitycatalog-langchain[databricks]>=0.3.0",
     "databricks-sdk>=0.65.0",
     "openai>=1.99.9",
-    "langchain-mcp-adapters>=0.1.13"
+    "langchain-mcp-adapters>=0.1.13",
+    "databricks_mcp>=0.4.0"
 
 ]
 
