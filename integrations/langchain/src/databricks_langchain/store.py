@@ -40,7 +40,6 @@ class DatabricksStore:
             **pool_kwargs,
         )
         self._pool = self._lakebase.pool
-        self.setup()
 
     def _with_store(self, fn, *args, **kwargs):
         """
