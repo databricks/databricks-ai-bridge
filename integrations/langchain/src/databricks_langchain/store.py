@@ -6,19 +6,24 @@ from databricks.sdk import WorkspaceClient
 
 try:
     from databricks_ai_bridge.lakebase import LakebasePool
+    from langgraph.store.base import BaseStore, Item
     from langgraph.store.postgres import PostgresStore
 
     _store_imports_available = True
 except ImportError:
     LakebasePool = object
     PostgresStore = object
+    BaseStore = object
+    Item = object
     _store_imports_available = False
 
 
-class DatabricksStore:
-    """
-    Wrapper around LangGraph's PostgresStore that uses a Lakebase
-    connection pool and borrows a connection per call.
+class DatabricksStore(BaseStore):
+    """Provides APIs for working with long-term memory on Databricks using Lakebase.
+    Extends LangGraph BaseStore interface using Databricks Lakebase for connection pooling.
+
+    Operations borrow a connection from the pool, create a short-lived PostgresStore,
+    execute the operation, and return the connection to the pool.
     """
 
     def __init__(
@@ -35,13 +40,12 @@ class DatabricksStore:
             )
 
         # Store initialization parameters for lazy initialization, otherwise
-        # if we directly iniitalize pool during deployment it will fail
+        # if we directly initialize pool during deployment it will fail
         self._instance_name = instance_name
         self._workspace_client = workspace_client
         self._pool_kwargs = pool_kwargs
         self._lakebase: Optional[LakebasePool] = None
         self._pool = None
-        self._setup_called = False
 
     def _ensure_initialized(self) -> None:
         """Lazy initialization of LakebasePool on first use after deployment is ready."""
@@ -64,7 +68,7 @@ class DatabricksStore:
             return fn(store, *args, **kwargs)
 
     def setup(self) -> None:
-        """Set up the store database tables."""
+        """Instantiate the store, setting up necessary persistent storage."""
         return self._with_store(lambda s: s.setup())
 
     def put(self, namespace: tuple[str, ...], key: str, value: Any) -> None:
@@ -77,6 +81,6 @@ class DatabricksStore:
         *,
         query: Optional[str] = None,
         limit: int = 20,
-    ) -> list[Any]:
+    ) -> list[Item]:
         """Search for items in the store."""
         return self._with_store(lambda s: s.search(namespace, query=query, limit=limit))
