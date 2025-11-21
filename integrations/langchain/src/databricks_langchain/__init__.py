@@ -20,6 +20,7 @@ from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogToo
 from databricks_langchain.chat_models import ChatDatabricks
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
+from databricks_langchain.multi_server_mcp_client import DatabricksMultiServerMCPClient
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
@@ -34,4 +35,5 @@ __all__ = [
     "UnityCatalogTool",
     "DatabricksFunctionClient",
     "set_uc_function_client",
+    "DatabricksMultiServerMCPClient",
 ]
