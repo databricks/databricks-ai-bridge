@@ -80,16 +80,3 @@ class DatabricksStore:
     ) -> list[Any]:
         """Search for items in the store."""
         return self._with_store(lambda s: s.search(namespace, query=query, limit=limit))
-
-    # def close(self) -> None:
-    #     """Close the underlying Lakebase pool."""
-    #     if self._lakebase is not None:
-    #         self._lakebase.close()
-
-    # def __enter__(self) -> "DatabricksStore":
-    #     """Enter context manager."""
-    #     return self
-
-    # def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-    #     """Exit context manager and close the connection pool."""
-    #     self.close()
