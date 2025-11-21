@@ -34,7 +34,7 @@ class DatabricksStore:
                 "Install with: pip install 'databricks-langchain[memory]'"
             )
 
-        # Store initialization parameters for lazy initialization, otherwise 
+        # Store initialization parameters for lazy initialization, otherwise
         # if we directly iniitalize pool during deployment it will fail
         self._instance_name = instance_name
         self._workspace_client = workspace_client

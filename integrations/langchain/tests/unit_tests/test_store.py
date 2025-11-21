@@ -62,6 +62,8 @@ def test_databricks_store_configures_lakebase(monkeypatch):
         workspace_client=workspace,
     )
 
+    store.setup()
+
     assert (
         test_pool.conninfo
         == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
