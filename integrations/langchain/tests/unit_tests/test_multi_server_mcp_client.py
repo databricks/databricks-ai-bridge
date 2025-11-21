@@ -8,18 +8,18 @@ import pytest
 from databricks.sdk import WorkspaceClient
 
 from databricks_langchain.multi_server_mcp_client import (
+    DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
-    DatabricksServer,
-    Server,
+    MCPServer,
 )
 
 
-class TestServer:
-    """Tests for the Server class."""
+class TestMCPServer:
+    """Tests for the MCPServer class."""
 
     def test_basic_server_creation(self):
         """Test creating a basic server with minimal parameters."""
-        server = Server(name="test-server", url="https://example.com/mcp")
+        server = MCPServer(name="test-server", url="https://example.com/mcp")
 
         assert server.name == "test-server"
         assert server.url == "https://example.com/mcp"
@@ -36,8 +36,8 @@ class TestServer:
         ],
     )
     def test_server_accepts_extra_params(self, extra_params: dict[str, Any]):
-        """Test that Server accepts and preserves extra parameters."""
-        server = Server(
+        """Test that MCPServer accepts and preserves extra parameters."""
+        server = MCPServer(
             name="test-server",
             url="https://example.com/mcp",
             handle_tool_error=True,
@@ -64,7 +64,7 @@ class TestServer:
     )
     def test_server_handle_tool_error_types(self, handle_tool_error_value: Any):
         """Test that handle_tool_error accepts various types."""
-        server = Server(
+        server = MCPServer(
             name="test-server",
             url="https://example.com/mcp",
             handle_tool_error=handle_tool_error_value,
@@ -73,11 +73,11 @@ class TestServer:
         assert server.handle_tool_error == handle_tool_error_value
 
 
-class TestDatabricksServer:
-    """Tests for the DatabricksServer class."""
+class TestDatabricksMCPServer:
+    """Tests for the DatabricksMCPServer class."""
 
     def test_databricks_server_without_workspace_client(self):
-        """Test DatabricksServer creates WorkspaceClient automatically."""
+        """Test DatabricksMCPServer creates WorkspaceClient automatically."""
         with (
             patch("databricks_langchain.multi_server_mcp_client.WorkspaceClient") as mock_ws,
             patch(
@@ -89,7 +89,7 @@ class TestDatabricksServer:
             mock_auth_instance = MagicMock()
             mock_auth.return_value = mock_auth_instance
 
-            server = DatabricksServer(name="databricks", url="https://databricks.com/mcp")
+            server = DatabricksMCPServer(name="databricks", url="https://databricks.com/mcp")
 
             # Should have created WorkspaceClient
             mock_ws.assert_called_once()
@@ -97,7 +97,7 @@ class TestDatabricksServer:
             mock_auth.assert_called_once_with(mock_ws_instance)
 
     def test_databricks_server_with_workspace_client(self):
-        """Test DatabricksServer uses provided WorkspaceClient."""
+        """Test DatabricksMCPServer uses provided WorkspaceClient."""
         mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
 
         with patch(
@@ -106,7 +106,7 @@ class TestDatabricksServer:
             mock_auth_instance = MagicMock()
             mock_auth.return_value = mock_auth_instance
 
-            server = DatabricksServer(
+            server = DatabricksMCPServer(
                 name="databricks",
                 url="https://databricks.com/mcp",
                 workspace_client=mock_workspace_client,
@@ -122,7 +122,7 @@ class TestDatabricksServer:
             assert connection_dict["auth"] is mock_auth_instance
 
     def test_databricks_server_accepts_extra_params(self):
-        """Test that DatabricksServer accepts extra connection params."""
+        """Test that DatabricksMCPServer accepts extra connection params."""
         mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
 
         with patch(
@@ -131,7 +131,7 @@ class TestDatabricksServer:
             mock_auth_instance = MagicMock()
             mock_auth.return_value = mock_auth_instance
 
-            server = DatabricksServer(
+            server = DatabricksMCPServer(
                 name="databricks",
                 url="https://databricks.com/mcp",
                 workspace_client=mock_workspace_client,
@@ -156,8 +156,8 @@ class TestDatabricksMultiServerMCPClient:
             mock_init.return_value = None
 
             servers = [
-                Server(name="server1", url="https://server1.com/mcp"),
-                Server(name="server2", url="https://server2.com/mcp"),
+                MCPServer(name="server1", url="https://server1.com/mcp"),
+                MCPServer(name="server2", url="https://server2.com/mcp"),
             ]
             client = DatabricksMultiServerMCPClient(servers)
 
@@ -181,8 +181,10 @@ class TestDatabricksMultiServerMCPClient:
     async def test_get_tools_all_servers(self):
         """Test get_tools without server_name (all servers)."""
         servers = [
-            Server(name="server1", url="https://server1.com/mcp", handle_tool_error=True),
-            Server(name="server2", url="https://server2.com/mcp", handle_tool_error="Custom error"),
+            MCPServer(name="server1", url="https://server1.com/mcp", handle_tool_error=True),
+            MCPServer(
+                name="server2", url="https://server2.com/mcp", handle_tool_error="Custom error"
+            ),
         ]
 
         # Create mock tools for each server
@@ -235,7 +237,7 @@ class TestDatabricksMultiServerMCPClient:
     @pytest.mark.asyncio
     async def test_get_tools_parallel_execution(self):
         """Test that get_tools executes server requests in parallel."""
-        servers = [Server(name=f"server{i}", url=f"https://server{i}.com/mcp") for i in range(5)]
+        servers = [MCPServer(name=f"server{i}", url=f"https://server{i}.com/mcp") for i in range(5)]
 
         call_count = 0
         call_times = []
@@ -274,7 +276,7 @@ class TestDatabricksMultiServerMCPClient:
 
     @pytest.mark.asyncio
     async def test_get_tools_with_databricks_server(self):
-        """Test get_tools with DatabricksServer."""
+        """Test get_tools with DatabricksMCPServer."""
         mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
         mock_tool = MagicMock()
 
@@ -295,7 +297,7 @@ class TestDatabricksMultiServerMCPClient:
             mock_auth.return_value = mock_auth_instance
             mock_parent_get_tools.return_value = [mock_tool]
 
-            server = DatabricksServer(
+            server = DatabricksMCPServer(
                 name="databricks",
                 url="https://databricks.com/mcp",
                 workspace_client=mock_workspace_client,

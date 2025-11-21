@@ -6,7 +6,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class Server(BaseModel):
+class MCPServer(BaseModel):
     """
     Base configuration for an MCP server connection using streamable HTTP transport.
 
@@ -24,10 +24,10 @@ class Server(BaseModel):
 
     Example:
         ```python
-        from databricks_langchain import DatabricksMultiServerMCPClient, Server
+        from databricks_langchain import DatabricksMultiServerMCPClient, MCPServer
 
         # Generic server with custom params - flat API for easy configuration
-        server = Server(
+        server = MCPServer(
             name="other-server",
             url="https://other-server.com/mcp",
             headers={"X-API-Key": "secret"},
@@ -72,7 +72,7 @@ class Server(BaseModel):
         return data
 
 
-class DatabricksServer(Server):
+class DatabricksMCPServer(MCPServer):
     """
     MCP server configuration with Databricks authentication.
 
@@ -82,10 +82,10 @@ class DatabricksServer(Server):
     Example:
         ```python
         from databricks.sdk import WorkspaceClient
-        from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksServer
+        from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
 
         # Databricks server with automatic OAuth - just pass params as kwargs!
-        server = DatabricksServer(
+        server = DatabricksMCPServer(
             name="databricks-prod",
             url="https://your-workspace.databricks.com/mcp",
             workspace_client=WorkspaceClient(),
@@ -141,14 +141,14 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
         from databricks.sdk import WorkspaceClient
         from databricks_langchain import (
             DatabricksMultiServerMCPClient,
-            DatabricksServer,
-            Server,
+            DatabricksMCPServer,
+            MCPServer,
         )
 
         client = DatabricksMultiServerMCPClient(
             [
                 # Databricks server with automatic OAuth - just pass params as kwargs!
-                DatabricksServer(
+                DatabricksMCPServer(
                     name="databricks-prod",
                     url="https://your-workspace.databricks.com/mcp",
                     workspace_client=WorkspaceClient(),
@@ -157,7 +157,7 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
                     handle_tool_error=True,  # Return errors as strings instead of raising
                 ),
                 # Generic server with custom params - same flat API
-                Server(
+                MCPServer(
                     name="other-server",
                     url="https://other-server.com/mcp",
                     headers={"X-API-Key": "secret"},
@@ -171,12 +171,12 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
         ```
     """
 
-    def __init__(self, servers: List[Server], **kwargs):
+    def __init__(self, servers: List[MCPServer], **kwargs):
         """
         Initialize the client with a list of server configurations.
 
         Args:
-            servers: List of Server or DatabricksServer configurations
+            servers: List of MCPServer or DatabricksMCPServer configurations
             **kwargs: Additional arguments to pass to MultiServerMCPClient
         """
         # Store server configs for later use (e.g., handle_tool_errors)
