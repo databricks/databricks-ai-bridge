@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from databricks.sdk import WorkspaceClient
 
 try:
     from databricks_ai_bridge.lakebase import LakebasePool
-    from langgraph.store.base import BaseStore, Item
+    from langgraph.store.base import BaseStore, Item, Op, Result
     from langgraph.store.postgres import PostgresStore
 
     _store_imports_available = True
@@ -15,6 +15,8 @@ except ImportError:
     PostgresStore = object
     BaseStore = object
     Item = object
+    Op = object
+    Result = object
     _store_imports_available = False
 
 
@@ -71,16 +73,26 @@ class DatabricksStore(BaseStore):
         """Instantiate the store, setting up necessary persistent storage."""
         return self._with_store(lambda s: s.setup())
 
-    def put(self, namespace: tuple[str, ...], key: str, value: Any) -> None:
-        """Store a value in the store."""
-        return self._with_store(lambda s: s.put(namespace, key, value))
+    # BaseStore abstract methods - REQUIRED to implement
+    def batch(self, ops: Iterable[Op]) -> list[Result]:
+        """Execute a batch of operations synchronously.
 
-    def search(
-        self,
-        namespace: tuple[str, ...],
-        *,
-        query: Optional[str] = None,
-        limit: int = 20,
-    ) -> list[Item]:
-        """Search for items in the store."""
-        return self._with_store(lambda s: s.search(namespace, query=query, limit=limit))
+        This is the core method required by BaseStore. All other operations
+        (get, put, search, delete, list_namespaces) are inherited from BaseStore
+        and internally call this batch() method.
+        """
+        return self._with_store(lambda s: s.batch(ops))
+
+    async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        """Execute a batch of operations asynchronously.
+
+        This is the second abstract method required by BaseStore.
+        Currently delegates to sync batch() - for true async support,
+        would need async-compatible connection pooling.
+        """
+        return self.batch(ops)
+
+    # def close(self) -> None:
+    #     """Close the underlying Lakebase pool."""
+    #     if self._lakebase is not None:
+    #         self._lakebase.close()
