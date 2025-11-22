@@ -92,7 +92,7 @@ class DatabricksStore(BaseStore):
         """
         return self.batch(ops)
 
-    # def close(self) -> None:
-    #     """Close the underlying Lakebase pool."""
-    #     if self._lakebase is not None:
-    #         self._lakebase.close()
+    def close(self) -> None:
+        """Close the underlying Lakebase pool."""
+        if self._lakebase is not None:
+            self._lakebase.close()
