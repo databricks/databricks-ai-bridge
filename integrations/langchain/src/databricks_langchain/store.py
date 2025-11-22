@@ -73,7 +73,6 @@ class DatabricksStore(BaseStore):
         """Instantiate the store, setting up necessary persistent storage."""
         return self._with_store(lambda s: s.setup())
 
-    # BaseStore abstract methods - REQUIRED to implement
     def batch(self, ops: Iterable[Op]) -> list[Result]:
         """Execute a batch of operations synchronously.
 
@@ -91,8 +90,3 @@ class DatabricksStore(BaseStore):
         would need async-compatible connection pooling.
         """
         return self.batch(ops)
-
-    def close(self) -> None:
-        """Close the underlying Lakebase pool."""
-        if self._lakebase is not None:
-            self._lakebase.close()
