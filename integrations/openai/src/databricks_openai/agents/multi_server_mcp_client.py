@@ -20,4 +20,7 @@ class DatabricksMultiServerMCPClient:
 
     async def cleanup_all(self):
         for server in self.servers:
-            await server.cleanup()
+            try:
+                await server.cleanup()
+            except Exception as e:
+                print(f"Error cleaning up server: {e}")
