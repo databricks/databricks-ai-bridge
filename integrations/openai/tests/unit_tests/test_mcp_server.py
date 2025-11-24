@@ -13,24 +13,24 @@ def mock_workspace_client():
     return mock_client
 
 
-class TestMcpServerInit:
+class TestDatabricksMCPServerInit:
     def test_init_with_url(self, mock_workspace_client):
         with patch(
             "databricks_openai.agents.mcp_server.WorkspaceClient",
             return_value=mock_workspace_client,
         ):
-            from databricks_openai.agents.mcp_server import McpServer
+            from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
-            server = McpServer(url="https://test.com/mcp")
+            server = DatabricksMCPServer(url="https://test.com/mcp")
             assert server.workspace_client == mock_workspace_client
             assert server.params["url"] == "https://test.com/mcp"
 
     def test_init_with_custom_workspace_client(self):
         custom_client = MagicMock(spec=WorkspaceClient)
         custom_client.config.host = "https://custom.databricks.com"
-        from databricks_openai.agents.mcp_server import McpServer
+        from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
-        server = McpServer(url="https://test.com/mcp", workspace_client=custom_client)
+        server = DatabricksMCPServer(url="https://test.com/mcp", workspace_client=custom_client)
         assert server.workspace_client == custom_client
 
     def test_init_with_custom_params(self, mock_workspace_client):
@@ -38,10 +38,10 @@ class TestMcpServerInit:
             "databricks_openai.agents.mcp_server.WorkspaceClient",
             return_value=mock_workspace_client,
         ):
-            from databricks_openai.agents.mcp_server import McpServer
+            from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
             custom_params = {"headers": {"Custom-Header": "value"}, "timeout": 10}
-            server = McpServer(url="https://test.com/mcp", params=custom_params)
+            server = DatabricksMCPServer(url="https://test.com/mcp", params=custom_params)
             assert server.params["url"] == "https://test.com/mcp"
             assert server.params["headers"] == {"Custom-Header": "value"}
             assert server.params["timeout"] == 10
@@ -51,9 +51,9 @@ class TestMcpServerInit:
             "databricks_openai.agents.mcp_server.WorkspaceClient",
             return_value=mock_workspace_client,
         ):
-            from databricks_openai.agents.mcp_server import McpServer
+            from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
-            server = McpServer(
+            server = DatabricksMCPServer(
                 url="https://test.com/mcp",
                 cache_tools_list=True,
                 name="test-server",
@@ -101,17 +101,17 @@ class TestMcpServerInit:
             "databricks_openai.agents.mcp_server.WorkspaceClient",
             return_value=mock_workspace_client,
         ):
-            from databricks_openai.agents.mcp_server import McpServer
+            from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
             params: MCPServerStreamableHttpParams | None = params_dict  # type: ignore
-            server = McpServer(url=url, params=params)
+            server = DatabricksMCPServer(url=url, params=params)
             assert server.params["url"] == expected_url
             for key, value in expected_extra.items():
                 assert server.params[key] == value
             assert server.workspace_client == mock_workspace_client
 
 
-class TestMcpServerCreateStreams:
+class TestDatabricksMCPServerCreateStreams:
     @pytest.mark.parametrize(
         "params,expected_values",
         [
@@ -140,12 +140,12 @@ class TestMcpServerCreateStreams:
             with patch(
                 "databricks_openai.agents.mcp_server.streamablehttp_client"
             ) as mock_streamable:
-                from databricks_openai.agents.mcp_server import McpServer
+                from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
                 server = (
-                    McpServer(url="https://test.com/mcp", params=params)
+                    DatabricksMCPServer(url="https://test.com/mcp", params=params)
                     if params
-                    else McpServer(url="https://test.com/mcp")
+                    else DatabricksMCPServer(url="https://test.com/mcp")
                 )
                 server.create_streams()
 

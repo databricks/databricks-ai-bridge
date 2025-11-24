@@ -1,3 +1,3 @@
-from databricks_openai.agents.mcp_server import McpServer
+from databricks_openai.agents.mcp_server import DatabricksMCPServer
 
-__all__ = ["McpServer"]
+__all__ = ["DatabricksMCPServer"]

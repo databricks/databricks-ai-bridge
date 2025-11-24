@@ -12,7 +12,7 @@ from mcp.types import CallToolResult
 from mlflow.entities import SpanType
 
 
-class McpServer(MCPServerStreamableHttp):
+class DatabricksMCPServer(MCPServerStreamableHttp):
     """Databricks MCP server implementation that extends MCPServerStreamableHttp.
 
     This class provides convenient access to MCP servers in the Databricks ecosystem.
@@ -83,10 +83,10 @@ class McpServer(MCPServerStreamableHttp):
             .. code-block:: python
 
                 from agents import Agent, Runner
-                from databricks_openai.agents import McpServer
+                from databricks_openai.agents import DatabricksMCPServer
 
                 async with (
-                    McpServer(
+                    DatabricksMCPServer(
                         url="https://<workspace-url>/api/2.0/mcp/functions/system/ai",
                         name="system-ai",
                         timeout=30.0,
@@ -112,7 +112,7 @@ class McpServer(MCPServerStreamableHttp):
 
         if url is None and params.get("url") is None:
             raise ValueError(
-                "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
+                "Please provide the url of the MCP Server when initializing the DatabricksMCPServer. DatabricksMCPServer(url=...)"
             )
 
         if url is not None and params.get("url") is not None and url != params.get("url"):
