@@ -309,7 +309,13 @@ latex_documents = [
 
 # Mock torch & fastai imports as per suggestion in
 # https://github.com/sphinx-doc/sphinx/issues/6521#issuecomment-505765893
-autodoc_mock_imports = ["torch", "fastai"]
+autodoc_mock_imports = [
+    "torch",
+    "fastai",
+    "psycopg",  # Required by databricks_ai_bridge.lakebase
+    "psycopg_pool",  # Required by databricks_ai_bridge.lakebase
+    "langgraph.checkpoint.postgres",  # Required by databricks_langchain.checkpoint
+]
 
 # The name of an image file (relative to this directory) to place at the top of
 # the title page.
