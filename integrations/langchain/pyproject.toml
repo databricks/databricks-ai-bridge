@@ -20,27 +20,33 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+memory = [
+  "langgraph-checkpoint-postgres>=2.0.0",
+  "databricks-ai-bridge[memory]>=0.10.0",
+]
+
+[dependency-groups]
 dev = [
-  "pytest",
   "typing_extensions",
   "ruff==0.6.4",
+  { include-group = "integration" }
 ]
 
 integration = [
+  "pytest",
   "langgraph>=0.2.27",
   "pytest-timeout>=2.3.1",
   "pytest-asyncio",
   "anyio",
 ]
 
-memory = [
-  "langgraph-checkpoint-postgres>=2.0.0",
-  "databricks-ai-bridge[memory]>=0.10.0",
-]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../../", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -81,3 +87,10 @@ docstring-code-line-length = 88
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_langchain",
+    "default::Warning:tests",
+]
