@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Iterable, Optional
 
 from databricks.sdk import WorkspaceClient
@@ -18,6 +20,62 @@ except ImportError:
     Op = object
     Result = object
     _store_imports_available = False
+
+
+def normalize_namespace_label(s: Optional[str]) -> str:
+    """Normalize a string for use as a namespace label.
+
+    Converts to lowercase, replaces @ with -at-, removes invalid characters,
+    and truncates with hash if too long.
+
+    Args:
+        s: The string to normalize (e.g., email address, user_id)
+
+    Returns:
+        Normalized string safe for namespace usage
+
+    Example:
+        >>> normalize_namespace_label("user@example.com")
+        'user-at-example-com'
+        >>> normalize_namespace_label("")
+        'anon'
+    """
+    SAFE_NS_MAX = 64
+
+    if not s:
+        return "anon"
+    x = s.strip().lower().replace("@", "-at-")
+    x = re.sub(r"[^a-z0-9_-]+", "-", x)  # removes dots and punctuation
+    x = re.sub(r"-{2,}", "-", x).strip("-") or "anon"
+    if len(x) > SAFE_NS_MAX:
+        head = x[: SAFE_NS_MAX - 17]
+        tail = hashlib.sha256(x.encode()).hexdigest()[:16]
+        x = f"{head}-{tail}"
+    return x
+
+
+def namespace(identifier: str, prefix: str = "users") -> tuple[str, ...]:
+    """Create a namespace tuple with a normalized identifier.
+
+    Args:
+        identifier: The identifier to normalize (e.g., user_id, email, entity_name)
+        prefix: The namespace prefix (default: "users")
+
+    Returns:
+        Tuple of (prefix, normalized_identifier) for use as namespace
+
+    Example:
+        >>> namespace("email@databricks.com")
+        ('users', 'email-at-databricks-com')
+        >>> namespace("session-123", prefix="sessions")
+        ('sessions', 'session-123')
+
+    Note:
+        To customize namespace structure for your agent (e.g., to isolate
+        memories per agent or add additional hierarchy), pass a custom prefix
+        or build your namespace tuple manually.
+    """
+    return (prefix, normalize_namespace_label(identifier))
 
 
 class DatabricksStore(BaseStore):
