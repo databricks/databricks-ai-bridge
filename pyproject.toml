@@ -21,19 +21,12 @@ dependencies = [
 [project.license]
 file = "LICENSE.txt"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build]
-include = [
-  "src/*"
+[project.optional-dependencies]
+memory = [
+  "psycopg[binary,pool]>=3.1",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/databricks_ai_bridge"]
-
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
   "hatch",
   "pytest",
@@ -56,9 +49,17 @@ lint = [
   "ruff==0.12.10",
 ]
 
-memory = [
-  "psycopg[binary,pool]>=3.1",
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+  "src/*"
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_ai_bridge"]
 
 [tool.ruff]
 line-length = 100
