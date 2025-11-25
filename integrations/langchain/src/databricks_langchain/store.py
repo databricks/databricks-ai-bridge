@@ -87,31 +87,18 @@ class DatabricksStore(BaseStore):
                 "Install with: pip install 'databricks-langchain[memory]'"
             )
 
-        # Store initialization parameters for lazy initialization, otherwise
-        # if we directly initialize pool during deployment it will fail
-        self._instance_name = instance_name
-        self._workspace_client = workspace_client
-        self._pool_kwargs = pool_kwargs
-        self._lakebase: Optional[LakebasePool] = None
-        self._pool = None
-
-    def _ensure_initialized(self) -> None:
-        """Lazy initialization of LakebasePool on first use after deployment is ready."""
-        if self._lakebase is None:
-            self._lakebase = LakebasePool(
-                instance_name=self._instance_name,
-                workspace_client=self._workspace_client,
-                **self._pool_kwargs,
-            )
-            self._pool = self._lakebase.pool
+        self._lakebase: LakebasePool = LakebasePool(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            **pool_kwargs,
+        )
 
     def _with_store(self, fn, *args, **kwargs):
         """
         Borrow a connection, create a short-lived PostgresStore, call fn(store),
         then return the connection to the pool.
         """
-        self._ensure_initialized()
-        with self._pool.connection() as conn:
+        with self._lakebase.connection() as conn:
             store = PostgresStore(conn=conn)
             return fn(store, *args, **kwargs)
 
