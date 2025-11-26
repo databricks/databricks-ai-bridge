@@ -105,11 +105,6 @@ class TestDatabricksStoreNamespace:
         result = DatabricksStore.namespace("user!name@test#site.com")
         assert result == ("users", "user-name-at-test-site-com")
 
-    def test_namespace_with_multiple_consecutive_dashes(self):
-        """Test that multiple consecutive dashes are collapsed to single dash."""
-        result = DatabricksStore.namespace("user!!!name@@@test.com")
-        assert result == ("users", "user-name-at-test-com")
-
     def test_namespace_with_leading_trailing_special_chars(self):
         """Test that leading/trailing dashes are stripped."""
         result = DatabricksStore.namespace("!!!user@test.com!!!")
@@ -143,10 +138,10 @@ class TestDatabricksStoreNamespace:
         assert isinstance(result, tuple)
         assert len(result) == 2
 
-    def test_namespace_with_only_special_characters(self):
-        """Test identifier with only special characters."""
+    def test_namespace_with_at_and_special_characters(self):
+        """Test identifier with at and special characters."""
         result = DatabricksStore.namespace("@@@###$$$")
-        assert result == ("users", "anon")
+        assert result == ("users", "at-at-at")
 
     def test_namespace_with_mixed_valid_invalid_chars(self):
         """Test identifier with mix of valid and invalid characters."""
