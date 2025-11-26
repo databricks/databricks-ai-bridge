@@ -11,25 +11,29 @@ requires-python = ">=3.10"
 dependencies = [
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.1.0",
-    "llama-index>=0.11.0",
+    "llama-index>=0.12.0",
     "unitycatalog-llamaindex[databricks]>=0.2.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "pytest",
-    "typing_extensions",
+    "typing_extensions>=4.15.0",
     "databricks-sdk>=0.34.0",
     "ruff==0.6.4",
+    { include-group = "integration" }
 ]
 
 integration = [
+    "pytest>=9.0.0",
     "pytest-timeout>=2.3.1",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../../", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -70,3 +74,10 @@ docstring-code-line-length = 88
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_llamaindex",
+    "default::Warning:tests",
+]
