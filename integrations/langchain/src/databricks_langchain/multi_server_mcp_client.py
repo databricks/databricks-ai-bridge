@@ -105,9 +105,9 @@ class DatabricksMCPServer(MCPServer):
         exclude=True,
     )
 
-    def __init__(self, **data):
+    def model_post_init(self, __context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
-        super().__init__(**data)
+        super().model_post_init(__context)
 
         # Set up Databricks OAuth authentication after initialization
         if self.workspace_client is None:
