@@ -21,6 +21,7 @@ class MCPServer(BaseModel):
         - httpx_client_factory: Callable - Custom httpx client factory
         - terminate_on_close: bool - Terminate connection on close
         - session_kwargs: dict - Additional session kwargs
+        - handle_tool_error: bool | str | Callable - Error handling strategy
 
     Example:
         ```python
@@ -48,11 +49,9 @@ class MCPServer(BaseModel):
         default=None,
         exclude=True,
         description=(
-            "How to handle errors raised by tools from this server. Options:\n"
-            "- None/False: Raise the error\n"
-            "- True: Return error message as string\n"
-            "- str: Return this string when errors occur\n"
-            "- Callable: Function that takes error and returns error message string"
+            "If True, return the error message as the output. If False, raise the error. "
+            "If a string, return the string as the error message. "
+            "If a callable, return the result of the callable as the error message."
         ),
     )
 
@@ -105,9 +104,9 @@ class DatabricksMCPServer(MCPServer):
         exclude=True,
     )
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
-        super().model_post_init(__context)
+        super().model_post_init(context)
 
         # Set up Databricks OAuth authentication after initialization
         if self.workspace_client is None:
