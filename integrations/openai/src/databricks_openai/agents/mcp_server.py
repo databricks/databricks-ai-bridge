@@ -136,6 +136,9 @@ class McpServer(MCPServerStreamableHttp):
         if params.get("timeout") is None:
             params["timeout"] = timeout if timeout is not None else 20.0
 
+        if "client_session_timeout_seconds" not in mcpserver_kwargs:
+            mcpserver_kwargs["client_session_timeout_seconds"] = params["timeout"]
+
         super().__init__(params=params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
