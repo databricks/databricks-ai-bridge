@@ -110,21 +110,20 @@ class McpServer(MCPServerStreamableHttp):
         if params is None:
             params = MCPServerStreamableHttpParams()
 
-        self.params = params
-        if url is None and self.params.get("url") is None:
+        if url is None and params.get("url") is None:
             raise ValueError(
                 "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
             )
 
-        if url is not None and self.params.get("url") is not None and url != self.params.get("url"):
+        if url is not None and params.get("url") is not None and url != params.get("url"):
             raise ValueError(
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
 
         if (
             timeout is not None
-            and self.params.get("timeout") is not None
-            and timeout != self.params.get("timeout")
+            and params.get("timeout") is not None
+            and timeout != params.get("timeout")
         ):
             raise ValueError(
                 "Different timeouts provided in timeout and the MCPServerStreamableHttpParams. Please provide only one of them."
@@ -132,11 +131,12 @@ class McpServer(MCPServerStreamableHttp):
 
         # Configure URL and timeout in Params
         if url is not None:
-            self.params["url"] = url
+            params["url"] = url
 
-        if self.params.get("timeout") is None:
-            self.params["timeout"] = timeout if timeout is not None else 20.0
+        if params.get("timeout") is None:
+            params["timeout"] = timeout if timeout is not None else 20.0
 
+        self.params = params
         super().__init__(params=self.params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
