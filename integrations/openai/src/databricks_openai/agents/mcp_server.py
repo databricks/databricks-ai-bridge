@@ -137,6 +137,7 @@ class McpServer(MCPServerStreamableHttp):
             params["timeout"] = timeout if timeout is not None else 20.0
 
         self.params = params
+        print(f"self.params: {self.params}")
         super().__init__(params=self.params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
@@ -152,6 +153,7 @@ class McpServer(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
+        print(f"params: {self.params}")
         kwargs = {
             "url": self.params["url"],
             "headers": self.params.get("headers", None),
