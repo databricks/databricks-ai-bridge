@@ -136,9 +136,10 @@ class McpServer(MCPServerStreamableHttp):
         if params.get("timeout") is None:
             params["timeout"] = timeout if timeout is not None else 20.0
 
-        self.params = params
-        print(f"self.params: {self.params}")
-        super().__init__(params=self.params, **mcpserver_kwargs)
+        if "client_session_timeout_seconds" not in mcpserver_kwargs:
+            mcpserver_kwargs["client_session_timeout_seconds"] = params["timeout"]
+        
+        super().__init__(params=params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
@@ -153,7 +154,7 @@ class McpServer(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
-        print(f"params: {self.params}")
+        print(f"self.params: {self.params}")
         kwargs = {
             "url": self.params["url"],
             "headers": self.params.get("headers", None),
