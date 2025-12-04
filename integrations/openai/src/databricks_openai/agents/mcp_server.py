@@ -133,9 +133,12 @@ class McpServer(MCPServerStreamableHttp):
         if url is not None:
             params["url"] = url
 
+        print(f"params: {params}")
+        print(timeout)
         if params.get("timeout") is None:
+            print(f"SETTING TIMEOUT TO {timeout if timeout is not None else 20.0}")
             params["timeout"] = timeout if timeout is not None else 20.0
-
+        print(f"params: {params}")
         super().__init__(params=params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
