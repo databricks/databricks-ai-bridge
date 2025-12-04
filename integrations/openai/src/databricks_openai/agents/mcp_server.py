@@ -110,20 +110,21 @@ class McpServer(MCPServerStreamableHttp):
         if params is None:
             params = MCPServerStreamableHttpParams()
 
-        if url is None and params.get("url") is None:
+        self.params = params
+        if url is None and self.params.get("url") is None:
             raise ValueError(
                 "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
             )
 
-        if url is not None and params.get("url") is not None and url != params.get("url"):
+        if url is not None and self.params.get("url") is not None and url != self.params.get("url"):
             raise ValueError(
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
 
         if (
             timeout is not None
-            and params.get("timeout") is not None
-            and timeout != params.get("timeout")
+            and self.params.get("timeout") is not None
+            and timeout != self.params.get("timeout")
         ):
             raise ValueError(
                 "Different timeouts provided in timeout and the MCPServerStreamableHttpParams. Please provide only one of them."
@@ -131,15 +132,12 @@ class McpServer(MCPServerStreamableHttp):
 
         # Configure URL and timeout in Params
         if url is not None:
-            params["url"] = url
+            self.params["url"] = url
 
-        print(f"params: {params}")
-        print(timeout)
-        if params.get("timeout") is None:
-            print(f"SETTING TIMEOUT TO {timeout if timeout is not None else 20.0}")
-            params["timeout"] = timeout if timeout is not None else 20.0
-        print(f"params: {params}")
-        super().__init__(params=params, **mcpserver_kwargs)
+        if self.params.get("timeout") is None:
+            self.params["timeout"] = timeout if timeout is not None else 20.0
+
+        super().__init__(params=self.params, **mcpserver_kwargs)
 
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
