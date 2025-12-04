@@ -110,6 +110,32 @@ class TestMcpServerInit:
                 assert server.params[key] == value
             assert server.workspace_client == mock_workspace_client
 
+    def test_client_session_timeout_propagation(self, mock_workspace_client):
+        with patch(
+            "databricks_openai.agents.mcp_server.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch(
+                "agents.mcp.MCPServerStreamableHttp.__init__", return_value=None
+            ) as mock_super_init:
+                from databricks_openai.agents.mcp_server import McpServer
+
+                # Case 1: Timeout provided, defaults client_session_timeout_seconds
+                McpServer(url="https://test.com/mcp", timeout=30.0)
+
+                _, kwargs = mock_super_init.call_args
+                assert kwargs["client_session_timeout_seconds"] == 30.0
+
+                # Case 2: client_session_timeout_seconds explicitly provided
+                McpServer(
+                    url="https://test.com/mcp",
+                    timeout=30.0,
+                    client_session_timeout_seconds=10.0,
+                )
+
+                _, kwargs = mock_super_init.call_args
+                assert kwargs["client_session_timeout_seconds"] == 10.0
+
 
 class TestMcpServerCreateStreams:
     @pytest.mark.parametrize(
