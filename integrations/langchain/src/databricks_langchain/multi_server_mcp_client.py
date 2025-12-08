@@ -104,6 +104,54 @@ class DatabricksMCPServer(MCPServer):
         exclude=True,
     )
 
+    @classmethod
+    def from_uc_path(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str = None,
+        workspace_client: WorkspaceClient = None,
+        **kwargs
+    ):
+        """Alternative constructor that builds URL from Unity Catalog path.
+
+        Args:
+            catalog: The catalog name (e.g., "system", "main").
+            schema: The schema name (e.g., "ai", "default").
+            name: Optional function/vector search index name. Also used as server name.
+            workspace_client: Databricks WorkspaceClient for authentication.
+            **kwargs: Additional connection parameters (timeout, headers, etc.)
+
+        Returns:
+            DatabricksMCPServer instance with Databricks auth configured.
+
+        Example:
+            .. code-block:: python
+
+                server = DatabricksMCPServer.from_uc_path(
+                    catalog="system", 
+                    schema="ai",
+                    workspace_client=WorkspaceClient(),
+                    timeout=30.0
+                )
+                server = DatabricksMCPServer.from_uc_path(
+                    catalog="main", 
+                    schema="default", 
+                    name="my_func"
+                )
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{name}"
+            server_name = name
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+            server_name = schema
+
+        return cls(name=server_name, url=url, workspace_client=ws_client, **kwargs)
+
     def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
         super().model_post_init(context)

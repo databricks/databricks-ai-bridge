@@ -95,6 +95,41 @@ class McpServerToolkit:
 
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
+    @classmethod
+    def from_uc_path(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str = None,
+        workspace_client: WorkspaceClient = None,
+    ):
+        """Alternative constructor that builds URL from Unity Catalog path.
+
+        Args:
+            catalog: The catalog name (e.g., "system", "main").
+            schema: The schema name (e.g., "ai", "default").
+            name: Optional function/vector search index name.
+            workspace_client: Databricks WorkspaceClient for authentication.
+
+        Returns:
+            McpServerToolkit instance.
+
+        Example:
+            .. code-block:: python
+
+                toolkit = McpServerToolkit.from_uc_path(catalog="system", schema="ai")
+                toolkit = McpServerToolkit.from_uc_path(catalog="main", schema="default", name="my_func")
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(url=url, name=name or schema, workspace_client=ws_client)
+
     def get_tools(self) -> List[ToolInfo]:
         return asyncio.run(self.aget_tools())
 
