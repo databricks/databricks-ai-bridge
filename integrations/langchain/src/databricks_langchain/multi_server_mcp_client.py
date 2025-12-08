@@ -112,7 +112,7 @@ class DatabricksMCPServer(MCPServer):
         function_name: str = None,
         name: str = None,
         workspace_client: WorkspaceClient = None,
-        **kwargs
+        **kwargs,
     ):
         """Alternative constructor that builds URL from Unity Catalog function path.
 
@@ -133,25 +133,20 @@ class DatabricksMCPServer(MCPServer):
 
                 # Schema-level - server named "my_tools"
                 server = DatabricksMCPServer.from_uc_function(
-                    catalog="system", 
-                    schema="ai",
-                    name="my_tools",
-                    timeout=30.0
+                    catalog="system", schema="ai", name="my_tools", timeout=30.0
                 )
-                
+
                 # Specific function - server inherits function name
                 server = DatabricksMCPServer.from_uc_function(
-                    catalog="main", 
-                    schema="default", 
-                    function_name="duplicate_id"
+                    catalog="main", schema="default", function_name="duplicate_id"
                 )
-                
+
                 # Specific function with custom server name
                 server = DatabricksMCPServer.from_uc_function(
-                    catalog="main", 
-                    schema="default", 
+                    catalog="main",
+                    schema="default",
                     function_name="duplicate_id",
-                    name="my_duplicate_checker"
+                    name="my_duplicate_checker",
                 )
         """
         ws_client = workspace_client or WorkspaceClient()
@@ -174,7 +169,7 @@ class DatabricksMCPServer(MCPServer):
         index_name: str = None,
         name: str = None,
         workspace_client: WorkspaceClient = None,
-        **kwargs
+        **kwargs,
     ):
         """Alternative constructor that builds URL from Unity Catalog vector search index path.
 
@@ -195,25 +190,17 @@ class DatabricksMCPServer(MCPServer):
 
                 # Schema-level with custom server name
                 server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", 
-                    schema="default",
-                    name="my_search",
-                    timeout=30.0
+                    catalog="main", schema="default", name="my_search", timeout=30.0
                 )
-                
+
                 # Specific index - server inherits index name
                 server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", 
-                    schema="default", 
-                    index_name="en_wiki_index"
+                    catalog="main", schema="default", index_name="en_wiki_index"
                 )
-                
+
                 # Specific index with custom server name
                 server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", 
-                    schema="default", 
-                    index_name="en_wiki_index",
-                    name="wikipedia"
+                    catalog="main", schema="default", index_name="en_wiki_index", name="wikipedia"
                 )
         """
         ws_client = workspace_client or WorkspaceClient()

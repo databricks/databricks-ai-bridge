@@ -122,24 +122,20 @@ class McpServerToolkit:
 
                 # Schema-level - toolkit named "my_tools"
                 toolkit = McpServerToolkit.from_uc_function(
-                    catalog="system", 
-                    schema="ai",
-                    name="my_tools"
+                    catalog="system", schema="ai", name="my_tools"
                 )
-                
+
                 # Specific function - toolkit inherits function name
                 toolkit = McpServerToolkit.from_uc_function(
-                    catalog="main", 
-                    schema="default", 
-                    function_name="duplicate_id"
+                    catalog="main", schema="default", function_name="duplicate_id"
                 )
-                
+
                 # Specific function with custom toolkit name
                 toolkit = McpServerToolkit.from_uc_function(
-                    catalog="main", 
-                    schema="default", 
+                    catalog="main",
+                    schema="default",
                     function_name="duplicate_id",
-                    name="my_duplicate_checker"
+                    name="my_duplicate_checker",
                 )
         """
         ws_client = workspace_client or WorkspaceClient()
@@ -181,24 +177,17 @@ class McpServerToolkit:
 
                 # Schema-level with custom toolkit name
                 toolkit = McpServerToolkit.from_vector_search(
-                    catalog="main", 
-                    schema="default",
-                    name="my_search"
+                    catalog="main", schema="default", name="my_search"
                 )
-                
+
                 # Specific index - toolkit inherits index name
                 toolkit = McpServerToolkit.from_vector_search(
-                    catalog="main", 
-                    schema="default", 
-                    index_name="en_wiki_index"
+                    catalog="main", schema="default", index_name="en_wiki_index"
                 )
-                
+
                 # Specific index with custom toolkit name
                 toolkit = McpServerToolkit.from_vector_search(
-                    catalog="main", 
-                    schema="default", 
-                    index_name="en_wiki_index",
-                    name="wikipedia"
+                    catalog="main", schema="default", index_name="en_wiki_index", name="wikipedia"
                 )
         """
         ws_client = workspace_client or WorkspaceClient()
