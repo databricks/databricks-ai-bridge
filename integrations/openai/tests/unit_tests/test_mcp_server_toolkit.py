@@ -425,6 +425,7 @@ class TestMcpServerToolkitAsyncGetTools:
                 ):
                     await toolkit.aget_tools()
 
+
 class TestMcpServerToolkitFromUCResource:
     def test_from_uc_function(self, mock_workspace_client):
         """Test from_uc_function constructs correct URL."""
@@ -439,10 +440,13 @@ class TestMcpServerToolkitFromUCResource:
                     catalog="system",
                     schema="ai",
                     function_name="test_tool",
-                    workspace_client=mock_workspace_client
+                    workspace_client=mock_workspace_client,
                 )
 
-                assert toolkit.url == "https://test.databricks.com/api/2.0/mcp/functions/system/ai/test_tool"
+                assert (
+                    toolkit.url
+                    == "https://test.databricks.com/api/2.0/mcp/functions/system/ai/test_tool"
+                )
                 assert toolkit.name is None
                 assert toolkit.workspace_client == mock_workspace_client
 
@@ -459,9 +463,12 @@ class TestMcpServerToolkitFromUCResource:
                     catalog="system",
                     schema="ai",
                     index_name="test_index",
-                    workspace_client=mock_workspace_client
+                    workspace_client=mock_workspace_client,
                 )
 
-                assert toolkit.url == "https://test.databricks.com/api/2.0/mcp/vector-search/system/ai/test_index"
+                assert (
+                    toolkit.url
+                    == "https://test.databricks.com/api/2.0/mcp/vector-search/system/ai/test_index"
+                )
                 assert toolkit.name is None
                 assert toolkit.workspace_client == mock_workspace_client
