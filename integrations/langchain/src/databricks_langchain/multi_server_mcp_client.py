@@ -110,7 +110,7 @@ class DatabricksMCPServer(MCPServer):
         catalog: str,
         schema: str,
         function_name: str = None,
-        name: str = None,
+        name: str,
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
@@ -130,7 +130,7 @@ class DatabricksMCPServer(MCPServer):
         catalog: str,
         schema: str,
         index_name: str = None,
-        name: str = None,
+        name: str,
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
