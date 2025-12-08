@@ -96,19 +96,22 @@ class McpServerToolkit:
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
     @classmethod
-    def from_uc_path(
+    def from_uc_function(
         cls,
         catalog: str,
         schema: str,
+        function_name: str = None,
         name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
-        """Alternative constructor that builds URL from Unity Catalog path.
+        """Alternative constructor that builds URL from Unity Catalog function path.
 
         Args:
             catalog: The catalog name (e.g., "system", "main").
             schema: The schema name (e.g., "ai", "default").
-            name: Optional function/vector search index name.
+            function_name: Optional UC function name to include in the URL path.
+            name: Optional toolkit name used as prefix for tool names. If not provided,
+                defaults to function_name if specified, otherwise schema.
             workspace_client: Databricks WorkspaceClient for authentication.
 
         Returns:
@@ -117,18 +120,98 @@ class McpServerToolkit:
         Example:
             .. code-block:: python
 
-                toolkit = McpServerToolkit.from_uc_path(catalog="system", schema="ai")
-                toolkit = McpServerToolkit.from_uc_path(catalog="main", schema="default", name="my_func")
+                # Schema-level - toolkit named "my_tools"
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="system", 
+                    schema="ai",
+                    name="my_tools"
+                )
+                
+                # Specific function - toolkit inherits function name
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="main", 
+                    schema="default", 
+                    function_name="duplicate_id"
+                )
+                
+                # Specific function with custom toolkit name
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="main", 
+                    schema="default", 
+                    function_name="duplicate_id",
+                    name="my_duplicate_checker"
+                )
         """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
-        if name:
-            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{name}"
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+            toolkit_name = name or function_name
         else:
             url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+            toolkit_name = name or schema
 
-        return cls(url=url, name=name or schema, workspace_client=ws_client)
+        return cls(url=url, name=toolkit_name, workspace_client=ws_client)
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        index_name: str = None,
+        name: str = None,
+        workspace_client: WorkspaceClient = None,
+    ):
+        """Alternative constructor that builds URL from Unity Catalog vector search index path.
+
+        Args:
+            catalog: The catalog name (e.g., "main").
+            schema: The schema name (e.g., "default").
+            index_name: Optional vector search index name to include in the URL path.
+            name: Optional toolkit name used as prefix for tool names. If not provided,
+                defaults to index_name if specified, otherwise schema.
+            workspace_client: Databricks WorkspaceClient for authentication.
+
+        Returns:
+            McpServerToolkit instance.
+
+        Example:
+            .. code-block:: python
+
+                # Schema-level with custom toolkit name
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="main", 
+                    schema="default",
+                    name="my_search"
+                )
+                
+                # Specific index - toolkit inherits index name
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="main", 
+                    schema="default", 
+                    index_name="en_wiki_index"
+                )
+                
+                # Specific index with custom toolkit name
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="main", 
+                    schema="default", 
+                    index_name="en_wiki_index",
+                    name="wikipedia"
+                )
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+            toolkit_name = name or index_name
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+            toolkit_name = name or schema
+
+        return cls(url=url, name=toolkit_name, workspace_client=ws_client)
 
     def get_tools(self) -> List[ToolInfo]:
         return asyncio.run(self.aget_tools())
