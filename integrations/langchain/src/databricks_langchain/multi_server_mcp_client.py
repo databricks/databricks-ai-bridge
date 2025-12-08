@@ -114,40 +114,6 @@ class DatabricksMCPServer(MCPServer):
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
-        """Alternative constructor that builds URL from Unity Catalog function path.
-
-        Args:
-            catalog: The catalog name (e.g., "system", "main").
-            schema: The schema name (e.g., "ai", "default").
-            function_name: Optional UC function name to include in the URL path.
-            name: Optional server name. When provided, tool names will be formatted
-                as "name__tool_name".
-            workspace_client: Databricks WorkspaceClient for authentication.
-            **kwargs: Additional connection parameters (timeout, headers, etc.)
-
-        Returns:
-            DatabricksMCPServer instance with Databricks auth configured.
-
-        Example:
-            .. code-block:: python
-
-                # All functions in schema
-                server = DatabricksMCPServer.from_uc_function(catalog="system", schema="ai")
-
-                # Specific function
-                server = DatabricksMCPServer.from_uc_function(
-                    catalog="main", schema="default", function_name="duplicate_id"
-                )
-
-                # Specific function with server name
-                server = DatabricksMCPServer.from_uc_function(
-                    catalog="main",
-                    schema="default",
-                    function_name="duplicate_id",
-                    name="my_tools",
-                    timeout=30.0,
-                )
-        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
@@ -168,40 +134,6 @@ class DatabricksMCPServer(MCPServer):
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
-        """Alternative constructor that builds URL from Unity Catalog vector search index path.
-
-        Args:
-            catalog: The catalog name (e.g., "main").
-            schema: The schema name (e.g., "default").
-            index_name: Optional vector search index name to include in the URL path.
-            name: Optional server name. When provided, tool names will be formatted
-                as "name__tool_name".
-            workspace_client: Databricks WorkspaceClient for authentication.
-            **kwargs: Additional connection parameters (timeout, headers, etc.)
-
-        Returns:
-            DatabricksMCPServer instance with Databricks auth configured.
-
-        Example:
-            .. code-block:: python
-
-                # All indexes in schema
-                server = DatabricksMCPServer.from_vector_search(catalog="main", schema="default")
-
-                # Specific index
-                server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", schema="default", index_name="en_wiki_index"
-                )
-
-                # Specific index with server name
-                server = DatabricksMCPServer.from_vector_search(
-                    catalog="main",
-                    schema="default",
-                    index_name="en_wiki_index",
-                    name="wikipedia",
-                    timeout=30.0,
-                )
-        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
