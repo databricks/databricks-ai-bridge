@@ -120,8 +120,8 @@ class DatabricksMCPServer(MCPServer):
             catalog: The catalog name (e.g., "system", "main").
             schema: The schema name (e.g., "ai", "default").
             function_name: Optional UC function name to include in the URL path.
-            name: Optional server name used as prefix for tool names. If not provided,
-                defaults to function_name if specified, otherwise schema.
+            name: Optional server name. When provided, tool names will be formatted
+                as "name__tool_name".
             workspace_client: Databricks WorkspaceClient for authentication.
             **kwargs: Additional connection parameters (timeout, headers, etc.)
 
@@ -131,22 +131,21 @@ class DatabricksMCPServer(MCPServer):
         Example:
             .. code-block:: python
 
-                # Schema-level - server named "my_tools"
-                server = DatabricksMCPServer.from_uc_function(
-                    catalog="system", schema="ai", name="my_tools", timeout=30.0
-                )
+                # All functions in schema
+                server = DatabricksMCPServer.from_uc_function(catalog="system", schema="ai")
 
-                # Specific function - server inherits function name
+                # Specific function
                 server = DatabricksMCPServer.from_uc_function(
                     catalog="main", schema="default", function_name="duplicate_id"
                 )
 
-                # Specific function with custom server name
+                # Specific function with server name
                 server = DatabricksMCPServer.from_uc_function(
                     catalog="main",
                     schema="default",
                     function_name="duplicate_id",
-                    name="my_duplicate_checker",
+                    name="my_tools",
+                    timeout=30.0,
                 )
         """
         ws_client = workspace_client or WorkspaceClient()
@@ -154,12 +153,10 @@ class DatabricksMCPServer(MCPServer):
 
         if function_name:
             url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
-            server_name = name or function_name
         else:
             url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
-            server_name = name or schema
 
-        return cls(name=server_name, url=url, workspace_client=ws_client, **kwargs)
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
 
     @classmethod
     def from_vector_search(
@@ -177,8 +174,8 @@ class DatabricksMCPServer(MCPServer):
             catalog: The catalog name (e.g., "main").
             schema: The schema name (e.g., "default").
             index_name: Optional vector search index name to include in the URL path.
-            name: Optional server name used as prefix for tool names. If not provided,
-                defaults to index_name if specified, otherwise schema.
+            name: Optional server name. When provided, tool names will be formatted
+                as "name__tool_name".
             workspace_client: Databricks WorkspaceClient for authentication.
             **kwargs: Additional connection parameters (timeout, headers, etc.)
 
@@ -188,19 +185,21 @@ class DatabricksMCPServer(MCPServer):
         Example:
             .. code-block:: python
 
-                # Schema-level with custom server name
-                server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", schema="default", name="my_search", timeout=30.0
-                )
+                # All indexes in schema
+                server = DatabricksMCPServer.from_vector_search(catalog="main", schema="default")
 
-                # Specific index - server inherits index name
+                # Specific index
                 server = DatabricksMCPServer.from_vector_search(
                     catalog="main", schema="default", index_name="en_wiki_index"
                 )
 
-                # Specific index with custom server name
+                # Specific index with server name
                 server = DatabricksMCPServer.from_vector_search(
-                    catalog="main", schema="default", index_name="en_wiki_index", name="wikipedia"
+                    catalog="main",
+                    schema="default",
+                    index_name="en_wiki_index",
+                    name="wikipedia",
+                    timeout=30.0,
                 )
         """
         ws_client = workspace_client or WorkspaceClient()
@@ -208,12 +207,10 @@ class DatabricksMCPServer(MCPServer):
 
         if index_name:
             url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
-            server_name = name or index_name
         else:
             url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
-            server_name = name or schema
 
-        return cls(name=server_name, url=url, workspace_client=ws_client, **kwargs)
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
 
     def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
