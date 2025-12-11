@@ -17,15 +17,18 @@ class TestConnectionPool:
     def __init__(self, connection_value="conn"):
         self.connection_value = connection_value
         self.conninfo = ""
+        self.conn_kwargs = {}
 
     def __call__(
         self,
         *,
         conninfo,
         connection_class=None,
-        **kwargs,
+        kwargs=None,
+        **pool_kwargs,
     ):
         self.conninfo = conninfo
+        self.conn_kwargs = kwargs or {}
         return self
 
     def connection(self):
@@ -66,3 +69,46 @@ def test_checkpoint_saver_configures_lakebase(monkeypatch):
 
     with saver._lakebase.connection() as conn:
         assert conn == "lake-conn"
+
+
+def test_checkpoint_saver_uses_default_public_schema(monkeypatch):
+    """Verify that the default schema 'public' is used when no schema is specified."""
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = MagicMock()
+    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
+    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+    saver = CheckpointSaver(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+    )
+
+    # Check that the options contain the default public schema
+    options = test_pool.conn_kwargs.get("options", "")
+    assert options == "-c search_path=public,public"
+
+
+def test_checkpoint_saver_uses_custom_schema(monkeypatch):
+    """Verify that a custom schema is passed through to LakebasePool."""
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = MagicMock()
+    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
+    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+    saver = CheckpointSaver(
+        instance_name="lakebase-instance",
+        schema="my_custom_schema",
+        workspace_client=workspace,
+    )
+
+    # Check that the options contain the custom schema
+    options = test_pool.conn_kwargs.get("options", "")
+    assert options == "-c search_path=my_custom_schema,public"

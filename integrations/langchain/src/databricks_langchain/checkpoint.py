@@ -23,6 +23,7 @@ class CheckpointSaver(PostgresSaver):
         self,
         *,
         instance_name: str,
+        schema: str = "public",
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: object,
     ) -> None:
@@ -35,6 +36,7 @@ class CheckpointSaver(PostgresSaver):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            schema=schema,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )

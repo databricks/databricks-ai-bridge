@@ -57,6 +57,7 @@ class LakebasePool:
         self,
         *,
         instance_name: str,
+        schema: str = "public",
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
@@ -110,6 +111,7 @@ class LakebasePool:
         default_kwargs: dict[str, object] = {
             "autocommit": True,
             "row_factory": dict_row,
+            "options": f"-c search_path={schema},public",
             "keepalives": 1,
             "keepalives_idle": 30,
             "keepalives_interval": 10,
