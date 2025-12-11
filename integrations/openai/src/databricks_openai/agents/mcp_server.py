@@ -141,6 +141,52 @@ class McpServer(MCPServerStreamableHttp):
 
         super().__init__(params=params, **mcpserver_kwargs)
 
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        function_name: str = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ):
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        index_name: str = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ):
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
+
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
         return await super().call_tool(tool_name, arguments)
