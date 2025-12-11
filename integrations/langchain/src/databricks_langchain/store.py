@@ -32,6 +32,7 @@ class DatabricksStore(BaseStore):
         self,
         *,
         instance_name: str,
+        schema: str = "public",
         workspace_client: Optional[WorkspaceClient] = None,
         **pool_kwargs: Any,
     ) -> None:
@@ -43,6 +44,7 @@ class DatabricksStore(BaseStore):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            schema=schema,
             workspace_client=workspace_client,
             **pool_kwargs,
         )

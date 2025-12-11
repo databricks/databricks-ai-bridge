@@ -42,10 +42,12 @@ def _make_connection_pool_class():
             *,
             conninfo,
             connection_class,
-            **kwargs,
+            kwargs=None,
+            **pool_kwargs,
         ):
             self.conninfo = conninfo
             self.connection_class = connection_class
+            self.conn_kwargs = kwargs or {}
 
     return TestConnectionPool
 
@@ -138,6 +140,41 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
 
     assert pool.username == "test@databricks.com"
     assert "user=test@databricks.com" in pool.pool.conninfo
+
+
+def test_lakebase_pool_uses_default_public_schema(monkeypatch):
+    """Verify that the default schema 'public' is used when no schema is specified."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_workspace()
+
+    pool = LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+    )
+
+    # Check that the options contain the default public schema
+    options = pool.pool.conn_kwargs.get("options", "")
+    assert options == "-c search_path=public,public"
+
+
+def test_lakebase_pool_uses_custom_schema(monkeypatch):
+    """Verify that a custom schema is used when specified."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_workspace()
+
+    pool = LakebasePool(
+        instance_name="lake-instance",
+        schema="my_custom_schema",
+        workspace_client=workspace,
+    )
+
+    # Check that the options contain the custom schema
+    options = pool.pool.conn_kwargs.get("options", "")
+    assert options == "-c search_path=my_custom_schema,public"
 
 
 def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
