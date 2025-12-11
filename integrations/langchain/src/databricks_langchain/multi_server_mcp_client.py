@@ -120,9 +120,9 @@ class DatabricksMCPServer(MCPServer):
         components instead of constructing the full URL manually.
 
         Args:
-            catalog: Unity Catalog catalog name (e.g., "main", "prod").
-            schema: Schema name within the catalog (e.g., "default", "tools").
-            name: Name to identify this server connection (required).
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
             function_name: Optional UC function name. If omitted, provides access to all
                 functions in the schema.
             workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
@@ -175,9 +175,9 @@ class DatabricksMCPServer(MCPServer):
         components instead of constructing the full URL manually.
 
         Args:
-            catalog: Unity Catalog catalog name (e.g., "main", "prod").
-            schema: Schema name within the catalog (e.g., "default", "embeddings").
-            name: Name to identify this server connection (required).
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
             index_name: Optional vector search index name. If omitted, provides access to all
                 indexes in the schema.
             workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.

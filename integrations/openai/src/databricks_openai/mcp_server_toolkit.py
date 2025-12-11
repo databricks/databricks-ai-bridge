@@ -110,8 +110,8 @@ class McpServerToolkit:
         components instead of constructing the full URL manually.
 
         Args:
-            catalog: Unity Catalog catalog name (e.g., "main", "prod").
-            schema: Schema name within the catalog (e.g., "default", "tools").
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
             function_name: Optional UC function name. If omitted, provides access to all
                 functions in the schema.
             name: Readable name for the MCP server. See __init__ for details.
@@ -160,8 +160,8 @@ class McpServerToolkit:
         components instead of constructing the full URL manually.
 
         Args:
-            catalog: Unity Catalog catalog name (e.g., "main", "prod").
-            schema: Schema name within the catalog (e.g., "default", "embeddings").
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
             index_name: Optional vector search index name. If omitted, provides access to all
                 indexes in the schema.
             name: Readable name for the MCP server. See __init__ for details.
