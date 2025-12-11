@@ -104,6 +104,37 @@ class McpServerToolkit:
         name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
+        """Create an MCP server toolkit from Unity Catalog function path.
+
+        Convenience method to create a toolkit for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "tools").
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            name: Readable name for the MCP server. See __init__ for details.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+
+        Returns:
+            McpServerToolkit instance for the specified Unity Catalog function.
+
+        Example:
+            .. code-block:: python
+
+                from databricks_openai import McpServerToolkit
+                from openai import OpenAI
+
+                # Create toolkit from UC function
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="main", schema="tools", function_name="send_email", name="email_tools"
+                )
+
+                # Get tools and use with OpenAI
+                tools = toolkit.get_tools()
+                tool_specs = [tool.spec for tool in tools]
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
@@ -123,6 +154,37 @@ class McpServerToolkit:
         name: str = None,
         workspace_client: WorkspaceClient = None,
     ):
+        """Create an MCP server toolkit from Unity Catalog vector search index path.
+
+        Convenience method to create a toolkit for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "embeddings").
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            name: Readable name for the MCP server. See __init__ for details.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+
+        Returns:
+            McpServerToolkit instance for the specified Unity Catalog vector search index.
+
+        Example:
+            .. code-block:: python
+
+                from databricks_openai import McpServerToolkit
+                from openai import OpenAI
+
+                # Create toolkit from vector search index
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="main", schema="embeddings", index_name="product_docs", name="search_tools"
+                )
+
+                # Get tools and use with OpenAI
+                tools = toolkit.get_tools()
+                tool_specs = [tool.spec for tool in tools]
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 

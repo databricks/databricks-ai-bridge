@@ -152,6 +152,85 @@ class McpServer(MCPServerStreamableHttp):
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
     ):
+        """Create an MCP server from Unity Catalog function path.
+
+        Convenience method to create an MCP server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "embeddings").
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog function.
+
+        Example:
+            Using a single UC function:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_uc_function(
+                        catalog="main",
+                        schema="tools",
+                        function_name="send_email",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+
+            Using with DatabricksMultiServerMCPClient to manage multiple servers:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer, DatabricksMultiServerMCPClient
+                from databricks.sdk import WorkspaceClient
+
+                ws = WorkspaceClient()
+
+                async with DatabricksMultiServerMCPClient(
+                    workspace_client=ws,
+                    servers=[
+                        McpServer.from_uc_function(
+                            catalog="main",
+                            schema="tools",
+                            function_name="send_email",
+                            workspace_client=ws,
+                        ),
+                        McpServer.from_uc_function(
+                            catalog="main",
+                            schema="tools",
+                            function_name="query_database",
+                            workspace_client=ws,
+                        ),
+                    ],
+                ) as client:
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=client.servers,
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
@@ -175,6 +254,85 @@ class McpServer(MCPServerStreamableHttp):
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
     ):
+        """Create an MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create an MCP server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "embeddings").
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            Using a single vector search index:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_vector_search(
+                        catalog="main",
+                        schema="embeddings",
+                        index_name="product_docs",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+
+            Using with DatabricksMultiServerMCPClient to manage multiple servers:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer, DatabricksMultiServerMCPClient
+                from databricks.sdk import WorkspaceClient
+
+                ws = WorkspaceClient()
+
+                async with DatabricksMultiServerMCPClient(
+                    workspace_client=ws,
+                    servers=[
+                        McpServer.from_vector_search(
+                            catalog="main",
+                            schema="embeddings",
+                            index_name="product_docs",
+                            workspace_client=ws,
+                        ),
+                        McpServer.from_vector_search(
+                            catalog="main",
+                            schema="embeddings",
+                            index_name="user_feedback",
+                            workspace_client=ws,
+                        ),
+                    ],
+                ) as client:
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=client.servers,
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 

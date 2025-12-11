@@ -114,6 +114,41 @@ class DatabricksMCPServer(MCPServer):
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
+        """Create a Databricks MCP server from Unity Catalog function path.
+
+        Convenience method to create a server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "tools").
+            name: Name to identify this server connection (required).
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog function.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from UC function - no manual URL construction!
+            server = DatabricksMCPServer.from_uc_function(
+                catalog="main",
+                schema="tools",
+                function_name="send_email",
+                name="email-server",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
@@ -134,6 +169,41 @@ class DatabricksMCPServer(MCPServer):
         workspace_client: WorkspaceClient = None,
         **kwargs,
     ):
+        """Create a Databricks MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create a server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name (e.g., "main", "prod").
+            schema: Schema name within the catalog (e.g., "default", "embeddings").
+            name: Name to identify this server connection (required).
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from vector search index - no manual URL construction!
+            server = DatabricksMCPServer.from_vector_search(
+                catalog="main",
+                schema="embeddings",
+                index_name="product_docs",
+                name="docs-search",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
 
