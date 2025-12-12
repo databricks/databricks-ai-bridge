@@ -27,19 +27,17 @@ _pool_cache_lock = Lock()
 
 def _get_or_create_pool(
     instance_name: str,
-    schema: str = "public",
     workspace_client: Optional[WorkspaceClient] = None,
     **pool_kwargs,
 ) -> LakebasePool:
     """Get cached pool or create new one for this instance."""
-    cache_key = f"{instance_name}:{schema}"
+    cache_key = instance_name
 
     with _pool_cache_lock:
         if cache_key not in _pool_cache:
             logger.info(f"Creating new LakebasePool for {cache_key}")
             _pool_cache[cache_key] = LakebasePool(
                 instance_name=instance_name,
-                schema=schema,
                 workspace_client=workspace_client,
                 **pool_kwargs,
             )
@@ -113,7 +111,6 @@ class LakebaseSession(SessionABC):
         pool: Optional[LakebasePool] = None,
         # Option 2: Pass instance name (pool managed internally)
         instance_name: Optional[str] = None,
-        schema: str = "public",
         workspace_client: Optional[WorkspaceClient] = None,
         # Table configuration
         sessions_table: str = SESSIONS_TABLE,
@@ -128,7 +125,6 @@ class LakebaseSession(SessionABC):
             session_id: Unique identifier for this conversation session.
             pool: Pre-existing LakebasePool to use. If provided, instance_name is ignored.
             instance_name: Name of the Lakebase instance. Required if pool is not provided.
-            schema: Database schema to use. Defaults to "public".
             workspace_client: Optional WorkspaceClient for authentication.
             sessions_table: Name of the sessions table. Defaults to "agent_sessions".
             messages_table: Name of the messages table. Defaults to "agent_messages".
@@ -151,7 +147,6 @@ class LakebaseSession(SessionABC):
         else:
             self._pool = _get_or_create_pool(
                 instance_name=instance_name,
-                schema=schema,
                 workspace_client=workspace_client,
                 **pool_kwargs,
             )
