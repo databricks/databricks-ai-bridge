@@ -230,7 +230,9 @@ async def test_get_items_empty_session(monkeypatch, mock_workspace, mock_pool, m
 
 
 @pytest.mark.asyncio
-async def test_get_items_returns_parsed_json(monkeypatch, mock_workspace, mock_pool, mock_connection):
+async def test_get_items_returns_parsed_json(
+    monkeypatch, mock_workspace, mock_pool, mock_connection
+):
     """Test get_items correctly parses JSON data."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
@@ -341,7 +343,9 @@ async def test_pop_item_returns_last_item(monkeypatch, mock_workspace, mock_pool
     mock_connection.queue_result(MockResult())  # INSERT session
     # DELETE RETURNING result
     mock_connection.queue_result(
-        MockResult(rows=[{"message_data": json.dumps({"role": "assistant", "content": "Last msg"})}])
+        MockResult(
+            rows=[{"message_data": json.dumps({"role": "assistant", "content": "Last msg"})}]
+        )
     )
     mock_connection.queue_result(MockResult())  # UPDATE session timestamp
 
@@ -481,4 +485,3 @@ async def test_get_items_handles_dict_message_data(
     assert len(items) == 1
     assert items[0]["role"] == "user"
     assert items[0]["content"] == "Already parsed"
-
