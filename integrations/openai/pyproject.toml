@@ -35,6 +35,10 @@ tests = [
     "pytest-timeout>=2.3.1",
 ]
 
+memory = [
+    "databricks-ai-bridge[memory]>=0.10.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
