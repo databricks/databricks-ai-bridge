@@ -106,19 +106,18 @@ class LakebaseSession(SessionABC):
         # Table configuration
         sessions_table: str = SESSIONS_TABLE,
         messages_table: str = MESSAGES_TABLE,
-        create_tables: bool = True,
         **pool_kwargs,
     ) -> None:
         """
         Initialize a LakebaseSession.
-
+        On first initialization for a given Lakebase instance, this will automatically
+        create the required tables if they don't exist.
         Args:
             session_id: Unique identifier for this conversation session.
             instance_name: Name of the Lakebase instance.
             workspace_client: Optional WorkspaceClient for authentication.
             sessions_table: Name of the sessions table. Defaults to "agent_sessions".
             messages_table: Name of the messages table. Defaults to "agent_messages".
-            create_tables: Whether to create tables on init. Defaults to True.
             **pool_kwargs: Additional arguments passed to LakebasePool.
         """
         self.session_id = session_id
@@ -131,13 +130,27 @@ class LakebaseSession(SessionABC):
             **pool_kwargs,
         )
 
-        if create_tables:
-            self._ensure_tables()
+        if not self._tables_exist():
+            self._create_tables()
 
         self._ensure_session()
 
-    def _ensure_tables(self) -> None:
-        """Create tables if they don't exist."""
+    def _tables_exist(self) -> bool:
+        """Check if both session tables already exist."""
+        with self._pool.connection() as conn:
+            result = conn.execute(
+                """
+                SELECT COUNT(*) as cnt FROM information_schema.tables 
+                WHERE table_name IN (%s, %s)
+                """,
+                (self.sessions_table, self.messages_table),
+            )
+            row = result.fetchone()
+            # Both tables should exist
+            return row["cnt"] == 2
+
+    def _create_tables(self) -> None:
+        """Create the required tables. Should only be called by the first user/admin."""
         sessions_sql = self.CREATE_SESSIONS_TABLE_SQL.format(sessions_table=self.sessions_table)
         messages_sql = self.CREATE_MESSAGES_TABLE_SQL.format(
             sessions_table=self.sessions_table, messages_table=self.messages_table
@@ -147,7 +160,7 @@ class LakebaseSession(SessionABC):
             conn.execute(sessions_sql)
             conn.execute(messages_sql)
 
-        logger.debug(f"Ensured tables {self.sessions_table}, {self.messages_table} exist")
+        logger.info(f"Created tables {self.sessions_table}, {self.messages_table}")
 
     def _ensure_session(self) -> None:
         """Ensure the session record exists in agent_sessions table."""
