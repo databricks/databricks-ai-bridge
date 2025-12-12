@@ -4,13 +4,13 @@ import json
 import logging
 from datetime import datetime, timezone
 from threading import Lock
-from typing import List, Optional, Dict, Any
+from typing import Dict, Optional
 
 from databricks.sdk import WorkspaceClient
 
 try:
-    from agents.memory.session import SessionABC
     from agents.items import TResponseInputItem
+    from agents.memory.session import SessionABC
     from databricks_ai_bridge.lakebase import LakebasePool
 except ImportError as e:
     raise ImportError(
@@ -20,7 +20,7 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
-# Module-level pool cache: instance_name:schema -> LakebasePool
+# Module-level pool cache: instance_name -> LakebasePool
 _pool_cache: Dict[str, LakebasePool] = {}
 _pool_cache_lock = Lock()
 
@@ -46,33 +46,27 @@ def _get_or_create_pool(
 
 class LakebaseSession(SessionABC):
     """
-        OpenAI Agents SDK Session implementation using Lakebase for persistent storage.
+    OpenAI Agents SDK Session implementation using Lakebase for persistent storage.
 
-        This class follows the Session protocol for conversation memory,
-        storing session data in two tables:
-        - agent_sessions: Tracks session metadata (session_id, created_at, updated_at)
-        - agent_messages: Stores conversation items (id, session_id, message_data, created_at)
+    This class follows the Session protocol for conversation memory,
+    storing session data in two tables:
+    - agent_sessions: Tracks session metadata (session_id, created_at, updated_at)
+    - agent_messages: Stores conversation items (id, session_id, message_data, created_at)
 
-        SessionABC: https://openai.github.io/openai-agents-python/ref/memory/session/#agents.memory.session.SessionABC
+    SessionABC: https://openai.github.io/openai-agents-python/ref/memory/session/#agents.memory.session.SessionABC
 
-        Example (pool managed internally):
+    Example:
     ```python
-            from databricks_openai.agents.session import LakebaseSession
-            from agents import Agent, Runner
+        from databricks_openai.agents.session import LakebaseSession
+        from agents import Agent, Runner
 
-            async def run_agent(thread_id: str, message: str):
-                session = LakebaseSession(
-                    session_id=thread_id,
-                    instance_name="my-lakebase-instance"
-                )
-                agent = Agent(name="Assistant")
-                return await Runner.run(agent, message, session=session)
-    ```
-
-        Or pass in a pool directly:
-    ```python
-            pool = LakebasePool(instance_name="my-instance")
-            session = LakebaseSession(session_id=thread_id, pool=pool)
+        async def run_agent(thread_id: str, message: str):
+            session = LakebaseSession(
+                session_id=thread_id,
+                instance_name="my-lakebase-instance"
+            )
+            agent = Agent(name="Assistant")
+            return await Runner.run(agent, message, session=session)
     ```
     """
 
@@ -107,10 +101,7 @@ class LakebaseSession(SessionABC):
         self,
         session_id: str,
         *,
-        # Option 1: Pass a pool directly
-        pool: Optional[LakebasePool] = None,
-        # Option 2: Pass instance name (pool managed internally)
-        instance_name: Optional[str] = None,
+        instance_name: str,
         workspace_client: Optional[WorkspaceClient] = None,
         # Table configuration
         sessions_table: str = SESSIONS_TABLE,
@@ -123,33 +114,22 @@ class LakebaseSession(SessionABC):
 
         Args:
             session_id: Unique identifier for this conversation session.
-            pool: Pre-existing LakebasePool to use. If provided, instance_name is ignored.
-            instance_name: Name of the Lakebase instance. Required if pool is not provided.
+            instance_name: Name of the Lakebase instance.
             workspace_client: Optional WorkspaceClient for authentication.
             sessions_table: Name of the sessions table. Defaults to "agent_sessions".
             messages_table: Name of the messages table. Defaults to "agent_messages".
             create_tables: Whether to create tables on init. Defaults to True.
-            **pool_kwargs: Additional arguments passed to LakebasePool if creating one.
-
-        Raises:
-            ValueError: If neither pool nor instance_name is provided.
+            **pool_kwargs: Additional arguments passed to LakebasePool.
         """
-        if pool is None and instance_name is None:
-            raise ValueError("Either 'pool' or 'instance_name' must be provided")
-
         self.session_id = session_id
         self.sessions_table = sessions_table
         self.messages_table = messages_table
 
-        # Use provided pool or get/create from cache
-        if pool is not None:
-            self._pool = pool
-        else:
-            self._pool = _get_or_create_pool(
-                instance_name=instance_name,
-                workspace_client=workspace_client,
-                **pool_kwargs,
-            )
+        self._pool = _get_or_create_pool(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            **pool_kwargs,
+        )
 
         if create_tables:
             self._ensure_tables()
