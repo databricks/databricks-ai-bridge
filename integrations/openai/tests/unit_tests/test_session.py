@@ -130,9 +130,13 @@ def mock_pool(mock_connection):
     return MockConnectionPool(connection_value=mock_connection)
 
 
-def test_session_configures_lakebase(monkeypatch, mock_workspace, mock_pool):
+def test_session_configures_lakebase(monkeypatch, mock_workspace, mock_pool, mock_connection):
     """Test that LakebaseSession correctly configures the Lakebase pool."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock: tables already exist
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))
+    mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
         session_id="test-session-001",
@@ -149,9 +153,20 @@ def test_session_configures_lakebase(monkeypatch, mock_workspace, mock_pool):
     assert session.messages_table == "agent_messages"
 
 
-def test_session_creates_tables_on_init(monkeypatch, mock_workspace, mock_pool, mock_connection):
-    """Test that LakebaseSession creates tables on initialization."""
+def test_session_creates_tables_on_init_when_not_exist(
+    monkeypatch, mock_workspace, mock_pool, mock_connection
+):
+    """Test that LakebaseSession creates tables when they don't exist."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock: tables don't exist (count=0)
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 0}]))
+    # CREATE sessions table
+    mock_connection.queue_result(MockResult())
+    # CREATE messages table
+    mock_connection.queue_result(MockResult())
+    # INSERT session
+    mock_connection.queue_result(MockResult())
 
     LakebaseSession(
         session_id="test-session-002",
@@ -168,29 +183,37 @@ def test_session_creates_tables_on_init(monkeypatch, mock_workspace, mock_pool, 
     assert create_messages_found, "Should create messages table"
 
 
-def test_session_skips_table_creation_when_disabled(
+def test_session_skips_table_creation_when_tables_exist(
     monkeypatch, mock_workspace, mock_pool, mock_connection
 ):
-    """Test that table creation can be disabled."""
+    """Test that LakebaseSession skips table creation when tables already exist."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock: both tables exist (count=2)
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))
+    # INSERT session (no CREATE TABLE calls)
+    mock_connection.queue_result(MockResult())
 
     LakebaseSession(
         session_id="test-session-003",
         instance_name="test-lakebase-instance",
         workspace_client=mock_workspace,
-        create_tables=False,
     )
 
-    # Should only have the session insert, not table creation
+    # Should NOT have executed CREATE TABLE statements
     queries = [q[0] for q in mock_connection.executed_queries]
     create_table_found = any("CREATE TABLE" in q for q in queries)
 
-    assert not create_table_found, "Should not create tables when create_tables=False"
+    assert not create_table_found, "Should not create tables when they already exist"
 
 
 def test_session_ensures_session_record(monkeypatch, mock_workspace, mock_pool, mock_connection):
     """Test that LakebaseSession ensures the session record exists."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock: tables already exist
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))
+    mock_connection.queue_result(MockResult())  # INSERT session
 
     LakebaseSession(
         session_id="my-unique-session",
@@ -213,9 +236,8 @@ async def test_get_items_empty_session(monkeypatch, mock_workspace, mock_pool, m
     """Test get_items returns empty list for new session."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
-    # Set up mock to return empty result for SELECT query
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    # Mock: tables exist, then INSERT session, then SELECT messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(MockResult(rows=[]))  # SELECT messages
 
@@ -241,8 +263,7 @@ async def test_get_items_returns_parsed_json(
         {"message_data": json.dumps({"role": "assistant", "content": "Hi there!"})},
     ]
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(MockResult(rows=test_messages))  # SELECT messages
 
@@ -266,8 +287,7 @@ async def test_get_items_with_limit(monkeypatch, mock_workspace, mock_pool, mock
     """Test get_items respects limit parameter."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(
         MockResult(rows=[{"message_data": json.dumps({"role": "user", "content": "Latest"})}])
@@ -292,6 +312,10 @@ async def test_get_items_with_limit(monkeypatch, mock_workspace, mock_pool, mock
 async def test_add_items(monkeypatch, mock_workspace, mock_pool, mock_connection):
     """Test add_items inserts messages correctly."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock: tables exist
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))
+    mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
         session_id="test-session",
@@ -318,6 +342,10 @@ async def test_add_items_empty_list(monkeypatch, mock_workspace, mock_pool, mock
     """Test add_items handles empty list gracefully."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
+    # Mock: tables exist
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))
+    mock_connection.queue_result(MockResult())  # INSERT session
+
     session = LakebaseSession(
         session_id="test-session",
         instance_name="test-instance",
@@ -338,8 +366,7 @@ async def test_pop_item_returns_last_item(monkeypatch, mock_workspace, mock_pool
     """Test pop_item removes and returns the most recent item."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     # DELETE RETURNING result
     mock_connection.queue_result(
@@ -369,8 +396,7 @@ async def test_pop_item_returns_none_when_empty(
     """Test pop_item returns None for empty session."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(MockResult(rows=[]))  # DELETE RETURNING - empty
 
@@ -390,8 +416,7 @@ async def test_clear_session(monkeypatch, mock_workspace, mock_pool, mock_connec
     """Test clear_session deletes all messages for the session."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(MockResult(rowcount=5))  # DELETE messages
     mock_connection.queue_result(MockResult())  # UPDATE session timestamp
@@ -420,6 +445,12 @@ def test_custom_table_names(monkeypatch, mock_workspace, mock_pool, mock_connect
     """Test that custom table names are used correctly."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
 
+    # Mock: tables don't exist (custom names), so they will be created
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 0}]))  # tables don't exist
+    mock_connection.queue_result(MockResult())  # CREATE sessions
+    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult())  # INSERT session
+
     session = LakebaseSession(
         session_id="test-session",
         instance_name="test-instance",
@@ -437,9 +468,15 @@ def test_custom_table_names(monkeypatch, mock_workspace, mock_pool, mock_connect
     assert any("custom_messages" in q for q in queries)
 
 
-def test_pool_caching(monkeypatch, mock_workspace, mock_pool):
+def test_pool_caching(monkeypatch, mock_workspace, mock_pool, mock_connection):
     """Test that pools are cached and reused."""
     monkeypatch.setattr(lakebase, "ConnectionPool", mock_pool)
+
+    # Mock for both session creations
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist
+    mock_connection.queue_result(MockResult())  # INSERT session 1
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist
+    mock_connection.queue_result(MockResult())  # INSERT session 2
 
     session1 = LakebaseSession(
         session_id="session-1",
@@ -469,8 +506,7 @@ async def test_get_items_handles_dict_message_data(
         {"message_data": {"role": "user", "content": "Already parsed"}},
     ]
 
-    mock_connection.queue_result(MockResult())  # CREATE sessions
-    mock_connection.queue_result(MockResult())  # CREATE messages
+    mock_connection.queue_result(MockResult(rows=[{"cnt": 2}]))  # tables exist check
     mock_connection.queue_result(MockResult())  # INSERT session
     mock_connection.queue_result(MockResult(rows=test_messages))
 
