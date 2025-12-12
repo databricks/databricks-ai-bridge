@@ -690,6 +690,18 @@ class ChatDatabricks(BaseChatModel):
                             logprobs=generation_info.get("logprobs"),
                         )
                     yield generation_chunk
+                elif chunk.usage and stream_usage:
+                    # Some models send a final chunk that does not have
+                    # a delta or choices, but does have usage info
+                    if not usage_chunk_emitted:
+                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
+                        if input_tokens is not None and output_tokens is not None:
+                            final_usage = {
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "total_tokens": input_tokens + output_tokens,
+                            }
 
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
