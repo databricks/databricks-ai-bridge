@@ -223,7 +223,16 @@ class LakebaseSession(SessionABC):
             result = conn.execute(query, params)
             rows = result.fetchall()
 
-        return [row["message_data"] for row in rows]
+        items = []
+        for row in rows:
+            message_data = row["message_data"]
+            # Parse JSON string if needed (psycopg may return JSONB as string)
+            if isinstance(message_data, str):
+                items.append(json.loads(message_data))
+            else:
+                items.append(message_data)
+
+        return items
 
     async def add_items(self, items: list[TResponseInputItem]) -> None:
         """
@@ -298,7 +307,11 @@ class LakebaseSession(SessionABC):
 
         if row:
             logger.debug(f"Popped item from session {self.session_id}")
-            return row["message_data"]
+            message_data = row["message_data"]
+            # Parse JSON string if needed (psycopg may return JSONB as string)
+            if isinstance(message_data, str):
+                return json.loads(message_data)
+            return message_data
         return None
 
     async def clear_session(self) -> None:
