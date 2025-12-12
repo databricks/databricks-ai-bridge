@@ -976,9 +976,7 @@ class ChatDatabricks(BaseChatModel):
                 "type": "json_schema",
                 "json_schema": {
                     "strict": True,
-                    "schema": (
-                        schema.model_json_schema() if is_pydantic_schema else schema  # type: ignore[union-attr]
-                    ),
+                    "schema": schema.model_json_schema() if is_pydantic_schema else schema,  # type: ignore[union-attr]
                 },
             }
             llm = self.bind(response_format=response_format)
