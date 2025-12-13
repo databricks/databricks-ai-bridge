@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,6 +11,7 @@ pytest.importorskip("langgraph.checkpoint.postgres")
 from databricks_ai_bridge import lakebase
 
 from databricks_langchain import DatabricksStore
+from databricks_langchain.embeddings import DatabricksEmbeddings
 
 
 class TestConnectionPool:
@@ -70,3 +71,97 @@ def test_databricks_store_configures_lakebase(monkeypatch):
 
     with store._lakebase.connection() as conn:
         assert conn == mock_conn
+
+    # Without embeddings, index_config should be None
+    assert store.embeddings is None
+    assert store.index_config is None
+
+
+def _create_mock_workspace():
+    """Helper to create a mock workspace client."""
+    workspace = MagicMock()
+    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
+    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    return workspace
+
+
+def test_databricks_store_with_embedding_endpoint(monkeypatch):
+    """Test that embedding_endpoint creates embeddings and index_config."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+
+    monkeypatch.setattr(PostgresStore, "setup", MagicMock())
+
+    workspace = _create_mock_workspace()
+
+    with patch.object(DatabricksEmbeddings, "__init__", return_value=None) as mock_init:
+        store = DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        )
+
+        mock_init.assert_called_once_with(endpoint="databricks-bge-large-en")
+
+    assert store.embeddings is not None
+    assert store.index_config is not None
+    assert store.index_config["dims"] == 1024
+    assert store.index_config["embed"] is store.embeddings
+    assert store.index_config["fields"] == ["$"]
+
+
+def test_databricks_store_embedding_endpoint_requires_dims(monkeypatch):
+    """Test that embedding_dims is required when embedding_endpoint is specified."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with pytest.raises(ValueError, match="embedding_dims is required"):
+        DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+        )
+
+
+def test_databricks_store_with_store_passes_index_config(monkeypatch):
+    """Test that _with_store passes index_config to PostgresStore when configured."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+
+    workspace = _create_mock_workspace()
+
+    with patch.object(DatabricksEmbeddings, "__init__", return_value=None):
+        store = DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        )
+
+    # Mock PostgresStore to capture how it's called
+    with patch.object(PostgresStore, "__init__", return_value=None) as mock_pg_init:
+        mock_pg_store = MagicMock()
+        mock_pg_store.setup = MagicMock()
+
+        with patch(
+            "databricks_langchain.store.PostgresStore", return_value=mock_pg_store
+        ) as mock_pg_class:
+            store.setup()
+
+            # Verify PostgresStore was called with index config
+            mock_pg_class.assert_called_once()
+            call_kwargs = mock_pg_class.call_args[1]
+            assert "index" in call_kwargs
+            assert call_kwargs["index"]["dims"] == 1024
