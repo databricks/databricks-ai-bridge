@@ -194,42 +194,6 @@ class McpServer(MCPServerStreamableHttp):
                     )
                     result = await Runner.run(agent, user_messages)
                     return result
-
-            Using with DatabricksMultiServerMCPClient to manage multiple servers:
-
-            .. code-block:: python
-
-                from agents import Agent, Runner
-                from databricks_openai.agents import McpServer, DatabricksMultiServerMCPClient
-                from databricks.sdk import WorkspaceClient
-
-                ws = WorkspaceClient()
-
-                async with DatabricksMultiServerMCPClient(
-                    workspace_client=ws,
-                    servers=[
-                        McpServer.from_uc_function(
-                            catalog="main",
-                            schema="tools",
-                            function_name="send_email",
-                            workspace_client=ws,
-                        ),
-                        McpServer.from_uc_function(
-                            catalog="main",
-                            schema="tools",
-                            function_name="query_database",
-                            workspace_client=ws,
-                        ),
-                    ],
-                ) as client:
-                    agent = Agent(
-                        name="my-agent",
-                        instructions="You are a helpful assistant",
-                        model="databricks-meta-llama-3-1-70b-instruct",
-                        mcp_servers=client.servers,
-                    )
-                    result = await Runner.run(agent, user_messages)
-                    return result
         """
         ws_client = workspace_client or WorkspaceClient()
         base_url = ws_client.config.host
@@ -293,42 +257,6 @@ class McpServer(MCPServerStreamableHttp):
                         instructions="You are a helpful assistant",
                         model="databricks-meta-llama-3-1-70b-instruct",
                         mcp_servers=[mcp_server],
-                    )
-                    result = await Runner.run(agent, user_messages)
-                    return result
-
-            Using with DatabricksMultiServerMCPClient to manage multiple servers:
-
-            .. code-block:: python
-
-                from agents import Agent, Runner
-                from databricks_openai.agents import McpServer, DatabricksMultiServerMCPClient
-                from databricks.sdk import WorkspaceClient
-
-                ws = WorkspaceClient()
-
-                async with DatabricksMultiServerMCPClient(
-                    workspace_client=ws,
-                    servers=[
-                        McpServer.from_vector_search(
-                            catalog="main",
-                            schema="embeddings",
-                            index_name="product_docs",
-                            workspace_client=ws,
-                        ),
-                        McpServer.from_vector_search(
-                            catalog="main",
-                            schema="embeddings",
-                            index_name="user_feedback",
-                            workspace_client=ws,
-                        ),
-                    ],
-                ) as client:
-                    agent = Agent(
-                        name="my-agent",
-                        instructions="You are a helpful assistant",
-                        model="databricks-meta-llama-3-1-70b-instruct",
-                        mcp_servers=client.servers,
                     )
                     result = await Runner.run(agent, user_messages)
                     return result
