@@ -43,6 +43,21 @@ class DatabricksStore(BaseStore):
         embeddings: Optional[DatabricksEmbeddings] = None,
         **pool_kwargs: Any,
     ) -> None:
+        """Initialize DatabricksStore with embedding support.
+
+        Args:
+            instance_name: The name of the Lakebase instance to connect to.
+            workspace_client: Optional Databricks WorkspaceClient for authentication.
+            embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
+                (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
+            embedding_dims: Dimension of the embedding vectors (e.g., 1024 for gte-large-en,
+                1536 for OpenAI-compatible models). Required if embedding_endpoint is set.
+            embedding_fields: List of JSON paths to vectorize. Defaults to ["$"] which
+                vectorizes the entire JSON value.
+            embeddings: Optional pre-configured DatabricksEmbeddings instance. If provided,
+                takes precedence over embedding_endpoint.
+            **pool_kwargs: Additional keyword arguments passed to LakebasePool.
+        """
         if not _store_imports_available:
             raise ImportError(
                 "DatabricksStore requires databricks-langchain[memory]. "
