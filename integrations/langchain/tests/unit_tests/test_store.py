@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -165,3 +166,33 @@ def test_databricks_store_with_store_passes_index_config(monkeypatch):
             call_kwargs = mock_pg_class.call_args[1]
             assert "index" in call_kwargs
             assert call_kwargs["index"]["dims"] == 1024
+
+
+def test_databricks_store_warns_when_both_embeddings_and_endpoint_specified(monkeypatch):
+    """Test that a warning is issued when both embeddings and embedding_endpoint are specified."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    mock_embeddings = MagicMock(spec=DatabricksEmbeddings)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        store = DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embeddings=mock_embeddings,
+            embedding_endpoint="databricks-bge-large-en",  # This should be ignored
+            embedding_dims=1024,
+        )
+
+        # Verify warning was issued
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "Both 'embeddings' and 'embedding_endpoint' were specified" in str(w[0].message)
+
+    # Verify embeddings instance takes precedence
+    assert store.embeddings is mock_embeddings
+    assert store.index_config["embed"] is mock_embeddings

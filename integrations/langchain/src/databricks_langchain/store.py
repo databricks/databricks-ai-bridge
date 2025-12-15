@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Iterable, List, Optional
 
 from databricks.sdk import WorkspaceClient
@@ -60,6 +61,13 @@ class DatabricksStore(BaseStore):
 
         if embeddings is not None:
             # Use pre-configured embeddings instance
+            if embedding_endpoint is not None:
+                warnings.warn(
+                    "Both 'embeddings' and 'embedding_endpoint' were specified. "
+                    "Using the provided 'embeddings' instance.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             self.embeddings = embeddings
             if embedding_dims is None:
                 raise ValueError("embedding_dims is required when providing an embeddings instance")
