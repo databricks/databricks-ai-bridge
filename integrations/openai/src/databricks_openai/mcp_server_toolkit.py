@@ -100,10 +100,10 @@ class McpServerToolkit:
         cls,
         catalog: str,
         schema: str,
-        function_name: str = None,
-        name: str = None,
-        workspace_client: WorkspaceClient = None,
-    ):
+        function_name: str | None = None,
+        name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "McpServerToolkit":
         """Create an MCP server toolkit from Unity Catalog function path.
 
         Convenience method to create a toolkit for UC functions by specifying Unity Catalog
@@ -150,10 +150,10 @@ class McpServerToolkit:
         cls,
         catalog: str,
         schema: str,
-        index_name: str = None,
-        name: str = None,
-        workspace_client: WorkspaceClient = None,
-    ):
+        index_name: str | None = None,
+        name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "McpServerToolkit":
         """Create an MCP server toolkit from Unity Catalog vector search index path.
 
         Convenience method to create a toolkit for vector search by specifying Unity Catalog

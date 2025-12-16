@@ -110,10 +110,10 @@ class DatabricksMCPServer(MCPServer):
         catalog: str,
         schema: str,
         name: str,
-        function_name: str = None,
-        workspace_client: WorkspaceClient = None,
+        function_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
         **kwargs,
-    ):
+    ) -> "DatabricksMCPServer":
         """Create a Databricks MCP server from Unity Catalog function path.
 
         Convenience method to create a server for UC functions by specifying Unity Catalog
@@ -165,10 +165,10 @@ class DatabricksMCPServer(MCPServer):
         catalog: str,
         schema: str,
         name: str,
-        index_name: str = None,
-        workspace_client: WorkspaceClient = None,
+        index_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
         **kwargs,
-    ):
+    ) -> "DatabricksMCPServer":
         """Create a Databricks MCP server from Unity Catalog vector search index path.
 
         Convenience method to create a server for vector search by specifying Unity Catalog

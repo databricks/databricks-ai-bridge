@@ -146,12 +146,12 @@ class McpServer(MCPServerStreamableHttp):
         cls,
         catalog: str,
         schema: str,
-        function_name: str = None,
+        function_name: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         timeout: float | None = None,
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
-    ):
+    ) -> "McpServer":
         """Create an MCP server from Unity Catalog function path.
 
         Convenience method to create an MCP server for UC functions by specifying Unity Catalog
@@ -212,12 +212,12 @@ class McpServer(MCPServerStreamableHttp):
         cls,
         catalog: str,
         schema: str,
-        index_name: str = None,
+        index_name: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         timeout: float | None = None,
         params: MCPServerStreamableHttpParams | None = None,
         **mcpserver_kwargs: object,
-    ):
+    ) -> "McpServer":
         """Create an MCP server from Unity Catalog vector search index path.
 
         Convenience method to create an MCP server for vector search by specifying Unity Catalog
