@@ -95,6 +95,106 @@ class McpServerToolkit:
 
         self.databricks_mcp_client = DatabricksMCPClient(self.url, self.workspace_client)
 
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        function_name: str | None = None,
+        name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "McpServerToolkit":
+        """Create an MCP server toolkit from Unity Catalog function path.
+
+        Convenience method to create a toolkit for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            name: Readable name for the MCP server. See __init__ for details.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+
+        Returns:
+            McpServerToolkit instance for the specified Unity Catalog function.
+
+        Example:
+            .. code-block:: python
+
+                from databricks_openai import McpServerToolkit
+                from openai import OpenAI
+
+                # Create toolkit from UC function
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="main", schema="tools", function_name="send_email", name="email_tools"
+                )
+
+                # Get tools and use with OpenAI
+                tools = toolkit.get_tools()
+                tool_specs = [tool.spec for tool in tools]
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(url=url, name=name, workspace_client=ws_client)
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        index_name: str | None = None,
+        name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+    ) -> "McpServerToolkit":
+        """Create an MCP server toolkit from Unity Catalog vector search index path.
+
+        Convenience method to create a toolkit for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            name: Readable name for the MCP server. See __init__ for details.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+
+        Returns:
+            McpServerToolkit instance for the specified Unity Catalog vector search index.
+
+        Example:
+            .. code-block:: python
+
+                from databricks_openai import McpServerToolkit
+                from openai import OpenAI
+
+                # Create toolkit from vector search index
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="main", schema="embeddings", index_name="product_docs", name="search_tools"
+                )
+
+                # Get tools and use with OpenAI
+                tools = toolkit.get_tools()
+                tool_specs = [tool.spec for tool in tools]
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(url=url, name=name, workspace_client=ws_client)
+
     def get_tools(self) -> List[ToolInfo]:
         return asyncio.run(self.aget_tools())
 

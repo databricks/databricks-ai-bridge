@@ -141,6 +141,138 @@ class McpServer(MCPServerStreamableHttp):
 
         super().__init__(params=params, **mcpserver_kwargs)
 
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        function_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ) -> "McpServer":
+        """Create an MCP server from Unity Catalog function path.
+
+        Convenience method to create an MCP server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog function.
+
+        Example:
+            Using a single UC function:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_uc_function(
+                        catalog="main",
+                        schema="tools",
+                        function_name="send_email",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        index_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ) -> "McpServer":
+        """Create an MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create an MCP server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            Using a single vector search index:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_vector_search(
+                        catalog="main",
+                        schema="embeddings",
+                        index_name="product_docs",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
+
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
         return await super().call_tool(tool_name, arguments)

@@ -104,6 +104,116 @@ class DatabricksMCPServer(MCPServer):
         exclude=True,
     )
 
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str,
+        function_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        **kwargs,
+    ) -> "DatabricksMCPServer":
+        """Create a Databricks MCP server from Unity Catalog function path.
+
+        Convenience method to create a server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog function.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from UC function - no manual URL construction!
+            server = DatabricksMCPServer.from_uc_function(
+                catalog="main",
+                schema="tools",
+                function_name="send_email",
+                name="email-server",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str,
+        index_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        **kwargs,
+    ) -> "DatabricksMCPServer":
+        """Create a Databricks MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create a server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from vector search index - no manual URL construction!
+            server = DatabricksMCPServer.from_vector_search(
+                catalog="main",
+                schema="embeddings",
+                index_name="product_docs",
+                name="docs-search",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
+
     def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
         super().model_post_init(context)
