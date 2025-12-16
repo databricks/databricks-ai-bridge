@@ -59,7 +59,8 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
                 endpoint=self.endpoint,
                 inputs={"input": txt, **params},  # type: ignore[arg-type]
             )
-            embeddings.extend(r["embedding"] for r in resp["data"])
+            for r in resp["data"]:
+                embeddings.append([float(v) for v in r["embedding"]])
         return embeddings
 
 
