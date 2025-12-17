@@ -35,10 +35,11 @@ jobs:
 
   core_test:
     runs-on: ubuntu-latest
-    name: core_test python-${{ matrix.python-version }}
+    name: "core_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -50,13 +51,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run tests
         run: |
-          uv run --exact --group tests --extra memory pytest tests/
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/
 
   langchain_test:
     runs-on: ubuntu-latest
+    name: "langchain_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
+
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -69,13 +75,16 @@ jobs:
       - name: Run tests
         working-directory: integrations/langchain
         run: |
-          uv run --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   lakebase_memory_test:
     runs-on: ubuntu-latest
+    name: "lakebase_memory_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -87,11 +96,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run databricks-ai-bridge Tests
         run: |
-          uv run --exact --group tests --extra memory pytest tests/databricks_ai_bridge/test_lakebase.py
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/databricks_ai_bridge/test_lakebase.py
       - name: Run databricks-langchain Tests
         working-directory: integrations/langchain
         run: |
-          uv run --exact --group tests --extra memory pytest tests/unit_tests/test_checkpoint.py tests/unit_tests/test_store.py
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/unit_tests/test_checkpoint.py \
+              tests/unit_tests/test_store.py
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest
@@ -142,9 +156,11 @@ jobs:
 
   openai_test:
     runs-on: ubuntu-latest
+    name: "openai_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -157,7 +173,8 @@ jobs:
       - name: Run tests
         working-directory: integrations/openai
         run: |
-          uv run --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   openai_cross_version_test:
     runs-on: ubuntu-latest
@@ -178,9 +195,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install . "${{ matrix.version.mlflow }}"
       - name: Checkout openai version
         uses: actions/checkout@v4
         with:
@@ -198,6 +212,7 @@ jobs:
         run: |
           pip install .
           pip install integrations/openai --group dev
+          pip install "${{ matrix.version.mlflow }}"
       - name: Run tests
         run: |
           # Only testing initialization since functionality can change
@@ -205,9 +220,11 @@ jobs:
 
   llamaindex_test:
     runs-on: ubuntu-latest
+    name: "llamaindex_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -220,13 +237,15 @@ jobs:
       - name: Run tests
         working-directory: integrations/llamaindex
         run: |
-          uv run --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} --exact --group tests pytest tests/unit_tests
 
   mcp_test:
     runs-on: ubuntu-latest
+    name: "mcp_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -239,13 +258,16 @@ jobs:
       - name: Run tests
         working-directory: databricks_mcp
         run: |
-          uv run --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   dspy_test:
     runs-on: ubuntu-latest
+    name: "dspy_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
@@ -258,4 +280,5 @@ jobs:
       - name: Run tests
         working-directory: integrations/dspy
         run: |
-          uv run --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests

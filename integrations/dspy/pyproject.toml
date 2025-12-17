@@ -20,7 +20,7 @@ dev = [
   { include-group = "tests" }
 ]
 tests = [
-  "pytest",
+  "pytest>=9.0.0",
 ]
 
 [build-system]

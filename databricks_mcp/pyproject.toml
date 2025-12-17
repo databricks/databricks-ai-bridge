@@ -9,7 +9,7 @@ readme = "README.md"
 license = { text="Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.9.1",
+    "mcp>=1.13.0",
     "databricks-sdk>=0.49.0",
     "databricks-ai-bridge>=0.4.2",
     "mlflow>=3.1"
@@ -17,15 +17,15 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "typing_extensions",
+  "typing_extensions>=4.15.0",
   "databricks-sdk>=0.49.0",
   "ruff==0.6.4",
   { include-group = "tests" }
 ]
 
 tests = [
-  "pytest",
-  "pytest-asyncio",
+  "pytest>=9.0.0",
+  "pytest-asyncio>=1.3.0",
   "pytest-timeout>=2.3.1",
 ]
 
