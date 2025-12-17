@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 import logging
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.propagate = True
 
 class MCPServer(BaseModel):
     """
@@ -188,6 +190,7 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
 
         # Create connections dict (excluding tool-level params like handle_tool_errors)
         connections = {server.name: server.to_connection_dict() for server in servers}
+        logger.error("CONNECTIONS: %s", connections)
         super().__init__(connections=connections, **kwargs)
 
     async def get_tools(self, server_name: str | None = None):
