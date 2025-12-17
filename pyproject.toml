@@ -29,9 +29,12 @@ memory = [
 [dependency-groups]
 dev = [
   "hatch",
-  "pytest",
+  { include-group = "tests" },
+  { include-group = "lint" },
+]
+tests = [
   "mlflow",
-  "ruff==0.12.10",
+  "pytest",
   "pytest-asyncio",
 ]
 doc = [
@@ -95,3 +98,8 @@ convention = "google"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_ai_bridge",
+    "default::Warning:tests",
+]

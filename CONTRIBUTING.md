@@ -2,19 +2,16 @@
 
 ## Setting up dev environment
 
-Create a conda environment and install dev requirements
+We have individual uv environments for each package. To start, sync dependencies with the following command:
 
 ```sh
-conda create --name databricks-ai-dev-env python=3.10
-conda activate databricks-ai-dev-env
-pip install -e ".[dev]"
-pip install -e ".[doc]"
+uv sync
 ```
 
-If you are working with integration packages install them as well
+## Run tests
 
-```sh
-pip install -e "integrations/langchain[dev]"
+```
+uv run --group tests pytest tests/
 ```
 
 ### Build API docs

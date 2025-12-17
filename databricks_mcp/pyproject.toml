@@ -17,20 +17,24 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "pytest",
-  "pytest-asyncio",
   "typing_extensions",
   "databricks-sdk>=0.49.0",
   "ruff==0.6.4",
+  { include-group = "tests" }
 ]
 
-integration = [
+tests = [
+  "pytest",
+  "pytest-asyncio",
   "pytest-timeout>=2.3.1",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -71,3 +75,10 @@ docstring-code-line-length = 88
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_mcp",
+    "default::Warning:tests",
+]

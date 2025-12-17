@@ -16,13 +16,19 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "pytest",
   "ruff",
+  { include-group = "tests" }
+]
+tests = [
+  "pytest",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../../", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -60,3 +66,10 @@ select = [
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 100
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_dspy",
+    "default::Warning:tests",
+]
