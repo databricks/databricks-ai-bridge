@@ -1,7 +1,9 @@
 from databricks.sdk import WorkspaceClient
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthToken
+import logging
 
+logger = logging.getLogger(__name__)
 TOKEN_EXPIRATION_SECONDS = 60
 
 
@@ -10,12 +12,15 @@ class DatabricksTokenStorage(TokenStorage):
         self.workspace_client = workspace_client
 
     async def get_tokens(self) -> OAuthToken | None:
+        logger.error("GETTING TOKENS")
         headers = self.workspace_client.config.authenticate()
+        logger.error("HEADERS: %s", headers)
         authorization_header = headers["Authorization"]
         if not authorization_header.startswith("Bearer "):
             raise ValueError("Invalid authentication token format. Expected Bearer token.")
 
         token = authorization_header.split("Bearer ")[1]
+        logger.error("TOKEN: %s", token)
         return OAuthToken(access_token=token, expires_in=TOKEN_EXPIRATION_SECONDS)
 
 

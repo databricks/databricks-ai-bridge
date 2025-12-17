@@ -4,7 +4,9 @@ from databricks.sdk import WorkspaceClient
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, ConfigDict, Field
+import logging
 
+logger = logging.getLogger(__name__)
 
 class MCPServer(BaseModel):
     """
@@ -106,13 +108,16 @@ class DatabricksMCPServer(MCPServer):
 
     def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
+        logger.error("RUNNING MODEL POST INIT")
         super().model_post_init(context)
 
         # Set up Databricks OAuth authentication after initialization
         if self.workspace_client is None:
+            logger.error("CREATING WORKSPACE CLIENT")
             self.workspace_client = WorkspaceClient()
 
         # Store the auth provider internally
+        logger.error("SETTING AUTH PROVIDER")
         self._auth_provider = DatabricksOAuthClientProvider(self.workspace_client)
 
     def to_connection_dict(self) -> dict[str, Any]:
