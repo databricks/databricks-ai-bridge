@@ -20,7 +20,7 @@ dependencies = [
     "openai-agents>=0.5.0"
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "pytest-asyncio",
