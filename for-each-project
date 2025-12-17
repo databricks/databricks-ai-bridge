@@ -1,0 +1,29 @@
+#!/bin/bash
+
+#
+# for-each-project <command>
+#
+# Run command in each project directory.
+#
+
+set -ex
+
+CMD="$*"
+
+PROJECTS=(
+  "."
+  "databricks_mcp"
+  "integrations/dspy"
+  "integrations/llamaindex"
+  "integrations/openai"
+  "integrations/langchain"
+)
+
+main() {
+  for project in "${PROJECTS[@]}"; do
+    pushd "$project" && $CMD || true
+    popd
+  done
+}
+
+main
