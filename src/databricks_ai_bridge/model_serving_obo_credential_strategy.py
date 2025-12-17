@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from databricks.sdk.core import Config
 from databricks.sdk.credentials_provider import (
@@ -30,13 +30,13 @@ def is_gevent_running():
         bool: True if gevent is active and running, False otherwise
     """
     try:
-        import gevent
+        import gevent  # ty:ignore[unresolved-import]
 
         # Check if gevent monkey patching is active
         if hasattr(gevent, "socket") and hasattr(gevent.socket, "socket"):
             # Additional check to see if we're in a gevent context
             try:
-                from gevent import getcurrent
+                from gevent import getcurrent  # ty:ignore[unresolved-import]
 
                 current = getcurrent()
                 # If we get a gevent greenlet (not the main greenlet), gevent is running
@@ -77,7 +77,9 @@ def _get_invokers_token_fallback():
 
 def _get_invokers_token_from_mlflowserving():
     try:
-        from mlflowserving.scoring_server.agent_utils import fetch_obo_token
+        from mlflowserving.scoring_server.agent_utils import (  # ty:ignore[unresolved-import]
+            fetch_obo_token,
+        )
 
         _log_debug_information("[Debug] Retrieving OBO Token from Scoring Server")
 
@@ -104,7 +106,7 @@ def _get_invokers_token():
     return invokers_token
 
 
-def get_databricks_host_token() -> Optional[Tuple[str, str]]:
+def get_databricks_host_token() -> Tuple[str | None, str] | None:
     if not should_fetch_model_serving_environment_oauth():
         return None
 
@@ -116,9 +118,12 @@ def get_databricks_host_token() -> Optional[Tuple[str, str]]:
     return (host, _get_invokers_token())
 
 
-def model_serving_auth_visitor(cfg: Config) -> Optional[CredentialsProvider]:
+def model_serving_auth_visitor(cfg: Config) -> CredentialsProvider | None:
     try:
-        host, token = get_databricks_host_token()
+        result = get_databricks_host_token()
+        if result is None:
+            raise ValueError("Unable to get Databricks host and token")
+        host, token = result
         if token is None:
             raise ValueError(
                 "Got malformed auth (empty token) when fetching auth implicitly available in Model Serving Environment. "
@@ -137,7 +142,10 @@ def model_serving_auth_visitor(cfg: Config) -> Optional[CredentialsProvider]:
 
     def inner() -> Dict[str, str]:
         # Call here again to get the refreshed token
-        _, token = get_databricks_host_token()
+        result = get_databricks_host_token()
+        if result is None:
+            raise ValueError("Unable to get Databricks host and token")
+        _, token = result
         return {"Authorization": f"Bearer {token}"}
 
     return inner

@@ -12,7 +12,7 @@ from mlflow.models.resources import (
     DatabricksVectorSearchIndex,
     Resource,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 
@@ -129,7 +129,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             )
         return self
 
-    @validator("tool_name")
+    @field_validator("tool_name")
     def validate_tool_name(cls, tool_name):
         if tool_name is not None:
             pattern = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -148,8 +148,13 @@ class VectorSearchRetrieverToolMixin(BaseModel):
 
             columns = []
 
-            for column_info in table_info.columns:
+            for column_info in table_info.columns or []:
                 name = column_info.name
+                if name is None or column_info.type_name is None:
+                    _logger.warning(
+                        f"Skipping column with missing name or type name: {column_info}"
+                    )
+                    continue
                 comment = column_info.comment or "No description provided"
                 col_type = column_info.type_name.name
                 if not name.startswith("__"):
@@ -162,6 +167,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             _logger.warning(
                 "Unable to retrieve column information automatically. Please manually specify column names, types, and descriptions in the tool description to help LLMs apply filters correctly."
             )
+            return ""
 
     def _get_filter_param_description(self) -> str:
         """Generate a comprehensive filter parameter description including available columns."""
@@ -182,8 +188,13 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             else:
                 table_info = WorkspaceClient().tables.get(full_name=self.index_name)
 
-            for column_info_item in table_info.columns:
+            for column_info_item in table_info.columns or []:
                 name = column_info_item.name
+                if name is None or column_info_item.type_name is None:
+                    _logger.warning(
+                        f"Column info item is missing name or type_name: {column_info_item}"
+                    )
+                    continue
                 col_type = column_info_item.type_name.name
                 if not name.startswith("__"):
                     column_info.append((name, col_type))
@@ -267,7 +278,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             return description
 
     def _get_resources(
-        self, index_name: str, embedding_endpoint: str, index_details: IndexDetails = None
+        self, index_name: str, embedding_endpoint: str, index_details: IndexDetails | None = None
     ) -> List[Resource]:
         resources = []
         if index_name:

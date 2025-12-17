@@ -18,10 +18,10 @@ search_resp = {
 
 def construct_docs_with_score(
     page_content_column: str,
-    column_1: str = None,
-    column_2: str = None,
-    column_3: str = None,
-    column_4: str = None,
+    column_1: str | None = None,
+    column_2: str | None = None,
+    column_3: str | None = None,
+    column_4: str | None = None,
     document_class=dict,
     include_score=False,
 ):

@@ -4,7 +4,7 @@ from unittest import mock
 from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
-from databricks.vector_search.client import VectorSearchIndex  # type: ignore
+from databricks.vector_search.client import VectorSearchIndex
 
 INPUT_TEXTS = ["foo", "bar", "baz"]
 DEFAULT_VECTOR_DIMENSION = 4
@@ -37,7 +37,7 @@ EXAMPLE_SEARCH_RESPONSE = {
                 [str(uuid.uuid4()), s, e, "doc_uri", 0.5]
                 for s, e in zip(INPUT_TEXTS, embed_documents(INPUT_TEXTS))
             ],
-            key=lambda x: x[2],  # type: ignore
+            key=lambda x: x[2],
             reverse=True,
         ),
     },
