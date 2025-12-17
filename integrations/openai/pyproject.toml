@@ -24,8 +24,9 @@ dependencies = [
 dev = [
     "typing_extensions>=4.15.0",
     "databricks-sdk>=0.34.0",
-    "ruff==0.6.4",
-    { include-group = "tests" }
+    "ruff==0.12.10",
+    "ty>=0.0.11",
+    { include-group = "tests" },
 ]
 
 tests = [
@@ -50,36 +51,8 @@ include = [
 packages = ["src/databricks_openai"]
 
 [tool.ruff]
-line-length = 100
-target-version = "py39"
-
-[tool.ruff.lint]
-select = [
-    # isort
-    "I",
-    # bugbear rules
-    "B",
-    # remove unused imports
-    "F401",
-    # bare except statements
-    "E722",
-    # print statements
-    "T201",
-    "T203",
-    # misuse of typing.TYPE_CHECKING
-    "TCH004",
-    # import rules
-    "TID251",
-    # undefined-local-with-import-star
-    "F403",
-]
-
-[tool.ruff.format]
-docstring-code-format = true
-docstring-code-line-length = 88
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+extend = "../../pyproject.toml"
 
 [tool.pytest.ini_options]
 filterwarnings = [
@@ -87,3 +60,9 @@ filterwarnings = [
     "default::Warning:databricks_openai",
     "default::Warning:tests",
 ]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

@@ -17,7 +17,8 @@ dependencies = [
 [dependency-groups]
 dev = [
   "ruff",
-  { include-group = "tests" }
+  "ty>=0.0.11",
+  { include-group = "tests" },
 ]
 tests = [
   "pytest>=9.0.0",
@@ -39,29 +40,8 @@ include = [
 packages = ["src/databricks_dspy"]
 
 [tool.ruff]
-line-length = 100
-target-version = "py310"
-
-[tool.ruff.lint]
-select = [
-  # isort
-  "I",
-  # bugbear rules
-  "B",
-  # remove unused imports
-  "F401",
-  # bare except statements
-  "E722",
-  # print statements
-  "T201",
-  "T203",
-  # misuse of typing.TYPE_CHECKING
-  "TCH004",
-  # import rules
-  "TID251",
-  # undefined-local-with-import-star
-  "F403",
-]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+extend = "../../pyproject.toml"
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -73,3 +53,9 @@ filterwarnings = [
     "default::Warning:databricks_dspy",
     "default::Warning:tests",
 ]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

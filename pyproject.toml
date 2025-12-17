@@ -29,6 +29,7 @@ memory = [
 [dependency-groups]
 dev = [
   "hatch>=1.15.1",
+  "ty>=0.0.11",
   { include-group = "tests" },
   { include-group = "lint" },
 ]
@@ -67,6 +68,7 @@ packages = ["src/databricks_ai_bridge"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = [
@@ -82,7 +84,7 @@ select = [
   "T201",
   "T203",
   # misuse of typing.TYPE_CHECKING
-  "TCH004",
+  "TC004",
   # import rules
   "TID251",
   # undefined-local-with-import-star
@@ -103,3 +105,9 @@ filterwarnings = [
     "default::Warning:databricks_ai_bridge",
     "default::Warning:tests",
 ]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

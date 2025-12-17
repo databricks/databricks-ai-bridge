@@ -163,7 +163,7 @@ def test_add_texts() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, ids, strict=False)
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
@@ -182,7 +182,7 @@ def test_add_texts_handle_single_text() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids, strict=False)
         ]
     )
     assert len(added_ids) == 1
@@ -201,7 +201,7 @@ def test_add_texts_with_default_id() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids, strict=False)
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
@@ -222,7 +222,9 @@ def test_add_texts_with_metadata() -> None:
                 "text_vector": vector,
                 **metadata,  # type: ignore[arg-type]
             }
-            for text, vector, id_, metadata in zip(INPUT_TEXTS, vectors, added_ids, metadatas)
+            for text, vector, id_, metadata in zip(
+                INPUT_TEXTS, vectors, added_ids, metadatas, strict=False
+            )
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
