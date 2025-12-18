@@ -8,6 +8,7 @@ import pytest
 from databricks.sdk import WorkspaceClient
 
 from databricks_langchain.multi_server_mcp_client import (
+    DatabricksMcpHttpClientFactory,
     DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
     MCPServer,
@@ -143,6 +144,29 @@ class TestDatabricksMCPServer:
 
             assert connection_dict["timeout"] == 45.0
             assert connection_dict["headers"] == {"X-Custom": "header"}
+
+    def test_databricks_server_includes_http_factory(self):
+        """Test that DatabricksMCPServer includes the custom HTTP client factory."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+
+        with patch(
+            "databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider"
+        ) as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+
+            server = DatabricksMCPServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client,
+            )
+
+            connection_dict = server.to_connection_dict()
+
+            assert "httpx_client_factory" in connection_dict
+            assert isinstance(
+                connection_dict["httpx_client_factory"], DatabricksMcpHttpClientFactory
+            )
 
 
 class TestDatabricksMultiServerMCPClient:
