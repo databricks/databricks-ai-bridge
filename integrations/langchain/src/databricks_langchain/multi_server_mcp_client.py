@@ -16,6 +16,11 @@ class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
         auth: httpx.Auth | None = None,
     ) -> httpx.AsyncClient:
         if isinstance(auth, DatabricksOAuthClientProvider) and auth.workspace_client is not None:
+            # Currently DatabricksOAuthClientProvider does not do a full U2M.
+            # Therefore a new fresh token is only retrieved on the first initialization.
+            #  As this factory is called for each request, we are reinitailizing the
+            # DatabricksOAuthClientProvider with the original workspace client to get a new token
+
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
