@@ -1,9 +1,37 @@
 from typing import Any, Callable, List, Union
 
+import httpx
 from databricks.sdk import WorkspaceClient
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import McpHttpClientFactory
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
+    def __call__(
+        self,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        if isinstance(auth, DatabricksOAuthClientProvider) and auth.workspace_client is not None:
+            # Currently DatabricksOAuthClientProvider does not do a full U2M.
+            # Therefore a new fresh token is only retrieved on the first initialization.
+            #  As this factory is called for each request, we are reinitailizing the
+            # DatabricksOAuthClientProvider with the original workspace client to get a new token
+
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=DatabricksOAuthClientProvider(auth.workspace_client),
+            )
+        else:
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+            )
 
 
 class MCPServer(BaseModel):
@@ -234,6 +262,7 @@ class DatabricksMCPServer(MCPServer):
 
         # Add Databricks auth provider
         data["auth"] = self._auth_provider
+        data["httpx_client_factory"] = DatabricksMcpHttpClientFactory()
 
         return data
 
