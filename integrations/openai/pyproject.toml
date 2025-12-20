@@ -34,7 +34,7 @@ integration = [
 ]
 
 memory = [
-    "databricks-ai-bridge[memory]>=0.10.0",
+    "databricks-ai-bridge[memory]>=0.11.0",
 ]
 
 [build-system]

@@ -9,9 +9,20 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("agents.memory.session")
 
+from psycopg import sql
+
 from databricks_ai_bridge import lakebase
 
 from databricks_openai.agents.session import LakebaseSession, _pool_cache
+
+
+def query_to_string(query):
+    """Convert a query (string or sql.Composed) to a string for testing."""
+    if isinstance(query, str):
+        return query
+    if isinstance(query, (sql.Composed, sql.SQL, sql.Identifier)):
+        return query.as_string(None)
+    return str(query)
 
 
 class MockCursor:
@@ -175,9 +186,9 @@ def test_session_creates_tables_on_init_when_not_exist(
     )
 
     # Should have executed CREATE TABLE statements
-    queries = [q[0] for q in mock_connection.executed_queries]
-    create_sessions_found = any("CREATE TABLE IF NOT EXISTS agent_sessions" in q for q in queries)
-    create_messages_found = any("CREATE TABLE IF NOT EXISTS agent_messages" in q for q in queries)
+    queries = [query_to_string(q) for q, _ in mock_connection.executed_queries]
+    create_sessions_found = any("CREATE TABLE IF NOT EXISTS" in q and "agent_sessions" in q for q in queries)
+    create_messages_found = any("CREATE TABLE IF NOT EXISTS" in q and "agent_messages" in q for q in queries)
 
     assert create_sessions_found, "Should create sessions table"
     assert create_messages_found, "Should create messages table"
@@ -201,7 +212,7 @@ def test_session_skips_table_creation_when_tables_exist(
     )
 
     # Should NOT have executed CREATE TABLE statements
-    queries = [q[0] for q in mock_connection.executed_queries]
+    queries = [query_to_string(q) for q, _ in mock_connection.executed_queries]
     create_table_found = any("CREATE TABLE" in q for q in queries)
 
     assert not create_table_found, "Should not create tables when they already exist"
@@ -223,7 +234,8 @@ def test_session_ensures_session_record(monkeypatch, mock_workspace, mock_pool, 
 
     # Find the INSERT INTO agent_sessions query
     insert_queries = [
-        (q, p) for q, p in mock_connection.executed_queries if "INSERT INTO agent_sessions" in q
+        (q, p) for q, p in mock_connection.executed_queries
+        if "INSERT INTO" in query_to_string(q) and "agent_sessions" in query_to_string(q)
     ]
 
     assert len(insert_queries) > 0, "Should insert session record"
@@ -304,7 +316,10 @@ async def test_get_items_with_limit(monkeypatch, mock_workspace, mock_pool, mock
     assert len(items) == 1
 
     # Verify the query used LIMIT
-    select_queries = [q for q, p in mock_connection.executed_queries if "SELECT message_data" in q]
+    select_queries = [
+        query_to_string(q) for q, p in mock_connection.executed_queries
+        if "SELECT message_data" in query_to_string(q)
+    ]
     assert any("LIMIT" in q for q in select_queries), "Should use LIMIT in query"
 
 
@@ -333,7 +348,8 @@ async def test_add_items(monkeypatch, mock_workspace, mock_pool, mock_connection
     # Check that executemany was called on cursor
     assert len(mock_connection._cursor.executed_queries) > 0
     query, params = mock_connection._cursor.executed_queries[-1]
-    assert "INSERT INTO agent_messages" in query
+    query_str = query_to_string(query)
+    assert "INSERT INTO" in query_str and "agent_messages" in query_str
     assert len(params) == 2  # Two items
 
 
@@ -433,7 +449,7 @@ async def test_clear_session(monkeypatch, mock_workspace, mock_pool, mock_connec
     delete_queries = [
         (q, p)
         for q, p in mock_connection.executed_queries
-        if "DELETE FROM agent_messages" in q and "WHERE session_id" in q
+        if "DELETE FROM" in query_to_string(q) and "agent_messages" in query_to_string(q) and "WHERE session_id" in query_to_string(q)
     ]
 
     assert len(delete_queries) > 0, "Should execute DELETE query"
@@ -463,7 +479,7 @@ def test_custom_table_names(monkeypatch, mock_workspace, mock_pool, mock_connect
     assert session.messages_table == "custom_messages"
 
     # Check that CREATE TABLE uses custom names
-    queries = [q for q, p in mock_connection.executed_queries]
+    queries = [query_to_string(q) for q, _ in mock_connection.executed_queries]
     assert any("custom_sessions" in q for q in queries)
     assert any("custom_messages" in q for q in queries)
 

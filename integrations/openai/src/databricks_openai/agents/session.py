@@ -12,6 +12,7 @@ try:
     from agents.items import TResponseInputItem
     from agents.memory.session import SessionABC
     from databricks_ai_bridge.lakebase import LakebasePool
+    from psycopg import sql
 except ImportError as e:
     raise ImportError(
         "LakebaseSession requires databricks-openai[memory]. "
@@ -89,9 +90,9 @@ class LakebaseSession(SessionABC):
         message_data JSONB NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_{messages_table}_session_id 
+    CREATE INDEX IF NOT EXISTS {idx_session_id} 
         ON {messages_table}(session_id);
-    CREATE INDEX IF NOT EXISTS idx_{messages_table}_session_order 
+    CREATE INDEX IF NOT EXISTS {idx_session_order} 
         ON {messages_table}(session_id, id);
     """
 
@@ -141,7 +142,8 @@ class LakebaseSession(SessionABC):
             result = conn.execute(
                 """
                 SELECT COUNT(*) as cnt FROM information_schema.tables 
-                WHERE table_name IN (%s, %s)
+                WHERE table_schema = current_schema()
+                  AND table_name IN (%s, %s)
                 """,
                 (self.sessions_table, self.messages_table),
             )
@@ -151,9 +153,14 @@ class LakebaseSession(SessionABC):
 
     def _create_tables(self) -> None:
         """Create the required tables. Should only be called by the first user/admin."""
-        sessions_sql = self.CREATE_SESSIONS_TABLE_SQL.format(sessions_table=self.sessions_table)
-        messages_sql = self.CREATE_MESSAGES_TABLE_SQL.format(
-            sessions_table=self.sessions_table, messages_table=self.messages_table
+        sessions_sql = sql.SQL(self.CREATE_SESSIONS_TABLE_SQL).format(
+            sessions_table=sql.Identifier(self.sessions_table)
+        )
+        messages_sql = sql.SQL(self.CREATE_MESSAGES_TABLE_SQL).format(
+            sessions_table=sql.Identifier(self.sessions_table),
+            messages_table=sql.Identifier(self.messages_table),
+            idx_session_id=sql.Identifier(f"idx_{self.messages_table}_session_id"),
+            idx_session_order=sql.Identifier(f"idx_{self.messages_table}_session_order"),
         )
 
         with self._pool.connection() as conn:
@@ -168,11 +175,13 @@ class LakebaseSession(SessionABC):
 
         with self._pool.connection() as conn:
             conn.execute(
-                f"""
-                INSERT INTO {self.sessions_table} (session_id, created_at, updated_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (session_id) DO NOTHING
-                """,
+                sql.SQL(
+                    """
+                    INSERT INTO {} (session_id, created_at, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (session_id) DO NOTHING
+                    """
+                ).format(sql.Identifier(self.sessions_table)),
                 (self.session_id, now, now),
             )
 
@@ -191,25 +200,29 @@ class LakebaseSession(SessionABC):
         """
         if limit is not None:
             # Get the last N items, but return in chronological order
-            query = f"""
+            query = sql.SQL(
+                """
                 SELECT message_data FROM (
                     SELECT message_data, id
-                    FROM {self.messages_table}
+                    FROM {}
                     WHERE session_id = %s
                     ORDER BY id DESC
                     LIMIT %s
                 ) sub
                 ORDER BY id ASC
-            """
+                """
+            ).format(sql.Identifier(self.messages_table))
             params = (self.session_id, limit)
         else:
             # Get all items in chronological order
-            query = f"""
+            query = sql.SQL(
+                """
                 SELECT message_data 
-                FROM {self.messages_table}
+                FROM {}
                 WHERE session_id = %s
                 ORDER BY id ASC
-            """
+                """
+            ).format(sql.Identifier(self.messages_table))
             params = (self.session_id,)
 
         with self._pool.connection() as conn:
@@ -237,27 +250,29 @@ class LakebaseSession(SessionABC):
         if not items:
             return
 
-        now = datetime.now(timezone.utc)
-
         with self._pool.connection() as conn:
             # Insert all messages
             with conn.cursor() as cur:
                 cur.executemany(
-                    f"""
-                    INSERT INTO {self.messages_table} (session_id, message_data, created_at)
-                    VALUES (%s, %s, %s)
-                    """,
-                    [(self.session_id, json.dumps(item), now) for item in items],
+                    sql.SQL(
+                        """
+                        INSERT INTO {} (session_id, message_data)
+                        VALUES (%s, %s)
+                        """
+                    ).format(sql.Identifier(self.messages_table)),
+                    [(self.session_id, json.dumps(item)) for item in items],
                 )
 
             # Update session timestamp
             conn.execute(
-                f"""
-                UPDATE {self.sessions_table} 
-                SET updated_at = %s 
-                WHERE session_id = %s
-                """,
-                (now, self.session_id),
+                sql.SQL(
+                    """
+                    UPDATE {} 
+                    SET updated_at = CURRENT_TIMESTAMP 
+                    WHERE session_id = %s
+                    """
+                ).format(sql.Identifier(self.sessions_table)),
+                (self.session_id,),
             )
 
         logger.debug(f"Added {len(items)} items to session {self.session_id}")
@@ -270,18 +285,21 @@ class LakebaseSession(SessionABC):
             The most recent item if it exists, None if the session is empty.
         """
         with self._pool.connection() as conn:
+            messages_table_id = sql.Identifier(self.messages_table)
             result = conn.execute(
-                f"""
-                DELETE FROM {self.messages_table}
-                WHERE id = (
-                    SELECT id 
-                    FROM {self.messages_table}
-                    WHERE session_id = %s
-                    ORDER BY id DESC
-                    LIMIT 1
-                )
-                RETURNING message_data
-                """,
+                sql.SQL(
+                    """
+                    DELETE FROM {messages_table}
+                    WHERE id = (
+                        SELECT id 
+                        FROM {messages_table}
+                        WHERE session_id = %s
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                    RETURNING message_data
+                    """
+                ).format(messages_table=messages_table_id),
                 (self.session_id,),
             )
             row = result.fetchone()
@@ -290,11 +308,13 @@ class LakebaseSession(SessionABC):
                 # Update session timestamp
                 now = datetime.now(timezone.utc)
                 conn.execute(
-                    f"""
-                    UPDATE {self.sessions_table} 
-                    SET updated_at = %s 
-                    WHERE session_id = %s
-                    """,
+                    sql.SQL(
+                        """
+                        UPDATE {} 
+                        SET updated_at = %s 
+                        WHERE session_id = %s
+                        """
+                    ).format(sql.Identifier(self.sessions_table)),
                     (now, self.session_id),
                 )
 
@@ -311,18 +331,23 @@ class LakebaseSession(SessionABC):
         """Clear all items for this session."""
         with self._pool.connection() as conn:
             result = conn.execute(
-                f"DELETE FROM {self.messages_table} WHERE session_id = %s", (self.session_id,)
+                sql.SQL("DELETE FROM {} WHERE session_id = %s").format(
+                    sql.Identifier(self.messages_table)
+                ),
+                (self.session_id,),
             )
             count = result.rowcount
 
             # Update session timestamp
             now = datetime.now(timezone.utc)
             conn.execute(
-                f"""
-                UPDATE {self.sessions_table} 
-                SET updated_at = %s 
-                WHERE session_id = %s
-                """,
+                sql.SQL(
+                    """
+                    UPDATE {} 
+                    SET updated_at = %s 
+                    WHERE session_id = %s
+                    """
+                ).format(sql.Identifier(self.sessions_table)),
                 (now, self.session_id),
             )
 
