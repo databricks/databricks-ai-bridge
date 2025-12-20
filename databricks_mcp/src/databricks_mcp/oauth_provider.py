@@ -63,7 +63,7 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
 
         super().__init__(
             server_url="",
-            client_metadata=None,
+            client_metadata=None,  # ty:ignore[invalid-argument-type]: No metadata available
             storage=self.databricks_token_storage,
             redirect_handler=None,
             callback_handler=None,
