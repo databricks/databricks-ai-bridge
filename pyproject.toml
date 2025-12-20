@@ -29,6 +29,7 @@ memory = [
 [dependency-groups]
 dev = [
   "hatch>=1.15.1",
+  "ty>=0.0.2",
   { include-group = "tests" },
   { include-group = "lint" },
 ]
@@ -103,3 +104,9 @@ filterwarnings = [
     "default::Warning:databricks_ai_bridge",
     "default::Warning:tests",
 ]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

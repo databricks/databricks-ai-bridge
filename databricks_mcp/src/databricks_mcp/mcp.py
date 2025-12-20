@@ -123,7 +123,7 @@ class DatabricksMCPClient:
         self.client = workspace_client or WorkspaceClient()
         self.server_url = server_url
 
-    def _get_databricks_managed_mcp_url_type(self) -> str:
+    def _get_databricks_managed_mcp_url_type(self) -> str | None:
         """Determine the MCP URL type based on the path."""
         path = urlparse(self.server_url).path
         for mcp_type, pattern in MCP_URL_PATTERNS.items():

@@ -63,16 +63,16 @@ class IndexDetails:
 
 @dataclass
 class RetrieverSchema:
-    text_column: str = None
-    doc_uri: Optional[str] = None
-    primary_key: Optional[str] = None
-    other_columns: Optional[List[str]] = None
+    text_column: str | None = None
+    doc_uri: str | None = None
+    primary_key: str | None = None
+    other_columns: list[str] | None = None
 
 
 def get_metadata(
     columns: List[str],
     result: List[Any],
-    retriever_schema: RetrieverSchema,
+    retriever_schema: RetrieverSchema | None,
     ignore_cols: List[str],
     include_score: bool,
 ):
@@ -124,11 +124,11 @@ def get_metadata(
 
 def parse_vector_search_response(
     search_resp: Dict,
-    index_details: IndexDetails = None,  # deprecated
-    text_column: str = None,  # deprecated
+    index_details: IndexDetails | None = None,  # deprecated
+    text_column: str | None = None,  # deprecated
     *,
-    retriever_schema: RetrieverSchema = None,
-    ignore_cols: Optional[List[str]] = None,
+    retriever_schema: RetrieverSchema | None = None,
+    ignore_cols: list[str] | None = None,
     document_class: Any = dict,
     include_score: bool = False,
 ) -> List[Tuple[Dict, float]]:
@@ -145,7 +145,8 @@ def parse_vector_search_response(
     if retriever_schema:
         text_column = retriever_schema.text_column
 
-    ignore_cols.append(text_column)
+    if text_column is not None:
+        ignore_cols.append(text_column)
 
     columns = [col["name"] for col in search_resp.get("manifest", dict()).get("columns", [])]
     docs_with_score = []
@@ -182,8 +183,8 @@ def validate_and_get_return_columns(
     columns: List[str],
     text_column: str,
     index_details: IndexDetails,
-    doc_uri: str = None,
-    primary_key: str = None,
+    doc_uri: str | None = None,
+    primary_key: str | None = None,
 ) -> List[str]:
     """
     Get a list of columns to retrieve from the index.

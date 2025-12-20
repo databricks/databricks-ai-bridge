@@ -32,7 +32,8 @@ memory = [
 dev = [
   "typing_extensions>=4.15.0",
   "ruff==0.6.4",
-  { include-group = "tests" }
+  "ty>=0.0.2",
+  { include-group = "tests" },
 ]
 
 tests = [
@@ -97,3 +98,9 @@ filterwarnings = [
     "default::Warning:databricks_langchain",
     "default::Warning:tests",
 ]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

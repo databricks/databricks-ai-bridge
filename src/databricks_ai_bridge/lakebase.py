@@ -34,16 +34,9 @@ DEFAULT_DATABASE = "databricks_postgres"
 
 def _infer_username(w: WorkspaceClient) -> str:
     """Get username for database connection with prioritizing service principal first, then user's username."""
-    try:
-        sp = w.current_service_principal.me()
-        if sp and getattr(sp, "application_id", None):
-            return sp.application_id
-    except Exception:
-        logger.debug(
-            "Could not get service principal, using current user for Lakebase credentials."
-        )
-
     user = w.current_user.me()
+    if user.user_name is None:
+        raise ValueError("Unable to get username of current user")
     return user.user_name
 
 
@@ -127,7 +120,7 @@ class LakebasePool:
             **pool_kwargs,
         )
 
-        self._pool = ConnectionPool(**pool_params)
+        self._pool = ConnectionPool(**pool_params)  # type: ignore[arg-type]
 
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
@@ -166,6 +159,10 @@ class LakebasePool:
                 f"'{self.instance_name}'. Ensure the caller has access."
             ) from exc
 
+        if cred.token is None:
+            raise ConnectionError(
+                f"Failed to generate token for Lakebase instance '{self.instance_name}'"
+            )
         return cred.token
 
     @property
