@@ -3,6 +3,7 @@
 import json
 import logging
 import warnings
+from functools import cached_property
 from operator import itemgetter
 from typing import (
     Any,
@@ -14,10 +15,11 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
-    Type,
     Union,
+    cast,
 )
 
+from databricks.sdk import WorkspaceClient
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.base import LanguageModelInput
@@ -51,6 +53,9 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
+from openai import OpenAI, Stream
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, Field
 
 from databricks_langchain.utils import get_openai_client
@@ -260,7 +265,7 @@ class ChatDatabricks(BaseChatModel):
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
     """The target MLflow deployment URI to use. Deprecated: use workspace_client instead."""
-    workspace_client: Optional[Any] = Field(default=None, exclude=True)
+    workspace_client: Optional[WorkspaceClient] = Field(default=None, exclude=True)
     """Optional WorkspaceClient instance to use for authentication. If not provided, uses default authentication."""
     temperature: Optional[float] = None
     """Sampling temperature. Higher values make the model more creative."""
@@ -282,7 +287,6 @@ class ChatDatabricks(BaseChatModel):
     """Timeout in seconds for the HTTP request. If None, uses the default timeout."""
     max_retries: Optional[int] = None
     """Maximum number of retries for failed requests. If None, uses the default retry count."""
-    client: Optional[object] = Field(default=None, exclude=True)  #: :meta private:
 
     @property
     def endpoint(self) -> str:
@@ -304,6 +308,18 @@ class ChatDatabricks(BaseChatModel):
         )
         self.model = value
 
+    @cached_property
+    def client(self) -> OpenAI:
+        # Always use OpenAI client (supports both chat completions and responses API)
+        # Prepare kwargs for the SDK call
+        openai_kwargs = {}
+        if self.timeout is not None:
+            openai_kwargs["timeout"] = self.timeout
+        if self.max_retries is not None:
+            openai_kwargs["max_retries"] = self.max_retries
+
+        return get_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
+
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
 
@@ -320,16 +336,6 @@ class ChatDatabricks(BaseChatModel):
                     "Cannot specify both 'workspace_client' and 'target_uri'. "
                     "Please use 'workspace_client' only."
                 )
-
-        # Always use OpenAI client (supports both chat completions and responses API)
-        # Prepare kwargs for the SDK call
-        openai_kwargs = {}
-        if self.timeout is not None:
-            openai_kwargs["timeout"] = self.timeout
-        if self.max_retries is not None:
-            openai_kwargs["max_retries"] = self.max_retries
-
-        self.client = get_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
 
         self.use_responses_api = kwargs.get("use_responses_api", False)
         self.extra_params = self.extra_params or {}
@@ -363,11 +369,12 @@ class ChatDatabricks(BaseChatModel):
 
         if self.use_responses_api:
             # Use OpenAI client with responses API
-            resp = self.client.responses.create(**data)  # type: ignore
+            resp = cast(OpenAI, self.client).responses.create(**data)
+            # TODO: streaming support
             return self._convert_responses_api_response_to_chat_result(resp)
         else:
             # Use OpenAI client with chat completions API
-            resp = self.client.chat.completions.create(**data)  # type: ignore
+            resp = cast(OpenAI, self.client).chat.completions.create(**data)
             return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -412,7 +419,7 @@ class ChatDatabricks(BaseChatModel):
 
         return data
 
-    def _convert_responses_api_response_to_chat_result(self, response: Any) -> ChatResult:
+    def _convert_responses_api_response_to_chat_result(self, response: Response) -> ChatResult:
         """
         A Responses API response has an array of messages, but a ChatResult can only have a single message.
         To accomodate this, we combine the messages into a single message, following LangChain convention.
@@ -427,64 +434,65 @@ class ChatDatabricks(BaseChatModel):
 
         for item in response.output:
             if item.type == "message":
-                for content in item.content:
-                    if content.type == "output_text":
-                        annotations = []
-                        if content.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content.annotations
-                            ]
+                if item.content is not None:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    for content in item.content:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                        if content.type == "output_text":
+                            annotations = []
+                            if content.annotations:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                # Convert annotation objects to dictionaries
+                                annotations = [
+                                    ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                    for ann in content.annotations  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                ]
 
-                        content_blocks.append(
-                            {
-                                "type": "text",
-                                "text": content.text,
-                                "annotations": annotations,
-                                "id": getattr(content, "id", None),
-                            }
-                        )
-                    elif content.type == "refusal":
-                        content_blocks.append(
-                            {
-                                "type": "refusal",
-                                "refusal": content.refusal,
-                                "id": getattr(content, "id", None),
-                            }
-                        )
+                            content_blocks.append(
+                                {
+                                    "type": "text",
+                                    "text": content.text,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                    "annotations": annotations,
+                                    "id": getattr(content, "id", None),
+                                }
+                            )
+                        elif content.type == "refusal":
+                            content_blocks.append(
+                                {
+                                    "type": "refusal",
+                                    "refusal": content.refusal,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                    "id": getattr(content, "id", None),
+                                }
+                            )
             elif item.type == "function_call":
                 # Convert to dict for content_blocks to maintain backward compatibility
                 item_dict = {
                     "type": "function_call",
-                    "name": item.name,
-                    "arguments": item.arguments,
-                    "call_id": item.call_id,
+                    "name": item.name,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    "arguments": item.arguments,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    "call_id": item.call_id,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                 }
                 content_blocks.append(item_dict)
 
                 try:
-                    args = json.loads(item.arguments, strict=False)
+                    args = json.loads(item.arguments, strict=False)  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                     error = None
                 except json.JSONDecodeError as e:
                     error = str(e)
-                    args = item.arguments
+                    args = item.arguments  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                 if error is None:
                     tool_calls.append(
                         {
                             "type": "tool_call",
-                            "name": item.name,
+                            "name": item.name,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                             "args": args,
-                            "id": item.call_id,
+                            "id": item.call_id,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                         }
                     )
                 else:
                     invalid_tool_calls.append(
                         {
                             "type": "invalid_tool_call",
-                            "name": item.name,
+                            "name": item.name,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                             "args": args,
-                            "id": item.call_id,
+                            "id": item.call_id,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                             "error": error,
                         }
                     )
@@ -538,7 +546,7 @@ class ChatDatabricks(BaseChatModel):
             message.custom_outputs = response.custom_outputs
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_response_to_chat_result(self, response: Any) -> ChatResult:
+    def _convert_response_to_chat_result(self, response: ChatCompletion) -> ChatResult:
         # Check if this is a ChatAgent response (has messages but no choices)
         if (
             hasattr(response, "choices")
@@ -600,11 +608,11 @@ class ChatDatabricks(BaseChatModel):
         )
 
         usage_chunk_emitted = False
-        final_usage = None
+        final_usage: dict[str, int] | None = None
 
         if self.use_responses_api:
             prev_chunk = None
-            stream = self.client.responses.create(**data)  # type: ignore
+            stream: Stream[ResponseStreamEvent] = cast(OpenAI, self.client).responses.create(**data)
             for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
@@ -624,12 +632,21 @@ class ChatDatabricks(BaseChatModel):
             if stream_usage and final_usage and not usage_chunk_emitted:
                 # Usage chunk is an AIMessageChunk with empty content and usage_metadata
                 yield ChatGenerationChunk(
-                    message=AIMessageChunk(content="", usage_metadata=UsageMetadata(**final_usage))
+                    message=AIMessageChunk(
+                        content="",
+                        usage_metadata=UsageMetadata(
+                            input_tokens=final_usage["input_tokens"],
+                            output_tokens=final_usage["output_tokens"],
+                            total_tokens=final_usage["total_tokens"],
+                        ),
+                    )
                 )
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            stream = self.client.chat.completions.create(**data)  # type: ignore
+            stream: Stream[ChatCompletionChunk] = cast(OpenAI, self.client).chat.completions.create(
+                **data
+            )
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
                 if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
@@ -694,19 +711,24 @@ class ChatDatabricks(BaseChatModel):
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
                 yield ChatGenerationChunk(
-                    message=AIMessageChunk(content="", usage_metadata=UsageMetadata(**final_usage))
+                    message=AIMessageChunk(
+                        content="",
+                        usage_metadata=UsageMetadata(
+                            input_tokens=final_usage["input_tokens"],
+                            output_tokens=final_usage["output_tokens"],
+                            total_tokens=final_usage["total_tokens"],
+                        ),
+                    )
                 )
                 usage_chunk_emitted = True
 
     def bind_tools(
         self,
-        tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
+        tools: Sequence[dict[str, Any] | type | Callable | BaseTool],
         *,
-        tool_choice: Optional[
-            Union[dict, str, Literal["auto", "none", "required", "any"], bool]
-        ] = None,
+        tool_choice: str | dict | bool | None = None,
         **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, BaseMessage]:
+    ) -> Runnable[LanguageModelInput, AIMessage]:
         """Bind tool-like objects to this chat model.
 
         Assumes model is compatible with OpenAI tool-calling API.
@@ -770,7 +792,7 @@ class ChatDatabricks(BaseChatModel):
 
     def with_structured_output(
         self,
-        schema: Optional[Union[Dict, Type]] = None,
+        schema: dict | type | None = None,
         *,
         method: Literal["function_calling", "json_mode", "json_schema"] = "function_calling",
         include_raw: bool = False,
@@ -945,7 +967,11 @@ class ChatDatabricks(BaseChatModel):
         """  # noqa: E501
         if kwargs:
             raise ValueError(f"Received unsupported arguments {kwargs}")
-        is_pydantic_schema = isinstance(schema, type) and is_basemodel_subclass(schema)
+        pydantic_schema = (
+            cast(type[BaseModel], schema)
+            if isinstance(schema, type) and is_basemodel_subclass(schema)
+            else None
+        )
         if method == "function_calling":
             if schema is None:
                 raise ValueError(
@@ -953,18 +979,18 @@ class ChatDatabricks(BaseChatModel):
                 )
             tool_name = convert_to_openai_tool(schema)["function"]["name"]
             llm = self.bind_tools([schema], tool_choice=tool_name)
-            if is_pydantic_schema:
+            if pydantic_schema:
                 output_parser: OutputParserLike = PydanticToolsParser(
-                    tools=[schema],  # type: ignore[list-item]
-                    first_tool_only=True,  # type: ignore[list-item]
+                    tools=[pydantic_schema],
+                    first_tool_only=True,
                 )
             else:
                 output_parser = JsonOutputKeyToolsParser(key_name=tool_name, first_tool_only=True)
         elif method == "json_mode":
             llm = self.bind(response_format={"type": "json_object"})
             output_parser = (
-                PydanticOutputParser(pydantic_object=schema)  # type: ignore[arg-type]
-                if is_pydantic_schema
+                PydanticOutputParser(pydantic_object=pydantic_schema)
+                if pydantic_schema
                 else JsonOutputParser()
             )
         elif method == "json_schema":
@@ -976,15 +1002,13 @@ class ChatDatabricks(BaseChatModel):
                 "type": "json_schema",
                 "json_schema": {
                     "strict": True,
-                    "schema": (
-                        schema.model_json_schema() if is_pydantic_schema else schema  # type: ignore[union-attr]
-                    ),
+                    "schema": (pydantic_schema.model_json_schema() if pydantic_schema else schema),
                 },
             }
             llm = self.bind(response_format=response_format)
             output_parser = (
-                PydanticOutputParser(pydantic_object=schema)  # type: ignore[arg-type]
-                if is_pydantic_schema
+                PydanticOutputParser(pydantic_object=pydantic_schema)
+                if pydantic_schema
                 else JsonOutputParser()
             )
 
@@ -1064,7 +1088,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         raise ValueError(f"Got unknown message type: {type(message)}")
 
 
-def _convert_lc_messages_to_responses_api(messages: List[BaseMessage]) -> dict:
+def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[dict[str, Any]]:
     """
     Convert a LangChain message to a Responses API message.
     """
@@ -1198,7 +1222,9 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
 
-def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
+def _convert_dict_to_message(
+    _dict: Dict,
+) -> HumanMessage | SystemMessage | ToolMessage | AIMessage | ChatMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
     if not isinstance(content, str):
@@ -1243,8 +1269,8 @@ def _convert_dict_to_message(_dict: Dict) -> BaseMessage:
 
 def _convert_dict_to_message_chunk(
     _dict: Mapping[str, Any],
-    default_role: str,
-    usage: Optional[Dict[str, Any]] = None,
+    default_role: str | None,
+    usage: dict[str, Any] | None = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
     content = _dict.get("content") or ""
@@ -1297,7 +1323,7 @@ def _convert_dict_to_message_chunk(
 
 
 def _convert_responses_api_chunk_to_lc_chunk(
-    chunk: Any, previous_chunk: Optional[Any] = None
+    chunk: ResponseStreamEvent, previous_chunk: ResponseStreamEvent | None = None
 ) -> Optional[BaseMessageChunk]:
     # Handle OpenAI responses API chunks
     content = []
@@ -1310,23 +1336,23 @@ def _convert_responses_api_chunk_to_lc_chunk(
         content.append(
             {
                 "type": "text",
-                "text": chunk.delta,
+                "text": chunk.delta,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
             }
         )
     elif chunk.type == "response.output_item.done":
-        item = chunk.item
+        item = chunk.item  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
         if item.type == "function_call_output":
             lc_chunk = ToolMessageChunk(
                 content=item.output,
                 tool_call_id=item.call_id,
             )
         elif item.type == "function_call":
-            id = item.call_id
+            id = item.call_id  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
             tool_call_chunks.append(
                 tool_call_chunk(
-                    name=item.name,
-                    args=item.arguments,
-                    id=item.call_id,
+                    name=item.name,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    args=item.arguments,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    id=item.call_id,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                 )
             )
         elif item.type == "message":
@@ -1337,39 +1363,40 @@ def _convert_responses_api_chunk_to_lc_chunk(
             skip_duplicate_text = (
                 previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
             )
-            for content_item in item.content:
-                if content_item.type == "output_text":
-                    if skip_duplicate_text:
-                        if content_item.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content_item.annotations
-                            ]
-                            content.append({"annotations": annotations})
-                    else:
-                        annotations = []
-                        if content_item.annotations:
-                            # Convert annotation objects to dictionaries
-                            annotations = [
-                                ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                for ann in content_item.annotations
-                            ]
+            if item.content is not None:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                for content_item in item.content:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                    if content_item.type == "output_text":
+                        if skip_duplicate_text:
+                            if content_item.annotations:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                # Convert annotation objects to dictionaries
+                                annotations = [
+                                    ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                    for ann in content_item.annotations  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                ]
+                                content.append({"annotations": annotations})
+                        else:
+                            annotations = []
+                            if content_item.annotations:  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                # Convert annotation objects to dictionaries
+                                annotations = [
+                                    ann.model_dump() if hasattr(ann, "model_dump") else ann
+                                    for ann in content_item.annotations  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                ]
 
+                            content.append(
+                                {
+                                    "type": "text",
+                                    "text": content_item.text,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
+                                    "annotations": annotations,
+                                }
+                            )
+                    elif content_item.type == "refusal":
                         content.append(
                             {
-                                "type": "text",
-                                "text": content_item.text,
-                                "annotations": annotations,
+                                "type": "refusal",
+                                "refusal": content_item.refusal,  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
                             }
                         )
-                elif content_item.type == "refusal":
-                    content.append(
-                        {
-                            "type": "refusal",
-                            "refusal": content_item.refusal,
-                        }
-                    )
         elif item.type in (
             "web_search_call",
             "file_search_call",
@@ -1387,13 +1414,13 @@ def _convert_responses_api_chunk_to_lc_chunk(
             else:
                 content.append(item)
     elif chunk.type == "response.created":
-        id = chunk.response.id if chunk.response else None
+        id = chunk.response.id if chunk.response else None  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
         lc_chunk = AIMessageChunk(content="", id=id)
     elif chunk.type == "response.completed":
         # This indicates the response is done
         return None
     elif chunk.type == "error":
-        raise ValueError(chunk.error)
+        raise ValueError(chunk.message)  # ty:ignore[possibly-missing-attribute]: astral-sh/ty#1479 should fix this
     else:
         # Return None for unknown chunk types
         return None
@@ -1406,6 +1433,6 @@ def _convert_responses_api_chunk_to_lc_chunk(
             id=id,
         )
 
-    if hasattr(chunk, "custom_outputs"):
+    if lc_chunk and hasattr(chunk, "custom_outputs"):
         lc_chunk.custom_outputs = chunk.custom_outputs
     return lc_chunk

@@ -170,5 +170,6 @@ def GenieAgent(
 
     runnable = RunnableLambda(partial_genie_agent)
     runnable.name = genie_agent_name
-    runnable.description = description or genie.description
+    # TODO: `description` field does not exist on `RunnableLambda`
+    runnable.description = description or genie.description  # ty:ignore[unresolved-attribute]
     return runnable

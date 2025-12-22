@@ -1,8 +1,10 @@
-from typing import Any, Callable, List, Union
+from datetime import timedelta
+from typing import Any, Callable, Union
 
 from databricks.sdk import WorkspaceClient
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -15,7 +17,7 @@ class MCPServer(BaseModel):
 
     Common optional parameters:
         - headers: dict[str, str] - Custom HTTP headers
-        - timeout: float - Request timeout in seconds
+        - timeout: timedelta - Request timeout in seconds
         - sse_read_timeout: float - SSE read timeout in seconds
         - auth: httpx.Auth - Authentication handler
         - httpx_client_factory: Callable - Custom httpx client factory
@@ -32,7 +34,7 @@ class MCPServer(BaseModel):
             name="other-server",
             url="https://other-server.com/mcp",
             headers={"X-API-Key": "secret"},
-            timeout=15.0,
+            timeout=timedelta(seconds=15),
             handle_tool_error="An error occurred. Please try again.",
         )
 
@@ -54,8 +56,12 @@ class MCPServer(BaseModel):
             "If a callable, return the result of the callable as the error message."
         ),
     )
+    headers: dict[str, str] | None = Field(
+        default=None, description="HTTP headers to send to the endpoint."
+    )
+    timeout: timedelta | None = Field(default=None, description="HTTP timeout.")
 
-    def to_connection_dict(self) -> dict[str, Any]:
+    def to_connection_dict(self) -> StreamableHttpConnection:
         """
         Convert to connection dictionary for LangChain MultiServerMCPClient.
 
@@ -225,7 +231,7 @@ class DatabricksMCPServer(MCPServer):
         # Store the auth provider internally
         self._auth_provider = DatabricksOAuthClientProvider(self.workspace_client)
 
-    def to_connection_dict(self) -> dict[str, Any]:
+    def to_connection_dict(self) -> StreamableHttpConnection:
         """
         Convert to connection dictionary, including Databricks auth.
         """
@@ -280,7 +286,7 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
         ```
     """
 
-    def __init__(self, servers: List[MCPServer], **kwargs):
+    def __init__(self, servers: list[MCPServer], **kwargs):
         """
         Initialize the client with a list of server configurations.
 

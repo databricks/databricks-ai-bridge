@@ -1,9 +1,10 @@
-from typing import Any, Dict, Generator, List
+from typing import Any, Generator
 from unittest import mock
 
 import pytest
 from databricks_ai_bridge.test_utils.vector_search import DEFAULT_VECTOR_DIMENSION
 from langchain_core.embeddings import Embeddings
+from mlflow.deployments import BaseDeploymentClient
 
 from databricks_langchain import DatabricksEmbeddings
 
@@ -15,13 +16,11 @@ class FakeEmbeddings(Embeddings):
         super().__init__()
         self.dimension = dimension
 
-    def embed_documents(self, embedding_texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Return simple embeddings."""
-        return [
-            [float(1.0)] * (self.dimension - 1) + [float(i)] for i in range(len(embedding_texts))
-        ]
+        return [[float(1.0)] * (self.dimension - 1) + [float(i)] for i in range(len(texts))]
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """Return simple embeddings."""
         return [float(1.0)] * (self.dimension - 1) + [float(0.0)]
 
@@ -29,7 +28,7 @@ class FakeEmbeddings(Embeddings):
 EMBEDDING_MODEL = FakeEmbeddings()
 
 
-def _mock_embeddings(endpoint: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+def _mock_embeddings(endpoint: str, inputs: dict[str, Any]) -> dict[str, Any]:
     return {
         "object": "list",
         "data": [
@@ -47,7 +46,7 @@ def _mock_embeddings(endpoint: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
 
 @pytest.fixture
 def mock_client() -> Generator:
-    client = mock.MagicMock()
+    client = mock.MagicMock(spec=BaseDeploymentClient)
     client.predict.side_effect = _mock_embeddings
     with mock.patch("mlflow.deployments.get_deploy_client", return_value=client):
         yield client

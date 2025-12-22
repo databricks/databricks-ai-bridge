@@ -1,10 +1,12 @@
 from __future__ import annotations
+from psycopg.rows import DictRow
+from psycopg_pool.abc import CT
 
 import logging
 import time
 import uuid
 from threading import Lock
-from typing import Optional
+from typing import Optional, Generic
 
 from databricks.sdk import WorkspaceClient
 
@@ -120,7 +122,9 @@ class LakebasePool:
             **pool_kwargs,
         )
 
-        self._pool = ConnectionPool(**pool_params)  # type: ignore[arg-type]
+        self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(
+            **pool_params,  # ty:ignore[invalid-argument-type]
+        )
 
         logger.info(
             "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
@@ -166,7 +170,7 @@ class LakebasePool:
         return cred.token
 
     @property
-    def pool(self) -> ConnectionPool:
+    def pool(self) -> ConnectionPool[psycopg.Connection[DictRow]]:
         """Access the underlying connection pool."""
         return self._pool
 

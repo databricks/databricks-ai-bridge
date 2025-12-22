@@ -8,7 +8,6 @@ try:
 
     _checkpoint_imports_available = True
 except ImportError:
-    PostgresSaver = object
     _checkpoint_imports_available = False
 
 

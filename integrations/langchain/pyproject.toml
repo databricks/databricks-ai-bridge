@@ -76,3 +76,4 @@ root = ["./src", "./tests"]
 
 [tool.ty.src]
 include = ["./src", "./tests"]
+exclude = ["./tests/integration_tests"]

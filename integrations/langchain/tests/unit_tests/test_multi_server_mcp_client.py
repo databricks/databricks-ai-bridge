@@ -1,6 +1,7 @@
 """Unit tests for DatabricksMultiServerMCPClient and related classes."""
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
@@ -28,10 +29,10 @@ class TestMCPServer:
     @pytest.mark.parametrize(
         "extra_params",
         [
-            {"timeout": 30.0},
+            {"timeout": timedelta(seconds=30.0)},
             {"headers": {"X-API-Key": "secret"}},
             {"sse_read_timeout": 60.0},
-            {"timeout": 15.0, "headers": {"Authorization": "Bearer token"}},
+            {"timeout": timedelta(seconds=15.0), "headers": {"Authorization": "Bearer token"}},
             {"session_kwargs": {"some_param": "value"}},
         ],
     )
@@ -48,7 +49,7 @@ class TestMCPServer:
 
         # Check that extra params are in connection dict
         for key, value in extra_params.items():
-            assert connection_dict[key] == value
+            assert connection_dict[key] == value  # ty:ignore[invalid-key]
             assert "name" not in connection_dict
             assert "handle_tool_error" not in connection_dict
 
@@ -135,13 +136,13 @@ class TestDatabricksMCPServer:
                 name="databricks",
                 url="https://databricks.com/mcp",
                 workspace_client=mock_workspace_client,
-                timeout=45.0,
+                timeout=timedelta(seconds=45),
                 headers={"X-Custom": "header"},
             )
 
             connection_dict = server.to_connection_dict()
 
-            assert connection_dict["timeout"] == 45.0
+            assert connection_dict["timeout"] == timedelta(seconds=45.0)
             assert connection_dict["headers"] == {"X-Custom": "header"}
 
 
