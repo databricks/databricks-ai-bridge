@@ -4,9 +4,9 @@ from typing import Any, Dict, List, Optional, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
-from databricks.vector_search.client import VectorSearchIndex  # type: ignore
+from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.reranker import DatabricksReranker, Reranker
-from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
+from databricks_ai_bridge.test_utils.vector_search import (
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
     DIRECT_ACCESS_INDEX,
@@ -15,12 +15,12 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     INPUT_TEXTS,
     mock_vs_client,  # noqa: F401
 )
-
-from databricks_langchain.vectorstores import DatabricksVectorSearch
-from tests.utils.vector_search import (
+from utils.vector_search import (
     EMBEDDING_MODEL,
     FakeEmbeddings,
 )
+
+from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
 def init_vector_search(
@@ -40,7 +40,7 @@ def init_vector_search(
                 "text_column": "text",
             }
         )
-    return DatabricksVectorSearch(**kwargs)  # type: ignore[arg-type]
+    return DatabricksVectorSearch(**kwargs)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -220,7 +220,7 @@ def test_add_texts_with_metadata() -> None:
                 "id": id_,
                 "text": text,
                 "text_vector": vector,
-                **metadata,  # type: ignore[arg-type]
+                **metadata,
             }
             for text, vector, id_, metadata in zip(
                 INPUT_TEXTS, vectors, added_ids, metadatas, strict=False

@@ -9,8 +9,9 @@ try:
 
     _checkpoint_imports_available = True
 except ImportError:
-    PostgresSaver = object
-    AsyncPostgresSaver = object
+    PostgresSaver = object  # type: ignore
+    AsyncPostgresSaver = object  # type: ignore
+
     _checkpoint_imports_available = False
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable
 
 from databricks.sdk import WorkspaceClient
 
@@ -10,21 +10,14 @@ try:
     from langgraph.store.base import BaseStore, Op, Result
     from langgraph.store.base.batch import AsyncBatchedBaseStore
     from langgraph.store.postgres import AsyncPostgresStore, PostgresStore
+    from langgraph.store.postgres.base import PostgresIndexConfig
 
     from databricks_langchain.embeddings import DatabricksEmbeddings
 
     _store_imports_available = True
 except ImportError:
-    LakebasePool = object
-    AsyncLakebasePool = object
-    PostgresStore = object
-    AsyncPostgresStore = object
-    BaseStore = object
-    AsyncBatchedBaseStore = object
-    Item = object
-    Op = object
-    Result = object
-    DatabricksEmbeddings = object
+    BaseStore = object  # type: ignore
+    AsyncBatchedBaseStore = object  # type: ignore
     _store_imports_available = False
 
 
@@ -41,11 +34,11 @@ class DatabricksStore(BaseStore):
         self,
         *,
         instance_name: str,
-        workspace_client: Optional[WorkspaceClient] = None,
-        embedding_endpoint: Optional[str] = None,
-        embedding_dims: Optional[int] = None,
-        embedding_fields: Optional[List[str]] = None,
-        embeddings: Optional[DatabricksEmbeddings] = None,
+        workspace_client: WorkspaceClient | None = None,
+        embedding_endpoint: str | None = None,
+        embedding_dims: int | None = None,
+        embedding_fields: list[str] | None = None,
+        embeddings: DatabricksEmbeddings | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize DatabricksStore with embedding support.
@@ -76,8 +69,8 @@ class DatabricksStore(BaseStore):
         )
 
         # Initialize embeddings and index configuration for semantic search
-        self.embeddings: Optional[DatabricksEmbeddings] = None
-        self.index_config: Optional[dict] = None
+        self.embeddings: DatabricksEmbeddings | None = None
+        self.index_config: PostgresIndexConfig | None = None
 
         if embeddings is not None:
             # Use pre-configured embeddings instance
@@ -156,11 +149,11 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         self,
         *,
         instance_name: str,
-        workspace_client: Optional[WorkspaceClient] = None,
-        embedding_endpoint: Optional[str] = None,
-        embedding_dims: Optional[int] = None,
-        embedding_fields: Optional[List[str]] = None,
-        embeddings: Optional[DatabricksEmbeddings] = None,
+        workspace_client: WorkspaceClient | None = None,
+        embedding_endpoint: str | None = None,
+        embedding_dims: int | None = None,
+        embedding_fields: list[str] | None = None,
+        embeddings: DatabricksEmbeddings | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize AsyncDatabricksStore with embedding support.
@@ -193,8 +186,8 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         )
 
         # Initialize embeddings and index configuration for semantic search
-        self.embeddings: Optional[DatabricksEmbeddings] = None
-        self.index_config: Optional[dict] = None
+        self.embeddings: DatabricksEmbeddings | None = None
+        self.index_config: PostgresIndexConfig | None = None
 
         if embeddings is not None:
             # Use pre-configured embeddings instance

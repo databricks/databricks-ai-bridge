@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, cast
 from unittest.mock import MagicMock, create_autospec, patch
 
 import mlflow
@@ -26,31 +26,31 @@ from mlflow.models.resources import (
     DatabricksServingEndpoint,
     DatabricksVectorSearchIndex,
 )
+from utils.chat_models import llm, mock_client  # noqa: F401
+from utils.vector_search import (
+    EMBEDDING_MODEL,
+    embeddings,  # noqa: F401
+)
+from utils.vector_search import (
+    mock_client as mock_embeddings_client,  # noqa: F401
+)
 
 from databricks_langchain import (
     ChatDatabricks,
     VectorSearchRetrieverTool,
 )
-from tests.utils.chat_models import llm, mock_client  # noqa: F401
-from tests.utils.vector_search import (
-    EMBEDDING_MODEL,
-    embeddings,  # noqa: F401
-)
-from tests.utils.vector_search import (
-    mock_client as mock_embeddings_client,  # noqa: F401
-)
 
 
 def init_vector_search_tool(
     index_name: str,
-    columns: Optional[List[str]] = None,
-    tool_name: Optional[str] = None,
-    tool_description: Optional[str] = None,
-    embedding: Optional[Embeddings] = None,
-    text_column: Optional[str] = None,
-    doc_uri: Optional[str] = None,
-    primary_key: Optional[str] = None,
-    filters: Optional[Dict[str, Any]] = None,
+    columns: list[str] | None = None,
+    tool_name: str | None = None,
+    tool_description: str | None = None,
+    embedding: Embeddings | None = None,
+    text_column: str | None = None,
+    doc_uri: str | None = None,
+    primary_key: str | None = None,
+    filters: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> VectorSearchRetrieverTool:
     kwargs.update(
@@ -73,7 +73,7 @@ def init_vector_search_tool(
                 "text_column": "text",
             }
         )
-    return VectorSearchRetrieverTool(**kwargs)  # type: ignore[arg-type]
+    return VectorSearchRetrieverTool(**kwargs)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -95,15 +95,18 @@ def test_chat_model_bind_tools(llm: ChatDatabricks, index_name: str) -> None:
 
 def test_filters_are_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
     vector_search_tool.invoke(
-        {
-            "query": "what cities are in Germany",
-            "filters": [FilterItem(key="country", value="Germany")],
-        }
+        cast(
+            dict[str, Any],
+            {
+                "query": "what cities are in Germany",
+                "filters": [FilterItem(key="country", value="Germany")],
+            },
+        )
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"country": "Germany"},
@@ -113,15 +116,18 @@ def test_filters_are_passed_through() -> None:
 
 def test_filters_are_combined() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
     vector_search_tool.invoke(
-        {
-            "query": "what cities are in Germany",
-            "filters": [FilterItem(key="country", value="Germany")],
-        }
+        cast(
+            dict[str, Any],
+            {
+                "query": "what cities are in Germany",
+                "filters": [FilterItem(key="country", value="Germany")],
+            },
+        )
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="what cities are in Germany",
         k=vector_search_tool.num_results,
         filter={"city LIKE": "Berlin", "country": "Germany"},
@@ -137,11 +143,11 @@ def test_filters_are_combined() -> None:
 @pytest.mark.parametrize("text_column", [None, "text"])
 def test_vector_search_retriever_tool_combinations(
     index_name: str,
-    columns: Optional[List[str]],
-    tool_name: Optional[str],
-    tool_description: Optional[str],
-    embedding: Optional[Any],
-    text_column: Optional[str],
+    columns: list[str] | None,
+    tool_name: str | None,
+    tool_description: str | None,
+    embedding: Any | None,
+    text_column: str | None,
 ) -> None:
     if index_name == DELTA_SYNC_INDEX:
         embedding = None
@@ -191,7 +197,7 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 @pytest.mark.parametrize("tool_name", [None, "test_tool"])
-def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
+def test_vs_tool_tracing(index_name: str, tool_name: str | None) -> None:
     vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
     vector_search_tool._run("Databricks Agent Framework")
     trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
@@ -236,7 +242,7 @@ def test_vector_search_retriever_tool_resources(
 
 
 @pytest.mark.parametrize("tool_name", [None, "valid_tool_name", "test_tool"])
-def test_tool_name_validation_valid(tool_name: Optional[str]) -> None:
+def test_tool_name_validation_valid(tool_name: str | None) -> None:
     index_name = "catalog.schema.index"
     tool = init_vector_search_tool(index_name, tool_name=tool_name)
     assert tool.tool_name == tool_name
@@ -346,12 +352,15 @@ def test_vector_search_client_with_sp_workspace_client():
 
 def test_kwargs_are_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
     vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "extra_param": "something random"},
+        cast(
+            dict[str, Any],
+            {"query": "what cities are in Germany", "extra_param": "something random"},
+        )
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="what cities are in Germany",
         k=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
@@ -363,12 +372,14 @@ def test_kwargs_are_passed_through() -> None:
 
 def test_kwargs_override_both_num_results_and_query_type() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
     vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"},
+        cast(
+            dict[str, Any], {"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"}
+        )
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="what cities are in Germany",
         k=3,  # Should use overridden value
         query_type="HYBRID",  # Should use overridden value
@@ -470,11 +481,11 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
     assert "filters" not in args_schema.model_fields
 
     # Test that predefined filters are used
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
-    vector_search_tool.invoke({"query": "what electronics are available"})
+    vector_search_tool.invoke(cast(dict[str, Any], {"query": "what electronics are available"}))
 
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="what electronics are available",
         k=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,
@@ -485,7 +496,7 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
 def test_filter_item_serialization() -> None:
     """Test that FilterItem objects are properly converted to dictionaries."""
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    vector_search_tool._vector_store.similarity_search = MagicMock()  # type: ignore[method-assign]
 
     # Test various filter types
     filters = [
@@ -495,7 +506,7 @@ def test_filter_item_serialization() -> None:
         FilterItem(key="tags", value=["wireless", "bluetooth"]),
     ]
 
-    vector_search_tool.invoke({"query": "find products", "filters": filters})
+    vector_search_tool.invoke(cast(dict[str, Any], {"query": "find products", "filters": filters}))
 
     expected_filters = {
         "category": "electronics",
@@ -504,7 +515,7 @@ def test_filter_item_serialization() -> None:
         "tags": ["wireless", "bluetooth"],
     }
 
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
+    vector_search_tool._vector_store.similarity_search.assert_called_once_with(  # type: ignore[attr-defined]
         query="find products",
         k=vector_search_tool.num_results,
         query_type=vector_search_tool.query_type,

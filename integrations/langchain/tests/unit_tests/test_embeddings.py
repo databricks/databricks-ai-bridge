@@ -1,15 +1,14 @@
 """Test Together AI embeddings."""
 
+from unittest.mock import MagicMock
+
 from databricks_ai_bridge.test_utils.vector_search import DEFAULT_VECTOR_DIMENSION
-from mlflow.deployments import BaseDeploymentClient  # type: ignore[import-untyped]
+from utils.vector_search import embeddings, mock_client  # noqa: F401
 
 from databricks_langchain import DatabricksEmbeddings
-from tests.utils.vector_search import embeddings, mock_client  # noqa: F401
 
 
-def test_embed_documents(
-    mock_client: BaseDeploymentClient, embeddings: DatabricksEmbeddings
-) -> None:
+def test_embed_documents(mock_client: MagicMock, embeddings: DatabricksEmbeddings) -> None:
     documents = ["foo"] * 30
     output = embeddings.embed_documents(documents)
     assert len(output) == 30
@@ -21,7 +20,7 @@ def test_embed_documents(
     )
 
 
-def test_embed_query(mock_client: BaseDeploymentClient, embeddings: DatabricksEmbeddings) -> None:
+def test_embed_query(mock_client: MagicMock, embeddings: DatabricksEmbeddings) -> None:
     query = "foo bar"
     output = embeddings.embed_query(query)
     assert len(output) == DEFAULT_VECTOR_DIMENSION

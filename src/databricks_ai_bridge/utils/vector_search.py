@@ -1,7 +1,13 @@
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, TypeVar
+
+T = TypeVar("T")
+
+
+class DocType(Protocol[T]):
+    def __call__(self, *, page_content: str, metadata: dict[str, Any]) -> T: ...
 
 
 class IndexType(str, Enum):
@@ -129,9 +135,9 @@ def parse_vector_search_response(
     *,
     retriever_schema: RetrieverSchema | None = None,
     ignore_cols: list[str] | None = None,
-    document_class: Any = dict,
+    document_class: DocType[T] = dict,  # ty:ignore[invalid-parameter-default]
     include_score: bool = False,
-) -> List[Tuple[Dict, float]]:
+) -> list[tuple[T, float]]:
     """
     Parse the search response into a list of Documents with score.
     The document_class parameter is used to specify the class of the document to be created.

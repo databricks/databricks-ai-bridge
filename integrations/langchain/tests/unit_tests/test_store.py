@@ -199,6 +199,7 @@ def test_databricks_store_warns_when_both_embeddings_and_endpoint_specified(monk
 
     # Verify embeddings instance takes precedence
     assert store.embeddings is mock_embeddings
+    assert store.index_config is not None
     assert store.index_config["embed"] is mock_embeddings
 
 
@@ -406,6 +407,7 @@ async def test_async_databricks_store_warns_when_both_embeddings_and_endpoint_sp
 
     # Verify embeddings instance takes precedence
     assert store.embeddings is mock_embeddings
+    assert store.index_config is not None
     assert store.index_config["embed"] is mock_embeddings
 
 

@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory = [
-  "langgraph-checkpoint-postgres>=2.0.0",
+  "langgraph-checkpoint-postgres>=2.0.5",
   "databricks-ai-bridge[memory]>=0.10.0",
 ]
 
@@ -75,3 +75,4 @@ root = ["./src", "./tests"]
 
 [tool.ty.src]
 include = ["./src", "./tests"]
+exclude = ["./tests/integration_tests"]
