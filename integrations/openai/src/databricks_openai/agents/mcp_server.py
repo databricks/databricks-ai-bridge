@@ -1,8 +1,12 @@
 from contextlib import AbstractAsyncContextManager
+from datetime import timedelta
 from typing import Any
 
 import mlflow
-from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from agents.mcp import (
+    MCPServerStreamableHttp,  # ty:ignore[possibly-missing-import]: agents.mcp is only available > 3.9
+    MCPServerStreamableHttpParams,  # ty:ignore[possibly-missing-import]: agents.mcp is only available > 3.9
+)
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksOAuthClientProvider
@@ -108,14 +112,14 @@ class McpServer(MCPServerStreamableHttp):
         self.workspace_client = workspace_client
 
         if params is None:
-            params = MCPServerStreamableHttpParams()
+            params = MCPServerStreamableHttpParams(url="")
 
-        if url is None and params.get("url") is None:
+        if url is None and not params.get("url"):
             raise ValueError(
                 "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
             )
 
-        if url is not None and params.get("url") is not None and url != params.get("url"):
+        if url is not None and params.get("url") and url != params.get("url"):
             raise ValueError(
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
@@ -139,7 +143,7 @@ class McpServer(MCPServerStreamableHttp):
         if "client_session_timeout_seconds" not in mcpserver_kwargs:
             mcpserver_kwargs["client_session_timeout_seconds"] = params["timeout"]
 
-        super().__init__(params=params, **mcpserver_kwargs)
+        super().__init__(params=params, **mcpserver_kwargs)  # ty:ignore[invalid-argument-type]
 
     @classmethod
     def from_uc_function(
@@ -286,16 +290,41 @@ class McpServer(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
-        kwargs = {
-            "url": self.params["url"],
-            "headers": self.params.get("headers", None),
-            "auth": DatabricksOAuthClientProvider(self.workspace_client),
-            "timeout": self.params.get("timeout", 5),
-            "sse_read_timeout": self.params.get("sse_read_timeout", 60 * 5),
-            "terminate_on_close": self.params.get("terminate_on_close", True),
-        }
+        url: str = self.params["url"]
+        headers: dict[str, str] | None = self.params.get("headers", None)
+        auth = DatabricksOAuthClientProvider(self.workspace_client)
 
-        if "httpx_client_factory" in self.params:
-            kwargs["httpx_client_factory"] = self.params["httpx_client_factory"]
+        timeout_value = self.params.get("timeout", 5)
+        if isinstance(timeout_value, timedelta):
+            timeout: float = float(timeout_value.total_seconds())
+        else:
+            timeout = float(timeout_value)
 
-        return streamablehttp_client(**kwargs)
+        sse_read_timeout_value = self.params.get("sse_read_timeout", 60 * 5)
+        if isinstance(sse_read_timeout_value, timedelta):
+            sse_read_timeout: float = float(sse_read_timeout_value.total_seconds())
+        else:
+            sse_read_timeout = float(sse_read_timeout_value)
+
+        terminate_on_close: bool = bool(self.params.get("terminate_on_close", True))
+        httpx_client_factory = self.params.get("httpx_client_factory", None)
+
+        if httpx_client_factory := self.params.get("httpx_client_factory", None):
+            return streamablehttp_client(
+                url=url,
+                headers=headers,
+                auth=auth,
+                timeout=timeout,
+                sse_read_timeout=sse_read_timeout,
+                terminate_on_close=terminate_on_close,
+                httpx_client_factory=httpx_client_factory,
+            )
+
+        return streamablehttp_client(
+            url=url,
+            headers=headers,
+            auth=auth,
+            timeout=timeout,
+            sse_read_timeout=sse_read_timeout,
+            terminate_on_close=terminate_on_close,
+        )

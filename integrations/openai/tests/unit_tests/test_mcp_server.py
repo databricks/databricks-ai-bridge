@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from agents.mcp import MCPServerStreamableHttpParams
+from agents.mcp import (
+    MCPServerStreamableHttpParams,  # ty:ignore[possibly-missing-import]: agents.mcp is only available > 3.9
+)
 from databricks.sdk import WorkspaceClient
 
 
@@ -40,7 +42,11 @@ class TestMcpServerInit:
         ):
             from databricks_openai.agents.mcp_server import McpServer
 
-            custom_params = {"headers": {"Custom-Header": "value"}, "timeout": 10}
+            custom_params: MCPServerStreamableHttpParams = {
+                "url": "https://test.com/mcp",
+                "headers": {"Custom-Header": "value"},
+                "timeout": 10,
+            }
             server = McpServer(url="https://test.com/mcp", params=custom_params)
             assert server.params["url"] == "https://test.com/mcp"
             assert server.params["headers"] == {"Custom-Header": "value"}
