@@ -1,3 +1,4 @@
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,9 +155,11 @@ class TestStrictFieldStripping:
             }
         ]
         _strip_strict_from_tools(tools)
-        assert tools[0]["function"]["name"] == "test"
-        assert tools[0]["function"]["description"] == "desc"
-        assert tools[0]["function"]["parameters"] == {"type": "object"}
+        tool: dict[str, Any] = tools[0]
+        function = cast(dict[str, Any], tool["function"])
+        assert function["name"] == "test"
+        assert function["description"] == "desc"
+        assert function["parameters"] == {"type": "object"}
         assert "strict" not in tools[0]["function"]
 
     @pytest.mark.parametrize(

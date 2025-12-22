@@ -40,7 +40,11 @@ class TestMcpServerInit:
         ):
             from databricks_openai.agents.mcp_server import McpServer
 
-            custom_params = {"headers": {"Custom-Header": "value"}, "timeout": 10}
+            custom_params: MCPServerStreamableHttpParams = {
+                "url": "https://test.com/mcp",
+                "headers": {"Custom-Header": "value"},
+                "timeout": 10,
+            }
             server = McpServer(url="https://test.com/mcp", params=custom_params)
             assert server.params["url"] == "https://test.com/mcp"
             assert server.params["headers"] == {"Custom-Header": "value"}
@@ -103,7 +107,7 @@ class TestMcpServerInit:
         ):
             from databricks_openai.agents.mcp_server import McpServer
 
-            params: MCPServerStreamableHttpParams | None = params_dict  # type: ignore
+            params: MCPServerStreamableHttpParams | None = params_dict
             server = McpServer(url=url, params=params)
             assert server.params["url"] == expected_url
             for key, value in expected_extra.items():

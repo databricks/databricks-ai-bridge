@@ -1,7 +1,7 @@
 import json
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from unittest.mock import MagicMock, Mock, create_autospec, patch
 
 import mlflow
@@ -32,7 +32,7 @@ from openai.types.chat import (
     ChatCompletionMessageToolCall,
 )
 from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_message_tool_call_param import Function
+from openai.types.chat.chat_completion_message_tool_call import Function
 from pydantic import BaseModel
 
 from databricks_openai import VectorSearchRetrieverTool
@@ -49,7 +49,7 @@ def mock_openai_client():
         yield mock_client
 
 
-def get_chat_completion_response(tool_name: str, index_name: str):
+def get_chat_completion_response(tool_name: str | None, index_name: str):
     return ChatCompletion(
         id="chatcmpl-AlSTQf3qIjeEOdoagPXUYhuWZkwme",
         choices=[
@@ -115,7 +115,7 @@ def init_vector_search_tool(
                 "embedding_model_name": "text-embedding-3-small",
             }
         )
-    return VectorSearchRetrieverTool(**kwargs)  # type: ignore[arg-type]
+    return VectorSearchRetrieverTool(**kwargs)
 
 
 class SelfManagedEmbeddingsTest:
@@ -247,6 +247,7 @@ def test_vector_search_retriever_index_name_rewrite(
         text_column=self_managed_embeddings_test.text_column,
         embedding_model_name=self_managed_embeddings_test.embedding_model_name,
     )
+    assert vector_search_tool.tool is not None
     assert vector_search_tool.tool["function"]["name"] == index_name.replace(".", "__")
 
 
@@ -258,6 +259,7 @@ def test_vector_search_retriever_long_index_name(
     index_name: str,
 ) -> None:
     vector_search_tool = init_vector_search_tool(index_name=index_name)
+    assert vector_search_tool.tool is not None
     assert len(vector_search_tool.tool["function"]["name"]) <= 64
 
 
@@ -365,7 +367,7 @@ def test_kwargs_are_passed_through() -> None:
 
 def test_filters_are_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._index.similarity_search = MagicMock()
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
 
     vector_search_tool.execute(
         {"query": "what cities are in Germany"},
@@ -384,7 +386,7 @@ def test_filters_are_passed_through() -> None:
 
 def test_filters_are_combined() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
-    vector_search_tool._index.similarity_search = MagicMock()
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
 
     vector_search_tool.execute(
         query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
@@ -467,7 +469,7 @@ def test_enhanced_filter_description_used_in_tool_schema() -> None:
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
 
     # Check that the tool schema includes enhanced filter description
-    tool_schema = vector_search_tool.tool
+    tool_schema = cast(Dict[str, Any], vector_search_tool.tool)
     filter_param = tool_schema["function"]["parameters"]["properties"]["filters"]
 
     # Check that it includes the comprehensive filter syntax
@@ -543,11 +545,11 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
     )
 
     # The filters parameter should NOT be exposed since dynamic_filter=False
-    tool_schema = vector_search_tool.tool
+    tool_schema = cast(Dict[str, Any], vector_search_tool.tool)
     assert "filters" not in tool_schema["function"]["parameters"]["properties"]
 
     # Test that predefined filters are used
-    vector_search_tool._index.similarity_search = MagicMock()
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
 
     vector_search_tool.execute(query="what electronics are available")
 
@@ -565,7 +567,7 @@ def test_predefined_filters_work_without_dynamic_filter() -> None:
 def test_filter_item_serialization() -> None:
     """Test that FilterItem objects are properly converted to dictionaries."""
     vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._index.similarity_search = MagicMock()
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
 
     # Test various filter types
     filters = [
@@ -599,6 +601,7 @@ def test_reranker_is_passed_through() -> None:
     vector_search_tool = init_vector_search_tool(
         DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
     )
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
     vector_search_tool.execute(
         query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
     )
@@ -617,6 +620,7 @@ def test_reranker_is_overriden() -> None:
     vector_search_tool = init_vector_search_tool(
         DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
     )
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
     overridden_reranker = DatabricksReranker(columns_to_rerank=["country2"])
     vector_search_tool.execute(
         query="what cities are in Germany",
