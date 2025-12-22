@@ -1,5 +1,5 @@
 import inspect
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
@@ -16,22 +16,22 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
 from llama_index.core.embeddings import BaseEmbedding
 from llama_index.core.tools import FunctionTool
 from llama_index.core.tools.types import ToolMetadata
-from pydantic import Extra, Field, PrivateAttr
+from pydantic import Field, PrivateAttr
 
 
 class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
     """Vector search retriever tool implementation."""
 
     class Config:
-        extra = Extra.allow  # allow FunctionTool to set unknown attributes
+        extra = "allow"  # allow FunctionTool to set unknown attributes
 
-    text_column: Optional[str] = Field(
+    text_column: str | None = Field(
         None,
         description="The name of the text column to use for the embeddings. "
         "Required for direct-access index or delta-sync index with "
         "self-managed embeddings.",
     )
-    embedding: Optional[BaseEmbedding] = Field(
+    embedding: BaseEmbedding | None = Field(
         None, description="Embedding model for self-managed embeddings."
     )
     return_direct: bool = Field(
@@ -79,9 +79,9 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
 
         # Define the similarity search function
         def similarity_search(
-            query: str, filters: Optional[List[FilterItem]] = None, **kwargs: Any
-        ) -> List[Dict[str, Any]]:
-            def get_query_text_vector(query: str) -> Tuple[Optional[str], Optional[List[float]]]:
+            query: str, filters: list[FilterItem] | None = None, **kwargs: Any
+        ) -> list[tuple[dict[str, Any], float]]:
+            def get_query_text_vector(query: str) -> tuple[str | None, list[float] | None]:
                 if self._index_details.is_databricks_managed_embeddings():
                     if self.embedding:
                         raise ValueError(
@@ -138,8 +138,7 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
             return parse_vector_search_response(
                 search_resp,
                 retriever_schema=self._retriever_schema,
-                document_class=dict,
-                include_score=self.include_score,
+                include_score=self.include_score or False,
             )
 
         # Create tool metadata

@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Protocol
+from typing import Any, Dict, List, Optional, Protocol, TypeVar
 
 T = TypeVar("T")
 

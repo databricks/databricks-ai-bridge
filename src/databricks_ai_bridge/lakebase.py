@@ -1,14 +1,13 @@
 from __future__ import annotations
-from psycopg.rows import DictRow
-from psycopg_pool.abc import CT
 
 import logging
 import time
 import uuid
 from threading import Lock
-from typing import Optional, Generic
+from typing import Optional
 
 from databricks.sdk import WorkspaceClient
+from psycopg.rows import DictRow
 
 try:
     import psycopg
