@@ -15,7 +15,6 @@ from databricks_ai_bridge.lakebase import LakebasePool
 
 def _make_workspace(
     *,
-    sp_application_id: str | None = "sp-123",
     user_name: str = "test@databricks.com",
     credential_token: str = "token-1",
 ):
@@ -25,12 +24,6 @@ def _make_workspace(
     instance.read_write_dns = "db.host"
     instance.read_only_dns = "db-ro.host"
     workspace.database.get_database_instance.return_value = instance
-    if sp_application_id is None:
-        workspace.current_service_principal.me.side_effect = RuntimeError("missing sp")
-    else:
-        workspace.current_service_principal.me.return_value = MagicMock(
-            application_id=sp_application_id
-        )
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
     return workspace
 
@@ -64,7 +57,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
 
     test_pool = pool.pool
     assert test_pool.conninfo == (
-        "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
+        "dbname=databricks_postgres user=test@databricks.com host=db.host port=5432 sslmode=require"
     )
 
     assert test_pool.connection_class is not None
@@ -104,30 +97,11 @@ def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     assert pool.host == "rw.host"
 
 
-def test_lakebase_pool_uses_service_principal_username(monkeypatch):
+def test_lakebase_pool_uses_user_name(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_workspace(
-        sp_application_id="service_principal_client_id",
-        user_name="test@databricks.com",
-    )
-
-    pool = LakebasePool(
-        instance_name="lake-instance",
-        workspace_client=workspace,
-    )
-
-    assert pool.username == "service_principal_client_id"
-    assert "user=service_principal_client_id" in pool.pool.conninfo
-
-
-def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
-    TestConnectionPool = _make_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
-
-    workspace = _make_workspace(
-        sp_application_id=None,
         user_name="test@databricks.com",
     )
 
@@ -137,7 +111,9 @@ def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeyp
     )
 
     assert pool.username == "test@databricks.com"
-    assert "user=test@databricks.com" in pool.pool.conninfo
+    conninfo = pool.pool.conninfo
+    assert isinstance(conninfo, str)
+    assert "user=test@databricks.com" in conninfo
 
 
 def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):

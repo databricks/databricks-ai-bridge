@@ -1,5 +1,7 @@
+from typing import Generator
+
 from databricks.sdk import WorkspaceClient
-from httpx import AsyncClient, Auth, Client, Request
+from httpx import AsyncClient, Auth, Client, Request, Response
 from openai import AsyncOpenAI, OpenAI
 
 
@@ -7,7 +9,7 @@ class BearerAuth(Auth):
     def __init__(self, get_headers_func):
         self.get_headers_func = get_headers_func
 
-    def auth_flow(self, request: Request) -> Request:
+    def auth_flow(self, request: Request) -> Generator[Request, Response, None]:
         auth_headers = self.get_headers_func()
         request.headers["Authorization"] = auth_headers["Authorization"]
         yield request
@@ -50,7 +52,7 @@ class DatabricksOpenAI(OpenAI):
         >>> client = DatabricksOpenAI(workspace_client=ws)
     """
 
-    def __init__(self, workspace_client: WorkspaceClient = None):
+    def __init__(self, workspace_client: WorkspaceClient | None = None):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -89,7 +91,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         >>> client = AsyncDatabricksOpenAI(workspace_client=ws)
     """
 
-    def __init__(self, workspace_client: WorkspaceClient = None):
+    def __init__(self, workspace_client: WorkspaceClient | None = None):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 

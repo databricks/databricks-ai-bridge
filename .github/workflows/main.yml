@@ -25,13 +25,10 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           version: ${{ env.UV_VERSION }}
-      - name: Install dependencies
-        run: |
-          uv sync --group lint
       - name: Lint Python code with ruff
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          ./for-each-project uv run --group dev ruff check .
+          ./for-each-project uv run --group dev ruff format --check .
 
   core_test:
     runs-on: ubuntu-latest
