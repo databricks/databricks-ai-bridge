@@ -151,7 +151,7 @@ class DatabricksRM(dspy.Retrieve):
             try:
                 import mlflow
 
-                mlflow.models.set_retriever_schema(
+                mlflow.models.set_retriever_schema(  # ty:ignore[possibly-missing-attribute]: caught below
                     primary_key="doc_id",
                     text_column="page_content",
                     doc_uri="doc_uri",
@@ -231,7 +231,7 @@ class DatabricksRM(dspy.Retrieve):
         query: str | list[float],
         query_type: str = "ANN",
         filters_json: str | None = None,
-    ) -> dspy.Prediction | list[dict[str, Any]]:
+    ) -> dspy.Prediction | list[dict[str, Any]]:  # ty:ignore[invalid-method-override]: can't fix due to backward compatibility
         """
         Retrieve documents from a Databricks Mosaic AI Vector Search Index that are relevant to the
         specified query.
