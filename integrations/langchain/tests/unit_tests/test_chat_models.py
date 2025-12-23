@@ -191,7 +191,7 @@ def test_chat_model_stream(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ]
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
 
 
@@ -202,7 +202,7 @@ def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks
             {"role": "user", "content": "36939 * 8922.4", "custom_outputs": {"foo": "bar"}},
         ]
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_DELTA_RESPONSE):
+    for chunk, expected in zip(res, _MOCK_STREAM_DELTA_RESPONSE, strict=False):
         assert chunk.custom_outputs == expected["custom_outputs"]
         assert chunk.content == expected["delta"]["content"]
 
@@ -223,7 +223,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         ],
         stream_usage=True,
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
         _assert_usage(chunk, expected)
 
@@ -238,7 +238,7 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ],
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
         assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
         _assert_usage(chunk, expected)
 

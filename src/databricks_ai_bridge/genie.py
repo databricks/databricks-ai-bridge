@@ -46,11 +46,11 @@ def _parse_query_result(
         return "EMPTY"
 
     columns = resp["manifest"]["schema"]["columns"]
-    header = [str(col["name"]) for col in columns]
-    rows = []
+    header: list[str] = [str(col["name"]) for col in columns]
+    rows: list[list] = []
 
     for item in output["data_array"]:
-        row = []
+        row: list = []
         for column, value in zip(columns, item):
             type_name = column["type_name"]
             if value is None:
@@ -101,7 +101,7 @@ def _parse_query_result(
 
         rows.append(row)
 
-    dataframe = pd.DataFrame(rows, columns=header)
+    dataframe = pd.DataFrame(rows, columns=header)  # type: ignore[arg-type]: see astral-sh/ty#1714
     if return_pandas:
         return dataframe
 
@@ -246,7 +246,7 @@ class Genie:
 
             # use MLflow client to get parent of any new spans we create from the current active span
             # (parenting keeps spans in the same trace)
-            client = mlflow.tracking.MlflowClient()
+            client = mlflow.tracking.MlflowClient()  # ty:ignore[possibly-missing-attribute]: fails when only tracking package is installed
             with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
                 parent_trace_id = parent.trace_id if parent else None
                 parent_span_id = parent.span_id if parent else None
