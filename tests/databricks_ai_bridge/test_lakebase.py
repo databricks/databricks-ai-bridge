@@ -239,7 +239,9 @@ def _make_async_connection_pool_class():
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_configures_connection_pool(monkeypatch):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
     workspace.database.get_database_instance.return_value.read_write_dns = "db.host"
@@ -261,7 +263,9 @@ async def test_async_lakebase_pool_configures_connection_pool(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
     with caplog.at_level(logging.INFO):
@@ -279,7 +283,9 @@ async def test_async_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_resolves_host_from_instance(monkeypatch):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
     workspace.database.get_database_instance.return_value.read_write_dns = "rw.host"
@@ -296,7 +302,9 @@ async def test_async_lakebase_pool_resolves_host_from_instance(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_uses_service_principal_username(monkeypatch):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace(
         sp_application_id="service_principal_client_id",
@@ -315,7 +323,9 @@ async def test_async_lakebase_pool_uses_service_principal_username(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace(
         sp_application_id=None,
@@ -335,7 +345,9 @@ async def test_async_lakebase_pool_falls_back_to_user_when_service_principal_mis
 async def test_async_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
     """Verify that a new token is minted when the cache duration expires."""
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     token_call_count = []
 
@@ -391,7 +403,9 @@ async def test_async_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatc
 async def test_async_lakebase_pool_context_manager(monkeypatch):
     """Test async context manager opens and closes the pool."""
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
 
@@ -409,7 +423,9 @@ async def test_async_lakebase_pool_context_manager(monkeypatch):
 async def test_async_lakebase_pool_connection(monkeypatch):
     """Test getting a connection from the async pool."""
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
 
@@ -425,7 +441,9 @@ async def test_async_lakebase_pool_connection(monkeypatch):
 async def test_async_lakebase_pool_open_close_methods(monkeypatch):
     """Test explicit open and close methods."""
     TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool)
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
 
     workspace = _make_workspace()
 
