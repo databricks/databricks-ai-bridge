@@ -121,53 +121,60 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
 
 
 def test_ask_question(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "456"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "Answer"}}]},
+    mock_mcp_result = MagicMock()
+    mock_mcp_result.content = [
+        {"type": "text", "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}'}
     ]
-    genie_result = genie.ask_question("What is the meaning of life?")
-    assert genie_result.result == "Answer"
-    assert genie_result.conversation_id == "123"
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.ask_question("What is the meaning of life?")
+        assert genie_result.result == "Answer"
+        assert genie_result.conversation_id == "123"
 
 
 def test_ask_question_continued_conversation(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "456"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "42"}}]},
+    mock_mcp_result = MagicMock()
+    mock_mcp_result.content = [
+        {"type": "text", "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}'}
     ]
-    genie_result = genie.ask_question("What is the meaning of life?", "123")
-    assert genie_result.result == "42"
-    assert genie_result.conversation_id == "123"
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.ask_question("What is the meaning of life?", "123")
+        assert genie_result.result == "42"
+        assert genie_result.conversation_id == "123"
 
 
-def test_ask_question_calls_start_once_and_not_create_on_new(genie, mock_workspace_client):
-    # arrange
-    with (
-        patch.object(genie, "create_message") as mock_create_message,
-        patch.object(genie, "start_conversation") as mock_start_conversation,
-        patch.object(genie, "poll_for_result") as mock_poll_for_result,
-    ):
-        # act
+def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_client):
+    mock_mcp_result = MagicMock()
+    mock_mcp_result.content = [
+        {"type": "text", "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}'}
+    ]
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?")
 
-        # assert
-        mock_create_message.assert_not_called()
-        mock_start_conversation.assert_called_once()
+        # Verify MCP client was called with correct args (no conversation_id)
+        mock_call.assert_called_once_with(
+            "query_space_test_space_id",
+            {"query": "What is the meaning of life?"}
+        )
 
 
-def test_ask_question_calls_create_once_and_not_start_on_continue(genie, mock_workspace_client):
-    # arrange
-    with (
-        patch.object(genie, "create_message") as mock_create_message,
-        patch.object(genie, "start_conversation") as mock_start_conversation,
-        patch.object(genie, "poll_for_result") as mock_poll_for_result,
-    ):
-        # act
+def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_client):
+    # Mock MCP client response
+    mock_mcp_result = MagicMock()
+    mock_mcp_result.content = [
+        {"type": "text", "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}'}
+    ]
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?", "123")
 
-        # assert
-        mock_create_message.assert_called_once()
-        mock_start_conversation.assert_not_called()
+        # Verify MCP client was called with conversation_id included
+        mock_call.assert_called_once_with(
+            "query_space_test_space_id",
+            {"query": "What is the meaning of life?", "conversation_id": "123"}
+        )
 
 
 def test_parse_query_result_empty():
