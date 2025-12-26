@@ -1,15 +1,25 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.sdk.service.dashboards import GenieSpace
 from databricks_ai_bridge.genie import Genie, GenieResponse
 from langchain_core.messages import AIMessage
+from mcp.types import CallToolResult
 
 from databricks_langchain.genie import (
     GenieAgent,
     _concat_messages_array,
     _query_genie_as_agent,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_databricks_mcp_client():
+    """Auto-mock DatabricksMCPClient for all tests to avoid OAuth validation errors."""
+    with patch("databricks_ai_bridge.genie.DatabricksMCPClient") as mock_client:
+        # Return a MagicMock instance that won't try to get OAuth tokens
+        mock_client.return_value = MagicMock()
+        yield mock_client
 
 
 def test_concat_messages_array():
