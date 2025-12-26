@@ -438,11 +438,12 @@ class Genie:
             description = content_data.get("description", "")
             statement_response = content_data.get("statement_response")
 
-            if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
+            if (
+                statement_response
+                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
+            ):
                 result = _parse_query_result(
-                    statement_response,
-                    self.truncate_results,
-                    self.return_pandas
+                    statement_response, self.truncate_results, self.return_pandas
                 )
             else:
                 result = content
