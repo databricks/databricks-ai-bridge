@@ -10,6 +10,7 @@ from typing import Optional, Union
 import mlflow
 import pandas as pd
 from databricks.sdk import WorkspaceClient
+
 from databricks_mcp import DatabricksMCPClient
 
 MAX_TOKENS_OF_DATA = 20000
@@ -437,19 +438,18 @@ class Genie:
             description = content_data.get("description", "")
             statement_response = content_data.get("statement_response")
 
-            if (
-                statement_response
-                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
-            ):
+            if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
                 result = _parse_query_result(
-                    statement_response, self.truncate_results, self.return_pandas
+                    statement_response,
+                    self.truncate_results,
+                    self.return_pandas
                 )
             else:
                 result = content
                 query_str = ""
                 description = ""
 
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        except (json.JSONDecodeError, KeyError, TypeError):
             result = content
             query_str = ""
             description = ""
