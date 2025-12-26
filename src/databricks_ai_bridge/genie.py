@@ -1,6 +1,8 @@
 import bisect
+import json
 import logging
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
@@ -8,6 +10,7 @@ from typing import Optional, Union
 import mlflow
 import pandas as pd
 from databricks.sdk import WorkspaceClient
+from databricks_mcp import DatabricksMCPClient
 
 MAX_TOKENS_OF_DATA = 20000
 MAX_ITERATIONS = 500  # for 250 s total
@@ -177,15 +180,35 @@ class Genie:
         workspace_client = client or WorkspaceClient()
         self.genie = workspace_client.genie
         self.description = self.genie.get_space(space_id).description
+
+        # Initialize MCP client for communication with Genie backend
+        server_url = f"{workspace_client.config.host}/api/2.0/mcp/genie/{space_id}"
+        self._mcp_client = DatabricksMCPClient(server_url, workspace_client)
+        self._tool_name = f"query_space_{space_id}"
+
+        # Keep headers for deprecated REST methods (backwards compatibility)
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+
         self.truncate_results = truncate_results
         self.return_pandas = return_pandas
 
     @mlflow.trace()
     def start_conversation(self, content):
+        """Start a conversation with the Genie space.
+
+        .. deprecated::
+            This method is deprecated and will be removed in a future release.
+            Use :meth:`ask_question` instead, which uses the MCP protocol.
+        """
+        warnings.warn(
+            "start_conversation() is deprecated and will be removed in a future release. "
+            "Use ask_question() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
@@ -196,6 +219,18 @@ class Genie:
 
     @mlflow.trace()
     def create_message(self, conversation_id, content):
+        """Create a message in an existing conversation.
+
+        .. deprecated::
+            This method is deprecated and will be removed in a future release.
+            Use :meth:`ask_question` with a conversation_id parameter instead.
+        """
+        warnings.warn(
+            "create_message() is deprecated and will be removed in a future release. "
+            "Use ask_question(question, conversation_id=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages",
@@ -206,6 +241,19 @@ class Genie:
 
     @mlflow.trace()
     def poll_for_result(self, conversation_id, message_id):
+        """Poll for the result of a Genie query.
+
+        .. deprecated::
+            This method is deprecated and will be removed in a future release.
+            Use :meth:`ask_question` instead, which handles polling automatically via MCP.
+        """
+        warnings.warn(
+            "poll_for_result() is deprecated and will be removed in a future release. "
+            "Use ask_question() instead, which handles polling automatically.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         @mlflow.trace()
         def poll_query_results(
             attachment_id, query_str, description, conversation_id=conversation_id
@@ -346,14 +394,68 @@ class Genie:
 
     @mlflow.trace()
     def ask_question(self, question, conversation_id: Optional[str] = None):
-        # check if a conversation_id is supplied
-        # if yes, continue an existing genie conversation
-        # otherwise start a new conversation
-        if not conversation_id:
-            resp = self.start_conversation(question)
-        else:
-            resp = self.create_message(conversation_id, question)
-        genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
-        if not genie_response.conversation_id:
-            genie_response.conversation_id = resp["conversation_id"]
-        return genie_response
+        """Ask a question to the Genie space using MCP protocol.
+
+        Args:
+            question: The question to ask the Genie space
+            conversation_id: Optional conversation ID to continue an existing conversation
+
+        Returns:
+            GenieResponse with result, query, description, and conversation_id
+        """
+        args = {"query": question}
+        if conversation_id:
+            args["conversation_id"] = conversation_id
+
+        mcp_result = self._mcp_client.call_tool(self._tool_name, args)
+
+        if not mcp_result.content or len(mcp_result.content) == 0:
+            return GenieResponse(
+                result="No content returned from Genie",
+                conversation_id=conversation_id,
+            )
+
+        # Genie backend always returns exactly 1 content block with JSON
+        content_block = mcp_result.content[0]
+        content_text = content_block.get("text", "{}")
+
+        try:
+            genie_response = json.loads(content_text)
+        except json.JSONDecodeError:
+            return GenieResponse(
+                result=f"Failed to parse response: {content_text}",
+                conversation_id=conversation_id,
+            )
+
+        content = genie_response.get("content", "")
+        conv_id = genie_response.get("conversationId", conversation_id)
+        status = genie_response.get("status", "")
+
+        try:
+            content_data = json.loads(content)
+            query_str = content_data.get("query", "")
+            description = content_data.get("description", "")
+            statement_response = content_data.get("statement_response")
+
+            if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
+                result = _parse_query_result(
+                    statement_response,
+                    self.truncate_results,
+                    self.return_pandas
+                )
+            else:
+                result = content
+                query_str = ""
+                description = ""
+
+        except (json.JSONDecodeError, KeyError, TypeError):
+            result = content
+            query_str = ""
+            description = ""
+
+        return GenieResponse(
+            result=result,
+            query=query_str,
+            description=description,
+            conversation_id=conv_id,
+        )
