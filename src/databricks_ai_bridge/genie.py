@@ -450,7 +450,7 @@ class Genie:
                 query_str = ""
                 description = ""
 
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
             result = content
             query_str = ""
             description = ""
