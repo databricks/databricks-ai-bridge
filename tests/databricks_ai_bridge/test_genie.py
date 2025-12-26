@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import mlflow
 import pandas as pd
 import pytest
+from mcp.types import CallToolResult
 
 from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
 
@@ -121,13 +122,14 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
 
 
 def test_ask_question(genie, mock_workspace_client):
-    mock_mcp_result = MagicMock()
-    mock_mcp_result.content = [
-        {
-            "type": "text",
-            "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
-        }
-    ]
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?")
@@ -136,13 +138,14 @@ def test_ask_question(genie, mock_workspace_client):
 
 
 def test_ask_question_continued_conversation(genie, mock_workspace_client):
-    mock_mcp_result = MagicMock()
-    mock_mcp_result.content = [
-        {
-            "type": "text",
-            "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}',
-        }
-    ]
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?", "123")
@@ -151,13 +154,14 @@ def test_ask_question_continued_conversation(genie, mock_workspace_client):
 
 
 def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_client):
-    mock_mcp_result = MagicMock()
-    mock_mcp_result.content = [
-        {
-            "type": "text",
-            "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}',
-        }
-    ]
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}',
+            }
+        ]
+    )
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?")
@@ -170,13 +174,14 @@ def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_cl
 
 def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_client):
     # Mock MCP client response
-    mock_mcp_result = MagicMock()
-    mock_mcp_result.content = [
-        {
-            "type": "text",
-            "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
-        }
-    ]
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?", "123")
