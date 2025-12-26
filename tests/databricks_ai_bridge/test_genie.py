@@ -123,7 +123,10 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
 def test_ask_question(genie, mock_workspace_client):
     mock_mcp_result = MagicMock()
     mock_mcp_result.content = [
-        {"type": "text", "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}'}
+        {
+            "type": "text",
+            "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+        }
     ]
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
@@ -135,7 +138,10 @@ def test_ask_question(genie, mock_workspace_client):
 def test_ask_question_continued_conversation(genie, mock_workspace_client):
     mock_mcp_result = MagicMock()
     mock_mcp_result.content = [
-        {"type": "text", "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}'}
+        {
+            "type": "text",
+            "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}',
+        }
     ]
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
@@ -147,7 +153,10 @@ def test_ask_question_continued_conversation(genie, mock_workspace_client):
 def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_client):
     mock_mcp_result = MagicMock()
     mock_mcp_result.content = [
-        {"type": "text", "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}'}
+        {
+            "type": "text",
+            "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}',
+        }
     ]
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
@@ -155,8 +164,7 @@ def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_cl
 
         # Verify MCP client was called with correct args (no conversation_id)
         mock_call.assert_called_once_with(
-            "query_space_test_space_id",
-            {"query": "What is the meaning of life?"}
+            "query_space_test_space_id", {"query": "What is the meaning of life?"}
         )
 
 
@@ -164,7 +172,10 @@ def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_clien
     # Mock MCP client response
     mock_mcp_result = MagicMock()
     mock_mcp_result.content = [
-        {"type": "text", "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}'}
+        {
+            "type": "text",
+            "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+        }
     ]
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
@@ -173,7 +184,7 @@ def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_clien
         # Verify MCP client was called with conversation_id included
         mock_call.assert_called_once_with(
             "query_space_test_space_id",
-            {"query": "What is the meaning of life?", "conversation_id": "123"}
+            {"query": "What is the meaning of life?", "conversation_id": "123"},
         )
 
 
