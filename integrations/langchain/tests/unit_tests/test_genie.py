@@ -13,14 +13,6 @@ from databricks_langchain.genie import (
 )
 
 
-def _configure_mock_workspace_client(mock_client):
-    """Configure a mock workspace client with proper authentication return values."""
-    # Ensure config.authenticate() returns a proper Bearer token string
-    mock_client.config.authenticate.return_value = {"Authorization": "Bearer mock-token"}
-    mock_client.config.host = "https://test.databricks.com"
-    return mock_client
-
-
 @pytest.fixture(autouse=True)
 def mock_databricks_oauth_provider():
     """Auto-mock DatabricksOAuthClientProvider for all tests to avoid OAuth validation errors."""
@@ -64,7 +56,6 @@ def test_concat_messages_array():
 
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_as_agent(MockWorkspaceClient):
-    _configure_mock_workspace_client(MockWorkspaceClient)
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -83,8 +74,8 @@ def test_query_genie_as_agent(MockWorkspaceClient):
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", MockWorkspaceClient)
 
-    # Mock the ask_question method to return our mock response
-    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+    # Mock the ask_question method at the module level to avoid mlflow tracing issues
+    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
         # Test with include_context=False (default)
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {
@@ -115,7 +106,6 @@ def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient):
         description="description",
     )
     mock_client = MockWorkspaceClient.return_value
-    _configure_mock_workspace_client(mock_client)
     mock_client.genie.get_space.return_value = mock_space
 
     agent = GenieAgent("space-id", "Genie", client=mock_client)
@@ -134,7 +124,6 @@ def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceCl
         description=None,
     )
     mock_client = MockWorkspaceClient.return_value
-    _configure_mock_workspace_client(mock_client)
     mock_client.genie.get_space.return_value = mock_space
 
     agent = GenieAgent("space-id", "Genie", "this is a description", client=mock_client)
@@ -146,7 +135,6 @@ def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceCl
 
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_with_client(mock_workspace_client):
-    _configure_mock_workspace_client(mock_workspace_client)
     mock_workspace_client.genie.get_space.return_value = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -164,8 +152,8 @@ def test_query_genie_with_client(mock_workspace_client):
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", mock_workspace_client)
 
-    # Mock the ask_question method to return our mock response
-    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+    # Mock the ask_question method at the module level to avoid mlflow tracing issues
+    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
@@ -183,7 +171,6 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient):
         description="description",
     )
     mock_client = MockWorkspaceClient.return_value
-    _configure_mock_workspace_client(mock_client)
     mock_client.genie.get_space.return_value = mock_space
 
     # Create a proper GenieResponse instance
@@ -226,7 +213,6 @@ def test_create_genie_agent_no_space_id():
 @patch("databricks.sdk.WorkspaceClient")
 def test_message_processor_functionality(MockWorkspaceClient):
     """Test message_processor parameter in both _query_genie_as_agent and GenieAgent"""
-    _configure_mock_workspace_client(MockWorkspaceClient)
     mock_space = GenieSpace(space_id="space-id", title="Sales Space", description="description")
     MockWorkspaceClient.genie.get_space.return_value = mock_space
 
@@ -314,7 +300,6 @@ def test_message_processor_functionality(MockWorkspaceClient):
 @patch("databricks.sdk.WorkspaceClient")
 def test_conversation_continuity(MockWorkspaceClient):
     """Test that conversation_id is passed through correctly for conversation continuity"""
-    _configure_mock_workspace_client(MockWorkspaceClient)
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -373,7 +358,6 @@ def test_dataframe_return(MockWorkspaceClient):
     """Test that DataFrames are returned correctly with markdown conversion"""
     import pandas as pd
 
-    _configure_mock_workspace_client(MockWorkspaceClient)
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -414,7 +398,6 @@ def test_dataframe_return(MockWorkspaceClient):
 @patch("databricks.sdk.WorkspaceClient")
 def test_string_return_no_dataframe_field(MockWorkspaceClient):
     """Test that string results don't include dataframe field"""
-    _configure_mock_workspace_client(MockWorkspaceClient)
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
