@@ -14,12 +14,13 @@ from databricks_langchain.genie import (
 
 
 @pytest.fixture(autouse=True)
-def mock_databricks_mcp_client():
-    """Auto-mock DatabricksMCPClient for all tests to avoid OAuth validation errors."""
-    with patch("databricks_ai_bridge.genie.DatabricksMCPClient") as mock_client:
+def mock_databricks_oauth_provider():
+    """Auto-mock DatabricksOAuthClientProvider for all tests to avoid OAuth validation errors."""
+    with patch("databricks_mcp.oauth_provider.DatabricksOAuthClientProvider") as mock_auth:
         # Return a MagicMock instance that won't try to get OAuth tokens
-        mock_client.return_value = MagicMock()
-        yield mock_client
+        mock_auth_instance = MagicMock()
+        mock_auth.return_value = mock_auth_instance
+        yield mock_auth
 
 
 def test_concat_messages_array():
