@@ -16,7 +16,7 @@ from databricks_langchain.genie import (
 @pytest.fixture(autouse=True)
 def mock_databricks_oauth_provider():
     """Auto-mock DatabricksOAuthClientProvider for all tests to avoid OAuth validation errors."""
-    with patch("databricks_mcp.oauth_provider.DatabricksOAuthClientProvider") as mock_auth:
+    with patch("databricks_mcp.mcp.DatabricksOAuthClientProvider") as mock_auth:
         # Return a MagicMock instance that won't try to get OAuth tokens
         mock_auth_instance = MagicMock()
         mock_auth.return_value = mock_auth_instance
