@@ -417,7 +417,7 @@ class Genie:
                 conversation_id=conversation_id,
             )
 
-        # Genie backend always returns exactly 1 content block with JSON
+        # Genie backend always returns 1 content block with JSON
         content_block = mcp_result.content[0]
         content_text = content_block.text if hasattr(content_block, "text") else "{}"
 
