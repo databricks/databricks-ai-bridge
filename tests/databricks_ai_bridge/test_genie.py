@@ -131,10 +131,7 @@ def test_ask_question(genie, mock_workspace_client):
         ]
     )
 
-    mock_mcp_client = MagicMock()
-    mock_mcp_client.call_tool.return_value = mock_mcp_result
-
-    with patch.object(genie, "_get_mcp_client", return_value=mock_mcp_client):
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?")
         assert genie_result.result == "Answer"
         assert genie_result.conversation_id == "123"
@@ -150,10 +147,7 @@ def test_ask_question_continued_conversation(genie, mock_workspace_client):
         ]
     )
 
-    mock_mcp_client = MagicMock()
-    mock_mcp_client.call_tool.return_value = mock_mcp_result
-
-    with patch.object(genie, "_get_mcp_client", return_value=mock_mcp_client):
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?", "123")
         assert genie_result.result == "42"
         assert genie_result.conversation_id == "123"
@@ -169,14 +163,11 @@ def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_cl
         ]
     )
 
-    mock_mcp_client = MagicMock()
-    mock_mcp_client.call_tool.return_value = mock_mcp_result
-
-    with patch.object(genie, "_get_mcp_client", return_value=mock_mcp_client):
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?")
 
         # Verify MCP client was called with correct args (no conversation_id)
-        mock_mcp_client.call_tool.assert_called_once_with(
+        mock_call.assert_called_once_with(
             "query_space_test_space_id", {"query": "What is the meaning of life?"}
         )
 
@@ -192,14 +183,11 @@ def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_clien
         ]
     )
 
-    mock_mcp_client = MagicMock()
-    mock_mcp_client.call_tool.return_value = mock_mcp_result
-
-    with patch.object(genie, "_get_mcp_client", return_value=mock_mcp_client):
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?", "123")
 
         # Verify MCP client was called with conversation_id included
-        mock_mcp_client.call_tool.assert_called_once_with(
+        mock_call.assert_called_once_with(
             "query_space_test_space_id",
             {"query": "What is the meaning of life?", "conversation_id": "123"},
         )
