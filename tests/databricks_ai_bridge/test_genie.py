@@ -173,7 +173,6 @@ def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_cl
 
 
 def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_client):
-    # Mock MCP client response
     mock_mcp_result = CallToolResult(
         content=[
             {
