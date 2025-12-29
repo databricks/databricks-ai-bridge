@@ -182,9 +182,9 @@ class Genie:
         self.genie = workspace_client.genie
         self.description = self.genie.get_space(space_id).description
 
-        # Initialize MCP client for communication with Genie backend
-        server_url = f"{workspace_client.config.host}/api/2.0/mcp/genie/{space_id}"
-        self._mcp_client = DatabricksMCPClient(server_url, workspace_client)
+        # Store workspace client for lazy MCP client initialization
+        self._workspace_client = workspace_client
+        self._mcp_client = None  # Lazy initialization
         self._tool_name = f"query_space_{space_id}"
 
         # Keep headers for deprecated REST methods (backwards compatibility)
@@ -393,6 +393,20 @@ class Genie:
 
         return poll_result()
 
+    def _get_mcp_client(self):
+        """Lazy initialization of MCP client.
+
+        Creates the MCP client on first use to avoid issues with mocked
+        workspace clients in tests and to defer initialization until needed.
+
+        Returns:
+            DatabricksMCPClient: The initialized MCP client
+        """
+        if self._mcp_client is None:
+            server_url = f"{self._workspace_client.config.host}/api/2.0/mcp/genie/{self.space_id}"
+            self._mcp_client = DatabricksMCPClient(server_url, self._workspace_client)
+        return self._mcp_client
+
     @mlflow.trace()
     def ask_question(self, question, conversation_id: Optional[str] = None):
         """Ask a question to the Genie space using MCP protocol.
@@ -408,7 +422,7 @@ class Genie:
         if conversation_id:
             args["conversation_id"] = conversation_id
 
-        mcp_result = self._mcp_client.call_tool(self._tool_name, args)
+        mcp_result = self._get_mcp_client().call_tool(self._tool_name, args)
 
         if not mcp_result.content or len(mcp_result.content) == 0:
             return GenieResponse(
