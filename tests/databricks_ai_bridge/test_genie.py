@@ -211,8 +211,8 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                ["1", "Alice", "2023-10-01T00:00:00Z"],
-                ["2", "Bob", "2023-10-02T00:00:00Z"],
+                {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
+                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
             ]
         },
     }
@@ -240,8 +240,8 @@ def test_parse_query_result_with_null_values():
         },
         "result": {
             "data_array": [
-                ["1", None, "2023-10-01T00:00:00Z"],
-                ["2", "Bob", None],
+                {"values": [{"string_value": "1"}, None, {"string_value": "2023-10-01T00:00:00Z"}]},
+                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, None]},
             ]
         },
     }
@@ -272,16 +272,16 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    ["1", "Alice", "2023-10-01T00:00:00Z"],
-                    ["2", "Bob", "2023-10-02T00:00:00Z"],
-                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
-                    ["4", "David", "2023-10-04T00:00:00Z"],
-                    ["5", "Eve", "2023-10-05T00:00:00Z"],
-                    ["6", "Frank", "2023-10-06T00:00:00Z"],
-                    ["7", "Grace", "2023-10-07T00:00:00Z"],
-                    ["8", "Hank", "2023-10-08T00:00:00Z"],
-                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
-                    ["10", "Jack", "2023-10-10T00:00:00Z"],
+                    {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
+                    {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
+                    {"values": [{"string_value": "3"}, {"string_value": "Charlie"}, {"string_value": "2023-10-03T00:00:00Z"}]},
+                    {"values": [{"string_value": "4"}, {"string_value": "David"}, {"string_value": "2023-10-04T00:00:00Z"}]},
+                    {"values": [{"string_value": "5"}, {"string_value": "Eve"}, {"string_value": "2023-10-05T00:00:00Z"}]},
+                    {"values": [{"string_value": "6"}, {"string_value": "Frank"}, {"string_value": "2023-10-06T00:00:00Z"}]},
+                    {"values": [{"string_value": "7"}, {"string_value": "Grace"}, {"string_value": "2023-10-07T00:00:00Z"}]},
+                    {"values": [{"string_value": "8"}, {"string_value": "Hank"}, {"string_value": "2023-10-08T00:00:00Z"}]},
+                    {"values": [{"string_value": "9"}, {"string_value": "Ivy"}, {"string_value": "2023-10-09T00:00:00Z"}]},
+                    {"values": [{"string_value": "10"}, {"string_value": "Jack"}, {"string_value": "2023-10-10T00:00:00Z"}]},
                 ]
             },
         }
@@ -381,12 +381,15 @@ def test_parse_query_result_trims_large_data(max_tokens):
             "Jack",
         ]
 
+        # Generate data in MCP format
         data_array = [
-            [
-                str(i + 1),
-                random.choice(names),
-                (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            ]
+            {
+                "values": [
+                    {"string_value": str(i + 1)},
+                    {"string_value": random.choice(names)},
+                    {"string_value": (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                ]
+            }
             for i in range(1000)
         ]
 
@@ -408,10 +411,10 @@ def test_parse_query_result_trims_large_data(max_tokens):
 
         expected_df = pd.DataFrame(
             {
-                "id": [int(row[0]) for row in data_array],
-                "name": [row[1] for row in data_array],
+                "id": [int(row["values"][0]["string_value"]) for row in data_array],
+                "name": [row["values"][1]["string_value"] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
+                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
                 ],
             }
         )
@@ -453,13 +456,13 @@ def test_parse_query_result_with_timestamp_formats():
         "manifest": {"schema": {"columns": [{"name": "created_at", "type_name": "TIMESTAMP"}]}},
         "result": {
             "data_array": [
-                ["2023-10-01T14:30:45"],  # %Y-%m-%dT%H:%M:%S
-                ["2023-10-02 09:15:22"],  # %Y-%m-%d %H:%M:%S
-                ["2023-10-03T16:45"],  # %Y-%m-%dT%H:%M
-                ["2023-10-04 11:20"],  # %Y-%m-%d %H:%M
-                ["2023-10-05T08"],  # %Y-%m-%dT%H
-                ["2023-10-06 19"],  # %Y-%m-%d %H
-                ["2023-10-07"],  # %Y-%m-%d
+                {"values": [{"string_value": "2023-10-01T14:30:45"}]},  # %Y-%m-%dT%H:%M:%S
+                {"values": [{"string_value": "2023-10-02 09:15:22"}]},  # %Y-%m-%d %H:%M:%S
+                {"values": [{"string_value": "2023-10-03T16:45"}]},  # %Y-%m-%dT%H:%M
+                {"values": [{"string_value": "2023-10-04 11:20"}]},  # %Y-%m-%d %H:%M
+                {"values": [{"string_value": "2023-10-05T08"}]},  # %Y-%m-%dT%H
+                {"values": [{"string_value": "2023-10-06 19"}]},  # %Y-%m-%d %H
+                {"values": [{"string_value": "2023-10-07"}]},  # %Y-%m-%d
             ]
         },
     }
