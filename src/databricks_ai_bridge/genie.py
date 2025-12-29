@@ -401,7 +401,7 @@ class Genie:
         Returns:
             GenieResponse with result, query, description, and conversation_id
         """
-        
+
         args = {"query": question}
         if conversation_id:
             args["conversation_id"] = conversation_id
@@ -429,8 +429,8 @@ class Genie:
         content = genie_response.get("content", "")
         conv_id = genie_response.get("conversationId", conversation_id)
         status = genie_response.get("status", "")
-        query_str = ""                                    
-        description = "" 
+        query_str = ""
+        description = ""
 
         try:
             content_data = json.loads(content)
