@@ -401,70 +401,59 @@ class Genie:
         Returns:
             GenieResponse with result, query, description, and conversation_id
         """
-        try:
-            args = {"query": question}
-            if conversation_id:
-                args["conversation_id"] = conversation_id
+        
+        args = {"query": question}
+        if conversation_id:
+            args["conversation_id"] = conversation_id
 
-            mcp_result = self._mcp_client.call_tool(self._tool_name, args)
+        mcp_result = self._mcp_client.call_tool(self._tool_name, args)
 
-            if not mcp_result.content or len(mcp_result.content) == 0:
-                return GenieResponse(
-                    result="No content returned from Genie",
-                    conversation_id=conversation_id,
-                )
-
-            # Genie backend always returns exactly 1 content block with JSON
-            content_block = mcp_result.content[0]
-            content_text = content_block.text if hasattr(content_block, "text") else "{}"
-
-            try:
-                genie_response = json.loads(content_text)
-            except json.JSONDecodeError:
-                return GenieResponse(
-                    result=f"Failed to parse response: {content_text}",
-                    conversation_id=conversation_id,
-                )
-
-            content = genie_response.get("content", "")
-            conv_id = genie_response.get("conversationId", conversation_id)
-            status = genie_response.get("status", "")
-
-            try:
-                content_data = json.loads(content)
-                query_str = content_data.get("query", "")
-                description = content_data.get("description", "")
-                statement_response = content_data.get("statement_response")
-
-                if (
-                    statement_response
-                    and statement_response.get("status", {}).get("state") == "SUCCEEDED"
-                ):
-                    result = _parse_query_result(
-                        statement_response, self.truncate_results, self.return_pandas
-                    )
-                else:
-                    result = content
-
-            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-                result = content
-
+        if not mcp_result.content or len(mcp_result.content) == 0:
             return GenieResponse(
-                result=result,
-                query=query_str,
-                description=description,
-                conversation_id=conv_id,
+                result="No content returned from Genie",
+                conversation_id=conversation_id,
             )
 
-        except Exception as e:
-            # Fall back to deprecated REST methods
-            logging.warning(f"MCP call failed, falling back to REST API: {e}")
+        # Genie backend always returns exactly 1 content block with JSON
+        content_block = mcp_result.content[0]
+        content_text = content_block.text if hasattr(content_block, "text") else "{}"
 
-            if not conversation_id:
-                resp = self.start_conversation(question)
+        try:
+            genie_response = json.loads(content_text)
+        except json.JSONDecodeError:
+            return GenieResponse(
+                result=f"Failed to parse response: {content_text}",
+                conversation_id=conversation_id,
+            )
+
+        content = genie_response.get("content", "")
+        conv_id = genie_response.get("conversationId", conversation_id)
+        status = genie_response.get("status", "")
+        query_str = ""                                    
+        description = "" 
+
+        try:
+            content_data = json.loads(content)
+            query_str = content_data.get("query", "")
+            description = content_data.get("description", "")
+            statement_response = content_data.get("statement_response")
+
+            if (
+                statement_response
+                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
+            ):
+                result = _parse_query_result(
+                    statement_response, self.truncate_results, self.return_pandas
+                )
             else:
-                resp = self.create_message(conversation_id, question)
-            genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
-            if not genie_response.conversation_id:
-                genie_response.conversation_id = resp["conversation_id"]
-            return genie_response
+                result = content
+
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+            result = content
+
+        return GenieResponse(
+            result=result,
+            query=query_str,
+            description=description,
+            conversation_id=conv_id,
+        )
