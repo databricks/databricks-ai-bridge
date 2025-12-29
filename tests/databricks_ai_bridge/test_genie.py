@@ -211,8 +211,20 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
-                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
+                {
+                    "values": [
+                        {"string_value": "1"},
+                        {"string_value": "Alice"},
+                        {"string_value": "2023-10-01T00:00:00Z"},
+                    ]
+                },
+                {
+                    "values": [
+                        {"string_value": "2"},
+                        {"string_value": "Bob"},
+                        {"string_value": "2023-10-02T00:00:00Z"},
+                    ]
+                },
             ]
         },
     }
@@ -272,16 +284,76 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
-                    {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
-                    {"values": [{"string_value": "3"}, {"string_value": "Charlie"}, {"string_value": "2023-10-03T00:00:00Z"}]},
-                    {"values": [{"string_value": "4"}, {"string_value": "David"}, {"string_value": "2023-10-04T00:00:00Z"}]},
-                    {"values": [{"string_value": "5"}, {"string_value": "Eve"}, {"string_value": "2023-10-05T00:00:00Z"}]},
-                    {"values": [{"string_value": "6"}, {"string_value": "Frank"}, {"string_value": "2023-10-06T00:00:00Z"}]},
-                    {"values": [{"string_value": "7"}, {"string_value": "Grace"}, {"string_value": "2023-10-07T00:00:00Z"}]},
-                    {"values": [{"string_value": "8"}, {"string_value": "Hank"}, {"string_value": "2023-10-08T00:00:00Z"}]},
-                    {"values": [{"string_value": "9"}, {"string_value": "Ivy"}, {"string_value": "2023-10-09T00:00:00Z"}]},
-                    {"values": [{"string_value": "10"}, {"string_value": "Jack"}, {"string_value": "2023-10-10T00:00:00Z"}]},
+                    {
+                        "values": [
+                            {"string_value": "1"},
+                            {"string_value": "Alice"},
+                            {"string_value": "2023-10-01T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "2"},
+                            {"string_value": "Bob"},
+                            {"string_value": "2023-10-02T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "3"},
+                            {"string_value": "Charlie"},
+                            {"string_value": "2023-10-03T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "4"},
+                            {"string_value": "David"},
+                            {"string_value": "2023-10-04T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "5"},
+                            {"string_value": "Eve"},
+                            {"string_value": "2023-10-05T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "6"},
+                            {"string_value": "Frank"},
+                            {"string_value": "2023-10-06T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "7"},
+                            {"string_value": "Grace"},
+                            {"string_value": "2023-10-07T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "8"},
+                            {"string_value": "Hank"},
+                            {"string_value": "2023-10-08T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "9"},
+                            {"string_value": "Ivy"},
+                            {"string_value": "2023-10-09T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "10"},
+                            {"string_value": "Jack"},
+                            {"string_value": "2023-10-10T00:00:00Z"},
+                        ]
+                    },
                 ]
             },
         }
@@ -353,7 +425,7 @@ def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
 
     # Strip whitespace from column names and values
     df.columns = [col.strip() for col in df.columns]
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
     # Drop the first column
     df = df.drop(columns=[df.columns[0]])
@@ -387,7 +459,11 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "values": [
                     {"string_value": str(i + 1)},
                     {"string_value": random.choice(names)},
-                    {"string_value": (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                    {
+                        "string_value": (
+                            base_date + timedelta(days=random.randint(0, 365))
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    },
                 ]
             }
             for i in range(1000)
@@ -414,7 +490,8 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "id": [int(row["values"][0]["string_value"]) for row in data_array],
                 "name": [row["values"][1]["string_value"] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
+                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ")
+                    for row in data_array
                 ],
             }
         )
