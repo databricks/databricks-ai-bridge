@@ -182,17 +182,14 @@ class Genie:
         self.genie = workspace_client.genie
         self.description = self.genie.get_space(space_id).description
 
-        # Initialize MCP client for communication with Genie backend
         server_url = f"{workspace_client.config.host}/api/2.0/mcp/genie/{space_id}"
         self._mcp_client = DatabricksMCPClient(server_url, workspace_client)
         self._tool_name = f"query_space_{space_id}"
 
-        # Keep headers for deprecated REST methods (backwards compatibility)
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-
         self.truncate_results = truncate_results
         self.return_pandas = return_pandas
 
@@ -224,11 +221,11 @@ class Genie:
 
         .. deprecated::
             This method is deprecated and will be removed in a future release.
-            Use :meth:`ask_question` with a conversation_id parameter instead.
+            Use :meth:`ask_question` instead, which uses MCP protocol.
         """
         warnings.warn(
             "create_message() is deprecated and will be removed in a future release. "
-            "Use ask_question(question, conversation_id=...) instead.",
+            "Use ask_question(question, conversation_id=...) instead, which uses MCP protocol.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -246,11 +243,11 @@ class Genie:
 
         .. deprecated::
             This method is deprecated and will be removed in a future release.
-            Use :meth:`ask_question` instead, which handles polling automatically via MCP.
+            Use :meth:`ask_question` instead, which uses MCP protocol.
         """
         warnings.warn(
             "poll_for_result() is deprecated and will be removed in a future release. "
-            "Use ask_question() instead, which handles polling automatically.",
+            "Use ask_question() instead, which uses MCP protocol.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -405,7 +402,6 @@ class Genie:
             GenieResponse with result, query, description, and conversation_id
         """
         try:
-            # Try using the new MCP approach
             args = {"query": question}
             if conversation_id:
                 args["conversation_id"] = conversation_id
@@ -449,13 +445,9 @@ class Genie:
                     )
                 else:
                     result = content
-                    query_str = ""
-                    description = ""
 
             except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 result = content
-                query_str = ""
-                description = ""
 
             return GenieResponse(
                 result=result,
@@ -472,7 +464,6 @@ class Genie:
                 resp = self.start_conversation(question)
             else:
                 resp = self.create_message(conversation_id, question)
-
             genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
             if not genie_response.conversation_id:
                 genie_response.conversation_id = resp["conversation_id"]
