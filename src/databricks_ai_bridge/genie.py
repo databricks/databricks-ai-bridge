@@ -470,7 +470,7 @@ class Genie:
 
             if conversation_id:
                 resp = self.create_message(conversation_id, question)
-                return self.poll_for_result(conversation_id, resp["id"])
+                return self.poll_for_result(conversation_id, resp["message_id"])
             else:
                 resp = self.start_conversation(question)
-                return self.poll_for_result(resp["conversation_id"], resp["id"])
+                return self.poll_for_result(resp["conversation_id"], resp["message_id"])
