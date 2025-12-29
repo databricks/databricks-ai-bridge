@@ -55,7 +55,10 @@ def _parse_query_result(
 
     for item in output["data_array"]:
         row = []
-        for column, value in zip(columns, item):
+        values = item["values"]
+        for column, value_obj in zip(columns, values):
+            value = value_obj.get("string_value") if isinstance(value_obj, dict) else value_obj
+
             type_name = column["type_name"]
             if value is None:
                 row.append(None)
