@@ -1,26 +1,15 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from databricks.sdk.service.dashboards import GenieSpace
 from databricks_ai_bridge.genie import Genie, GenieResponse
 from langchain_core.messages import AIMessage
-from mcp.types import CallToolResult
 
 from databricks_langchain.genie import (
     GenieAgent,
     _concat_messages_array,
     _query_genie_as_agent,
 )
-
-
-@pytest.fixture(autouse=True)
-def mock_databricks_oauth_provider():
-    """Auto-mock DatabricksOAuthClientProvider for all tests to avoid OAuth validation errors."""
-    with patch("databricks_mcp.mcp.DatabricksOAuthClientProvider") as mock_auth:
-        # Return a MagicMock instance that won't try to get OAuth tokens
-        mock_auth_instance = MagicMock()
-        mock_auth.return_value = mock_auth_instance
-        yield mock_auth
 
 
 def test_concat_messages_array():
@@ -74,8 +63,8 @@ def test_query_genie_as_agent(MockWorkspaceClient):
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", MockWorkspaceClient)
 
-    # Mock the ask_question method at the module level to avoid mlflow tracing issues
-    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
+    # Mock the ask_question method to return our mock response
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
         # Test with include_context=False (default)
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {
@@ -152,8 +141,8 @@ def test_query_genie_with_client(mock_workspace_client):
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     genie = Genie("space-id", mock_workspace_client)
 
-    # Mock the ask_question method at the module level to avoid mlflow tracing issues
-    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
+    # Mock the ask_question method to return our mock response
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
