@@ -468,9 +468,12 @@ class Genie:
             # Fall back to deprecated REST methods
             logging.warning(f"MCP call failed, falling back to REST API: {e}")
 
-            if conversation_id:
-                resp = self.create_message(conversation_id, question)
-                return self.poll_for_result(conversation_id, resp["message_id"])
-            else:
+            if not conversation_id:
                 resp = self.start_conversation(question)
-                return self.poll_for_result(resp["conversation_id"], resp["message_id"])
+            else:
+                resp = self.create_message(conversation_id, question)
+
+            genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
+            if not genie_response.conversation_id:
+                genie_response.conversation_id = resp["conversation_id"]
+            return genie_response
