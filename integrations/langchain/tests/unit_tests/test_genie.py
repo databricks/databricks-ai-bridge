@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.genie import GenieResponse
 from langchain_core.messages import AIMessage
 
@@ -73,12 +74,24 @@ def test_create_genie_agent(MockRunnableLambda):
     MockRunnableLambda.assert_called()
 
 
-@patch("databricks.sdk.WorkspaceClient")
-def test_query_genie_with_client(mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "abc"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "It is sunny."}}]},
-    ]
+@patch("databricks_ai_bridge.genie.DatabricksMCPClient")
+def test_query_genie_with_client(mock_mcp_client_class):
+    # Create a properly mocked workspace client
+    mock_workspace_client = MagicMock(spec=WorkspaceClient)
+    mock_workspace_client.config.host = "https://test.databricks.com"
+    mock_workspace_client.config._header_factory = MagicMock()
+    mock_workspace_client.genie.get_space.return_value = MagicMock(
+        space_id="space-id", description="Test space"
+    )
+
+    # Mock the MCP client instance and its call_tool method
+    mock_mcp_client_instance = MagicMock()
+    mock_response = MagicMock()
+    mock_content = MagicMock()
+    mock_content.text = '{"content": "It is sunny.", "status": "COMPLETED"}'
+    mock_response.content = [mock_content]
+    mock_mcp_client_instance.call_tool.return_value = mock_response
+    mock_mcp_client_class.return_value = mock_mcp_client_instance
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
     result = _query_genie_as_agent(input_data, "space-id", "Genie", mock_workspace_client)
