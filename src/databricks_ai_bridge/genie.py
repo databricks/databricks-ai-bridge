@@ -150,26 +150,55 @@ def _truncate_result(dataframe):
     return truncated_result
 
 
-def _end_current_span(client, parent_trace_id, current_span, final_state, error=None):
-    """helper function to safely end a span with exception handling."""
+def _parse_genie_mcp_response(
+    mcp_result, truncate_results: bool, return_pandas: bool, conversation_id: Optional[str] = None
+) -> GenieResponse:
+    if not mcp_result.content or len(mcp_result.content) == 0:
+        return GenieResponse(
+            result="No content returned from Genie",
+            conversation_id=conversation_id,
+        )
 
-    if current_span is None:
-        return None
+    # Genie backend always returns 1 content block with JSON
+    content_block = mcp_result.content[0]
+    content_text = content_block.text if hasattr(content_block, "text") else "{}"
 
     try:
-        attributes = {"final_state": final_state}
-        if error is not None:
-            attributes["error"] = error
-
-        client.end_span(
-            trace_id=parent_trace_id,
-            span_id=current_span.span_id,
-            attributes=attributes,
+        genie_response = json.loads(content_text)
+    except json.JSONDecodeError:
+        return GenieResponse(
+            result=f"Failed to parse response: {content_text}",
+            conversation_id=conversation_id,
         )
-    except mlflow.exceptions.MlflowTracingException as e:
-        logging.warning(f"Failed to end span for {final_state}: {e}")
 
-    return None
+    content = genie_response.get("content", "")
+    conv_id = genie_response.get("conversationId", conversation_id)
+    query_str = ""
+    description = ""
+
+    try:
+        content_data = json.loads(content)
+        query_str = content_data.get("query", "")
+        description = content_data.get("description", "")
+        statement_response = content_data.get("statement_response")
+
+        if (
+            statement_response
+            and statement_response.get("status", {}).get("state") == "SUCCEEDED"
+        ):
+            result = _parse_query_result(statement_response, truncate_results, return_pandas)
+        else:
+            result = content
+
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        result = content
+
+    return GenieResponse(
+        result=result,
+        query=query_str,
+        description=description,
+        conversation_id=conv_id,
+    )
 
 
 class Genie:
@@ -187,7 +216,16 @@ class Genie:
 
         server_url = f"{workspace_client.config.host}/api/2.0/mcp/genie/{space_id}"
         self._mcp_client = DatabricksMCPClient(server_url, workspace_client)
-        self._tool_name = f"query_space_{space_id}"
+
+        tools = self._mcp_client.list_tools()
+        if not tools:
+            raise ValueError(f"No tools found in Genie MCP server for space {space_id}")
+
+        query_tools = [tool for tool in tools if "query" in tool.name.lower()]
+        poll_tools = [tool for tool in tools if "poll" in tool.name.lower()]
+
+        self._query_tool_name = query_tools[0].name if query_tools else None
+        self._poll_tool_name = poll_tools[0].name if poll_tools else None
 
         self.headers = {
             "Accept": "application/json",
@@ -198,18 +236,6 @@ class Genie:
 
     @mlflow.trace()
     def start_conversation(self, content):
-        """Start a conversation with the Genie space.
-
-        .. deprecated::
-            This method is deprecated and will be removed in a future release.
-            Use :meth:`ask_question` instead, which uses the MCP protocol.
-        """
-        warnings.warn(
-            "start_conversation() is deprecated and will be removed in a future release. "
-            "Use ask_question() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
@@ -220,18 +246,6 @@ class Genie:
 
     @mlflow.trace()
     def create_message(self, conversation_id, content):
-        """Create a message in an existing conversation.
-
-        .. deprecated::
-            This method is deprecated and will be removed in a future release.
-            Use :meth:`ask_question` instead, which uses MCP protocol.
-        """
-        warnings.warn(
-            "create_message() is deprecated and will be removed in a future release. "
-            "Use ask_question(question, conversation_id=...) instead, which uses MCP protocol.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages",
@@ -242,221 +256,56 @@ class Genie:
 
     @mlflow.trace()
     def poll_for_result(self, conversation_id, message_id):
-        """Poll for the result of a Genie query.
-
-        .. deprecated::
-            This method is deprecated and will be removed in a future release.
-            Use :meth:`ask_question` instead, which uses MCP protocol.
-        """
-        warnings.warn(
-            "poll_for_result() is deprecated and will be removed in a future release. "
-            "Use ask_question() instead, which uses MCP protocol.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        @mlflow.trace()
-        def poll_query_results(
-            attachment_id, query_str, description, conversation_id=conversation_id
-        ):
-            iteration_count = 0
-            while iteration_count < MAX_ITERATIONS:
-                iteration_count += 1
-                resp = self.genie._api.do(
-                    "GET",
-                    f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/query-result",
-                    headers=self.headers,
-                )["statement_response"]
-                state = resp["status"]["state"]
-                returned_conversation_id = resp.get("conversation_id", None)
-                if state == "SUCCEEDED":
-                    result = _parse_query_result(resp, self.truncate_results, self.return_pandas)
-                    return GenieResponse(result, query_str, description, returned_conversation_id)
-                elif state in ["RUNNING", "PENDING"]:
-                    logging.debug("Waiting for query result...")
-                    time.sleep(ITERATION_FREQUENCY)
-                else:
-                    return GenieResponse(
-                        f"No query result: {resp['state']}",
-                        query_str,
-                        description,
-                        returned_conversation_id,
-                    )
-            return GenieResponse(
-                f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
-                query_str,
-                description,
-                conversation_id,
+        if not self._poll_tool_name:
+            raise ValueError(
+                f"Poll tool not available for Genie space {self.space_id}. "
+                f"The MCP server must expose a poll tool to use poll_for_result()."
             )
 
-        @mlflow.trace()
-        def poll_result():
-            iteration_count = 0
+        iteration_count = 0
+        while iteration_count < MAX_ITERATIONS:
+            iteration_count += 1
 
-            # use MLflow client to get parent of any new spans we create from the current active span
-            # (parenting keeps spans in the same trace)
-            client = mlflow.tracking.MlflowClient()
-            with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
-                parent_trace_id = parent.trace_id if parent else None
-                parent_span_id = parent.span_id if parent else None
+            args = {"conversation_id": conversation_id, "message_id": message_id}
+            mcp_result = self._mcp_client.call_tool(self._poll_tool_name, args)
 
-                # Track last status from API and the current child span
-                last_status = None
-                current_span = None
-
-                while iteration_count < MAX_ITERATIONS:
-                    iteration_count += 1
-                    resp = self.genie._api.do(
-                        "GET",
-                        f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}",
-                        headers=self.headers,
+            try:
+                if not mcp_result.content or len(mcp_result.content) == 0:
+                    return GenieResponse(
+                        result="No content returned from Genie poll",
+                        conversation_id=conversation_id,
                     )
-                    returned_conversation_id = resp.get("conversation_id", None)
 
-                    # get current status from API response
-                    current_status = resp["status"]
+                content_block = mcp_result.content[0]
+                content_text = content_block.text if hasattr(content_block, "text") else "{}"
+                genie_response = json.loads(content_text)
+                status = genie_response.get("status", "")
+            except (json.JSONDecodeError, AttributeError, KeyError):
+                return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
 
-                    # On status change: end previous span, start a new one (excluding terminal states)
-                    if current_status != last_status:
-                        # END previous span
-                        current_span = _end_current_span(
-                            client, parent_trace_id, current_span, last_status
-                        )
+            if status in ["COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"]:
+                return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
 
-                        # START new span for non-terminal states
-                        if current_status not in TERMINAL_STATES:
-                            # START new span
-                            try:
-                                current_span = client.start_span(
-                                    name=current_status.lower(),
-                                    trace_id=parent_trace_id,
-                                    parent_id=parent_span_id,
-                                    span_type="CHAIN",
-                                    attributes={
-                                        "state": current_status,
-                                        "conversation_id": conversation_id,
-                                        "message_id": message_id,
-                                    },
-                                )
-                            except mlflow.exceptions.MlflowTracingException as e:
-                                logging.warning(f"Failed to create span for {current_status}: {e}")
-                                current_span = None
+            logging.debug(f"Polling: status={status}, iteration={iteration_count}")
+            time.sleep(ITERATION_FREQUENCY)
 
-                        logging.debug(f"Status: {last_status} → {current_status}")
-                        last_status = current_status
+        return GenieResponse(
+            result=f"Genie query timed out after {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds",
+            conversation_id=conversation_id,
+        )
 
-                    if current_status == "COMPLETED":
-                        attachment = next((r for r in resp["attachments"] if "query" in r), None)
-                        if attachment:
-                            query_obj = attachment["query"]
-                            description = query_obj.get("description", "")
-                            query_str = query_obj.get("query", "")
-                            attachment_id = attachment["attachment_id"]
-                            return poll_query_results(
-                                attachment_id,
-                                query_str,
-                                description,
-                                returned_conversation_id,
-                            )
-                        if current_status == "COMPLETED":
-                            text_content = next(r for r in resp["attachments"] if "text" in r)[
-                                "text"
-                            ]["content"]
-                            return GenieResponse(
-                                result=text_content,
-                                conversation_id=returned_conversation_id,
-                            )
-
-                    elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
-                        return GenieResponse(result=f"Genie query {current_status.lower()}.")
-
-                    elif current_status == "FAILED":
-                        return GenieResponse(
-                            result=f"Genie query failed with error: {resp.get('error', 'Unknown error')}"
-                        )
-                    # includes EXECUTING_QUERY, Genie can retry after this status
-                    else:
-                        logging.debug(f"Status: {current_status}")
-                        time.sleep(ITERATION_FREQUENCY)  # faster poll rate
-
-                # timeout path / end of while loop — close any open spans
-                current_span = _end_current_span(
-                    client,
-                    parent_trace_id,
-                    current_span,
-                    last_status,
-                )
-                return GenieResponse(
-                    f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds (total {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds)",
-                    conversation_id=conversation_id,
-                )
-
-        return poll_result()
 
     @mlflow.trace()
     def ask_question(self, question, conversation_id: Optional[str] = None):
-        """Ask a question to the Genie space using MCP protocol.
-
-        Args:
-            question: The question to ask the Genie space
-            conversation_id: Optional conversation ID to continue an existing conversation
-
-        Returns:
-            GenieResponse with result, query, description, and conversation_id
-        """
+        if not self._query_tool_name:
+            raise ValueError(
+                f"Query tool not available for Genie space {self.space_id}. "
+                f"The MCP server must expose a query tool to use ask_question()."
+            )
 
         args = {"query": question}
         if conversation_id:
             args["conversation_id"] = conversation_id
 
-        mcp_result = self._mcp_client.call_tool(self._tool_name, args)
-
-        if not mcp_result.content or len(mcp_result.content) == 0:
-            return GenieResponse(
-                result="No content returned from Genie",
-                conversation_id=conversation_id,
-            )
-
-        # Genie backend always returns 1 content block with JSON
-        content_block = mcp_result.content[0]
-        content_text = content_block.text if hasattr(content_block, "text") else "{}"
-
-        try:
-            genie_response = json.loads(content_text)
-        except json.JSONDecodeError:
-            return GenieResponse(
-                result=f"Failed to parse response: {content_text}",
-                conversation_id=conversation_id,
-            )
-
-        content = genie_response.get("content", "")
-        conv_id = genie_response.get("conversationId", conversation_id)
-        status = genie_response.get("status", "")
-        query_str = ""
-        description = ""
-
-        try:
-            content_data = json.loads(content)
-            query_str = content_data.get("query", "")
-            description = content_data.get("description", "")
-            statement_response = content_data.get("statement_response")
-
-            if (
-                statement_response
-                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
-            ):
-                result = _parse_query_result(
-                    statement_response, self.truncate_results, self.return_pandas
-                )
-            else:
-                result = content
-
-        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-            result = content
-
-        return GenieResponse(
-            result=result,
-            query=query_str,
-            description=description,
-            conversation_id=conv_id,
-        )
+        mcp_result = self._mcp_client.call_tool(self._query_tool_name, args)
+        return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
