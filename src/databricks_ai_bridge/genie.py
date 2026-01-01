@@ -150,6 +150,27 @@ def _truncate_result(dataframe):
     return truncated_result
 
 
+def _end_current_span(client, parent_trace_id, current_span, final_state, error=None):
+    """Helper function to safely end a span with exception handling."""
+    if current_span is None:
+        return None
+
+    try:
+        attributes = {"final_state": final_state}
+        if error is not None:
+            attributes["error"] = error
+
+        client.end_span(
+            trace_id=parent_trace_id,
+            span_id=current_span.span_id,
+            attributes=attributes,
+        )
+    except Exception as e:
+        logging.warning(f"Failed to end span for {final_state}: {e}")
+
+    return None
+
+
 def _parse_genie_mcp_response(
     mcp_result, truncate_results: bool, return_pandas: bool, conversation_id: Optional[str] = None
 ) -> GenieResponse:
@@ -262,37 +283,84 @@ class Genie:
                 f"The MCP server must expose a poll tool to use poll_for_result()."
             )
 
-        iteration_count = 0
-        while iteration_count < MAX_ITERATIONS:
-            iteration_count += 1
+        # Use MLflow client for manual span management to track status transitions
+        client = mlflow.tracking.MlflowClient()
+        with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
+            parent_trace_id = parent.trace_id if parent else None
+            parent_span_id = parent.span_id if parent else None
 
-            args = {"conversation_id": conversation_id, "message_id": message_id}
-            mcp_result = self._mcp_client.call_tool(self._poll_tool_name, args)
+            # Track last status and current child span
+            last_status = None
+            current_span = None
 
-            try:
-                if not mcp_result.content or len(mcp_result.content) == 0:
-                    return GenieResponse(
-                        result="No content returned from Genie poll",
-                        conversation_id=conversation_id,
+            iteration_count = 0
+            while iteration_count < MAX_ITERATIONS:
+                iteration_count += 1
+
+                args = {"conversation_id": conversation_id, "message_id": message_id}
+                mcp_result = self._mcp_client.call_tool(self._poll_tool_name, args)
+
+                try:
+                    if not mcp_result.content or len(mcp_result.content) == 0:
+                        # End any active span before returning
+                        _end_current_span(client, parent_trace_id, current_span, last_status)
+                        return GenieResponse(
+                            result="No content returned from Genie poll",
+                            conversation_id=conversation_id,
+                        )
+
+                    content_block = mcp_result.content[0]
+                    content_text = content_block.text if hasattr(content_block, "text") else "{}"
+                    genie_response = json.loads(content_text)
+                    status = genie_response.get("status", "")
+                except (json.JSONDecodeError, AttributeError, KeyError):
+                    # End any active span before returning
+                    _end_current_span(client, parent_trace_id, current_span, last_status)
+                    return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+
+                # On status change: end previous span, start new one
+                if status != last_status:
+                    # END previous span
+                    current_span = _end_current_span(
+                        client, parent_trace_id, current_span, last_status
                     )
 
-                content_block = mcp_result.content[0]
-                content_text = content_block.text if hasattr(content_block, "text") else "{}"
-                genie_response = json.loads(content_text)
-                status = genie_response.get("status", "")
-            except (json.JSONDecodeError, AttributeError, KeyError):
-                return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+                    # START new span for non-terminal states
+                    if status not in TERMINAL_STATES:
+                        try:
+                            current_span = client.start_span(
+                                name=status.lower(),
+                                trace_id=parent_trace_id,
+                                parent_id=parent_span_id,
+                                span_type="CHAIN",
+                                attributes={
+                                    "state": status,
+                                    "conversation_id": conversation_id,
+                                    "message_id": message_id,
+                                },
+                            )
+                        except Exception as e:
+                            logging.warning(f"Failed to create span for {status}: {e}")
+                            current_span = None
 
-            if status in ["COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"]:
-                return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+                    logging.debug(f"Status: {last_status} → {status}")
+                    last_status = status
 
-            logging.debug(f"Polling: status={status}, iteration={iteration_count}")
-            time.sleep(ITERATION_FREQUENCY)
+                # Check for terminal states
+                if status in TERMINAL_STATES:
+                    # End any active span before returning
+                    _end_current_span(client, parent_trace_id, current_span, last_status)
+                    return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
 
-        return GenieResponse(
-            result=f"Genie query timed out after {MAX_ITERATIONS * ITERATION_FREQUENCY} seconds",
-            conversation_id=conversation_id,
-        )
+                logging.debug(f"Polling: status={status}, iteration={iteration_count}")
+                time.sleep(ITERATION_FREQUENCY)
+
+            # Timeout - end any active span
+            _end_current_span(client, parent_trace_id, current_span, last_status)
+            return GenieResponse(
+                result=f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds",
+                conversation_id=conversation_id,
+            )
 
 
     @mlflow.trace()
