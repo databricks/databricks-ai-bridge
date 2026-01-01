@@ -2,7 +2,6 @@ import bisect
 import json
 import logging
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
