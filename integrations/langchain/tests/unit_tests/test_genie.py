@@ -125,7 +125,9 @@ def test_create_genie_agent(MockRunnableLambda, MockWorkspaceClient, MockMCPClie
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
 @patch("langchain_core.runnables.RunnableLambda")
-def test_create_genie_agent_with_description(MockRunnableLambda, MockWorkspaceClient, MockMCPClient):
+def test_create_genie_agent_with_description(
+    MockRunnableLambda, MockWorkspaceClient, MockMCPClient
+):
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
