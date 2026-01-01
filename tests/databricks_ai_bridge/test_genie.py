@@ -76,28 +76,32 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
-    mock_content = json.dumps({
-        "query": "SELECT *",
-        "description": "Test query",
-        "statement_response": {
-            "status": {"state": "SUCCEEDED"},
-            "manifest": {"schema": {"columns": []}},
-            "result": {
-                "data_array": [],
+    mock_content = json.dumps(
+        {
+            "query": "SELECT *",
+            "description": "Test query",
+            "statement_response": {
+                "status": {"state": "SUCCEEDED"},
+                "manifest": {"schema": {"columns": []}},
+                "result": {
+                    "data_array": [],
+                },
             },
         }
-    })
+    )
 
     mock_mcp_result = CallToolResult(
         content=[
             {
                 "type": "text",
-                "text": json.dumps({
-                    "content": mock_content,
-                    "conversationId": "123",
-                    "messageId": "456",
-                    "status": "COMPLETED"
-                }),
+                "text": json.dumps(
+                    {
+                        "content": mock_content,
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
             }
         ]
     )
@@ -264,8 +268,20 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
-                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
+                {
+                    "values": [
+                        {"string_value": "1"},
+                        {"string_value": "Alice"},
+                        {"string_value": "2023-10-01T00:00:00Z"},
+                    ]
+                },
+                {
+                    "values": [
+                        {"string_value": "2"},
+                        {"string_value": "Bob"},
+                        {"string_value": "2023-10-02T00:00:00Z"},
+                    ]
+                },
             ]
         },
     }
@@ -325,16 +341,76 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
-                    {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
-                    {"values": [{"string_value": "3"}, {"string_value": "Charlie"}, {"string_value": "2023-10-03T00:00:00Z"}]},
-                    {"values": [{"string_value": "4"}, {"string_value": "David"}, {"string_value": "2023-10-04T00:00:00Z"}]},
-                    {"values": [{"string_value": "5"}, {"string_value": "Eve"}, {"string_value": "2023-10-05T00:00:00Z"}]},
-                    {"values": [{"string_value": "6"}, {"string_value": "Frank"}, {"string_value": "2023-10-06T00:00:00Z"}]},
-                    {"values": [{"string_value": "7"}, {"string_value": "Grace"}, {"string_value": "2023-10-07T00:00:00Z"}]},
-                    {"values": [{"string_value": "8"}, {"string_value": "Hank"}, {"string_value": "2023-10-08T00:00:00Z"}]},
-                    {"values": [{"string_value": "9"}, {"string_value": "Ivy"}, {"string_value": "2023-10-09T00:00:00Z"}]},
-                    {"values": [{"string_value": "10"}, {"string_value": "Jack"}, {"string_value": "2023-10-10T00:00:00Z"}]},
+                    {
+                        "values": [
+                            {"string_value": "1"},
+                            {"string_value": "Alice"},
+                            {"string_value": "2023-10-01T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "2"},
+                            {"string_value": "Bob"},
+                            {"string_value": "2023-10-02T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "3"},
+                            {"string_value": "Charlie"},
+                            {"string_value": "2023-10-03T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "4"},
+                            {"string_value": "David"},
+                            {"string_value": "2023-10-04T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "5"},
+                            {"string_value": "Eve"},
+                            {"string_value": "2023-10-05T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "6"},
+                            {"string_value": "Frank"},
+                            {"string_value": "2023-10-06T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "7"},
+                            {"string_value": "Grace"},
+                            {"string_value": "2023-10-07T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "8"},
+                            {"string_value": "Hank"},
+                            {"string_value": "2023-10-08T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "9"},
+                            {"string_value": "Ivy"},
+                            {"string_value": "2023-10-09T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "10"},
+                            {"string_value": "Jack"},
+                            {"string_value": "2023-10-10T00:00:00Z"},
+                        ]
+                    },
                 ]
             },
         }
@@ -440,7 +516,11 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "values": [
                     {"string_value": str(i + 1)},
                     {"string_value": random.choice(names)},
-                    {"string_value": (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ")},
+                    {
+                        "string_value": (
+                            base_date + timedelta(days=random.randint(0, 365))
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    },
                 ]
             }
             for i in range(1000)
@@ -467,7 +547,8 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "id": [int(row["values"][0]["string_value"]) for row in data_array],
                 "name": [row["values"][1]["string_value"] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
+                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ")
+                    for row in data_array
                 ],
             }
         )
@@ -491,37 +572,49 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
         with patch("time.sleep", return_value=None):
             mock_responses = [
                 CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 ),
                 CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Still processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Still processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 ),
                 CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Should not reach this",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Should not reach this",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 ),
             ]
 
@@ -577,12 +670,14 @@ def test_poll_for_result_creates_genie_timeline_span(genie, mock_workspace_clien
                 content=[
                     {
                         "type": "text",
-                        "text": json.dumps({
-                            "content": "Done",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "COMPLETED"
-                        }),
+                        "text": json.dumps(
+                            {
+                                "content": "Done",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "COMPLETED",
+                            }
+                        ),
                     }
                 ]
             )
@@ -608,29 +703,39 @@ def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_clie
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Done",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "COMPLETED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]):
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
                     genie.poll_for_result("123", "456")
 
                 # Verify span was created for EXECUTING_QUERY
@@ -657,29 +762,39 @@ def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_clien
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Done",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "COMPLETED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]):
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
                     genie.poll_for_result("123", "456")
 
                 # Verify span was closed when transitioning to COMPLETED
@@ -705,51 +820,76 @@ def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"  # duplicate status
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",  # duplicate status
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result3 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"  # duplicate status
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",  # duplicate status
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result4 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Done",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "COMPLETED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2, mock_mcp_result3, mock_mcp_result4]):
+                with patch.object(
+                    genie._mcp_client,
+                    "call_tool",
+                    side_effect=[
+                        mock_mcp_result1,
+                        mock_mcp_result2,
+                        mock_mcp_result3,
+                        mock_mcp_result4,
+                    ],
+                ):
                     genie.poll_for_result("123", "456")
 
                 # should only create span once for EXECUTING_QUERY despite 3 status changes
@@ -771,29 +911,39 @@ def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Message processing failed: Query cancelled",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "CANCELLED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: Query cancelled",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "CANCELLED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]):
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
                     result = genie.poll_for_result("123", "456")
 
                 assert result.result == "Message processing failed: Query cancelled"
@@ -817,29 +967,39 @@ def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Message processing failed: some error",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "FAILED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: some error",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "FAILED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]):
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
                     result = genie.poll_for_result("123", "456")
 
                 assert result.result == "Message processing failed: some error"
@@ -863,29 +1023,39 @@ def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspa
                 mock_client.start_span.return_value = mock_child_span
 
                 mock_mcp_result1 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Processing",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "EXECUTING_QUERY"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
                 )
                 mock_mcp_result2 = CallToolResult(
-                    content=[{
-                        "type": "text",
-                        "text": json.dumps({
-                            "content": "Message processing failed: Result expired",
-                            "conversationId": "123",
-                            "messageId": "456",
-                            "status": "QUERY_RESULT_EXPIRED"
-                        }),
-                    }]
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: Result expired",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "QUERY_RESULT_EXPIRED",
+                                }
+                            ),
+                        }
+                    ]
                 )
 
-                with patch.object(genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]):
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
                     result = genie.poll_for_result("123", "456")
 
                 assert result.result == "Message processing failed: Result expired"
@@ -911,37 +1081,49 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
 
                     mock_responses = [
                         CallToolResult(
-                            content=[{
-                                "type": "text",
-                                "text": json.dumps({
-                                    "content": "Processing",
-                                    "conversationId": "123",
-                                    "messageId": "456",
-                                    "status": "EXECUTING_QUERY"
-                                }),
-                            }]
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Processing",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
                         ),
                         CallToolResult(
-                            content=[{
-                                "type": "text",
-                                "text": json.dumps({
-                                    "content": "Still processing",
-                                    "conversationId": "123",
-                                    "messageId": "456",
-                                    "status": "EXECUTING_QUERY"
-                                }),
-                            }]
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Still processing",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
                         ),
                         CallToolResult(
-                            content=[{
-                                "type": "text",
-                                "text": json.dumps({
-                                    "content": "Should not reach",
-                                    "conversationId": "123",
-                                    "messageId": "456",
-                                    "status": "EXECUTING_QUERY"
-                                }),
-                            }]
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Should not reach",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
                         ),
                     ]
 
@@ -979,26 +1161,34 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
 
         mock_responses = [
             CallToolResult(
-                content=[{
-                    "type": "text",
-                    "text": json.dumps({
-                        "content": "Processing",
-                        "conversationId": "123",
-                        "messageId": "456",
-                        "status": "EXECUTING_QUERY"
-                    }),
-                }]
+                content=[
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "content": "Processing",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "EXECUTING_QUERY",
+                            }
+                        ),
+                    }
+                ]
             ),
             CallToolResult(
-                content=[{
-                    "type": "text",
-                    "text": json.dumps({
-                        "content": "Success",
-                        "conversationId": "123",
-                        "messageId": "456",
-                        "status": "COMPLETED"
-                    }),
-                }]
+                content=[
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "content": "Success",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "COMPLETED",
+                            }
+                        ),
+                    }
+                ]
             ),
         ]
 

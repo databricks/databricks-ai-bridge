@@ -203,10 +203,7 @@ def _parse_genie_mcp_response(
         description = content_data.get("description", "")
         statement_response = content_data.get("statement_response")
 
-        if (
-            statement_response
-            and statement_response.get("status", {}).get("state") == "SUCCEEDED"
-        ):
+        if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
             result = _parse_query_result(statement_response, truncate_results, return_pandas)
         else:
             result = content
@@ -316,7 +313,9 @@ class Genie:
                 except (json.JSONDecodeError, AttributeError, KeyError):
                     # End any active span before returning
                     _end_current_span(client, parent_trace_id, current_span, last_status)
-                    return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+                    return _parse_genie_mcp_response(
+                        mcp_result, self.truncate_results, self.return_pandas, conversation_id
+                    )
 
                 # On status change: end previous span, start new one
                 if status != last_status:
@@ -350,7 +349,9 @@ class Genie:
                 if status in TERMINAL_STATES:
                     # End any active span before returning
                     _end_current_span(client, parent_trace_id, current_span, last_status)
-                    return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+                    return _parse_genie_mcp_response(
+                        mcp_result, self.truncate_results, self.return_pandas, conversation_id
+                    )
 
                 logging.debug(f"Polling: status={status}, iteration={iteration_count}")
                 time.sleep(ITERATION_FREQUENCY)
@@ -361,7 +362,6 @@ class Genie:
                 result=f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds",
                 conversation_id=conversation_id,
             )
-
 
     @mlflow.trace()
     def ask_question(self, question, conversation_id: Optional[str] = None):
@@ -376,4 +376,6 @@ class Genie:
             args["conversation_id"] = conversation_id
 
         mcp_result = self._mcp_client.call_tool(self._query_tool_name, args)
-        return _parse_genie_mcp_response(mcp_result, self.truncate_results, self.return_pandas, conversation_id)
+        return _parse_genie_mcp_response(
+            mcp_result, self.truncate_results, self.return_pandas, conversation_id
+        )
