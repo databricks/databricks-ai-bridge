@@ -1,12 +1,13 @@
+import json
 import random
 from datetime import datetime, timedelta
 from io import StringIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
 import pandas as pd
 import pytest
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, Tool
 
 from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
 
@@ -20,7 +21,19 @@ def mock_workspace_client():
 
 @pytest.fixture
 def genie(mock_workspace_client):
-    return Genie(space_id="test_space_id")
+    mock_query_tool = Mock(spec=Tool)
+    mock_query_tool.name = "query_space_test_space_id"
+
+    mock_poll_tool = Mock(spec=Tool)
+    mock_poll_tool.name = "poll_response_test_space_id"
+
+    with patch("databricks_ai_bridge.genie.DatabricksMCPClient") as MockMCPClient:
+        mock_mcp_instance = MockMCPClient.return_value
+        mock_mcp_instance.list_tools.return_value = [mock_query_tool, mock_poll_tool]
+
+        genie_instance = Genie(space_id="test_space_id")
+        genie_instance._mcp_client = mock_mcp_instance
+        return genie_instance
 
 
 def test_start_conversation(genie, mock_workspace_client):
@@ -48,58 +61,95 @@ def test_create_message(genie, mock_workspace_client):
 
 
 def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {
-            "status": "COMPLETED",
-            "attachments": [{"attachment_id": "123", "text": {"content": "Result"}}],
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Result"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Result", "conversationId": "123", "messageId": "456", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Result"
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {
-            "status": "COMPLETED",
-            "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
-        },
-        {
-            "statement_response": {
-                "status": {"state": "SUCCEEDED"},
-                "manifest": {"schema": {"columns": []}},
-                "result": {
-                    "data_array": [],
-                },
+    mock_content = json.dumps({
+        "query": "SELECT *",
+        "description": "Test query",
+        "statement_response": {
+            "status": {"state": "SUCCEEDED"},
+            "manifest": {"schema": {"columns": []}},
+            "result": {
+                "data_array": [],
+            },
+        }
+    })
+
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps({
+                    "content": mock_content,
+                    "conversationId": "123",
+                    "messageId": "456",
+                    "status": "COMPLETED"
+                }),
             }
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == pd.DataFrame().to_markdown()
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "FAILED", "error": "Test error"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query failed with error: Test error"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Test error", "conversationId": "123", "messageId": "456", "status": "FAILED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Test error"
 
 
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "CANCELLED"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query cancelled."
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Cancelled", "conversationId": "123", "messageId": "456", "status": "CANCELLED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Cancelled"
 
 
 def test_poll_for_result_expired(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "QUERY_RESULT_EXPIRED"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query query_result_expired."
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Expired", "conversationId": "123", "messageId": "456", "status": "QUERY_RESULT_EXPIRED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Expired"
 
 
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
@@ -109,16 +159,19 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
         patch("databricks_ai_bridge.genie.ITERATION_FREQUENCY", 0.1),
         patch("time.sleep", return_value=None),
     ):
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-        ]
-        result = genie.poll_for_result("123", "456")
-        assert (
-            result.result
-            == "Genie query timed out after 2 iterations of 0.1 seconds (total 0.2 seconds)"
+        mock_mcp_result = CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": '{"content": "Query is still processing", "conversationId": "123", "messageId": "456", "status": "RUNNING"}',
+                }
+            ]
         )
+
+        with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+            result = genie.poll_for_result("123", "456")
+            assert "timed out" in result.result.lower()
+            assert "0.2 seconds" in result.result
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -211,20 +264,8 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                {
-                    "values": [
-                        {"string_value": "1"},
-                        {"string_value": "Alice"},
-                        {"string_value": "2023-10-01T00:00:00Z"},
-                    ]
-                },
-                {
-                    "values": [
-                        {"string_value": "2"},
-                        {"string_value": "Bob"},
-                        {"string_value": "2023-10-02T00:00:00Z"},
-                    ]
-                },
+                {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
+                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
             ]
         },
     }
@@ -284,76 +325,16 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    {
-                        "values": [
-                            {"string_value": "1"},
-                            {"string_value": "Alice"},
-                            {"string_value": "2023-10-01T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "2"},
-                            {"string_value": "Bob"},
-                            {"string_value": "2023-10-02T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "3"},
-                            {"string_value": "Charlie"},
-                            {"string_value": "2023-10-03T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "4"},
-                            {"string_value": "David"},
-                            {"string_value": "2023-10-04T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "5"},
-                            {"string_value": "Eve"},
-                            {"string_value": "2023-10-05T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "6"},
-                            {"string_value": "Frank"},
-                            {"string_value": "2023-10-06T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "7"},
-                            {"string_value": "Grace"},
-                            {"string_value": "2023-10-07T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "8"},
-                            {"string_value": "Hank"},
-                            {"string_value": "2023-10-08T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "9"},
-                            {"string_value": "Ivy"},
-                            {"string_value": "2023-10-09T00:00:00Z"},
-                        ]
-                    },
-                    {
-                        "values": [
-                            {"string_value": "10"},
-                            {"string_value": "Jack"},
-                            {"string_value": "2023-10-10T00:00:00Z"},
-                        ]
-                    },
+                    {"values": [{"string_value": "1"}, {"string_value": "Alice"}, {"string_value": "2023-10-01T00:00:00Z"}]},
+                    {"values": [{"string_value": "2"}, {"string_value": "Bob"}, {"string_value": "2023-10-02T00:00:00Z"}]},
+                    {"values": [{"string_value": "3"}, {"string_value": "Charlie"}, {"string_value": "2023-10-03T00:00:00Z"}]},
+                    {"values": [{"string_value": "4"}, {"string_value": "David"}, {"string_value": "2023-10-04T00:00:00Z"}]},
+                    {"values": [{"string_value": "5"}, {"string_value": "Eve"}, {"string_value": "2023-10-05T00:00:00Z"}]},
+                    {"values": [{"string_value": "6"}, {"string_value": "Frank"}, {"string_value": "2023-10-06T00:00:00Z"}]},
+                    {"values": [{"string_value": "7"}, {"string_value": "Grace"}, {"string_value": "2023-10-07T00:00:00Z"}]},
+                    {"values": [{"string_value": "8"}, {"string_value": "Hank"}, {"string_value": "2023-10-08T00:00:00Z"}]},
+                    {"values": [{"string_value": "9"}, {"string_value": "Ivy"}, {"string_value": "2023-10-09T00:00:00Z"}]},
+                    {"values": [{"string_value": "10"}, {"string_value": "Jack"}, {"string_value": "2023-10-10T00:00:00Z"}]},
                 ]
             },
         }
@@ -425,7 +406,7 @@ def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
 
     # Strip whitespace from column names and values
     df.columns = [col.strip() for col in df.columns]
-    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
 
     # Drop the first column
     df = df.drop(columns=[df.columns[0]])
@@ -459,11 +440,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "values": [
                     {"string_value": str(i + 1)},
                     {"string_value": random.choice(names)},
-                    {
-                        "string_value": (
-                            base_date + timedelta(days=random.randint(0, 365))
-                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    },
+                    {"string_value": (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ")},
                 ]
             }
             for i in range(1000)
@@ -490,8 +467,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
                 "id": [int(row["values"][0]["string_value"]) for row in data_array],
                 "name": [row["values"][1]["string_value"] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ")
-                    for row in data_array
+                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
                 ],
             }
         )
