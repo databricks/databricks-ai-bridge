@@ -214,7 +214,10 @@ class DatabricksMCPClient:
 
     @_handle_mcp_errors
     def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None = None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """
         Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
