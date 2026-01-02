@@ -482,7 +482,7 @@ def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
 
     # Strip whitespace from column names and values
     df.columns = [col.strip() for col in df.columns]
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
     # Drop the first column
     df = df.drop(columns=[df.columns[0]])
