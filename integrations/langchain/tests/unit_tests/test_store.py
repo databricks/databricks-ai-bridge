@@ -11,8 +11,12 @@ pytest.importorskip("langgraph.checkpoint.postgres")
 
 from databricks_ai_bridge import lakebase
 
-from databricks_langchain import DatabricksStore
+from databricks_langchain import AsyncDatabricksStore, DatabricksStore
 from databricks_langchain.embeddings import DatabricksEmbeddings
+
+# =============================================================================
+# Synchronous DatabricksStore Tests
+# ====================
 
 
 class TestConnectionPool:
@@ -196,3 +200,227 @@ def test_databricks_store_warns_when_both_embeddings_and_endpoint_specified(monk
     # Verify embeddings instance takes precedence
     assert store.embeddings is mock_embeddings
     assert store.index_config["embed"] is mock_embeddings
+
+
+# =============================================================================
+# AsyncDatabricksStore Tests
+# =============================================================================
+
+
+class TestAsyncConnectionPool:
+    """Mock async connection pool for testing."""
+
+    def __init__(self, connection_value="async-conn"):
+        self.connection_value = connection_value
+        self.conninfo = ""
+        self._opened = False
+        self._closed = False
+
+    def __call__(
+        self,
+        *,
+        conninfo,
+        connection_class=None,
+        **kwargs,
+    ):
+        self.conninfo = conninfo
+        return self
+
+    def connection(self):
+        class _AsyncCtx:
+            def __init__(self, outer):
+                self.outer = outer
+
+            async def __aenter__(self):
+                return self.outer.connection_value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                pass
+
+        return _AsyncCtx(self)
+
+    async def open(self):
+        self._opened = True
+
+    async def close(self):
+        self._closed = True
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_configures_lakebase(monkeypatch):
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    from langgraph.store.postgres import AsyncPostgresStore
+
+    monkeypatch.setattr(AsyncPostgresStore, "setup", MagicMock())
+
+    workspace = _create_mock_workspace()
+
+    store = AsyncDatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+    )
+
+    assert (
+        test_pool.conninfo
+        == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
+    )
+    assert isinstance(store, AsyncDatabricksStore)
+
+    # Without embeddings, index_config should be None
+    assert store.embeddings is None
+    assert store.index_config is None
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_context_manager(monkeypatch):
+    """Test async context manager opens and closes the pool."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    async with AsyncDatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+    ) as store:
+        assert test_pool._opened
+        assert not test_pool._closed
+
+    assert test_pool._closed
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_with_embedding_endpoint(monkeypatch):
+    """Test that embedding_endpoint creates embeddings and index_config."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    from langgraph.store.postgres import AsyncPostgresStore
+
+    monkeypatch.setattr(AsyncPostgresStore, "setup", MagicMock())
+
+    workspace = _create_mock_workspace()
+
+    with patch.object(DatabricksEmbeddings, "__init__", return_value=None) as mock_init:
+        store = AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        )
+
+        mock_init.assert_called_once_with(endpoint="databricks-bge-large-en")
+
+    assert store.embeddings is not None
+    assert store.index_config is not None
+    assert store.index_config["dims"] == 1024
+    assert store.index_config["embed"] is store.embeddings
+    assert store.index_config["fields"] == ["$"]
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_embedding_endpoint_requires_dims(monkeypatch):
+    """Test that embedding_dims is required when embedding_endpoint is specified."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with pytest.raises(ValueError, match="embedding_dims is required"):
+        AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_with_store_passes_index_config(monkeypatch):
+    """Test that _with_store passes index_config to AsyncPostgresStore when configured."""
+    import asyncio
+
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with patch.object(DatabricksEmbeddings, "__init__", return_value=None):
+        store = AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        )
+
+    mock_pg_store = MagicMock()
+    future = asyncio.Future()
+    future.set_result(None)
+    mock_pg_store.setup = MagicMock(return_value=future)
+
+    with patch(
+        "databricks_langchain.store.AsyncPostgresStore", return_value=mock_pg_store
+    ) as mock_pg_class:
+        await store.setup()
+
+        # Verify AsyncPostgresStore was called with index config
+        mock_pg_class.assert_called_once()
+        call_kwargs = mock_pg_class.call_args[1]
+        assert "index" in call_kwargs
+        assert call_kwargs["index"]["dims"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_warns_when_both_embeddings_and_endpoint_specified(
+    monkeypatch,
+):
+    """Test that a warning is issued when both embeddings and embedding_endpoint are specified."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    mock_embeddings = MagicMock(spec=DatabricksEmbeddings)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        store = AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            embeddings=mock_embeddings,
+            embedding_endpoint="databricks-bge-large-en",  # This should be ignored
+            embedding_dims=1024,
+        )
+
+        # Verify warning was issued
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "Both 'embeddings' and 'embedding_endpoint' were specified" in str(w[0].message)
+
+    # Verify embeddings instance takes precedence
+    assert store.embeddings is mock_embeddings
+    assert store.index_config["embed"] is mock_embeddings
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_connection(monkeypatch):
+    """Test getting a connection from the async store's pool."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    async with AsyncDatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+    ) as store:
+        async with store._lakebase.connection() as conn:
+            assert conn == mock_conn
