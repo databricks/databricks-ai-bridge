@@ -11,6 +11,8 @@ try:
     from langgraph.store.base.batch import AsyncBatchedBaseStore
     from langgraph.store.postgres import AsyncPostgresStore, PostgresStore
 
+    from databricks_langchain.embeddings import DatabricksEmbeddings
+
     _store_imports_available = True
 except ImportError:
     LakebasePool = object
@@ -22,9 +24,8 @@ except ImportError:
     Item = object
     Op = object
     Result = object
+    DatabricksEmbeddings = object
     _store_imports_available = False
-
-from databricks_langchain.embeddings import DatabricksEmbeddings
 
 
 class DatabricksStore(BaseStore):
