@@ -302,9 +302,7 @@ class LakebaseClient:
     # SQL Execution
     # ---------------------------------------------------------
 
-    def execute(
-        self, sql: str, params: Optional[tuple | dict] = None
-    ) -> List[Any] | None:
+    def execute(self, sql: str, params: Optional[tuple | dict] = None) -> List[Any] | None:
         """
         Execute a SQL query against the Lakebase instance.
 
@@ -461,9 +459,7 @@ class LakebaseClient:
         privs_str = self._format_privileges_str(privileges)
 
         for schema in schemas:
-            query = sql.SQL(
-                "GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}"
-            ).format(
+            query = sql.SQL("GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}").format(
                 privs=privs,
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),
@@ -519,116 +515,3 @@ class LakebaseClient:
             )
             self._execute_composed(query)
             logger.info("Granted %s on table '%s' to '%s'", privs_str, table, grantee)
-
-    def revoke_schema(
-        self,
-        grantee: str,
-        privileges: Sequence[SchemaPrivilege],
-        schemas: Sequence[str],
-    ) -> None:
-        """
-        Revoke schema-level privileges from a role.
-
-        :param grantee: The role to revoke privileges from (e.g., service principal UUID).
-        :param privileges: List of SchemaPrivilege to revoke.
-        :param schemas: List of schema names to revoke privileges on.
-
-        Example:
-            client.revoke_schema(
-                grantee="app-sp-uuid",
-                privileges=[SchemaPrivilege.CREATE],
-                schemas=["drizzle", "ai_chatbot"],
-            )
-        """
-        privs = self._format_privileges_sql(privileges)
-        privs_str = self._format_privileges_str(privileges)
-
-        for schema in schemas:
-            query = sql.SQL("REVOKE {privs} ON SCHEMA {schema} FROM {grantee}").format(
-                privs=privs,
-                schema=sql.Identifier(schema),
-                grantee=sql.Identifier(grantee),
-            )
-            self._execute_composed(query)
-            logger.info("Revoked %s on schema '%s' from '%s'", privs_str, schema, grantee)
-
-    def revoke_all_tables_in_schema(
-        self,
-        grantee: str,
-        privileges: Sequence[TablePrivilege],
-        schemas: Sequence[str],
-    ) -> None:
-        """
-        Revoke table-level privileges on ALL tables in the specified schemas.
-
-        :param grantee: The role to revoke privileges from (e.g., service principal UUID).
-        :param privileges: List of TablePrivilege to revoke.
-        :param schemas: List of schema names whose tables will have privileges revoked.
-
-        Example:
-            client.revoke_all_tables_in_schema(
-                grantee="app-sp-uuid",
-                privileges=[TablePrivilege.DELETE, TablePrivilege.TRUNCATE],
-                schemas=["drizzle", "ai_chatbot"],
-            )
-        """
-        privs = self._format_privileges_sql(privileges)
-        privs_str = self._format_privileges_str(privileges)
-
-        for schema in schemas:
-            query = sql.SQL(
-                "REVOKE {privs} ON ALL TABLES IN SCHEMA {schema} FROM {grantee}"
-            ).format(
-                privs=privs,
-                schema=sql.Identifier(schema),
-                grantee=sql.Identifier(grantee),
-            )
-            self._execute_composed(query)
-            logger.info(
-                "Revoked %s on all tables in schema '%s' from '%s'",
-                privs_str,
-                schema,
-                grantee,
-            )
-
-    def revoke_table(
-        self,
-        grantee: str,
-        privileges: Sequence[TablePrivilege],
-        tables: Sequence[str],
-    ) -> None:
-        """
-        Revoke table-level privileges on specific tables.
-
-        :param grantee: The role to revoke privileges from (e.g., service principal UUID).
-        :param privileges: List of TablePrivilege to revoke.
-        :param tables: List of table names (can be schema-qualified like "public.users").
-
-        Example:
-            client.revoke_table(
-                grantee="app-sp-uuid",
-                privileges=[TablePrivilege.DELETE],
-                tables=[
-                    "public.checkpoints",
-                    "public.checkpoint_blobs",
-                ],
-            )
-        """
-        privs = self._format_privileges_sql(privileges)
-        privs_str = self._format_privileges_str(privileges)
-
-        for table in tables:
-            # Handle schema.table format
-            if "." in table:
-                schema_name, table_name = table.split(".", 1)
-                table_ident = sql.Identifier(schema_name, table_name)
-            else:
-                table_ident = sql.Identifier(table)
-
-            query = sql.SQL("REVOKE {privs} ON {table} FROM {grantee}").format(
-                privs=privs,
-                table=table_ident,
-                grantee=sql.Identifier(grantee),
-            )
-            self._execute_composed(query)
-            logger.info("Revoked %s on table '%s' from '%s'", privs_str, table, grantee)
