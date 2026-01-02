@@ -224,7 +224,8 @@ class McpServerToolkit:
 
     def _create_exec_fn(self, tool_name: str) -> Callable:
         def exec_fn(**kwargs):
-            response = self.databricks_mcp_client.call_tool(tool_name, kwargs)
+            meta = kwargs.pop("_meta", None)
+            response = self.databricks_mcp_client.call_tool(tool_name, kwargs, meta=meta)
             return "".join(c.text for c in (response.content or []))
 
         return exec_fn
