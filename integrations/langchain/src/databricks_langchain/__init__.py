@@ -26,13 +26,14 @@ from databricks_langchain.multi_server_mcp_client import (
     DatabricksMultiServerMCPClient,
     MCPServer,
 )
-from databricks_langchain.store import DatabricksStore
+from databricks_langchain.store import AsyncDatabricksStore, DatabricksStore
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 # Expose all integrations to users under databricks-langchain
 __all__ = [
     "AsyncCheckpointSaver",
+    "AsyncDatabricksStore",
     "ChatDatabricks",
     "CheckpointSaver",
     "DatabricksEmbeddings",
