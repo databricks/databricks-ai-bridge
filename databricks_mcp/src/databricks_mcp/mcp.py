@@ -177,6 +177,7 @@ class DatabricksMCPClient:
         self,
         tool_name: str,
         arguments: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
         async with streamablehttp_client(
@@ -185,7 +186,7 @@ class DatabricksMCPClient:
         ) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
-                return await session.call_tool(tool_name, arguments)
+                return await session.call_tool(tool_name, arguments, meta=meta)
 
     def _extract_genie_id(self) -> str:
         """Extract the Genie space ID from the URL."""
@@ -212,18 +213,29 @@ class DatabricksMCPClient:
         return asyncio.run(self._get_tools_async())
 
     @_handle_mcp_errors
-    def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CallToolResult:
+    def call_tool(
+        self, tool_name: str, arguments: dict[str, Any] | None = None, meta: dict[str, Any] | None = None
+    ) -> CallToolResult:
         """
         Calls the tool with the given name and input. This method uses the `streamablehttp_client` from mcp to call the tool.
 
         Args:
             tool_name (str): The name of the tool to call.
             arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+            meta (dict[str, Any], optional): Optional metadata parameters for additional tool configurations.
+                For Vector Search tools, this can include:
+                - num_results: Number of results to return
+                - filters: JSON string of filter conditions
+                - query_type: Type of query (e.g., "ANN", "HYBRID")
+                - columns: Comma-separated list of columns to return
+                - score_threshold: Minimum similarity score threshold
+                - include_score: Whether to include similarity scores in results
+                - columns_to_rerank: Columns to use for reranking
 
         Returns:
             mcp.types.CallToolResult: The result of the tool call.
         """
-        return asyncio.run(self._call_tools_async(tool_name, arguments))
+        return asyncio.run(self._call_tools_async(tool_name, arguments, meta))
 
     def get_databricks_resources(self) -> List[DatabricksResource]:
         """
