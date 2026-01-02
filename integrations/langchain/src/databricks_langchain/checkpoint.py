@@ -19,7 +19,7 @@ class CheckpointSaver(PostgresSaver):
     instance_name: Name of Lakebase Instance
     """
 
-    def __init__( 
+    def __init__(
         self,
         *,
         instance_name: str,
