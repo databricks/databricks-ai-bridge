@@ -8,7 +8,6 @@ import mlflow
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
-from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401

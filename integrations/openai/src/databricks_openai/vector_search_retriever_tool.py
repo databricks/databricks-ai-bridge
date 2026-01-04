@@ -1,419 +1,697 @@
-import inspect
 import json
-import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import os
+import threading
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, Mock, create_autospec, patch
 
-from databricks.vector_search.client import VectorSearchIndex
-from databricks_ai_bridge.utils.vector_search import (
-    IndexDetails,
-    RetrieverSchema,
-    parse_vector_search_response,
-    validate_and_get_return_columns,
-    validate_and_get_text_column,
+import mlflow
+import pytest
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.credentials_provider import ModelServingUserCredentials
+from databricks.vector_search.reranker import DatabricksReranker, Reranker
+from databricks.vector_search.utils import CredentialStrategy
+from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
+    ALL_INDEX_NAMES,
+    DELTA_SYNC_INDEX,
+    DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
+    DIRECT_ACCESS_INDEX,
+    INPUT_TEXTS,
+    mock_vs_client,
+    mock_workspace_client,
 )
-from databricks_ai_bridge.vector_search_retriever_tool import (
-    FilterItem,
-    VectorSearchRetrieverToolMixin,
-    vector_search_retriever_tool_trace,
+from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
+from mlflow.entities import SpanType
+from mlflow.models.resources import (
+    DatabricksServingEndpoint,
+    DatabricksVectorSearchIndex,
 )
-from databricks_openai.mcp_server_toolkit import McpServerToolkit
-from openai import OpenAI, pydantic_function_tool
-from openai.types.chat import ChatCompletionToolParam
-from pydantic import Field, PrivateAttr, model_validator
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionMessage,
+    ChatCompletionMessageToolCall,
+)
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_message_tool_call_param import Function
+from pydantic import BaseModel
 
-_logger = logging.getLogger(__name__)
+from databricks_openai import VectorSearchRetrieverTool
 
 
-class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
-    """
-    A utility class to create a vector search-based retrieval tool for querying indexed embeddings.
-    This class integrates with Databricks Vector Search and provides a convenient interface
-    for tool calling using the OpenAI SDK.
+@pytest.fixture(autouse=True)
+def mock_openai_client():
+    mock_client = MagicMock()
+    mock_client.api_key = "fake_api_key"
+    mock_response = Mock()
+    mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3, 0.4])]
+    mock_client.embeddings.create.return_value = mock_response
+    with patch("openai.OpenAI", return_value=mock_client):
+        yield mock_client
 
-    Example:
-        Step 1: Call model with VectorSearchRetrieverTool defined
 
-        .. code-block:: python
+@pytest.fixture(autouse=True)
+def mock_mcp_toolkit():
+    """Mock McpServerToolkit for testing MCP path."""
+    import uuid
 
-            dbvs_tool = VectorSearchRetrieverTool(index_name="catalog.schema.my_index_name")
-            messages = [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {
-                    "role": "user",
-                    "content": "Using the Databricks documentation, answer what is Spark?",
-                },
-            ]
-            first_response = client.chat.completions.create(
-                model="gpt-4o", messages=messages, tools=[dbvs_tool.tool]
+    # Create mock response in MCP format (flat JSON with all columns)
+    def create_mcp_response(**kwargs):
+        # MCP returns flat dicts as JSON string
+        mcp_response_data = [
+            {"id": str(uuid.uuid4()), "text": text, "score": "0.5"}
+            for text in INPUT_TEXTS
+        ]
+        return json.dumps(mcp_response_data)
+
+    # Create mock tool with execute method
+    mock_tool = MagicMock()
+    mock_tool.execute = MagicMock(side_effect=create_mcp_response)
+
+    # Create mock toolkit instance
+    mock_toolkit_instance = MagicMock()
+    mock_toolkit_instance.get_tools.return_value = [mock_tool]
+
+    # Mock the from_vector_search factory method
+    with patch(
+        "databricks_openai.vector_search_retriever_tool.McpServerToolkit"
+    ) as mock_toolkit_class:
+        mock_toolkit_class.from_vector_search.return_value = mock_toolkit_instance
+        yield mock_toolkit_instance
+
+
+def get_chat_completion_response(tool_name: str, index_name: str):
+    return ChatCompletion(
+        id="chatcmpl-AlSTQf3qIjeEOdoagPXUYhuWZkwme",
+        choices=[
+            Choice(
+                finish_reason="tool_calls",
+                index=0,
+                logprobs=None,
+                message=ChatCompletionMessage(
+                    content=None,
+                    refusal=None,
+                    role="assistant",
+                    audio=None,
+                    function_call=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_VtmBTsVM2zQ3yL5GzddMgWb0",
+                            function=Function(
+                                arguments='{"query":"Databricks Agent Framework"}',
+                                name=tool_name
+                                or index_name.replace(
+                                    ".", "__"
+                                ),  # see get_tool_name() in VectorSearchRetrieverTool
+                            ),
+                            type="function",
+                        )
+                    ],
+                ),
             )
-
-        Step 2: Execute function code – parse the model's response and handle function calls.
-
-        .. code-block:: python
-
-            tool_call = first_response.choices[0].message.tool_calls[0]
-            args = json.loads(tool_call.function.arguments)
-            result = dbvs_tool.execute(
-                query=args["query"], filters=args.get("filters", None)
-            )  # For self-managed embeddings, optionally pass in openai_client=client
-
-        Step 3: Supply model with results – so it can incorporate them into its final response.
-
-        .. code-block:: python
-
-            messages.append(first_response.choices[0].message)
-            messages.append(
-                {"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(result)}
-            )
-            second_response = client.chat.completions.create(
-                model="gpt-4o", messages=messages, tools=tools
-            )
-
-    **Note**: Any additional keyword arguments passed to the constructor will be passed along to
-    `databricks.vector_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
-    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
-    to see the full set of supported keyword arguments,
-    e.g. `score_threshold`. Also, see documentation for
-    :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for additional supported constructor
-    arguments not listed below, including `query_type` and `num_results`.
-
-    WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.
-    """
-
-    text_column: Optional[str] = Field(
-        None,
-        description="The name of the text column to use for the embeddings. "
-        "Required for direct-access index or delta-sync index with "
-        "self-managed embeddings.",
+        ],
+        created=1735874232,
+        model="gpt-4o-mini-2024-07-18",
+        object="chat.completion",
     )
-    embedding_model_name: Optional[str] = Field(
-        None,
-        description="The name of the embedding model to use for embedding the query text."
-        "Required for direct-access index or delta-sync index with "
-        "self-managed embeddings.",
-    )
 
-    tool: ChatCompletionToolParam = Field(
-        None, description="The tool input used in the OpenAI chat completion SDK"
-    )
-    _index: VectorSearchIndex = PrivateAttr()
-    _index_details: IndexDetails = PrivateAttr()
-    _mcp_toolkit: Optional[McpServerToolkit] = PrivateAttr(default=None)
-    _mcp_tool_execute: Optional[Callable] = PrivateAttr(default=None)
 
-    @model_validator(mode="after")
-    def _validate_tool_inputs(self):
-        from databricks.vector_search.client import (
-            VectorSearchClient,  # import here so we can mock in tests
-        )
-        from databricks.vector_search.utils import CredentialStrategy
-
-        splits = self.index_name.split(".")
-        if len(splits) != 3:
-            raise ValueError(
-                f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
-            )
-        client_args = {
-            "disable_notice": True,
+def init_vector_search_tool(
+    index_name: str,
+    columns: Optional[List[str]] = None,
+    tool_name: Optional[str] = None,
+    tool_description: Optional[str] = None,
+    text_column: Optional[str] = None,
+    embedding_model_name: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+    reranker: Optional[Reranker] = None,
+    **kwargs: Any,
+) -> VectorSearchRetrieverTool:
+    kwargs.update(
+        {
+            "index_name": index_name,
+            "columns": columns,
+            "tool_name": tool_name,
+            "tool_description": tool_description,
+            "text_column": text_column,
+            "embedding_model_name": embedding_model_name,
+            "filters": filters,
+            "reranker": reranker,
         }
-        if self.workspace_client is not None:
-            config = self.workspace_client.config
-            if config.auth_type == "model_serving_user_credentials":
-                client_args.setdefault(
-                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-                )
-            elif config.auth_type == "pat":
-                client_args.setdefault("personal_access_token", config.token)
-            elif config.auth_type == "oauth-m2m":
-                client_args.setdefault("workspace_url", config.host)
-                client_args.setdefault("service_principal_client_id", config.client_id)
-                client_args.setdefault("service_principal_client_secret", config.client_secret)
-        self._index = VectorSearchClient(**client_args).get_index(index_name=self.index_name)
-        self._index_details = IndexDetails(self._index)
-        self.text_column = validate_and_get_text_column(self.text_column, self._index_details)
-        self.columns = validate_and_get_return_columns(
-            self.columns or [],
-            self.text_column,
-            self._index_details,
-            self.doc_uri,
-            self.primary_key,
-        )
-        self._retriever_schema = RetrieverSchema(
-            text_column=self.text_column,
-            doc_uri=self.doc_uri,
-            primary_key=self.primary_key,
-            other_columns=self.columns,
-        )
-
-        if (
-            not self._index_details.is_databricks_managed_embeddings()
-            and not self.embedding_model_name
-        ):
-            raise ValueError(
-                "The embedding model name is required for non-Databricks-managed "
-                "embeddings Vector Search indexes in order to generate embeddings for retrieval queries."
-            )
-
-        tool_name = self._get_tool_name()
-
-        # Create tool input model based on dynamic_filter setting
-        if self.dynamic_filter:
-            tool_input_class = self._create_enhanced_input_model()
-        else:
-            tool_input_class = self._create_basic_input_model()
-
-        self.tool = pydantic_function_tool(
-            tool_input_class,
-            name=tool_name,
-            description=self.tool_description
-            or self._get_default_tool_description(self._index_details),
-        )
-        # We need to remove strict: True from the tool in order to support arbitrary filters
-        if "function" in self.tool and "strict" in self.tool["function"]:
-            del self.tool["function"]["strict"]
-        # We need to remove additionalProperties from the tool in order to support arbitrary kwargs
-        if (
-            "function" in self.tool
-            and "parameters" in self.tool["function"]
-            and "additionalProperties" in self.tool["function"]["parameters"]
-        ):
-            del self.tool["function"]["parameters"]["additionalProperties"]
-
-        try:
-            from databricks.sdk import WorkspaceClient
-            from databricks.sdk.errors.platform import ResourceDoesNotExist
-
-            if self.workspace_client is not None:
-                self.workspace_client.serving_endpoints.get(self.embedding_model_name)
-            else:
-                WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
-            self.resources = self._get_resources(
-                self.index_name, self.embedding_model_name, self._index_details
-            )
-        except ResourceDoesNotExist:
-            self.resources = self._get_resources(self.index_name, None, self._index_details)
-
-        return self
-
-    @vector_search_retriever_tool_trace
-    def execute(
-        self,
-        query: str,
-        filters: Optional[List[FilterItem]] = None,
-        openai_client: OpenAI = None,
-        **kwargs: Any,
-    ) -> List[Dict]:
-        """
-        Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
-        self.tool VectorSearchRetrieverToolInput and attach the retrieved documents into tool call messages.
-
-        Automatically routes to MCP path (Databricks-managed embeddings) or
-        Direct API path (self-managed embeddings) based on index configuration.
-
-        Args:
-            query: The query text to use for the retrieval.
-            filters: Optional filters to refine vector search results.
-            openai_client: The OpenAI client object used to generate embeddings for retrieval queries.
-                           Only used for self-managed embeddings. If not provided, the default OpenAI
-                           client in the current environment will be used.
-            **kwargs: Additional search parameters (e.g., num_results, query_type, score_threshold, reranker).
-                      For Databricks-managed embeddings, these are passed as MCP metadata.
-                      For self-managed embeddings, these are passed to similarity_search().
-
-        Returns:
-            A list of document dictionaries. Format may vary between MCP and Direct API paths.
-        """
-        if self._index_details.is_databricks_managed_embeddings():
-            return self._execute_mcp_path(query, filters, **kwargs)
-        else:
-            return self._execute_direct_api_path(query, filters, openai_client, **kwargs)
-
-    def _execute_direct_api_path(
-        self,
-        query: str,
-        filters: Optional[List[FilterItem]] = None,
-        openai_client: OpenAI = None,
-        **kwargs: Any,
-    ) -> List[Dict]:
-        from openai import OpenAI
-
-        oai_client = openai_client or OpenAI()
-        if not oai_client.api_key:
-            raise ValueError(
-                "OpenAI API key is required to generate embeddings for retrieval queries."
-            )
-
-        query_text = query if self.query_type and self.query_type.upper() == "HYBRID" else None
-        query_vector = (
-            oai_client.embeddings.create(input=query, model=self.embedding_model_name)
-            .data[0]
-            .embedding
-        )
-        if (
-            index_embedding_dimension := self._index_details.embedding_vector_column.get(
-                "embedding_dimension"
-            )
-        ) and len(query_vector) != index_embedding_dimension:
-            raise ValueError(
-                f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
-            )
-
-        # Since LLM can generate either a dict or FilterItem, convert to dict always
-        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
-        combined_filters = {**filters_dict, **(self.filters or {})}
-
-        signature = inspect.signature(self._index.similarity_search)
-        kwargs = {**kwargs, **(self.model_extra or {})}
-        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
-
-        # Allow kwargs to override the default values upon invocation
-        num_results = kwargs.pop("num_results", self.num_results)
-        query_type = kwargs.pop("query_type", self.query_type)
-        reranker = kwargs.pop("reranker", self.reranker)
-
+    )
+    if index_name != DELTA_SYNC_INDEX:
         kwargs.update(
             {
-                "query_text": query_text,
-                "query_vector": query_vector,
-                "columns": self.columns,
-                "filters": combined_filters,
-                "num_results": num_results,
-                "query_type": query_type,
-                "reranker": reranker,
+                "text_column": "text",
+                "embedding_model_name": "text-embedding-3-small",
             }
         )
-        search_resp = self._index.similarity_search(**kwargs)
-        docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
-            search_resp=search_resp,
-            retriever_schema=self._retriever_schema,
-            document_class=dict,
-            include_score=self.include_score,
+    return VectorSearchRetrieverTool(**kwargs)  # type: ignore[arg-type]
+
+
+class SelfManagedEmbeddingsTest:
+    def __init__(self, text_column=None, embedding_model_name=None, open_ai_client=None):
+        self.text_column = text_column
+        self.embedding_model_name = embedding_model_name
+        self.open_ai_client = open_ai_client
+
+
+@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
+@pytest.mark.parametrize("columns", [None, ["id", "text"]])
+@pytest.mark.parametrize("tool_name", [None, "test_tool"])
+@pytest.mark.parametrize("tool_description", [None, "Test tool for vector search"])
+def test_vector_search_retriever_tool_init(
+    index_name: str,
+    columns: Optional[List[str]],
+    tool_name: Optional[str],
+    tool_description: Optional[str],
+) -> None:
+    if index_name == DELTA_SYNC_INDEX:
+        self_managed_embeddings_test = SelfManagedEmbeddingsTest()
+    else:
+        from openai import OpenAI
+
+        self_managed_embeddings_test = SelfManagedEmbeddingsTest(
+            "text", "text-embedding-3-small", OpenAI(api_key="your-api-key")
         )
-        return [doc for doc, _ in docs_with_score]
 
-    def _get_mcp_toolkit(self) -> Callable:
-        if self._mcp_tool_execute is not None:
-            return self._mcp_tool_execute
+    vector_search_tool = init_vector_search_tool(
+        index_name=index_name,
+        columns=columns,
+        tool_name=tool_name,
+        tool_description=tool_description,
+        text_column=self_managed_embeddings_test.text_column,
+        embedding_model_name=self_managed_embeddings_test.embedding_model_name,
+    )
+    assert isinstance(vector_search_tool, BaseModel)
 
-        parts = self.index_name.split(".")
-        if len(parts) != 3:
-            raise ValueError(
-                f"Invalid index name format: {self.index_name}. Expected 'catalog.schema.index'"
+    expected_resources = (
+        [DatabricksVectorSearchIndex(index_name=index_name)]
+        + (
+            [DatabricksServingEndpoint(endpoint_name="text-embedding-3-small")]
+            if self_managed_embeddings_test.embedding_model_name
+            else []
+        )
+        + (
+            [
+                DatabricksServingEndpoint(
+                    endpoint_name=DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME
+                )
+            ]
+            if index_name == DELTA_SYNC_INDEX
+            else []
+        )
+    )
+    assert [res.to_dict() for res in vector_search_tool.resources] == [
+        res.to_dict() for res in expected_resources
+    ]
+
+    # simulate call to openai.chat.completions.create
+    chat_completion_resp = get_chat_completion_response(tool_name, index_name)
+    tool_call = chat_completion_resp.choices[0].message.tool_calls[0]
+    args = json.loads(tool_call.function.arguments)
+    docs = vector_search_tool.execute(query=args["query"])
+    assert docs is not None
+    assert len(docs) == len(INPUT_TEXTS)
+
+    # Check format based on index type
+    if index_name == DELTA_SYNC_INDEX:
+        # MCP path returns flat dicts
+        assert all(["text" in d for d in docs])
+        assert all(["id" in d for d in docs])
+        assert sorted([d["text"] for d in docs]) == sorted(INPUT_TEXTS)
+    else:
+        # Direct API path returns page_content/metadata format
+        assert sorted([d["page_content"] for d in docs]) == sorted(INPUT_TEXTS)
+        assert all(["id" in d["metadata"] for d in docs])
+
+    # Ensure tracing works properly
+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
+    spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
+    assert len(spans) == 1
+    inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
+    assert inputs["query"] == "Databricks Agent Framework"
+    outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
+    if index_name == DELTA_SYNC_INDEX:
+        # MCP path: outputs are flat dicts
+        assert all([d["text"] in INPUT_TEXTS for d in outputs])
+    else:
+        # Direct API path: outputs have page_content/metadata
+        assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+
+    # Ensure that there aren't additional properties (not compatible with llama)
+    assert "'additionalProperties': True" not in str(vector_search_tool.tool)
+
+
+@pytest.mark.parametrize("columns", [None, ["id", "text"]])
+@pytest.mark.parametrize("tool_name", [None, "test_tool"])
+@pytest.mark.parametrize("tool_description", [None, "Test tool for vector search"])
+def test_open_ai_client_from_env(
+    columns: Optional[List[str]], tool_name: Optional[str], tool_description: Optional[str]
+) -> None:
+    self_managed_embeddings_test = SelfManagedEmbeddingsTest("text", "text-embedding-3-small", None)
+    os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+    vector_search_tool = init_vector_search_tool(
+        index_name=DIRECT_ACCESS_INDEX,
+        columns=columns,
+        tool_name=tool_name,
+        tool_description=tool_description,
+        text_column=self_managed_embeddings_test.text_column,
+        embedding_model_name=self_managed_embeddings_test.embedding_model_name,
+    )
+    assert isinstance(vector_search_tool, BaseModel)
+    # simulate call to openai.chat.completions.create
+    chat_completion_resp = get_chat_completion_response(tool_name, DIRECT_ACCESS_INDEX)
+    tool_call = chat_completion_resp.choices[0].message.tool_calls[0]
+    args = json.loads(tool_call.function.arguments)
+    docs = vector_search_tool.execute(
+        query=args["query"], openai_client=self_managed_embeddings_test.open_ai_client
+    )
+    assert docs is not None
+    assert len(docs) == len(INPUT_TEXTS)
+    assert sorted([d["page_content"] for d in docs]) == sorted(INPUT_TEXTS)
+    assert all(["id" in d["metadata"] for d in docs])
+
+
+@pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
+def test_vector_search_retriever_index_name_rewrite(
+    index_name: str,
+) -> None:
+    if index_name == DELTA_SYNC_INDEX:
+        self_managed_embeddings_test = SelfManagedEmbeddingsTest()
+    else:
+        from openai import OpenAI
+
+        self_managed_embeddings_test = SelfManagedEmbeddingsTest(
+            "text", "text-embedding-3-small", OpenAI(api_key="your-api-key")
+        )
+
+    vector_search_tool = init_vector_search_tool(
+        index_name=index_name,
+        text_column=self_managed_embeddings_test.text_column,
+        embedding_model_name=self_managed_embeddings_test.embedding_model_name,
+    )
+    assert vector_search_tool.tool["function"]["name"] == index_name.replace(".", "__")
+
+
+@pytest.mark.parametrize(
+    "index_name",
+    ["catalog.schema.really_really_really_long_tool_name_that_should_be_truncated_to_64_chars"],
+)
+def test_vector_search_retriever_long_index_name(
+    index_name: str,
+) -> None:
+    vector_search_tool = init_vector_search_tool(index_name=index_name)
+    assert len(vector_search_tool.tool["function"]["name"]) <= 64
+
+
+def test_vector_search_client_model_serving_environment():
+    with patch("os.path.isfile", return_value=True):
+        # Simulate Model Serving Environment
+        os.environ["IS_IN_DB_MODEL_SERVING_ENV"] = "true"
+
+        # Fake credential token
+        current_thread = threading.current_thread()
+        thread_data = current_thread.__dict__
+        thread_data["invokers_token"] = "abc"
+
+        w = WorkspaceClient(
+            host="testDogfod.com", credentials_strategy=ModelServingUserCredentials()
+        )
+
+        with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+            with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+                vsTool = VectorSearchRetrieverTool(
+                    index_name="catalog.schema.my_index_name",
+                    text_column="abc",
+                    embedding_model_name="text-embedding-3-small",
+                    tool_description="desc",
+                    workspace_client=w,
+                )
+                mockVSClient.assert_called_once_with(
+                    disable_notice=True,
+                    credential_strategy=CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS,
+                )
+
+
+def test_vector_search_client_non_model_serving_environment():
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        vsTool = VectorSearchRetrieverTool(
+            index_name="catalog.schema.my_index_name",
+            text_column="abc",
+            embedding_model_name="text-embedding-3-small",
+            tool_description="desc",
+        )
+        mockVSClient.assert_called_once_with(disable_notice=True)
+
+
+def test_vector_search_client_with_pat_workspace_client():
+    w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+            VectorSearchRetrieverTool(
+                index_name="catalog.schema.my_index_name",
+                text_column="abc",
+                embedding_model_name="text-embedding-3-small",
+                tool_description="desc",
+                workspace_client=w,
             )
-        catalog, schema, index = parts
-
-        try:
-            self._mcp_toolkit = McpServerToolkit.from_vector_search(
-                catalog=catalog,
-                schema=schema,
-                index_name=index,
-                workspace_client=self.workspace_client,
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to initialize MCP toolkit for index {self.index_name}. "
-                f"Ensure the index exists and is configured for Databricks-managed embeddings. "
-                f"Error: {e}"
-            ) from e
-
-        tools = self._mcp_toolkit.get_tools()
-        if len(tools) != 1:
-            raise ValueError(
-                f"Expected exactly 1 MCP tool for index {self.index_name}, but got {len(tools)}"
+            mockVSClient.assert_called_once_with(
+                disable_notice=True, personal_access_token="fakeToken"
             )
 
-        self._mcp_tool_execute = tools[0].execute
-        return self._mcp_tool_execute
 
-    def _build_mcp_meta(
-        self, filters: Optional[List[FilterItem]] = None, **kwargs: Any
-    ) -> Dict[str, Any]:
-        kwargs = {**(self.model_extra or {}), **kwargs}
+def test_vector_search_client_with_sp_workspace_client():
+    # Create a proper mock workspace client that passes isinstance check
+    w = create_autospec(WorkspaceClient, instance=True)
+    w.config.auth_type = "oauth-m2m"
+    w.config.host = "testDogfod.com"
+    w.config.client_id = "fakeClientId"
+    w.config.client_secret = "fakeClientSecret"
 
-        meta = {}
-
-        num_results = kwargs.pop("num_results", self.num_results)
-        meta["num_results"] = num_results
-
-        if self.query_type or "query_type" in kwargs:
-            query_type = kwargs.pop("query_type", self.query_type)
-            if query_type:
-                meta["query_type"] = query_type
-
-        if self.columns:
-            meta["columns"] = ",".join(self.columns)
-
-        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
-        combined_filters = {**filters_dict, **(self.filters or {})}
-        if combined_filters:
-            meta["filters"] = json.dumps(combined_filters)
-
-        if "score_threshold" in kwargs:
-            meta["score_threshold"] = float(kwargs.pop("score_threshold"))
-
-        if self.include_score:
-            meta["include_score"] = "true"
-
-        reranker = kwargs.pop("reranker", self.reranker)
-        if reranker and hasattr(reranker, "columns_to_rerank"):
-            meta["columns_to_rerank"] = ",".join(reranker.columns_to_rerank)
-
-        # Warn about any unknown kwargs
-        if kwargs:
-            _logger.warning(
-                f"Ignoring unsupported kwargs for MCP vector search: {list(kwargs.keys())}"
+    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
+            VectorSearchRetrieverTool(
+                index_name="catalog.schema.my_index_name",
+                text_column="abc",
+                embedding_model_name="text-embedding-3-small",
+                tool_description="desc",
+                workspace_client=w,
+            )
+            mockVSClient.assert_called_once_with(
+                disable_notice=True,
+                workspace_url="testDogfod.com",
+                service_principal_client_id="fakeClientId",
+                service_principal_client_secret="fakeClientSecret",
             )
 
-        return meta
 
-    def _parse_mcp_response(self, mcp_response: str) -> List[Dict]:
-        """
-        Parse MCP response string into List[Dict] format.
+def test_kwargs_are_passed_through(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
 
-        MCP returns: '[{"column1": "value1", "column2": "value2"}, ...]'
-        We return the same flat dict format for agent consumption.
+    # Get the mock tool that was set up by the fixture
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
 
-        Args:
-            mcp_response: JSON string from MCP tool
+    # extra_param is ignored because it's not supported
+    vector_search_tool.execute(
+        query="what cities are in Germany", debug_level=2, extra_param="something random"
+    )
 
-        Returns:
-            List[Dict] with flat column data
-        """
-        try:
-            parsed = json.loads(mcp_response)
-        except json.JSONDecodeError as e:
-            _logger.error(f"Failed to parse MCP response as JSON: {mcp_response[:200]}...")
-            raise ValueError(
-                f"Unable to parse MCP response. Expected JSON format. Error: {e}"
-            ) from e
+    # Verify MCP tool execute was called with correct arguments and meta
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
 
-        if not isinstance(parsed, list):
-            # Show preview of what we got (limit to 500 chars for readability)
-            response_preview = str(parsed)[:500]
-            _logger.error(
-                f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}"
-            )
-            raise ValueError(
-                f"Expected MCP vector search to return a JSON array of results, "
-                f"but got {type(parsed).__name__}: {response_preview}"
-            )
+    assert call_kwargs["query"] == "what cities are in Germany"
 
-        return parsed
+    meta = call_kwargs["_meta"]
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+    assert meta["score_threshold"] == 0.5
+    assert meta["query_type"] == vector_search_tool.query_type
+    assert "filters" not in meta
+    assert "columns_to_rerank" not in meta
+    assert "debug_level" not in meta
+    assert "extra_param" not in meta
 
-    def _execute_mcp_path(
-        self,
-        query: str,
-        filters: Optional[List[FilterItem]] = None,
-        **kwargs: Any,
-    ) -> List[Dict]:
-        try:
-            mcp_execute = self._get_mcp_toolkit()
-            meta = self._build_mcp_meta(filters, **kwargs)
-            mcp_response = mcp_execute(query=query, _meta=meta)
-            documents = self._parse_mcp_response(mcp_response)
-            return documents
-        except Exception as e:
-            _logger.error(f"MCP vector search failed: {e}", exc_info=True)
-            raise RuntimeError(
-                f"Vector search via MCP failed for index {self.index_name}. Error: {e}"
-            ) from e
+
+def test_filters_are_passed_through(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    vector_search_tool.execute(
+        query="what cities are in Germany",
+        filters=[FilterItem(key="country", value="Germany")],
+    )
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+    meta = call_kwargs["_meta"]
+
+    assert call_kwargs["query"] == "what cities are in Germany"
+    assert meta["filters"] == '{"country": "Germany"}'
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+
+def test_filters_are_combined(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    vector_search_tool.execute(
+        query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
+    )
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "what cities are in Germany"
+
+    meta = call_kwargs["_meta"]
+    assert meta["filters"] == '{"country": "Germany", "city LIKE": "Berlin"}'
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+
+
+def test_kwargs_override_both_num_results_and_query_type(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    vector_search_tool.execute(
+        query="what cities are in Germany", num_results=3, query_type="HYBRID"
+    )
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "what cities are in Germany"
+
+    meta = call_kwargs["_meta"]
+    # Should use overridden values, not the defaults from constructor
+    assert meta["num_results"] == 3
+    assert meta["query_type"] == "HYBRID"
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+    assert "filters" not in meta
+
+
+def test_get_filter_param_description_with_column_metadata() -> None:
+    """Test that _get_filter_param_description includes column metadata when available."""
+    # Mock table info with column metadata
+    mock_column1 = Mock()
+    mock_column1.name = "category"
+    mock_column1.type_name.name = "STRING"
+
+    mock_column2 = Mock()
+    mock_column2.name = "price"
+    mock_column2.type_name.name = "FLOAT"
+
+    mock_column3 = Mock()
+    mock_column3.name = "__internal_column"  # Should be excluded
+    mock_column3.type_name.name = "STRING"
+
+    mock_table_info = Mock()
+    mock_table_info.columns = [mock_column1, mock_column2, mock_column3]
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = Mock()
+        mock_ws_client.tables.get.return_value = mock_table_info
+        mock_ws_client_class.return_value = mock_ws_client
+
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        # Test the _get_filter_param_description method directly
+        description = vector_search_tool._get_filter_param_description()
+
+        # Should include available columns in description
+        assert "Available columns for filtering: category (STRING), price (FLOAT)" in description
+
+        # Should include comprehensive filter syntax
+        assert "Inclusion:" in description
+        assert "Exclusion:" in description
+        assert "Comparisons:" in description
+        assert "Pattern match:" in description
+        assert "OR logic:" in description
+
+        # Should include examples
+        assert "Examples:" in description
+        assert "Filter by category:" in description
+        assert "Filter by price range:" in description
+
+
+def test_enhanced_filter_description_used_in_tool_schema() -> None:
+    """Test that the tool schema includes comprehensive filter descriptions."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+    # Check that the tool schema includes enhanced filter description
+    tool_schema = vector_search_tool.tool
+    filter_param = tool_schema["function"]["parameters"]["properties"]["filters"]
+
+    # Check that it includes the comprehensive filter syntax
+    assert "Inclusion:" in filter_param["description"]
+    assert "Exclusion:" in filter_param["description"]
+    assert "Comparisons:" in filter_param["description"]
+    assert "Pattern match:" in filter_param["description"]
+    assert "OR logic:" in filter_param["description"]
+
+    # Check that it includes useful filter information
+    assert "array of key-value pairs" in filter_param["description"]
+    assert "column" in filter_param["description"]
+
+
+def test_enhanced_filter_description_fails_on_table_metadata_error() -> None:
+    """Test that tool initialization fails with clear error when table metadata cannot be retrieved."""
+    # Mock WorkspaceClient to raise an exception when accessing table metadata
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_ws_client.tables.get.side_effect = Exception("Permission denied")
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because we can't get table metadata
+        with pytest.raises(
+            ValueError,
+            match="Failed to retrieve table metadata for index.*Permission denied",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
+def test_enhanced_filter_description_fails_on_empty_columns() -> None:
+    """Test that tool initialization fails when table has no valid columns."""
+    # Mock WorkspaceClient to return a table with no valid columns (all start with __)
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_table = MagicMock()
+        mock_column = MagicMock()
+        mock_column.name = "__internal_column"
+        mock_column.type_name = MagicMock()
+        mock_column.type_name.name = "STRING"
+        mock_table.columns = [mock_column]
+        mock_ws_client.tables.get.return_value = mock_table
+        mock_ws_client_class.return_value = mock_ws_client
+
+        # Try to initialize tool with dynamic_filter=True
+        # This should fail because there are no valid columns
+        with pytest.raises(
+            ValueError,
+            match="No valid columns found in table metadata for index",
+        ):
+            init_vector_search_tool(DELTA_SYNC_INDEX, dynamic_filter=True)
+
+
+def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
+    """Test that using both dynamic_filter and predefined filters raises an error."""
+    # Try to initialize tool with both dynamic_filter=True and predefined filters
+    with pytest.raises(
+        ValueError, match="Cannot use both dynamic_filter=True and predefined filters"
+    ):
+        init_vector_search_tool(
+            DELTA_SYNC_INDEX,
+            filters={"status": "active", "category": "electronics"},
+            dynamic_filter=True,
+        )
+
+
+def test_predefined_filters_work_without_dynamic_filter(mock_mcp_toolkit) -> None:
+    """Test that predefined filters work correctly when dynamic_filter is False."""
+    # Initialize tool with only predefined filters (dynamic_filter=False by default)
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, filters={"status": "active", "category": "electronics"}
+    )
+
+    # The filters parameter should NOT be exposed since dynamic_filter=False
+    tool_schema = vector_search_tool.tool
+    assert "filters" not in tool_schema["function"]["parameters"]["properties"]
+
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    vector_search_tool.execute(query="what electronics are available")
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "what electronics are available"
+
+    meta = call_kwargs["_meta"]
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+    assert json.loads(meta["filters"]) == {"status": "active", "category": "electronics"}
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
+
+def test_filter_item_serialization(mock_mcp_toolkit) -> None:
+    """Test that FilterItem objects are properly converted to dictionaries."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    # Test various filter types
+    filters = [
+        FilterItem(key="category", value="electronics"),
+        FilterItem(key="price >=", value=100),
+        FilterItem(key="status NOT", value="discontinued"),
+        FilterItem(key="tags", value=["wireless", "bluetooth"]),
+    ]
+
+    vector_search_tool.execute("find products", filters=filters)
+
+    expected_filters = {
+        "category": "electronics",
+        "price >=": 100,
+        "status NOT": "discontinued",
+        "tags": ["wireless", "bluetooth"],
+    }
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "find products"
+
+    meta = call_kwargs["_meta"]
+    # Filters should be serialized as JSON
+    assert json.loads(meta["filters"]) == expected_filters
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
+    assert meta["columns"] == ",".join(vector_search_tool.columns)
+
+
+def test_reranker_is_passed_through(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+    )
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    vector_search_tool.execute(
+        query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
+    )
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "what cities are in Germany"
+
+    meta = call_kwargs["_meta"]
+    assert meta["columns_to_rerank"] == "country"
+    assert json.loads(meta["filters"]) == {"country": "Germany"}
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
+
+
+def test_reranker_is_overriden(mock_mcp_toolkit) -> None:
+    vector_search_tool = init_vector_search_tool(
+        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+    )
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    overridden_reranker = DatabricksReranker(columns_to_rerank=["country2"])
+    vector_search_tool.execute(
+        query="what cities are in Germany",
+        filters=[FilterItem(key="country", value="Germany")],
+        reranker=overridden_reranker,
+    )
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+
+    assert call_kwargs["query"] == "what cities are in Germany"
+
+    meta = call_kwargs["_meta"]
+    # Should use overridden reranker columns
+    assert meta["columns_to_rerank"] == "country2"
+    assert json.loads(meta["filters"]) == {"country": "Germany"}
+    assert meta["num_results"] == vector_search_tool.num_results
+    assert meta["query_type"] == vector_search_tool.query_type
