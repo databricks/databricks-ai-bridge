@@ -299,8 +299,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         parts = self.index_name.split(".")
         if len(parts) != 3:
             raise ValueError(
-                f"Invalid index name format: {self.index_name}. "
-                f"Expected 'catalog.schema.index'"
+                f"Invalid index name format: {self.index_name}. Expected 'catalog.schema.index'"
             )
         catalog, schema, index = parts
 
@@ -321,17 +320,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         tools = self._mcp_toolkit.get_tools()
         if len(tools) != 1:
             raise ValueError(
-                f"Expected exactly 1 MCP tool for index {self.index_name}, "
-                f"but got {len(tools)}"
+                f"Expected exactly 1 MCP tool for index {self.index_name}, but got {len(tools)}"
             )
 
         self._mcp_tool_execute = tools[0].execute
         return self._mcp_tool_execute
 
     def _build_mcp_meta(
-        self,
-        filters: Optional[List[FilterItem]] = None,
-        **kwargs: Any
+        self, filters: Optional[List[FilterItem]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
         kwargs = {**(self.model_extra or {}), **kwargs}
 
@@ -360,7 +356,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             meta["include_score"] = "true"
 
         reranker = kwargs.pop("reranker", self.reranker)
-        if reranker and hasattr(reranker, 'columns_to_rerank'):
+        if reranker and hasattr(reranker, "columns_to_rerank"):
             meta["columns_to_rerank"] = ",".join(reranker.columns_to_rerank)
 
         # Warn about any unknown kwargs
@@ -395,7 +391,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         if not isinstance(parsed, list):
             # Show preview of what we got (limit to 500 chars for readability)
             response_preview = str(parsed)[:500]
-            _logger.error(f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}")
+            _logger.error(
+                f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}"
+            )
             raise ValueError(
                 f"Expected MCP vector search to return a JSON array of results, "
                 f"but got {type(parsed).__name__}: {response_preview}"
@@ -418,6 +416,5 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         except Exception as e:
             _logger.error(f"MCP vector search failed: {e}", exc_info=True)
             raise RuntimeError(
-                f"Vector search via MCP failed for index {self.index_name}. "
-                f"Error: {e}"
+                f"Vector search via MCP failed for index {self.index_name}. Error: {e}"
             ) from e
