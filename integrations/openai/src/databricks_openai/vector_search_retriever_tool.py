@@ -244,7 +244,16 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 "OpenAI API key is required to generate embeddings for retrieval queries."
             )
 
-        query_text = query if self.query_type and self.query_type.upper() == "HYBRID" else None
+        signature = inspect.signature(self._index.similarity_search)
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+
+        # Allow kwargs to override the default values upon invocation
+        num_results = kwargs.pop("num_results", self.num_results)
+        query_type = kwargs.pop("query_type", self.query_type)
+        reranker = kwargs.pop("reranker", self.reranker)
+
+        query_text = query if query_type and query_type.upper() == "HYBRID" else None
         query_vector = (
             oai_client.embeddings.create(input=query, model=self.embedding_model_name)
             .data[0]
@@ -262,15 +271,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         # Since LLM can generate either a dict or FilterItem, convert to dict always
         filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
         combined_filters = {**filters_dict, **(self.filters or {})}
-
-        signature = inspect.signature(self._index.similarity_search)
-        kwargs = {**kwargs, **(self.model_extra or {})}
-        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
-
-        # Allow kwargs to override the default values upon invocation
-        num_results = kwargs.pop("num_results", self.num_results)
-        query_type = kwargs.pop("query_type", self.query_type)
-        reranker = kwargs.pop("reranker", self.reranker)
 
         kwargs.update(
             {
