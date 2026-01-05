@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Dict, Optional
+from uuid import UUID
 
 from databricks.sdk import WorkspaceClient
 
@@ -58,12 +59,16 @@ class LakebaseSession(SessionABC):
 
     Example:
     ```python
+        from uuid import UUID
+        from uuid_utils import uuid7
         from databricks_openai.agents.session import LakebaseSession
         from agents import Agent, Runner
 
-        async def run_agent(thread_id: str, message: str):
+        async def run_agent(thread_id: UUID | None, message: str):
+            # Use uuid7 for time-ordered UUIDs (better for database indexing)
+            session_id = thread_id or uuid7()
             session = LakebaseSession(
-                session_id=thread_id,
+                session_id=session_id,
                 instance_name="my-lakebase-instance"
             )
             agent = Agent(name="Assistant")
@@ -77,7 +82,7 @@ class LakebaseSession(SessionABC):
 
     CREATE_SESSIONS_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS {sessions_table} (
-        session_id TEXT PRIMARY KEY,
+        session_id UUID PRIMARY KEY,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -86,7 +91,7 @@ class LakebaseSession(SessionABC):
     CREATE_MESSAGES_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS {messages_table} (
         id BIGSERIAL PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES {sessions_table}(session_id) ON DELETE CASCADE,
+        session_id UUID NOT NULL REFERENCES {sessions_table}(session_id) ON DELETE CASCADE,
         message_data JSONB NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -96,11 +101,11 @@ class LakebaseSession(SessionABC):
         ON {messages_table}(session_id, id);
     """
 
-    session_id: str
+    session_id: UUID
 
     def __init__(
         self,
-        session_id: str,
+        session_id: UUID,
         *,
         instance_name: str,
         workspace_client: Optional[WorkspaceClient] = None,
@@ -114,7 +119,7 @@ class LakebaseSession(SessionABC):
         On first initialization for a given Lakebase instance, this will automatically
         create the required tables if they don't exist.
         Args:
-            session_id: Unique identifier for this conversation session.
+            session_id: UUID identifier for this conversation session.
             instance_name: Name of the Lakebase instance.
             workspace_client: Optional WorkspaceClient for authentication.
             sessions_table: Name of the sessions table. Defaults to "agent_sessions".
