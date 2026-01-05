@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -73,26 +74,14 @@ class _LakebasePoolBase:
         self.host = resolved_host
         self.username = self._infer_username()
 
-        # Token caching (minting is sync via WorkspaceClient)
-        self._cache_lock = Lock()
         self._cached_token: Optional[str] = None
         self._cache_ts: Optional[float] = None
 
-    def _get_token(self) -> str:
-        """Get cached token or mint a new one if expired."""
-        with self._cache_lock:
-            now = time.time()
-            if (
-                self._cached_token
-                and self._cache_ts
-                and (now - self._cache_ts) < self.token_cache_duration_seconds
-            ):
-                return self._cached_token
-
-            token = self._mint_token()
-            self._cached_token = token
-            self._cache_ts = now
-            return token
+    def _is_token_valid(self) -> bool:
+        """Check if the cached token is still valid."""
+        if not self._cached_token or not self._cache_ts:
+            return False
+        return (time.time() - self._cache_ts) < self.token_cache_duration_seconds
 
     def _mint_token(self) -> str:
         try:
@@ -145,6 +134,10 @@ class LakebasePool(_LakebasePoolBase):
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
+
+        # Sync lock for thread-safe token caching
+        self._cache_lock = Lock()
+
         # Create connection pool that fetches a rotating M2M OAuth token
         # https://docs.databricks.com/aws/en/oltp/instances/query/notebook#psycopg3
         pool = self
@@ -191,6 +184,17 @@ class LakebasePool(_LakebasePoolBase):
             self.token_cache_duration_seconds,
         )
 
+    def _get_token(self) -> str:
+        """Get cached token or mint a new one if expired (thread-safe)."""
+        with self._cache_lock:
+            if self._is_token_valid():
+                return self._cached_token
+
+            token = self._mint_token()
+            self._cached_token = token
+            self._cache_ts = time.time()
+            return token
+
     @property
     def pool(self) -> ConnectionPool:
         """Access the underlying connection pool."""
@@ -225,19 +229,26 @@ class AsyncLakebasePool(_LakebasePoolBase):
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
 
+        # Async lock for coroutine-safe token caching
+        self._cache_lock = asyncio.Lock()
+
         # Create async connection pool that fetches a rotating M2M OAuth token
         pool = self
 
         class AsyncRotatingConnection(psycopg.AsyncConnection):
             @classmethod
             async def connect(cls, conninfo: str = "", **kwargs):
-                kwargs["password"] = pool._get_token()
+                kwargs["password"] = await pool._get_token_async()
                 # Call the superclass's connect method with updated kwargs
                 return await super().connect(conninfo, **kwargs)
 
         default_kwargs: dict[str, object] = {
             "autocommit": True,
             "row_factory": dict_row,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
         }
 
         # Get pool config values (overrides by user pool_kwargs)
@@ -265,6 +276,23 @@ class AsyncLakebasePool(_LakebasePoolBase):
             timeout,
             self.token_cache_duration_seconds,
         )
+
+    async def _get_token_async(self) -> str:
+        """Get cached token or mint a new one if expired (async, non-blocking).
+
+        Uses asyncio.Lock for coroutine coordination. Token minting (a sync SDK call)
+        runs in an executor to avoid blocking the event loop.
+        """
+        async with self._cache_lock:
+            if self._is_token_valid():
+                return self._cached_token
+
+            # Run the sync SDK call in an executor to not block the event loop
+            loop = asyncio.get_running_loop()
+            token = await loop.run_in_executor(None, self._mint_token)
+            self._cached_token = token
+            self._cache_ts = time.time()
+            return token
 
     @property
     def pool(self) -> AsyncConnectionPool:

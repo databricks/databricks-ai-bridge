@@ -324,25 +324,25 @@ async def test_async_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatc
     monkeypatch.setattr(time, "time", mock_time)
 
     # First call should mint a token
-    token1 = pool._get_token()
+    token1 = await pool._get_token_async()
     assert token1 == "token-1"
     assert len(token_call_count) == 1
 
     # Second call within cache duration should return cached token
     test_time[0] = 100.5  # 0.5 seconds later (within 1 second cache)
-    token2 = pool._get_token()
+    token2 = await pool._get_token_async()
     assert token2 == "token-1"  # Same cached token
     assert len(token_call_count) == 1  # No new token minted
 
     # Third call after cache expiry should mint a new token
     test_time[0] = 101.5  # 1.5 seconds later (past 1 second cache)
-    token3 = pool._get_token()
+    token3 = await pool._get_token_async()
     assert token3 == "token-2"  # New token
     assert len(token_call_count) == 2  # New token was minted
 
     # Fourth call within new cache window should return cached token
     test_time[0] = 102.0  # 0.5 seconds after last mint
-    token4 = pool._get_token()
+    token4 = await pool._get_token_async()
     assert token4 == "token-2"  # Same cached token
     assert len(token_call_count) == 2  # No new token minted
 
