@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 
@@ -9,11 +10,15 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 pytest.importorskip("agents.memory.session")
 
+from databricks_ai_bridge import lakebase
 from psycopg import sql
 
-from databricks_ai_bridge import lakebase
-
 from databricks_openai.agents.session import LakebaseSession, _pool_cache
+
+# Use UUID (V7) for performance
+TEST_SESSION_ID = UUID("12345678-1234-5678-1234-567812345678")
+TEST_SESSION_ID_2 = UUID("22345678-1234-5678-1234-567812345678")
+TEST_SESSION_ID_3 = UUID("32345678-1234-5678-1234-567812345678")
 
 
 def query_to_string(query):
@@ -150,7 +155,7 @@ def test_session_configures_lakebase(monkeypatch, mock_workspace, mock_pool, moc
     mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
-        session_id="test-session-001",
+        session_id=TEST_SESSION_ID,
         instance_name="test-lakebase-instance",
         workspace_client=mock_workspace,
     )
@@ -159,7 +164,7 @@ def test_session_configures_lakebase(monkeypatch, mock_workspace, mock_pool, moc
         mock_pool.conninfo
         == "dbname=databricks_postgres user=test@databricks.com host=db-host port=5432 sslmode=require"
     )
-    assert session.session_id == "test-session-001"
+    assert session.session_id == TEST_SESSION_ID
     assert session.sessions_table == "agent_sessions"
     assert session.messages_table == "agent_messages"
 
@@ -180,15 +185,19 @@ def test_session_creates_tables_on_init_when_not_exist(
     mock_connection.queue_result(MockResult())
 
     LakebaseSession(
-        session_id="test-session-002",
+        session_id=TEST_SESSION_ID_2,
         instance_name="test-lakebase-instance",
         workspace_client=mock_workspace,
     )
 
     # Should have executed CREATE TABLE statements
     queries = [query_to_string(q) for q, _ in mock_connection.executed_queries]
-    create_sessions_found = any("CREATE TABLE IF NOT EXISTS" in q and "agent_sessions" in q for q in queries)
-    create_messages_found = any("CREATE TABLE IF NOT EXISTS" in q and "agent_messages" in q for q in queries)
+    create_sessions_found = any(
+        "CREATE TABLE IF NOT EXISTS" in q and "agent_sessions" in q for q in queries
+    )
+    create_messages_found = any(
+        "CREATE TABLE IF NOT EXISTS" in q and "agent_messages" in q for q in queries
+    )
 
     assert create_sessions_found, "Should create sessions table"
     assert create_messages_found, "Should create messages table"
@@ -206,7 +215,7 @@ def test_session_skips_table_creation_when_tables_exist(
     mock_connection.queue_result(MockResult())
 
     LakebaseSession(
-        session_id="test-session-003",
+        session_id=TEST_SESSION_ID_3,
         instance_name="test-lakebase-instance",
         workspace_client=mock_workspace,
     )
@@ -227,20 +236,21 @@ def test_session_ensures_session_record(monkeypatch, mock_workspace, mock_pool, 
     mock_connection.queue_result(MockResult())  # INSERT session
 
     LakebaseSession(
-        session_id="my-unique-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-lakebase-instance",
         workspace_client=mock_workspace,
     )
 
     # Find the INSERT INTO agent_sessions query
     insert_queries = [
-        (q, p) for q, p in mock_connection.executed_queries
+        (q, p)
+        for q, p in mock_connection.executed_queries
         if "INSERT INTO" in query_to_string(q) and "agent_sessions" in query_to_string(q)
     ]
 
     assert len(insert_queries) > 0, "Should insert session record"
     query, params = insert_queries[0]
-    assert params[0] == "my-unique-session", "Should use correct session_id"
+    assert params[0] == TEST_SESSION_ID, "Should use correct session_id"
 
 
 @pytest.mark.asyncio
@@ -254,7 +264,7 @@ async def test_get_items_empty_session(monkeypatch, mock_workspace, mock_pool, m
     mock_connection.queue_result(MockResult(rows=[]))  # SELECT messages
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -280,7 +290,7 @@ async def test_get_items_returns_parsed_json(
     mock_connection.queue_result(MockResult(rows=test_messages))  # SELECT messages
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -306,7 +316,7 @@ async def test_get_items_with_limit(monkeypatch, mock_workspace, mock_pool, mock
     )
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -317,7 +327,8 @@ async def test_get_items_with_limit(monkeypatch, mock_workspace, mock_pool, mock
 
     # Verify the query used LIMIT
     select_queries = [
-        query_to_string(q) for q, p in mock_connection.executed_queries
+        query_to_string(q)
+        for q, p in mock_connection.executed_queries
         if "SELECT message_data" in query_to_string(q)
     ]
     assert any("LIMIT" in q for q in select_queries), "Should use LIMIT in query"
@@ -333,7 +344,7 @@ async def test_add_items(monkeypatch, mock_workspace, mock_pool, mock_connection
     mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -363,7 +374,7 @@ async def test_add_items_empty_list(monkeypatch, mock_workspace, mock_pool, mock
     mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -393,7 +404,7 @@ async def test_pop_item_returns_last_item(monkeypatch, mock_workspace, mock_pool
     mock_connection.queue_result(MockResult())  # UPDATE session timestamp
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -417,7 +428,7 @@ async def test_pop_item_returns_none_when_empty(
     mock_connection.queue_result(MockResult(rows=[]))  # DELETE RETURNING - empty
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -438,7 +449,7 @@ async def test_clear_session(monkeypatch, mock_workspace, mock_pool, mock_connec
     mock_connection.queue_result(MockResult())  # UPDATE session timestamp
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )
@@ -449,12 +460,14 @@ async def test_clear_session(monkeypatch, mock_workspace, mock_pool, mock_connec
     delete_queries = [
         (q, p)
         for q, p in mock_connection.executed_queries
-        if "DELETE FROM" in query_to_string(q) and "agent_messages" in query_to_string(q) and "WHERE session_id" in query_to_string(q)
+        if "DELETE FROM" in query_to_string(q)
+        and "agent_messages" in query_to_string(q)
+        and "WHERE session_id" in query_to_string(q)
     ]
 
     assert len(delete_queries) > 0, "Should execute DELETE query"
     query, params = delete_queries[0]
-    assert params == ("test-session",), "Should use correct session_id"
+    assert params == (TEST_SESSION_ID,), "Should use correct session_id"
 
 
 def test_custom_table_names(monkeypatch, mock_workspace, mock_pool, mock_connection):
@@ -468,7 +481,7 @@ def test_custom_table_names(monkeypatch, mock_workspace, mock_pool, mock_connect
     mock_connection.queue_result(MockResult())  # INSERT session
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
         sessions_table="custom_sessions",
@@ -495,13 +508,13 @@ def test_pool_caching(monkeypatch, mock_workspace, mock_pool, mock_connection):
     mock_connection.queue_result(MockResult())  # INSERT session 2
 
     session1 = LakebaseSession(
-        session_id="session-1",
+        session_id=TEST_SESSION_ID,
         instance_name="shared-instance",
         workspace_client=mock_workspace,
     )
 
     session2 = LakebaseSession(
-        session_id="session-2",
+        session_id=TEST_SESSION_ID_2,
         instance_name="shared-instance",
         workspace_client=mock_workspace,
     )
@@ -527,7 +540,7 @@ async def test_get_items_handles_dict_message_data(
     mock_connection.queue_result(MockResult(rows=test_messages))
 
     session = LakebaseSession(
-        session_id="test-session",
+        session_id=TEST_SESSION_ID,
         instance_name="test-instance",
         workspace_client=mock_workspace,
     )

@@ -37,6 +37,7 @@ tests = [
 
 memory = [
     "databricks-ai-bridge[memory]>=0.11.0",
+    "uuid-utils>=0.9.0",
 ]
 
 [build-system]
