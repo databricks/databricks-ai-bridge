@@ -15,7 +15,6 @@ from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
 
 def _make_workspace(
     *,
-    sp_application_id: str | None = "sp-123",
     user_name: str = "test@databricks.com",
     credential_token: str = "token-1",
 ):
@@ -25,12 +24,6 @@ def _make_workspace(
     instance.read_write_dns = "db.host"
     instance.read_only_dns = "db-ro.host"
     workspace.database.get_database_instance.return_value = instance
-    if sp_application_id is None:
-        workspace.current_service_principal.me.side_effect = RuntimeError("missing sp")
-    else:
-        workspace.current_service_principal.me.return_value = MagicMock(
-            application_id=sp_application_id
-        )
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
     return workspace
 
@@ -64,7 +57,7 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
 
     test_pool = pool.pool
     assert test_pool.conninfo == (
-        "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
+        "dbname=databricks_postgres user=test@databricks.com host=db.host port=5432 sslmode=require"
     )
 
     assert test_pool.connection_class is not None
@@ -104,40 +97,19 @@ def test_lakebase_pool_resolves_host_from_instance(monkeypatch):
     assert pool.host == "rw.host"
 
 
-def test_lakebase_pool_uses_service_principal_username(monkeypatch):
+def test_lakebase_pool_gets_username(monkeypatch):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
-    workspace = _make_workspace(
-        sp_application_id="service_principal_client_id",
-        user_name="test@databricks.com",
-    )
+    workspace = _make_workspace(user_name="myuser@databricks.com")
 
     pool = LakebasePool(
         instance_name="lake-instance",
         workspace_client=workspace,
     )
 
-    assert pool.username == "service_principal_client_id"
-    assert "user=service_principal_client_id" in pool.pool.conninfo
-
-
-def test_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
-    TestConnectionPool = _make_connection_pool_class()
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
-
-    workspace = _make_workspace(
-        sp_application_id=None,
-        user_name="test@databricks.com",
-    )
-
-    pool = LakebasePool(
-        instance_name="lake-instance",
-        workspace_client=workspace,
-    )
-
-    assert pool.username == "test@databricks.com"
-    assert "user=test@databricks.com" in pool.pool.conninfo
+    assert pool.username == "myuser@databricks.com"
+    assert "user=myuser@databricks.com" in pool.pool.conninfo
 
 
 def test_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatch):
@@ -253,7 +225,7 @@ async def test_async_lakebase_pool_configures_connection_pool(monkeypatch):
 
     test_pool = pool.pool
     assert test_pool.conninfo == (
-        "dbname=databricks_postgres user=sp-123 host=db.host port=5432 sslmode=require"
+        "dbname=databricks_postgres user=test@databricks.com host=db.host port=5432 sslmode=require"
     )
 
     assert test_pool.connection_class is not None
@@ -300,45 +272,21 @@ async def test_async_lakebase_pool_resolves_host_from_instance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_lakebase_pool_uses_service_principal_username(monkeypatch):
+async def test_async_lakebase_pool_gets_username(monkeypatch):
     TestAsyncConnectionPool = _make_async_connection_pool_class()
     monkeypatch.setattr(
         "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
     )
 
-    workspace = _make_workspace(
-        sp_application_id="service_principal_client_id",
-        user_name="test@databricks.com",
-    )
+    workspace = _make_workspace(user_name="myuser@databricks.com")
 
     pool = AsyncLakebasePool(
         instance_name="lake-instance",
         workspace_client=workspace,
     )
 
-    assert pool.username == "service_principal_client_id"
-    assert "user=service_principal_client_id" in pool.pool.conninfo
-
-
-@pytest.mark.asyncio
-async def test_async_lakebase_pool_falls_back_to_user_when_service_principal_missing(monkeypatch):
-    TestAsyncConnectionPool = _make_async_connection_pool_class()
-    monkeypatch.setattr(
-        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
-    )
-
-    workspace = _make_workspace(
-        sp_application_id=None,
-        user_name="test@databricks.com",
-    )
-
-    pool = AsyncLakebasePool(
-        instance_name="lake-instance",
-        workspace_client=workspace,
-    )
-
-    assert pool.username == "test@databricks.com"
-    assert "user=test@databricks.com" in pool.pool.conninfo
+    assert pool.username == "myuser@databricks.com"
+    assert "user=myuser@databricks.com" in pool.pool.conninfo
 
 
 @pytest.mark.asyncio
@@ -376,25 +324,25 @@ async def test_async_lakebase_pool_refreshes_token_after_cache_expiry(monkeypatc
     monkeypatch.setattr(time, "time", mock_time)
 
     # First call should mint a token
-    token1 = pool._get_token_sync()
+    token1 = pool._get_token()
     assert token1 == "token-1"
     assert len(token_call_count) == 1
 
     # Second call within cache duration should return cached token
     test_time[0] = 100.5  # 0.5 seconds later (within 1 second cache)
-    token2 = pool._get_token_sync()
+    token2 = pool._get_token()
     assert token2 == "token-1"  # Same cached token
     assert len(token_call_count) == 1  # No new token minted
 
     # Third call after cache expiry should mint a new token
     test_time[0] = 101.5  # 1.5 seconds later (past 1 second cache)
-    token3 = pool._get_token_sync()
+    token3 = pool._get_token()
     assert token3 == "token-2"  # New token
     assert len(token_call_count) == 2  # New token was minted
 
     # Fourth call within new cache window should return cached token
     test_time[0] = 102.0  # 0.5 seconds after last mint
-    token4 = pool._get_token_sync()
+    token4 = pool._get_token()
     assert token4 == "token-2"  # Same cached token
     assert len(token_call_count) == 2  # No new token minted
 
