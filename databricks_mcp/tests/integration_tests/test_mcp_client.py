@@ -22,8 +22,6 @@
 # tools = mcp_client.list_tools()
 # print(f"Available tools: {tools}")
 
-import json
-
 from databricks.sdk import WorkspaceClient
 
 from databricks_mcp import DatabricksMCPClient
@@ -39,4 +37,4 @@ mcp_client = DatabricksMCPClient(
     server_url="https://mcp-chloe-test-6051921418418893.staging.aws.databricksapps.com/mcp",
     workspace_client=ws_client,
 )
-print(mcp_client.list_tools())
+# print(mcp_client.list_tools())
