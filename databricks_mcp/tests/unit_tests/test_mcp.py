@@ -11,6 +11,8 @@ from databricks_mcp.mcp import (
     UC_FUNCTIONS_MCP,
     VECTOR_SEARCH_MCP,
     DatabricksMCPClient,
+    _is_databricks_apps_url,
+    _is_pat_auth,
 )
 
 
@@ -442,3 +444,78 @@ class TestMCPURLPatterns:
                 client.list_tools()
 
             mock_request.assert_not_called()
+
+
+class TestIsDatabricksAppsUrl:
+    """Test cases for _is_databricks_apps_url helper function."""
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            ("https://my-app.staging.aws.databricksapps.com/mcp", True),
+            ("https://my-app.prod.azure.databricksapps.com/mcp", True),
+            ("https://my-app.databricksapps.com", True),
+            ("https://test.cloud.databricks.com/api/2.0/mcp/functions/a/b", False),
+            ("https://custom-server.example.com/mcp", False),
+            ("https://databricksapps.com.evil.com/mcp", False),
+            ("https://notdatabricksapps.com/mcp", False),
+        ],
+    )
+    def test_is_databricks_apps_url(self, url, expected):
+        assert _is_databricks_apps_url(url) == expected
+
+
+class TestIsPatAuth:
+    """Test cases for _is_pat_auth helper function."""
+
+    def test_is_pat_auth_returns_true_for_pat(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "pat"
+        assert _is_pat_auth(mock_client) is True
+
+    def test_is_pat_auth_returns_false_for_oauth(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "oauth-m2m"
+        assert _is_pat_auth(mock_client) is False
+
+    def test_is_pat_auth_returns_false_for_databricks_cli(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "databricks-cli"
+        assert _is_pat_auth(mock_client) is False
+
+
+class TestDatabricksMCPClientPATValidation:
+    """Test cases for PAT + Databricks Apps validation."""
+
+    def test_raises_error_for_pat_with_databricks_apps(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "pat"
+
+        with pytest.raises(ValueError, match="Personal Access Tokens \\(PAT\\) are not supported"):
+            DatabricksMCPClient(
+                "https://my-app.staging.aws.databricksapps.com/mcp",
+                mock_client,
+            )
+
+    def test_allows_oauth_with_databricks_apps(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "oauth-m2m"
+
+        client = DatabricksMCPClient(
+            "https://my-app.staging.aws.databricksapps.com/mcp",
+            mock_client,
+        )
+        assert client.server_url == "https://my-app.staging.aws.databricksapps.com/mcp"
+
+    def test_allows_pat_with_non_databricks_apps(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.auth_type = "pat"
+
+        client = DatabricksMCPClient(
+            "https://test.cloud.databricks.com/api/2.0/mcp/functions/catalog/schema",
+            mock_client,
+        )
+        assert (
+            client.server_url
+            == "https://test.cloud.databricks.com/api/2.0/mcp/functions/catalog/schema"
+        )

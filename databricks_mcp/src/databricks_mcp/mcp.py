@@ -23,6 +23,18 @@ from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _is_databricks_apps_url(url: str) -> bool:
+    """Check if the URL is hosted on Databricks Apps."""
+    parsed = urlparse(url)
+    return parsed.netloc.endswith(".databricksapps.com")
+
+
+def _is_pat_auth(workspace_client: WorkspaceClient) -> bool:
+    """Check if the workspace client is using PAT authentication."""
+    return workspace_client.config.auth_type == "pat"
+
+
 # MCP URL types
 UC_FUNCTIONS_MCP = "uc_functions_mcp"
 VECTOR_SEARCH_MCP = "vector_search_mcp"
@@ -122,6 +134,14 @@ class DatabricksMCPClient:
     def __init__(self, server_url: str, workspace_client: Optional[WorkspaceClient] = None):
         self.client = workspace_client or WorkspaceClient()
         self.server_url = server_url
+
+        # Early detection: error if using PAT with Databricks Apps
+        if _is_databricks_apps_url(server_url) and _is_pat_auth(self.client):
+            raise ValueError(
+                "Personal Access Tokens (PAT) are not supported for MCP servers hosted on Databricks Apps. "
+                "Please use OAuth authentication instead. "
+                "For more information: https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
+            )
 
     def _get_databricks_managed_mcp_url_type(self) -> str:
         """Determine the MCP URL type based on the path."""
