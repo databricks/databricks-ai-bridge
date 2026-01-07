@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -11,14 +12,14 @@ from databricks.sdk import WorkspaceClient
 try:
     import psycopg
     from psycopg.rows import dict_row
-    from psycopg_pool import ConnectionPool
+    from psycopg_pool import AsyncConnectionPool, ConnectionPool
 except ImportError as e:
     raise ImportError(
         "LakebasePool requires databricks-ai-bridge[memory]. "
         "Please install with: pip install databricks-ai-bridge[memory]"
     ) from e
 
-__all__ = ["LakebasePool"]
+__all__ = ["AsyncLakebasePool", "LakebasePool"]
 
 logger = logging.getLogger(__name__)
 
@@ -32,25 +33,12 @@ DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
 
 
-def _infer_username(w: WorkspaceClient) -> str:
-    """Get username for database connection with prioritizing service principal first, then user's username."""
-    try:
-        sp = w.current_service_principal.me()
-        if sp and getattr(sp, "application_id", None):
-            return sp.application_id
-    except Exception:
-        logger.debug(
-            "Could not get service principal, using current user for Lakebase credentials."
-        )
+class _LakebasePoolBase:
+    """
+    Base logic for Lakebase connection pools: resolve host, infer username,
+    token cache + minting, and conninfo building.
 
-    user = w.current_user.me()
-    return user.user_name
-
-
-class LakebasePool:
-    """Wrapper around a psycopg connection pool with rotating Lakehouse credentials.
-
-    name: Name of Lakebase Instance
+    Subclasses implement pool-specific initialization and lifecycle methods.
     """
 
     def __init__(
@@ -59,14 +47,14 @@ class LakebasePool:
         instance_name: str,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
-        **pool_kwargs: object,
     ) -> None:
-        if workspace_client is None:
-            workspace_client = WorkspaceClient()
+        self.workspace_client = workspace_client or WorkspaceClient()
+        self.instance_name = instance_name
+        self.token_cache_duration_seconds = token_cache_duration_seconds
 
         # Resolve host from the Lakebase name
         try:
-            instance = workspace_client.database.get_database_instance(instance_name)
+            instance = self.workspace_client.database.get_database_instance(instance_name)
         except Exception as exc:
             raise ValueError(
                 f"Unable to resolve Lakebase instance '{instance_name}'. "
@@ -83,76 +71,17 @@ class LakebasePool:
                 "Ensure the instance is running and in AVAILABLE state."
             )
 
-        self.workspace_client = workspace_client
-        self.instance_name = instance_name
         self.host = resolved_host
-        self.username = _infer_username(workspace_client)
-        self.token_cache_duration_seconds = token_cache_duration_seconds
+        self.username = self._infer_username()
 
-        # Token caching
-        self._cache_lock = Lock()
         self._cached_token: Optional[str] = None
         self._cache_ts: Optional[float] = None
 
-        # Create connection pool that fetches a rotating M2M OAuth token
-        # https://docs.databricks.com/aws/en/oltp/instances/query/notebook#psycopg3
-        class RotatingConnection(psycopg.Connection):
-            @classmethod
-            def connect(cls, conninfo: str = "", **kwargs):
-                # Append new password to kwargs
-                kwargs["password"] = self._get_token()
-
-                # Call the superclass's connect method with updated kwargs
-                return super().connect(conninfo, **kwargs)
-
-        conninfo = f"dbname={DEFAULT_DATABASE} user={self.username} host={resolved_host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
-
-        default_kwargs: dict[str, object] = {
-            "autocommit": True,
-            "row_factory": dict_row,
-            "keepalives": 1,
-            "keepalives_idle": 30,
-            "keepalives_interval": 10,
-            "keepalives_count": 5,
-        }
-
-        pool_params = dict(
-            conninfo=conninfo,
-            kwargs=default_kwargs,
-            min_size=DEFAULT_MIN_SIZE,
-            max_size=DEFAULT_MAX_SIZE,
-            timeout=DEFAULT_TIMEOUT,
-            open=True,
-            connection_class=RotatingConnection,
-            **pool_kwargs,
-        )
-
-        self._pool = ConnectionPool(**pool_params)
-
-        logger.info(
-            "lakebase pool ready: host=%s db=%s min=%s max=%s cache=%ss",
-            resolved_host,
-            DEFAULT_DATABASE,
-            pool_params.get("min_size"),
-            pool_params.get("max_size"),
-            self.token_cache_duration_seconds,
-        )
-
-    def _get_token(self) -> str:
-        """Get cached token or mint a new one if expired."""
-        with self._cache_lock:
-            now = time.time()
-            if (
-                self._cached_token
-                and self._cache_ts
-                and (now - self._cache_ts) < self.token_cache_duration_seconds
-            ):
-                return self._cached_token
-
-            token = self._mint_token()
-            self._cached_token = token
-            self._cache_ts = now
-            return token
+    def _is_token_valid(self) -> bool:
+        """Check if the cached token is still valid."""
+        if not self._cached_token or not self._cache_ts:
+            return False
+        return (time.time() - self._cache_ts) < self.token_cache_duration_seconds
 
     def _mint_token(self) -> str:
         try:
@@ -168,6 +97,104 @@ class LakebasePool:
 
         return cred.token
 
+    def _conninfo(self) -> str:
+        """Build the connection info string."""
+        return (
+            f"dbname={DEFAULT_DATABASE} user={self.username} "
+            f"host={self.host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
+        )
+
+    def _infer_username(self) -> str:
+        """Get username for database connection."""
+        try:
+            user = self.workspace_client.current_user.me()
+            if user and getattr(user, "user_name", None):
+                return user.user_name
+        except Exception:
+            logger.debug("Could not get username for Lakebase credentials.")
+        raise ValueError("Unable to infer username for Lakebase connection.")
+
+
+class LakebasePool(_LakebasePoolBase):
+    """Sync Lakebase connection pool built on psycopg with rotating credentials.
+
+    instance_name: Name of Lakebase Instance
+    """
+
+    def __init__(
+        self,
+        *,
+        instance_name: str,
+        workspace_client: WorkspaceClient | None = None,
+        token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        **pool_kwargs: object,
+    ) -> None:
+        super().__init__(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            token_cache_duration_seconds=token_cache_duration_seconds,
+        )
+
+        # Sync lock for thread-safe token caching
+        self._cache_lock = Lock()
+
+        # Create connection pool that fetches a rotating M2M OAuth token
+        # https://docs.databricks.com/aws/en/oltp/instances/query/notebook#psycopg3
+        pool = self
+
+        class RotatingConnection(psycopg.Connection):
+            @classmethod
+            def connect(cls, conninfo: str = "", **kwargs):
+                kwargs["password"] = pool._get_token()
+                # Call the superclass's connect method with updated kwargs
+                return super().connect(conninfo, **kwargs)
+
+        default_kwargs: dict[str, object] = {
+            "autocommit": True,
+            "row_factory": dict_row,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        }
+
+        # Get pool config values (overrides by user pool_kwargs)
+        min_size = pool_kwargs.pop("min_size", DEFAULT_MIN_SIZE)
+        max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
+        timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
+
+        self._pool = ConnectionPool(
+            conninfo=self._conninfo(),
+            kwargs=default_kwargs,
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout,
+            open=True,
+            connection_class=RotatingConnection,
+            **pool_kwargs,
+        )
+
+        logger.info(
+            "lakebase pool ready: host=%s db=%s min=%s max=%s timeout=%s cache=%ss",
+            self.host,
+            DEFAULT_DATABASE,
+            min_size,
+            max_size,
+            timeout,
+            self.token_cache_duration_seconds,
+        )
+
+    def _get_token(self) -> str:
+        """Get cached token or mint a new one if expired (thread-safe)."""
+        with self._cache_lock:
+            if self._is_token_valid():
+                return self._cached_token
+
+            token = self._mint_token()
+            self._cached_token = token
+            self._cache_ts = time.time()
+            return token
+
     @property
     def pool(self) -> ConnectionPool:
         """Access the underlying connection pool."""
@@ -180,3 +207,116 @@ class LakebasePool:
     def close(self) -> None:
         """Close the connection pool."""
         self._pool.close()
+
+
+class AsyncLakebasePool(_LakebasePoolBase):
+    """Async Lakebase connection pool built on psycopg with rotating credentials.
+
+    instance_name: Name of Lakebase Instance
+    """
+
+    def __init__(
+        self,
+        *,
+        instance_name: str,
+        workspace_client: WorkspaceClient | None = None,
+        token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        **pool_kwargs: object,
+    ) -> None:
+        super().__init__(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            token_cache_duration_seconds=token_cache_duration_seconds,
+        )
+
+        # Async lock for coroutine-safe token caching
+        self._cache_lock = asyncio.Lock()
+
+        # Create async connection pool that fetches a rotating M2M OAuth token
+        pool = self
+
+        class AsyncRotatingConnection(psycopg.AsyncConnection):
+            @classmethod
+            async def connect(cls, conninfo: str = "", **kwargs):
+                kwargs["password"] = await pool._get_token_async()
+                # Call the superclass's connect method with updated kwargs
+                return await super().connect(conninfo, **kwargs)
+
+        default_kwargs: dict[str, object] = {
+            "autocommit": True,
+            "row_factory": dict_row,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+        }
+
+        # Get pool config values (overrides by user pool_kwargs)
+        min_size = pool_kwargs.pop("min_size", DEFAULT_MIN_SIZE)
+        max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
+        timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
+
+        self._pool = AsyncConnectionPool(
+            conninfo=self._conninfo(),
+            kwargs=default_kwargs,
+            min_size=min_size,
+            max_size=max_size,
+            timeout=timeout,
+            open=False,  # Don't open yet, must be opened with await
+            connection_class=AsyncRotatingConnection,
+            **pool_kwargs,
+        )
+
+        logger.info(
+            "async lakebase pool created: host=%s db=%s min=%s max=%s timeout=%s cache=%ss",
+            self.host,
+            DEFAULT_DATABASE,
+            min_size,
+            max_size,
+            timeout,
+            self.token_cache_duration_seconds,
+        )
+
+    async def _get_token_async(self) -> str:
+        """Get cached token or mint a new one if expired (async, non-blocking).
+
+        Uses asyncio.Lock for coroutine coordination. Token minting (a sync SDK call)
+        runs in an executor to avoid blocking the event loop.
+        """
+        async with self._cache_lock:
+            if self._is_token_valid():
+                return self._cached_token
+
+            # Run the sync SDK call in an executor to not block the event loop
+            loop = asyncio.get_running_loop()
+            token = await loop.run_in_executor(None, self._mint_token)
+            self._cached_token = token
+            self._cache_ts = time.time()
+            return token
+
+    @property
+    def pool(self) -> AsyncConnectionPool:
+        """Access the underlying async connection pool."""
+        return self._pool
+
+    def connection(self):
+        """Get a connection from the async pool."""
+        return self._pool.connection()
+
+    async def open(self) -> None:
+        """Open the connection pool."""
+        await self._pool.open()
+
+    async def close(self) -> None:
+        """Close the connection pool."""
+        await self._pool.close()
+
+    async def __aenter__(self):
+        """Enter async context manager."""
+        await self.open()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit async context manager and close the connection pool."""
+        await self.close()
+        return False
