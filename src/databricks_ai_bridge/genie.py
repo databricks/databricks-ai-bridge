@@ -108,39 +108,43 @@ def _parse_query_result(
     if truncate_results:
         query_result = _truncate_result(dataframe)
     else:
-        query_result = dataframe.to_markdown()
+        # Disable scientific notation for the markdown conversion
+        with pd.option_context('display.float_format', str):
+            query_result = dataframe.to_markdown()
 
     return query_result.strip()
 
 
 def _truncate_result(dataframe):
-    query_result = dataframe.to_markdown()
-    tokens_used = _count_tokens(query_result)
+    # Disable scientific notation for the markdown conversion
+    with pd.option_context('display.float_format', str):
+        query_result = dataframe.to_markdown()
+        tokens_used = _count_tokens(query_result)
 
-    # If the full result fits, return it
-    if tokens_used <= MAX_TOKENS_OF_DATA:
-        return query_result.strip()
+        # If the full result fits, return it
+        if tokens_used <= MAX_TOKENS_OF_DATA:
+            return query_result.strip()
 
-    def is_too_big(n):
-        return _count_tokens(dataframe.iloc[:n].to_markdown()) > MAX_TOKENS_OF_DATA
+        def is_too_big(n):
+            return _count_tokens(dataframe.iloc[:n].to_markdown()) > MAX_TOKENS_OF_DATA
 
-    # Use bisect_left to find the cutoff point of rows within the max token data limit in a O(log n) complexity
-    # Passing True, as this is the target value we are looking for when _is_too_big returns
-    cutoff = bisect.bisect_left(range(len(dataframe) + 1), True, key=is_too_big)
+        # Use bisect_left to find the cutoff point of rows within the max token data limit in a O(log n) complexity
+        # Passing True, as this is the target value we are looking for when _is_too_big returns
+        cutoff = bisect.bisect_left(range(len(dataframe) + 1), True, key=is_too_big)
 
-    # Slice to the found limit
-    truncated_df = dataframe.iloc[:cutoff]
+        # Slice to the found limit
+        truncated_df = dataframe.iloc[:cutoff]
 
-    # Edge case: Cannot return any rows because of tokens so return an empty string
-    if len(truncated_df) == 0:
-        return ""
+        # Edge case: Cannot return any rows because of tokens so return an empty string
+        if len(truncated_df) == 0:
+            return ""
 
-    truncated_result = truncated_df.to_markdown()
+        truncated_result = truncated_df.to_markdown()
 
-    # Double-check edge case if we overshot by one
-    if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
-        truncated_result = truncated_df.iloc[:-1].to_markdown()
-    return truncated_result
+        # Double-check edge case if we overshot by one
+        if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
+            truncated_result = truncated_df.iloc[:-1].to_markdown()
+        return truncated_result
 
 
 def _end_current_span(client, parent_trace_id, current_span, final_state, error=None):
