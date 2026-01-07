@@ -13,7 +13,6 @@ import os
 from typing import Annotated
 
 import pytest
-from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import (
     AIMessage,
@@ -376,30 +375,6 @@ def multiply(a: int, b: int) -> int:
         b: Second integer
     """
     return a * b
-
-
-@pytest.mark.foundation_models
-@pytest.mark.parametrize("model", _FOUNDATION_MODELS)
-def test_chat_databricks_agent_executor(model):
-    model = ChatDatabricks(
-        model=model,
-        temperature=0,
-        max_tokens=100,
-    )
-    tools = [add, multiply]
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "You are a helpful assistant"),
-            ("human", "{input}"),
-            ("placeholder", "{agent_scratchpad}"),
-        ]
-    )
-
-    agent = create_tool_calling_agent(model, tools, prompt)
-    agent_executor = AgentExecutor(agent=agent, tools=tools)
-
-    response = agent_executor.invoke({"input": "What is (10 + 5) * 3?"})
-    assert "45" in response["output"]
 
 
 @pytest.mark.foundation_models
@@ -784,7 +759,7 @@ def test_chat_databricks_custom_outputs():
 
 
 def test_chat_databricks_custom_outputs_stream():
-    llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
+    llm = ChatDatabricks(model="agents_ml-bbqiu-mcp-openai", use_responses_api=True)
     response = llm.stream(
         "What is the 10th fibonacci number?",
         custom_inputs={"key": "value"},
@@ -819,4 +794,84 @@ def test_chat_databricks_token_count():
     assert (
         last_chunk.usage_metadata["total_tokens"]
         == last_chunk.usage_metadata["input_tokens"] + last_chunk.usage_metadata["output_tokens"]
+    )
+
+
+def test_chat_databricks_gpt5_stream_with_usage():
+    """
+    Test GPT-5 streaming with usage metadata.
+
+    GPT-5 sends a final chunk with only usage data (no choices/delta).
+    This test verifies that the usage metadata is correctly extracted from that final chunk.
+
+    Example final chunk from GPT-5:
+    ChatCompletionChunk(
+        id='chatcmpl-...',
+        choices=[],  # Empty choices array
+        created=...,
+        model='gpt-5-2025-08-07',
+        object='chat.completion.chunk',
+        usage=CompletionUsage(
+            completion_tokens=267,
+            prompt_tokens=4861,
+            total_tokens=5128,
+            ...
+        )
+    )
+    """
+    from databricks.sdk import WorkspaceClient
+
+    # Use dogfood profile to access GPT-5
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+
+    llm = ChatDatabricks(
+        endpoint="gpt-5",
+        workspace_client=workspace_client,
+        max_tokens=100,
+        stream_usage=True,
+    )
+
+    # Stream a simple query
+    chunks = list(llm.stream("hello"))
+
+    # Verify we get chunks
+    assert len(chunks) > 0, "Expected at least one chunk from GPT-5 streaming"
+
+    # Find content chunks (non-empty content)
+    content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+    assert len(content_chunks) > 0, "Expected at least one content chunk"
+
+    # Find usage chunks (empty content with usage_metadata)
+    usage_chunks = [
+        chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+    ]
+
+    # Should have exactly ONE usage chunk from the final usage-only chunk
+    assert len(usage_chunks) == 1, (
+        f"Expected exactly 1 usage chunk from GPT-5 final chunk, got {len(usage_chunks)}"
+    )
+
+    # Verify usage chunk has correct metadata structure
+    usage_chunk = usage_chunks[0]
+    assert isinstance(usage_chunk, AIMessageChunk)
+    assert usage_chunk.content == ""
+    assert "input_tokens" in usage_chunk.usage_metadata
+    assert "output_tokens" in usage_chunk.usage_metadata
+    assert "total_tokens" in usage_chunk.usage_metadata
+
+    # Verify token counts are positive
+    assert usage_chunk.usage_metadata["input_tokens"] > 0, (
+        f"Expected positive input_tokens, got {usage_chunk.usage_metadata['input_tokens']}"
+    )
+    assert usage_chunk.usage_metadata["output_tokens"] > 0, (
+        f"Expected positive output_tokens, got {usage_chunk.usage_metadata['output_tokens']}"
+    )
+
+    # Verify total_tokens equals sum of input and output
+    expected_total = (
+        usage_chunk.usage_metadata["input_tokens"] + usage_chunk.usage_metadata["output_tokens"]
+    )
+    assert usage_chunk.usage_metadata["total_tokens"] == expected_total, (
+        f"Expected total_tokens ({usage_chunk.usage_metadata['total_tokens']}) "
+        f"to equal input_tokens + output_tokens ({expected_total})"
     )
