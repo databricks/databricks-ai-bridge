@@ -336,6 +336,82 @@ def test_chat_model_stream_no_duplicate_usage_chunks():
         assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
 
 
+def test_chat_model_stream_usage_only_final_chunk():
+    """Test that a final chunk with only usage data (no choices) correctly emits usage metadata."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 15
+    mock_usage.completion_tokens = 10
+
+    # Simulate GPT-5 streaming behavior: content chunks followed by usage-only chunk
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason=None,
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content=" world",
+                        model_dump=Mock(return_value={"role": "assistant", "content": " world"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with ONLY usage data, no choices/delta
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Should get content chunks plus one usage chunk
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 2
+        assert content_chunks[0].content == "Hello"
+        assert content_chunks[1].content == " world"
+
+        # Should emit exactly ONE usage chunk
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
+
+        # Verify usage chunk has correct metadata
+        usage_chunk = usage_chunks[0]
+        assert isinstance(usage_chunk, AIMessageChunk)
+        assert usage_chunk.content == ""
+        assert usage_chunk.usage_metadata["input_tokens"] == 15
+        assert usage_chunk.usage_metadata["output_tokens"] == 10
+        assert usage_chunk.usage_metadata["total_tokens"] == 25
+
+
 class GetWeather(BaseModel):
     """Get the current weather in a given location"""
 
