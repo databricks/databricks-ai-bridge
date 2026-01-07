@@ -856,15 +856,14 @@ def test_chat_databricks_gpt5_stream_with_usage():
     workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
 
     llm = ChatDatabricks(
-        endpoint="databricks-gpt-5-2",
+        endpoint="gpt-5",
         workspace_client=workspace_client,
-        temperature=0,
         max_tokens=100,
         stream_usage=True,
     )
 
     # Stream a simple query
-    chunks = list(llm.stream("Say hello in exactly 3 words."))
+    chunks = list(llm.stream("hello"))
 
     # Verify we get chunks
     assert len(chunks) > 0, "Expected at least one chunk from GPT-5 streaming"
