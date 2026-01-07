@@ -46,21 +46,12 @@ class DatabricksVectorSearch(VectorStore):
 
         index_name: The name of the index to use. Format: "catalog.schema.index".
 
-        endpoint: The name of the Databricks Vector Search ``endpoint``.
-            If not specified, the endpoint name is automatically inferred based on the index name.
+        endpoint: **Deprecated**. This parameter is ignored.
+            The endpoint name is automatically inferred from the index name.
 
-            .. note::
-
-                If you are using `databricks-vectorsearch` version < 0.35, the `endpoint` parameter
-                is required when initializing the vector store.
-
-                .. code-block:: python
-
-                    vector_store = DatabricksVectorSearch(
-                        endpoint="<your-endpoint-name>",
-                        index_name="<your-index-name>",
-                        ...
-                    )
+            .. deprecated::
+                The ``endpoint`` parameter is deprecated and will be removed in a future release.
+                The endpoint is always auto-inferred from the index name.
 
         embedding: The embedding model.
                   Required for direct-access index or delta-sync index
@@ -268,34 +259,31 @@ class DatabricksVectorSearch(VectorStore):
                 "Please install it with `pip install databricks-vectorsearch`."
             ) from e
 
-        try:
-            client_args = client_args or {}
-            client_args.setdefault("disable_notice", True)
-            if workspace_client is not None:
-                config = workspace_client.config
-                if config.auth_type == "model_serving_user_credentials":
-                    client_args.setdefault(
-                        "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-                    )
-                elif config.auth_type == "pat":
-                    client_args.setdefault("personal_access_token", config.token)
-                elif config.auth_type == "oauth-m2m":
-                    client_args.setdefault("workspace_url", config.host)
-                    client_args.setdefault("service_principal_client_id", config.client_id)
-                    client_args.setdefault("service_principal_client_secret", config.client_secret)
-            self.index = VectorSearchClient(**client_args).get_index(
-                endpoint_name=endpoint, index_name=index_name
+        if endpoint is not None:
+            import warnings
+
+            warnings.warn(
+                "The `endpoint` parameter is deprecated and will be ignored. "
+                "The endpoint is automatically inferred from the index name.",
+                DeprecationWarning,
+                stacklevel=2,
             )
-        except Exception as e:
-            if endpoint is None and "Wrong vector search endpoint" in str(e):
-                raise ValueError(
-                    "The `endpoint` parameter is required for instantiating "
-                    "DatabricksVectorSearch with the `databricks-vectorsearch` "
-                    "version earlier than 0.35. Please provide the endpoint "
-                    "name or upgrade to version 0.35 or later."
-                ) from e
-            else:
-                raise
+
+        client_args = client_args or {}
+        client_args.setdefault("disable_notice", True)
+        if workspace_client is not None:
+            config = workspace_client.config
+            if config.auth_type == "model_serving_user_credentials":
+                client_args.setdefault(
+                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                )
+            elif config.auth_type == "pat":
+                client_args.setdefault("personal_access_token", config.token)
+            elif config.auth_type == "oauth-m2m":
+                client_args.setdefault("workspace_url", config.host)
+                client_args.setdefault("service_principal_client_id", config.client_id)
+                client_args.setdefault("service_principal_client_secret", config.client_secret)
+        self.index = VectorSearchClient(**client_args).get_index(index_name=index_name)
 
         self._index_details = IndexDetails(self.index)
 
