@@ -381,6 +381,11 @@ def test_chat_model_stream_usage_only_final_chunk():
         ),
     ]
 
+    # Verify mock structure matches GPT-5 behavior
+    # Final chunk has empty choices list and usage data (no delta)
+    assert len(mock_chunks[2].choices) == 0
+    assert mock_chunks[2].usage is not None
+
     with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
@@ -410,6 +415,112 @@ def test_chat_model_stream_usage_only_final_chunk():
         assert usage_chunk.usage_metadata["input_tokens"] == 15
         assert usage_chunk.usage_metadata["output_tokens"] == 10
         assert usage_chunk.usage_metadata["total_tokens"] == 25
+
+
+def test_chat_model_stream_usage_only_chunk_missing_tokens():
+    """Test that a usage-only chunk with missing token data doesn't emit usage metadata."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = None  # Missing prompt_tokens
+    mock_usage.completion_tokens = 10
+
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with usage data but missing prompt_tokens
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Should get content chunks but NO usage chunk (due to missing tokens)
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 1
+
+        # Should NOT emit a usage chunk when tokens are missing
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 0, (
+            f"Expected 0 usage chunks when tokens are missing, got {len(usage_chunks)}"
+        )
+
+
+def test_chat_model_stream_usage_only_chunk_stream_usage_false():
+    """Test that a usage-only chunk is ignored when stream_usage=False."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 15
+    mock_usage.completion_tokens = 10
+
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with usage data
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=False))
+
+        # Should get content chunks only
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 1
+
+        # Should NOT emit a usage chunk when stream_usage=False
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 0, (
+            f"Expected 0 usage chunks when stream_usage=False, got {len(usage_chunks)}"
+        )
 
 
 class GetWeather(BaseModel):

@@ -379,30 +379,6 @@ def multiply(a: int, b: int) -> int:
     return a * b
 
 
-# @pytest.mark.foundation_models
-# @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
-# def test_chat_databricks_agent_executor(model):
-#     model = ChatDatabricks(
-#         model=model,
-#         temperature=0,
-#         max_tokens=100,
-#     )
-#     tools = [add, multiply]
-#     prompt = ChatPromptTemplate.from_messages(
-#         [
-#             ("system", "You are a helpful assistant"),
-#             ("human", "{input}"),
-#             ("placeholder", "{agent_scratchpad}"),
-#         ]
-#     )
-
-#     agent = create_tool_calling_agent(model, tools, prompt)
-#     agent_executor = AgentExecutor(agent=agent, tools=tools)
-
-#     response = agent_executor.invoke({"input": "What is (10 + 5) * 3?"})
-#     assert "45" in response["output"]
-
-
 @pytest.mark.foundation_models
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 def test_chat_databricks_langgraph(model):
@@ -790,11 +766,6 @@ def test_chat_databricks_custom_outputs_stream():
         "What is the 10th fibonacci number?",
         custom_inputs={"key": "value"},
     )
-
-    # for chunk in response:
-    #     print(chunk)
-
-    # assert False
 
     assert any(chunk.custom_outputs["key"] == "value" for chunk in response)
 
