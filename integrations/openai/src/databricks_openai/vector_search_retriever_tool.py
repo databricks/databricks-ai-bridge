@@ -229,67 +229,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         else:
             return self._execute_direct_api_path(query, filters, openai_client, **kwargs)
 
-    def _execute_direct_api_path(
-        self,
-        query: str,
-        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
-        openai_client: OpenAI = None,
-        **kwargs: Any,
-    ) -> List[Dict]:
-        from openai import OpenAI
-
-        oai_client = openai_client or OpenAI()
-        if not oai_client.api_key:
-            raise ValueError(
-                "OpenAI API key is required to generate embeddings for retrieval queries."
-            )
-
-        signature = inspect.signature(self._index.similarity_search)
-        kwargs = {**kwargs, **(self.model_extra or {})}
-        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
-
-        # Allow kwargs to override the default values upon invocation
-        num_results = kwargs.pop("num_results", self.num_results)
-        query_type = kwargs.pop("query_type", self.query_type)
-        reranker = kwargs.pop("reranker", self.reranker)
-
-        query_text = query if query_type and query_type.upper() == "HYBRID" else None
-        query_vector = (
-            oai_client.embeddings.create(input=query, model=self.embedding_model_name)
-            .data[0]
-            .embedding
-        )
-        if (
-            index_embedding_dimension := self._index_details.embedding_vector_column.get(
-                "embedding_dimension"
-            )
-        ) and len(query_vector) != index_embedding_dimension:
-            raise ValueError(
-                f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
-            )
-
-        combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
-
-        kwargs.update(
-            {
-                "query_text": query_text,
-                "query_vector": query_vector,
-                "columns": self.columns,
-                "filters": combined_filters,
-                "num_results": num_results,
-                "query_type": query_type,
-                "reranker": reranker,
-            }
-        )
-        search_resp = self._index.similarity_search(**kwargs)
-        docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
-            search_resp=search_resp,
-            retriever_schema=self._retriever_schema,
-            document_class=dict,
-            include_score=self.include_score,
-        )
-        return [doc for doc, _ in docs_with_score]
-
     def _get_mcp_toolkit(self) -> Callable:
         if self._mcp_tool_execute is not None:
             return self._mcp_tool_execute
@@ -425,6 +364,67 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             )
 
         return [self._normalize_mcp_result(result) for result in parsed]
+
+    def _execute_direct_api_path(
+        self,
+        query: str,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
+        openai_client: OpenAI = None,
+        **kwargs: Any,
+    ) -> List[Dict]:
+        from openai import OpenAI
+
+        oai_client = openai_client or OpenAI()
+        if not oai_client.api_key:
+            raise ValueError(
+                "OpenAI API key is required to generate embeddings for retrieval queries."
+            )
+
+        signature = inspect.signature(self._index.similarity_search)
+        kwargs = {**kwargs, **(self.model_extra or {})}
+        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+
+        # Allow kwargs to override the default values upon invocation
+        num_results = kwargs.pop("num_results", self.num_results)
+        query_type = kwargs.pop("query_type", self.query_type)
+        reranker = kwargs.pop("reranker", self.reranker)
+
+        query_text = query if query_type and query_type.upper() == "HYBRID" else None
+        query_vector = (
+            oai_client.embeddings.create(input=query, model=self.embedding_model_name)
+            .data[0]
+            .embedding
+        )
+        if (
+            index_embedding_dimension := self._index_details.embedding_vector_column.get(
+                "embedding_dimension"
+            )
+        ) and len(query_vector) != index_embedding_dimension:
+            raise ValueError(
+                f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
+            )
+
+        combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
+
+        kwargs.update(
+            {
+                "query_text": query_text,
+                "query_vector": query_vector,
+                "columns": self.columns,
+                "filters": combined_filters,
+                "num_results": num_results,
+                "query_type": query_type,
+                "reranker": reranker,
+            }
+        )
+        search_resp = self._index.similarity_search(**kwargs)
+        docs_with_score: List[Tuple[Dict, float]] = parse_vector_search_response(
+            search_resp=search_resp,
+            retriever_schema=self._retriever_schema,
+            document_class=dict,
+            include_score=self.include_score,
+        )
+        return [doc for doc, _ in docs_with_score]
 
     def _execute_mcp_path(
         self,
