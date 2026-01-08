@@ -469,81 +469,35 @@ class TestIsDatabricksAppsUrl:
 
 
 class TestIsOauthAuth:
-    """Test cases for _is_oauth_auth helper function."""
-
-    def test_is_oauth_auth_returns_true_when_oauth_token_succeeds(self):
+    @pytest.mark.parametrize(
+        "side_effect,expected",
+        [
+            (None, True),  # oauth_token succeeds
+            (ValueError("not available"), False),  # oauth_token raises
+        ],
+    )
+    def test_is_oauth_auth(self, side_effect, expected):
         mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.return_value = MagicMock()
-        assert _is_oauth_auth(mock_client) is True
-
-    def test_is_oauth_auth_returns_false_when_oauth_token_raises(self):
-        mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError("OAuth tokens are not available")
-        assert _is_oauth_auth(mock_client) is False
-
-    def test_is_oauth_auth_returns_false_for_pat(self):
-        mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError(
-            "OAuth tokens are not available for pat authentication"
-        )
-        assert _is_oauth_auth(mock_client) is False
-
-    def test_is_oauth_auth_returns_false_for_runtime(self):
-        mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError(
-            "OAuth tokens are not available for runtime authentication"
-        )
-        assert _is_oauth_auth(mock_client) is False
+        if side_effect:
+            mock_client.config.oauth_token.side_effect = side_effect
+        assert _is_oauth_auth(mock_client) is expected
 
 
 class TestDatabricksMCPClientOAuthValidation:
-    """Test cases for OAuth validation with Databricks Apps."""
-
-    def test_raises_error_for_non_oauth_with_databricks_apps(self):
+    @pytest.mark.parametrize("auth_type", ["pat", "runtime"])
+    def test_raises_error_for_non_oauth_with_databricks_apps(self, auth_type):
         mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError(
-            "OAuth tokens are not available for pat authentication"
-        )
-
+        mock_client.config.oauth_token.side_effect = ValueError(f"not available for {auth_type}")
         with pytest.raises(ValueError, match="OAuth authentication is required"):
-            DatabricksMCPClient(
-                "https://my-app.staging.aws.databricksapps.com/mcp",
-                mock_client,
-            )
-
-    def test_raises_error_for_runtime_auth_with_databricks_apps(self):
-        mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError(
-            "OAuth tokens are not available for runtime authentication"
-        )
-
-        with pytest.raises(ValueError, match="OAuth authentication is required"):
-            DatabricksMCPClient(
-                "https://my-app.staging.aws.databricksapps.com/mcp",
-                mock_client,
-            )
+            DatabricksMCPClient("https://my-app.databricksapps.com/mcp", mock_client)
 
     def test_allows_oauth_with_databricks_apps(self):
         mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.return_value = MagicMock()
-
-        client = DatabricksMCPClient(
-            "https://my-app.staging.aws.databricksapps.com/mcp",
-            mock_client,
-        )
-        assert client.server_url == "https://my-app.staging.aws.databricksapps.com/mcp"
+        client = DatabricksMCPClient("https://my-app.databricksapps.com/mcp", mock_client)
+        assert client.server_url == "https://my-app.databricksapps.com/mcp"
 
     def test_allows_non_oauth_with_non_databricks_apps(self):
         mock_client = MagicMock(spec=WorkspaceClient)
-        mock_client.config.oauth_token.side_effect = ValueError(
-            "OAuth tokens are not available for pat authentication"
-        )
-
-        client = DatabricksMCPClient(
-            "https://test.cloud.databricks.com/api/2.0/mcp/functions/catalog/schema",
-            mock_client,
-        )
-        assert (
-            client.server_url
-            == "https://test.cloud.databricks.com/api/2.0/mcp/functions/catalog/schema"
-        )
+        mock_client.config.oauth_token.side_effect = ValueError("not available")
+        client = DatabricksMCPClient("https://test.com/api/2.0/mcp/functions/a/b", mock_client)
+        assert client.server_url == "https://test.com/api/2.0/mcp/functions/a/b"
