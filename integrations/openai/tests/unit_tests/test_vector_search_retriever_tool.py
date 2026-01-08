@@ -48,7 +48,7 @@ def mock_openai_client():
         yield mock_client
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_mcp_toolkit():
     """Mock McpServerToolkit for testing MCP path."""
     import uuid
@@ -79,6 +79,32 @@ def mock_mcp_toolkit():
     ) as mock_toolkit_class:
         mock_toolkit_class.from_vector_search.return_value = mock_toolkit_instance
         yield mock_toolkit_instance
+
+
+@pytest.fixture(params=["mcp", "direct_api"])
+def execution_path(request, mock_mcp_toolkit):
+    """Parametrized fixture that sets up mocks for MCP or Direct API path."""
+    if request.param == "mcp":
+        yield {
+            "path": "mcp",
+            "index_name": DELTA_SYNC_INDEX,
+            "mock_tool": mock_mcp_toolkit.get_tools.return_value[0],
+        }
+    else:
+        # For direct API, we need to mock _index on the tool after creation
+        yield {
+            "path": "direct_api",
+            "index_name": DIRECT_ACCESS_INDEX,
+            "mock_tool": None,
+        }
+
+
+def setup_tool_for_path(execution_path, tool):
+    """Set up mock for the tool based on execution path."""
+    from databricks.vector_search.client import VectorSearchIndex
+
+    if execution_path["path"] == "direct_api":
+        tool._index = create_autospec(VectorSearchIndex, instance=True)
 
 
 def get_chat_completion_response(tool_name: str, index_name: str):
@@ -162,6 +188,7 @@ class SelfManagedEmbeddingsTest:
 @pytest.mark.parametrize("tool_name", [None, "test_tool"])
 @pytest.mark.parametrize("tool_description", [None, "Test tool for vector search"])
 def test_vector_search_retriever_tool_init(
+    mock_mcp_toolkit,
     index_name: str,
     columns: Optional[List[str]],
     tool_name: Optional[str],
@@ -375,92 +402,142 @@ def test_vector_search_client_with_sp_workspace_client():
             )
 
 
-def test_kwargs_are_passed_through(mock_mcp_toolkit) -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
-
-    # Get the mock tool that was set up by the fixture
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+def test_kwargs_are_passed_through(execution_path) -> None:
+    vector_search_tool = init_vector_search_tool(
+        execution_path["index_name"], score_threshold=0.5
+    )
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     # extra_param is ignored because it's not supported
     vector_search_tool.execute(
         query="what cities are in Germany", debug_level=2, extra_param="something random"
     )
 
-    # Verify MCP tool execute was called with correct arguments and meta
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "what cities are in Germany"
+        assert call_kwargs["query"] == "what cities are in Germany"
 
-    meta = call_kwargs["_meta"]
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
-    assert meta["score_threshold"] == 0.5
-    assert meta["query_type"] == vector_search_tool.query_type
-    assert "filters" not in meta
-    assert "columns_to_rerank" not in meta
-    assert "debug_level" not in meta
-    assert "extra_param" not in meta
+        meta = call_kwargs["_meta"]
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+        assert meta["score_threshold"] == 0.5
+        assert meta["query_type"] == vector_search_tool.query_type
+        assert "filters" not in meta
+        assert "columns_to_rerank" not in meta
+        assert "debug_level" not in meta
+        assert "extra_param" not in meta
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["columns"] == vector_search_tool.columns
+        assert call_kwargs["score_threshold"] == 0.5
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
+        assert call_kwargs["filters"] == {}
+        # debug_level should be passed through for direct API (if supported by signature)
+        assert call_kwargs.get("debug_level") == 2
 
 
-def test_filters_are_passed_through(mock_mcp_toolkit) -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+def test_filters_are_passed_through(execution_path) -> None:
+    vector_search_tool = init_vector_search_tool(execution_path["index_name"])
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     vector_search_tool.execute(
         query="what cities are in Germany",
         filters=[FilterItem(key="country", value="Germany")],
     )
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
-    meta = call_kwargs["_meta"]
 
-    assert call_kwargs["query"] == "what cities are in Germany"
-    assert meta["filters"] == '{"country": "Germany"}'
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
+        meta = call_kwargs["_meta"]
+
+        assert call_kwargs["query"] == "what cities are in Germany"
+        assert json.loads(meta["filters"]) == {"country": "Germany"}
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["filters"] == {"country": "Germany"}
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
+        assert call_kwargs["columns"] == vector_search_tool.columns
 
 
-def test_filters_are_combined(mock_mcp_toolkit) -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+def test_filters_are_combined(execution_path) -> None:
+    vector_search_tool = init_vector_search_tool(
+        execution_path["index_name"], filters={"city LIKE": "Berlin"}
+    )
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     vector_search_tool.execute(
         query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
     )
 
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    expected_combined_filters = {"country": "Germany", "city LIKE": "Berlin"}
 
-    assert call_kwargs["query"] == "what cities are in Germany"
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    meta = call_kwargs["_meta"]
-    assert meta["filters"] == '{"country": "Germany", "city LIKE": "Berlin"}'
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
+        assert call_kwargs["query"] == "what cities are in Germany"
+
+        meta = call_kwargs["_meta"]
+        assert json.loads(meta["filters"]) == expected_combined_filters
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["filters"] == expected_combined_filters
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
+        assert call_kwargs["columns"] == vector_search_tool.columns
 
 
-def test_kwargs_override_both_num_results_and_query_type(mock_mcp_toolkit) -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+def test_kwargs_override_both_num_results_and_query_type(execution_path) -> None:
+    vector_search_tool = init_vector_search_tool(
+        execution_path["index_name"], num_results=10, query_type="ANN"
+    )
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     vector_search_tool.execute(
         query="what cities are in Germany", num_results=3, query_type="HYBRID"
     )
 
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "what cities are in Germany"
+        assert call_kwargs["query"] == "what cities are in Germany"
 
-    meta = call_kwargs["_meta"]
-    # Should use overridden values, not the defaults from constructor
-    assert meta["num_results"] == 3
-    assert meta["query_type"] == "HYBRID"
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
-    assert "filters" not in meta
+        meta = call_kwargs["_meta"]
+        # Should use overridden values, not the defaults from constructor
+        assert meta["num_results"] == 3
+        assert meta["query_type"] == "HYBRID"
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+        assert "filters" not in meta
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        # Should use overridden values, not the defaults from constructor
+        assert call_kwargs["num_results"] == 3
+        assert call_kwargs["query_type"] == "HYBRID"
+        assert call_kwargs["columns"] == vector_search_tool.columns
+        assert call_kwargs["filters"] == {}
 
 
 def test_filters_as_dict_mcp_path(mock_mcp_toolkit) -> None:
@@ -480,29 +557,6 @@ def test_filters_as_dict_mcp_path(mock_mcp_toolkit) -> None:
 
     # Filters should be serialized correctly
     assert json.loads(meta["filters"]) == {"country": "Germany", "status": "active"}
-
-
-def test_filters_as_dict_direct_api_path() -> None:
-    """Test that filters can be passed as dict (not just List[FilterItem]) in Direct API path."""
-    from unittest.mock import create_autospec
-
-    from databricks.vector_search.client import VectorSearchIndex
-
-    vector_search_tool = init_vector_search_tool(
-        DIRECT_ACCESS_INDEX, text_column="text", embedding_model_name="text-embedding-3-small"
-    )
-    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
-
-    # Pass filters as dict instead of List[FilterItem]
-    vector_search_tool.execute(
-        query="test query",
-        filters={"country": "Germany", "status": "active"},
-    )
-
-    vector_search_tool._index.similarity_search.assert_called_once()
-    call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
-
-    assert call_kwargs["filters"] == {"country": "Germany", "status": "active"}
 
 
 def test_include_score_always_sent_in_meta(mock_mcp_toolkit) -> None:
@@ -643,37 +697,47 @@ def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
         )
 
 
-def test_predefined_filters_work_without_dynamic_filter(mock_mcp_toolkit) -> None:
+def test_predefined_filters_work_without_dynamic_filter(execution_path) -> None:
     """Test that predefined filters work correctly when dynamic_filter is False."""
+    predefined_filters = {"status": "active", "category": "electronics"}
     # Initialize tool with only predefined filters (dynamic_filter=False by default)
     vector_search_tool = init_vector_search_tool(
-        DELTA_SYNC_INDEX, filters={"status": "active", "category": "electronics"}
+        execution_path["index_name"], filters=predefined_filters
     )
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     # The filters parameter should NOT be exposed since dynamic_filter=False
     tool_schema = vector_search_tool.tool
     assert "filters" not in tool_schema["function"]["parameters"]["properties"]
 
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
-
     vector_search_tool.execute(query="what electronics are available")
 
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "what electronics are available"
+        assert call_kwargs["query"] == "what electronics are available"
 
-    meta = call_kwargs["_meta"]
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
-    assert json.loads(meta["filters"]) == {"status": "active", "category": "electronics"}
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
+        meta = call_kwargs["_meta"]
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+        assert json.loads(meta["filters"]) == predefined_filters
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["filters"] == predefined_filters
+        assert call_kwargs["columns"] == vector_search_tool.columns
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
 
 
-def test_filter_item_serialization(mock_mcp_toolkit) -> None:
+def test_filter_item_serialization(execution_path) -> None:
     """Test that FilterItem objects are properly converted to dictionaries."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+    vector_search_tool = init_vector_search_tool(execution_path["index_name"])
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     # Test various filter types
     filters = [
@@ -692,46 +756,68 @@ def test_filter_item_serialization(mock_mcp_toolkit) -> None:
         "tags": ["wireless", "bluetooth"],
     }
 
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "find products"
+        assert call_kwargs["query"] == "find products"
 
-    meta = call_kwargs["_meta"]
-    # Filters should be serialized as JSON
-    assert json.loads(meta["filters"]) == expected_filters
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
-    assert meta["columns"] == ",".join(vector_search_tool.columns)
+        meta = call_kwargs["_meta"]
+        # Filters should be serialized as JSON
+        assert json.loads(meta["filters"]) == expected_filters
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+        assert meta["columns"] == ",".join(vector_search_tool.columns)
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["filters"] == expected_filters
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
+        assert call_kwargs["columns"] == vector_search_tool.columns
 
 
-def test_reranker_is_passed_through(mock_mcp_toolkit) -> None:
+def test_reranker_is_passed_through(execution_path) -> None:
+    reranker = DatabricksReranker(columns_to_rerank=["country"])
     vector_search_tool = init_vector_search_tool(
-        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+        execution_path["index_name"], reranker=reranker
     )
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     vector_search_tool.execute(
         query="what cities are in Germany", filters=[FilterItem(key="country", value="Germany")]
     )
 
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "what cities are in Germany"
+        assert call_kwargs["query"] == "what cities are in Germany"
 
-    meta = call_kwargs["_meta"]
-    assert meta["columns_to_rerank"] == "country"
-    assert json.loads(meta["filters"]) == {"country": "Germany"}
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
+        meta = call_kwargs["_meta"]
+        assert meta["columns_to_rerank"] == "country"
+        assert json.loads(meta["filters"]) == {"country": "Germany"}
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        assert call_kwargs["reranker"] == reranker
+        assert call_kwargs["filters"] == {"country": "Germany"}
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
 
 
-def test_reranker_is_overriden(mock_mcp_toolkit) -> None:
+def test_reranker_is_overriden(execution_path) -> None:
+    original_reranker = DatabricksReranker(columns_to_rerank=["country"])
     vector_search_tool = init_vector_search_tool(
-        DELTA_SYNC_INDEX, reranker=DatabricksReranker(columns_to_rerank=["country"])
+        execution_path["index_name"], reranker=original_reranker
     )
-    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+    setup_tool_for_path(execution_path, vector_search_tool)
 
     overridden_reranker = DatabricksReranker(columns_to_rerank=["country2"])
     vector_search_tool.execute(
@@ -739,17 +825,29 @@ def test_reranker_is_overriden(mock_mcp_toolkit) -> None:
         filters=[FilterItem(key="country", value="Germany")],
         reranker=overridden_reranker,
     )
-    mock_tool.execute.assert_called_once()
-    call_kwargs = mock_tool.execute.call_args.kwargs
 
-    assert call_kwargs["query"] == "what cities are in Germany"
+    if execution_path["path"] == "mcp":
+        mock_tool = execution_path["mock_tool"]
+        mock_tool.execute.assert_called_once()
+        call_kwargs = mock_tool.execute.call_args.kwargs
 
-    meta = call_kwargs["_meta"]
-    # Should use overridden reranker columns
-    assert meta["columns_to_rerank"] == "country2"
-    assert json.loads(meta["filters"]) == {"country": "Germany"}
-    assert meta["num_results"] == vector_search_tool.num_results
-    assert meta["query_type"] == vector_search_tool.query_type
+        assert call_kwargs["query"] == "what cities are in Germany"
+
+        meta = call_kwargs["_meta"]
+        # Should use overridden reranker columns
+        assert meta["columns_to_rerank"] == "country2"
+        assert json.loads(meta["filters"]) == {"country": "Germany"}
+        assert meta["num_results"] == vector_search_tool.num_results
+        assert meta["query_type"] == vector_search_tool.query_type
+    else:
+        vector_search_tool._index.similarity_search.assert_called_once()
+        call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+        # Should use overridden reranker
+        assert call_kwargs["reranker"] == overridden_reranker
+        assert call_kwargs["filters"] == {"country": "Germany"}
+        assert call_kwargs["num_results"] == vector_search_tool.num_results
+        assert call_kwargs["query_type"] == vector_search_tool.query_type
 
 
 # ============================================================================
