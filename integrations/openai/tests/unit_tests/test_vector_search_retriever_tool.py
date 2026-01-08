@@ -403,9 +403,7 @@ def test_vector_search_client_with_sp_workspace_client():
 
 
 def test_kwargs_are_passed_through(execution_path) -> None:
-    vector_search_tool = init_vector_search_tool(
-        execution_path["index_name"], score_threshold=0.5
-    )
+    vector_search_tool = init_vector_search_tool(execution_path["index_name"], score_threshold=0.5)
     setup_tool_for_path(execution_path, vector_search_tool)
 
     # extra_param is ignored because it's not supported
@@ -781,9 +779,7 @@ def test_filter_item_serialization(execution_path) -> None:
 
 def test_reranker_is_passed_through(execution_path) -> None:
     reranker = DatabricksReranker(columns_to_rerank=["country"])
-    vector_search_tool = init_vector_search_tool(
-        execution_path["index_name"], reranker=reranker
-    )
+    vector_search_tool = init_vector_search_tool(execution_path["index_name"], reranker=reranker)
     setup_tool_for_path(execution_path, vector_search_tool)
 
     vector_search_tool.execute(
