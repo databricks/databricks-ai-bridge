@@ -384,19 +384,12 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
     def _normalize_mcp_result(self, result: Dict) -> Dict:
         """
-        Normalize a single MCP result dict to match the Direct API format.
+        Normalize MCP result to page_content/metadata format for backward compatibility.
 
-        Transforms flat MCP response:
-            {"text_col": "content", "other_col": "value", "score": 0.5}
+        MCP returns: {"id": "doc1", "text": "content", "score": 0.95}
+        We convert to: {"page_content": "content", "metadata": {"id": "doc1", "score": 0.95}}
 
-        Into standard page_content/metadata format:
-            {"page_content": "content", "metadata": {"other_col": "value", "score": 0.5}}
-
-        Args:
-            result: Single flat dict from MCP response
-
-        Returns:
-            Dict with page_content and metadata keys
+        This ensures callers get consistent output regardless of MCP vs Direct API path.
         """
         text_column = self.text_column
         page_content = result.get(text_column, "")
@@ -407,16 +400,10 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
     def _parse_mcp_response(self, mcp_response: str) -> List[Dict]:
         """
-        Parse MCP response string into List[Dict] format matching Direct API output.
+        Parse MCP JSON response and normalize to page_content/metadata format.
 
-        MCP returns: '[{"text_col": "content", "other_col": "value"}, ...]'
-        We normalize to: '[{"page_content": "content", "metadata": {"other_col": "value"}}, ...]'
-
-        Args:
-            mcp_response: JSON string from MCP tool
-
-        Returns:
-            List[Dict] with page_content and metadata keys
+        The Vector Search MCP server returns a JSON array of flat result dicts.
+        We parse and normalize each result for consistent output format.
         """
         try:
             parsed = json.loads(mcp_response)
