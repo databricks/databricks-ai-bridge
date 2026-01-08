@@ -23,6 +23,28 @@ from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _is_databricks_apps_url(url: str) -> bool:
+    """Check if the URL is hosted on Databricks Apps."""
+    parsed = urlparse(url)
+    return parsed.netloc.endswith(".databricksapps.com")
+
+
+def _is_oauth_auth(workspace_client: WorkspaceClient) -> bool:
+    """Check if the workspace client is using OAuth authentication.
+
+    Uses the SDK's oauth_token() method to determine if OAuth is available.
+    This is more resilient than checking auth_type directly, as it handles
+    various non-OAuth auth types (pat, runtime, etc.).
+    """
+    try:
+        workspace_client.config.oauth_token()
+        return True
+    except ValueError:
+        # oauth_token() raises ValueError when not using OAuth-based auth
+        return False
+
+
 # MCP URL types
 UC_FUNCTIONS_MCP = "uc_functions_mcp"
 VECTOR_SEARCH_MCP = "vector_search_mcp"
@@ -122,6 +144,15 @@ class DatabricksMCPClient:
     def __init__(self, server_url: str, workspace_client: Optional[WorkspaceClient] = None):
         self.client = workspace_client or WorkspaceClient()
         self.server_url = server_url
+
+        # Early detection: error if using non-OAuth auth with Databricks Apps
+        if _is_databricks_apps_url(server_url) and not _is_oauth_auth(self.client):
+            raise ValueError(
+                "OAuth authentication is required for MCP servers hosted on Databricks Apps. "
+                "Your current authentication method is not supported. "
+                "Please use OAuth authentication instead. "
+                "For more information: https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
+            )
 
     def _get_databricks_managed_mcp_url_type(self) -> str:
         """Determine the MCP URL type based on the path."""

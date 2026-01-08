@@ -1,4 +1,5 @@
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors.platform import PermissionDenied
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthToken
 
@@ -47,6 +48,17 @@ class DatabricksOAuthClientProvider(OAuthClientProvider):
 
     def __init__(self, workspace_client: WorkspaceClient):
         self.workspace_client = workspace_client
+
+        # Pre-flight check: verify the workspace client has basic permissions
+        try:
+            workspace_client.current_user.me()
+        except PermissionDenied as e:
+            raise PermissionError(
+                f"The workspace client does not have permission to access the Databricks workspace. "
+                f"Please ensure the service principal or user has the required permissions to call Databricks APIs. "
+                f"Original error: {e}"
+            ) from e
+
         self.databricks_token_storage = DatabricksTokenStorage(workspace_client)
 
         super().__init__(

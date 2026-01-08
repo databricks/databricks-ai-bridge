@@ -11,6 +11,8 @@ from databricks_mcp.mcp import (
     UC_FUNCTIONS_MCP,
     VECTOR_SEARCH_MCP,
     DatabricksMCPClient,
+    _is_databricks_apps_url,
+    _is_oauth_auth,
 )
 
 
@@ -131,6 +133,7 @@ class TestDatabricksMCPClient:
         with (
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
             patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
         ):
             mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
             mock_session_class.return_value.__aenter__.return_value = mock_session
@@ -156,6 +159,7 @@ class TestDatabricksMCPClient:
         with (
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
             patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
         ):
             mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
             mock_session_class.return_value.__aenter__.return_value = mock_session
@@ -434,6 +438,7 @@ class TestMCPURLPatterns:
                 client, "_get_databricks_managed_mcp_url_type", return_value=UC_FUNCTIONS_MCP
             ),
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
             patch("requests.request") as mock_request,
         ):
             mock_client.side_effect = original_error
@@ -442,3 +447,57 @@ class TestMCPURLPatterns:
                 client.list_tools()
 
             mock_request.assert_not_called()
+
+
+class TestIsDatabricksAppsUrl:
+    """Test cases for _is_databricks_apps_url helper function."""
+
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            ("https://my-app.staging.aws.databricksapps.com/mcp", True),
+            ("https://my-app.prod.azure.databricksapps.com/mcp", True),
+            ("https://my-app.databricksapps.com", True),
+            ("https://test.cloud.databricks.com/api/2.0/mcp/functions/a/b", False),
+            ("https://custom-server.example.com/mcp", False),
+            ("https://databricksapps.com.evil.com/mcp", False),
+            ("https://notdatabricksapps.com/mcp", False),
+        ],
+    )
+    def test_is_databricks_apps_url(self, url, expected):
+        assert _is_databricks_apps_url(url) == expected
+
+
+class TestIsOauthAuth:
+    @pytest.mark.parametrize(
+        "side_effect,expected",
+        [
+            (None, True),  # oauth_token succeeds
+            (ValueError("not available"), False),  # oauth_token raises
+        ],
+    )
+    def test_is_oauth_auth(self, side_effect, expected):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        if side_effect:
+            mock_client.config.oauth_token.side_effect = side_effect
+        assert _is_oauth_auth(mock_client) is expected
+
+
+class TestDatabricksMCPClientOAuthValidation:
+    @pytest.mark.parametrize("auth_type", ["pat", "runtime"])
+    def test_raises_error_for_non_oauth_with_databricks_apps(self, auth_type):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.oauth_token.side_effect = ValueError(f"not available for {auth_type}")
+        with pytest.raises(ValueError, match="OAuth authentication is required"):
+            DatabricksMCPClient("https://my-app.databricksapps.com/mcp", mock_client)
+
+    def test_allows_oauth_with_databricks_apps(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        client = DatabricksMCPClient("https://my-app.databricksapps.com/mcp", mock_client)
+        assert client.server_url == "https://my-app.databricksapps.com/mcp"
+
+    def test_allows_non_oauth_with_non_databricks_apps(self):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.oauth_token.side_effect = ValueError("not available")
+        client = DatabricksMCPClient("https://test.com/api/2.0/mcp/functions/a/b", mock_client)
+        assert client.server_url == "https://test.com/api/2.0/mcp/functions/a/b"
