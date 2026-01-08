@@ -463,6 +463,69 @@ def test_kwargs_override_both_num_results_and_query_type(mock_mcp_toolkit) -> No
     assert "filters" not in meta
 
 
+def test_filters_as_dict_mcp_path(mock_mcp_toolkit) -> None:
+    """Test that filters can be passed as dict (not just List[FilterItem]) in MCP path."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    # Pass filters as dict instead of List[FilterItem]
+    vector_search_tool.execute(
+        query="test query",
+        filters={"country": "Germany", "status": "active"},
+    )
+
+    mock_tool.execute.assert_called_once()
+    call_kwargs = mock_tool.execute.call_args.kwargs
+    meta = call_kwargs["_meta"]
+
+    # Filters should be serialized correctly
+    assert json.loads(meta["filters"]) == {"country": "Germany", "status": "active"}
+
+
+def test_filters_as_dict_direct_api_path() -> None:
+    """Test that filters can be passed as dict (not just List[FilterItem]) in Direct API path."""
+    from unittest.mock import create_autospec
+
+    from databricks.vector_search.client import VectorSearchIndex
+
+    vector_search_tool = init_vector_search_tool(
+        DIRECT_ACCESS_INDEX, text_column="text", embedding_model_name="text-embedding-3-small"
+    )
+    vector_search_tool._index = create_autospec(VectorSearchIndex, instance=True)
+
+    # Pass filters as dict instead of List[FilterItem]
+    vector_search_tool.execute(
+        query="test query",
+        filters={"country": "Germany", "status": "active"},
+    )
+
+    vector_search_tool._index.similarity_search.assert_called_once()
+    call_kwargs = vector_search_tool._index.similarity_search.call_args.kwargs
+
+    assert call_kwargs["filters"] == {"country": "Germany", "status": "active"}
+
+
+def test_include_score_always_sent_in_meta(mock_mcp_toolkit) -> None:
+    """Test that include_score is always sent explicitly (true or false) to override backend defaults."""
+    mock_tool = mock_mcp_toolkit.get_tools.return_value[0]
+
+    # Test with include_score=True
+    tool_with_score = init_vector_search_tool(DELTA_SYNC_INDEX, include_score=True)
+    tool_with_score.execute(query="test")
+
+    call_kwargs = mock_tool.execute.call_args.kwargs
+    assert call_kwargs["_meta"]["include_score"] == "true"
+
+    mock_tool.reset_mock()
+
+    # Test with include_score=False (default)
+    tool_without_score = init_vector_search_tool(DELTA_SYNC_INDEX, include_score=False)
+    tool_without_score.execute(query="test")
+
+    call_kwargs = mock_tool.execute.call_args.kwargs
+    assert call_kwargs["_meta"]["include_score"] == "false"
+
+
 def test_get_filter_param_description_with_column_metadata() -> None:
     """Test that _get_filter_param_description includes column metadata when available."""
     # Mock table info with column metadata

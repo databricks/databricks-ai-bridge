@@ -1,7 +1,7 @@
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from databricks.vector_search.client import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
@@ -200,7 +200,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def execute(
         self,
         query: str,
-        filters: Optional[List[FilterItem]] = None,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
         openai_client: OpenAI = None,
         **kwargs: Any,
     ) -> List[Dict]:
@@ -232,7 +232,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def _execute_direct_api_path(
         self,
         query: str,
-        filters: Optional[List[FilterItem]] = None,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
         openai_client: OpenAI = None,
         **kwargs: Any,
     ) -> List[Dict]:
@@ -268,9 +268,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 f"Expected embedding dimension {index_embedding_dimension} but got {len(query_vector)}"
             )
 
-        # Since LLM can generate either a dict or FilterItem, convert to dict always
-        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
-        combined_filters = {**filters_dict, **(self.filters or {})}
+        combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
 
         kwargs.update(
             {
@@ -326,8 +324,26 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._mcp_tool_execute = tools[0].execute
         return self._mcp_tool_execute
 
+    def _normalize_filters(
+        self, filters: Optional[Union[Dict[str, Any], List[FilterItem]]]
+    ) -> Dict[str, Any]:
+        """
+        Normalize filters to a dict format.
+
+        Args:
+            filters: Either a dict or List[FilterItem]
+
+        Returns:
+            Dict of filter key-value pairs
+        """
+        if filters is None:
+            return {}
+        if isinstance(filters, dict):
+            return filters
+        return {dict(item)["key"]: dict(item)["value"] for item in filters}
+
     def _build_mcp_meta(
-        self, filters: Optional[List[FilterItem]] = None, **kwargs: Any
+        self, filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
         kwargs = {**(self.model_extra or {}), **kwargs}
 
@@ -344,16 +360,15 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         if self.columns:
             meta["columns"] = ",".join(self.columns)
 
-        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
-        combined_filters = {**filters_dict, **(self.filters or {})}
+        combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
         if combined_filters:
             meta["filters"] = json.dumps(combined_filters)
 
         if "score_threshold" in kwargs:
             meta["score_threshold"] = float(kwargs.pop("score_threshold"))
 
-        if self.include_score:
-            meta["include_score"] = "true"
+        # Always send include_score explicitly to override backend defaults
+        meta["include_score"] = "true" if self.include_score else "false"
 
         reranker = kwargs.pop("reranker", self.reranker)
         if reranker and hasattr(reranker, "columns_to_rerank"):
@@ -427,7 +442,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     def _execute_mcp_path(
         self,
         query: str,
-        filters: Optional[List[FilterItem]] = None,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
         **kwargs: Any,
     ) -> List[Dict]:
         try:
