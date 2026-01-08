@@ -1,5 +1,3 @@
-import os
-
 from databricks.sdk import WorkspaceClient
 
 from databricks_mcp import DatabricksMCPClient
