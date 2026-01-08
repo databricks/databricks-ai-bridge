@@ -2,8 +2,6 @@ from databricks.sdk import WorkspaceClient
 
 from databricks_mcp import DatabricksMCPClient
 
-# os.environ["DATABRICKS_CONFIG_PROFILE"] = "dogfood"
-
 # Replace with your deployed app URL
 mcp_server_url = "https://mcp-chloe-test-6051921418418893.staging.aws.databricksapps.com/mcp"
 

@@ -30,9 +30,19 @@ def _is_databricks_apps_url(url: str) -> bool:
     return parsed.netloc.endswith(".databricksapps.com")
 
 
-def _is_pat_auth(workspace_client: WorkspaceClient) -> bool:
-    """Check if the workspace client is using PAT authentication."""
-    return workspace_client.config.auth_type == "pat"
+def _is_oauth_auth(workspace_client: WorkspaceClient) -> bool:
+    """Check if the workspace client is using OAuth authentication.
+
+    Uses the SDK's oauth_token() method to determine if OAuth is available.
+    This is more resilient than checking auth_type directly, as it handles
+    various non-OAuth auth types (pat, runtime, etc.).
+    """
+    try:
+        workspace_client.config.oauth_token()
+        return True
+    except ValueError:
+        # oauth_token() raises ValueError when not using OAuth-based auth
+        return False
 
 
 # MCP URL types
@@ -135,10 +145,11 @@ class DatabricksMCPClient:
         self.client = workspace_client or WorkspaceClient()
         self.server_url = server_url
 
-        # Early detection: error if using PAT with Databricks Apps
-        if _is_databricks_apps_url(server_url) and _is_pat_auth(self.client):
+        # Early detection: error if using non-OAuth auth with Databricks Apps
+        if _is_databricks_apps_url(server_url) and not _is_oauth_auth(self.client):
             raise ValueError(
-                "Personal Access Tokens (PAT) are not supported for MCP servers hosted on Databricks Apps. "
+                "OAuth authentication is required for MCP servers hosted on Databricks Apps. "
+                "Your current authentication method is not supported. "
                 "Please use OAuth authentication instead. "
                 "For more information: https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
             )
