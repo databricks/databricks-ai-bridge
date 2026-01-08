@@ -55,9 +55,13 @@ def mock_mcp_toolkit():
 
     # Create mock response in MCP format (flat JSON with all columns)
     def create_mcp_response(**kwargs):
-        # MCP returns flat dicts as JSON string
         mcp_response_data = [
-            {"id": str(uuid.uuid4()), "text": text, "score": "0.5"} for text in INPUT_TEXTS
+            {
+                "id": str(uuid.uuid4()),
+                "text": text,
+                "score": 0.85 - (i * 0.1),  # Decreasing scores like real results
+            }
+            for i, text in enumerate(INPUT_TEXTS)
         ]
         return json.dumps(mcp_response_data)
 
@@ -211,16 +215,8 @@ def test_vector_search_retriever_tool_init(
     assert docs is not None
     assert len(docs) == len(INPUT_TEXTS)
 
-    # Check format based on index type
-    if index_name == DELTA_SYNC_INDEX:
-        # MCP path returns flat dicts
-        assert all(["text" in d for d in docs])
-        assert all(["id" in d for d in docs])
-        assert sorted([d["text"] for d in docs]) == sorted(INPUT_TEXTS)
-    else:
-        # Direct API path returns page_content/metadata format
-        assert sorted([d["page_content"] for d in docs]) == sorted(INPUT_TEXTS)
-        assert all(["id" in d["metadata"] for d in docs])
+    assert sorted([d["page_content"] for d in docs]) == sorted(INPUT_TEXTS)
+    assert all(["id" in d["metadata"] for d in docs])
 
     # Ensure tracing works properly
     trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
@@ -229,12 +225,7 @@ def test_vector_search_retriever_tool_init(
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
-    if index_name == DELTA_SYNC_INDEX:
-        # MCP path: outputs are flat dicts
-        assert all([d["text"] in INPUT_TEXTS for d in outputs])
-    else:
-        # Direct API path: outputs have page_content/metadata
-        assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+    assert all([d["page_content"] in INPUT_TEXTS for d in outputs])
 
     # Ensure that there aren't additional properties (not compatible with llama)
     assert "'additionalProperties': True" not in str(vector_search_tool.tool)
@@ -696,3 +687,72 @@ def test_reranker_is_overriden(mock_mcp_toolkit) -> None:
     assert json.loads(meta["filters"]) == {"country": "Germany"}
     assert meta["num_results"] == vector_search_tool.num_results
     assert meta["query_type"] == vector_search_tool.query_type
+
+
+# ============================================================================
+# Response Format Normalization Tests
+# ============================================================================
+
+
+class TestMCPResponseNormalization:
+    """Test that MCP responses are normalized to match Direct API format."""
+
+    def test_normalize_mcp_result_basic(self) -> None:
+        """Test basic normalization of a single MCP result."""
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        mcp_result = {
+            "id": "doc-123",
+            "text": "This is the document content",
+            "score": 0.95,
+        }
+
+        normalized = vector_search_tool._normalize_mcp_result(mcp_result)
+
+        assert normalized["page_content"] == "This is the document content"
+        assert normalized["metadata"]["id"] == "doc-123"
+        assert normalized["metadata"]["score"] == 0.95
+        assert "text" not in normalized["metadata"]  # text column moved to page_content
+
+    def test_normalize_mcp_result_missing_text_column(self) -> None:
+        """Test normalization handles missing text column gracefully."""
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        mcp_result = {
+            "id": "doc-789",
+            "score": 0.75,
+            # "text" column is missing
+        }
+
+        normalized = vector_search_tool._normalize_mcp_result(mcp_result)
+
+        assert normalized["page_content"] == ""  # Empty string when text column missing
+        assert normalized["metadata"]["id"] == "doc-789"
+        assert normalized["metadata"]["score"] == 0.75
+
+    def test_parse_mcp_response_empty_list(self) -> None:
+        """Test parsing empty MCP response."""
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        mcp_response = json.dumps([])
+
+        results = vector_search_tool._parse_mcp_response(mcp_response)
+
+        assert results == []
+
+    def test_parse_mcp_response_invalid_json(self) -> None:
+        """Test parsing invalid JSON raises ValueError."""
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        with pytest.raises(ValueError, match="Unable to parse MCP response"):
+            vector_search_tool._parse_mcp_response("not valid json {")
+
+    def test_parse_mcp_response_not_a_list(self) -> None:
+        """Test parsing non-list JSON raises ValueError."""
+        vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+        # MCP should return a list, not a dict
+        mcp_response = json.dumps({"error": "something went wrong"})
+
+        with pytest.raises(ValueError, match="Expected MCP vector search to return a JSON array"):
+            vector_search_tool._parse_mcp_response(mcp_response)

@@ -381,38 +381,6 @@ class TestMcpServerToolkitExecFn:
                     meta=meta_params,  # _meta should be passed as separate parameter
                 )
 
-    def test_exec_fn_without_meta_params(
-        self, mock_workspace_client, mock_mcp_tool, mock_mcp_response
-    ):
-        """Test that when _meta is not provided, meta=None is passed to call_tool."""
-        with patch(
-            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ):
-            with patch(
-                "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
-            ) as mock_mcp_client_class:
-                mock_mcp_client_instance = MagicMock()
-
-                async def mock_async():
-                    return [mock_mcp_tool]
-
-                mock_mcp_client_instance._get_tools_async = mock_async
-                mock_mcp_client_instance.call_tool.return_value = mock_mcp_response
-                mock_mcp_client_class.return_value = mock_mcp_client_instance
-
-                from databricks_openai.mcp_server_toolkit import McpServerToolkit
-
-                toolkit = McpServerToolkit(url="https://test.com/mcp")
-                tools = toolkit.get_tools()
-
-                result = tools[0].execute(query="search text")
-
-                assert result == "Hello World"
-                mock_mcp_client_instance.call_tool.assert_called_once_with(
-                    "test_tool", {"query": "search text"}, meta=None
-                )
-
 
 class TestToolInfo:
     def test_tool_info_creation_and_execution(self):

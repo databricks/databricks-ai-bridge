@@ -367,18 +367,41 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         return meta
 
+    def _normalize_mcp_result(self, result: Dict) -> Dict:
+        """
+        Normalize a single MCP result dict to match the Direct API format.
+
+        Transforms flat MCP response:
+            {"text_col": "content", "other_col": "value", "score": 0.5}
+
+        Into standard page_content/metadata format:
+            {"page_content": "content", "metadata": {"other_col": "value", "score": 0.5}}
+
+        Args:
+            result: Single flat dict from MCP response
+
+        Returns:
+            Dict with page_content and metadata keys
+        """
+        text_column = self.text_column
+        page_content = result.get(text_column, "")
+
+        metadata = {k: v for k, v in result.items() if k != text_column}
+
+        return {"page_content": page_content, "metadata": metadata}
+
     def _parse_mcp_response(self, mcp_response: str) -> List[Dict]:
         """
-        Parse MCP response string into List[Dict] format.
+        Parse MCP response string into List[Dict] format matching Direct API output.
 
-        MCP returns: '[{"column1": "value1", "column2": "value2"}, ...]'
-        We return the same flat dict format for agent consumption.
+        MCP returns: '[{"text_col": "content", "other_col": "value"}, ...]'
+        We normalize to: '[{"page_content": "content", "metadata": {"other_col": "value"}}, ...]'
 
         Args:
             mcp_response: JSON string from MCP tool
 
         Returns:
-            List[Dict] with flat column data
+            List[Dict] with page_content and metadata keys
         """
         try:
             parsed = json.loads(mcp_response)
@@ -399,7 +422,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 f"but got {type(parsed).__name__}: {response_preview}"
             )
 
-        return parsed
+        return [self._normalize_mcp_result(result) for result in parsed]
 
     def _execute_mcp_path(
         self,
