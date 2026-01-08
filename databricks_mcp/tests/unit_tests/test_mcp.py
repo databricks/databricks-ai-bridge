@@ -133,6 +133,7 @@ class TestDatabricksMCPClient:
         with (
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
             patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
         ):
             mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
             mock_session_class.return_value.__aenter__.return_value = mock_session
@@ -158,6 +159,7 @@ class TestDatabricksMCPClient:
         with (
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
             patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
         ):
             mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
             mock_session_class.return_value.__aenter__.return_value = mock_session
@@ -436,6 +438,7 @@ class TestMCPURLPatterns:
                 client, "_get_databricks_managed_mcp_url_type", return_value=UC_FUNCTIONS_MCP
             ),
             patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
             patch("requests.request") as mock_request,
         ):
             mock_client.side_effect = original_error
