@@ -1,11 +1,13 @@
+import json
 import random
 from datetime import datetime, timedelta
 from io import StringIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import mlflow
 import pandas as pd
 import pytest
+from mcp.types import CallToolResult, Tool
 
 from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
 
@@ -19,7 +21,19 @@ def mock_workspace_client():
 
 @pytest.fixture
 def genie(mock_workspace_client):
-    return Genie(space_id="test_space_id")
+    mock_query_tool = Mock(spec=Tool)
+    mock_query_tool.name = "query_space_test_space_id"
+
+    mock_poll_tool = Mock(spec=Tool)
+    mock_poll_tool.name = "poll_response_test_space_id"
+
+    with patch("databricks_ai_bridge.genie.DatabricksMCPClient") as MockMCPClient:
+        mock_mcp_instance = MockMCPClient.return_value
+        mock_mcp_instance.list_tools.return_value = [mock_query_tool, mock_poll_tool]
+
+        genie_instance = Genie(space_id="test_space_id")
+        genie_instance._mcp_client = mock_mcp_instance
+        return genie_instance
 
 
 def test_start_conversation(genie, mock_workspace_client):
@@ -47,58 +61,99 @@ def test_create_message(genie, mock_workspace_client):
 
 
 def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {
-            "status": "COMPLETED",
-            "attachments": [{"attachment_id": "123", "text": {"content": "Result"}}],
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Result"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Result", "conversationId": "123", "messageId": "456", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Result"
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
+    mock_content = json.dumps(
         {
-            "status": "COMPLETED",
-            "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
-        },
-        {
+            "query": "SELECT *",
+            "description": "Test query",
             "statement_response": {
                 "status": {"state": "SUCCEEDED"},
                 "manifest": {"schema": {"columns": []}},
                 "result": {
                     "data_array": [],
                 },
+            },
+        }
+    )
+
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": mock_content,
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
             }
-        },
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == pd.DataFrame().to_markdown()
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == pd.DataFrame().to_markdown()
 
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "FAILED", "error": "Test error"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query failed with error: Test error"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Test error", "conversationId": "123", "messageId": "456", "status": "FAILED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Test error"
 
 
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "CANCELLED"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query cancelled."
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Cancelled", "conversationId": "123", "messageId": "456", "status": "CANCELLED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Cancelled"
 
 
 def test_poll_for_result_expired(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "QUERY_RESULT_EXPIRED"},
-    ]
-    genie_result = genie.poll_for_result("123", "456")
-    assert genie_result.result == "Genie query query_result_expired."
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Message processing failed: Expired", "conversationId": "123", "messageId": "456", "status": "QUERY_RESULT_EXPIRED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "Message processing failed: Expired"
 
 
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
@@ -108,66 +163,90 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
         patch("databricks_ai_bridge.genie.ITERATION_FREQUENCY", 0.1),
         patch("time.sleep", return_value=None),
     ):
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-        ]
-        result = genie.poll_for_result("123", "456")
-        assert (
-            result.result
-            == "Genie query timed out after 2 iterations of 0.1 seconds (total 0.2 seconds)"
+        mock_mcp_result = CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": '{"content": "Query is still processing", "conversationId": "123", "messageId": "456", "status": "RUNNING"}',
+                }
+            ]
         )
+
+        with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+            result = genie.poll_for_result("123", "456")
+            assert "timed out" in result.result.lower()
+            assert "2 iterations of 0.1 seconds" in result.result
 
 
 def test_ask_question(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "456"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "Answer"}}]},
-    ]
-    genie_result = genie.ask_question("What is the meaning of life?")
-    assert genie_result.result == "Answer"
-    assert genie_result.conversation_id == "123"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.ask_question("What is the meaning of life?")
+        assert genie_result.result == "Answer"
+        assert genie_result.conversation_id == "123"
 
 
 def test_ask_question_continued_conversation(genie, mock_workspace_client):
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"conversation_id": "123", "message_id": "456"},
-        {"status": "COMPLETED", "attachments": [{"text": {"content": "42"}}]},
-    ]
-    genie_result = genie.ask_question("What is the meaning of life?", "123")
-    assert genie_result.result == "42"
-    assert genie_result.conversation_id == "123"
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "42", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.ask_question("What is the meaning of life?", "123")
+        assert genie_result.result == "42"
+        assert genie_result.conversation_id == "123"
 
 
-def test_ask_question_calls_start_once_and_not_create_on_new(genie, mock_workspace_client):
-    # arrange
-    with (
-        patch.object(genie, "create_message") as mock_create_message,
-        patch.object(genie, "start_conversation") as mock_start_conversation,
-        patch.object(genie, "poll_for_result") as mock_poll_for_result,
-    ):
-        # act
+def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_client):
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "new-123", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?")
 
-        # assert
-        mock_create_message.assert_not_called()
-        mock_start_conversation.assert_called_once()
+        # Verify MCP client was called with correct args (no conversation_id)
+        mock_call.assert_called_once_with(
+            "query_space_test_space_id", {"query": "What is the meaning of life?"}
+        )
 
 
-def test_ask_question_calls_create_once_and_not_start_on_continue(genie, mock_workspace_client):
-    # arrange
-    with (
-        patch.object(genie, "create_message") as mock_create_message,
-        patch.object(genie, "start_conversation") as mock_start_conversation,
-        patch.object(genie, "poll_for_result") as mock_poll_for_result,
-    ):
-        # act
+def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_client):
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "123", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result) as mock_call:
         genie.ask_question("What is the meaning of life?", "123")
 
-        # assert
-        mock_create_message.assert_called_once()
-        mock_start_conversation.assert_not_called()
+        # Verify MCP client was called with conversation_id included
+        mock_call.assert_called_once_with(
+            "query_space_test_space_id",
+            {"query": "What is the meaning of life?", "conversation_id": "123"},
+        )
 
 
 def test_parse_query_result_empty():
@@ -189,8 +268,20 @@ def test_parse_query_result_with_data():
         },
         "result": {
             "data_array": [
-                ["1", "Alice", "2023-10-01T00:00:00Z"],
-                ["2", "Bob", "2023-10-02T00:00:00Z"],
+                {
+                    "values": [
+                        {"string_value": "1"},
+                        {"string_value": "Alice"},
+                        {"string_value": "2023-10-01T00:00:00Z"},
+                    ]
+                },
+                {
+                    "values": [
+                        {"string_value": "2"},
+                        {"string_value": "Bob"},
+                        {"string_value": "2023-10-02T00:00:00Z"},
+                    ]
+                },
             ]
         },
     }
@@ -218,8 +309,8 @@ def test_parse_query_result_with_null_values():
         },
         "result": {
             "data_array": [
-                ["1", None, "2023-10-01T00:00:00Z"],
-                ["2", "Bob", None],
+                {"values": [{"string_value": "1"}, None, {"string_value": "2023-10-01T00:00:00Z"}]},
+                {"values": [{"string_value": "2"}, {"string_value": "Bob"}, None]},
             ]
         },
     }
@@ -250,16 +341,76 @@ def test_parse_query_result_trims_data(truncate_results):
             },
             "result": {
                 "data_array": [
-                    ["1", "Alice", "2023-10-01T00:00:00Z"],
-                    ["2", "Bob", "2023-10-02T00:00:00Z"],
-                    ["3", "Charlie", "2023-10-03T00:00:00Z"],
-                    ["4", "David", "2023-10-04T00:00:00Z"],
-                    ["5", "Eve", "2023-10-05T00:00:00Z"],
-                    ["6", "Frank", "2023-10-06T00:00:00Z"],
-                    ["7", "Grace", "2023-10-07T00:00:00Z"],
-                    ["8", "Hank", "2023-10-08T00:00:00Z"],
-                    ["9", "Ivy", "2023-10-09T00:00:00Z"],
-                    ["10", "Jack", "2023-10-10T00:00:00Z"],
+                    {
+                        "values": [
+                            {"string_value": "1"},
+                            {"string_value": "Alice"},
+                            {"string_value": "2023-10-01T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "2"},
+                            {"string_value": "Bob"},
+                            {"string_value": "2023-10-02T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "3"},
+                            {"string_value": "Charlie"},
+                            {"string_value": "2023-10-03T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "4"},
+                            {"string_value": "David"},
+                            {"string_value": "2023-10-04T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "5"},
+                            {"string_value": "Eve"},
+                            {"string_value": "2023-10-05T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "6"},
+                            {"string_value": "Frank"},
+                            {"string_value": "2023-10-06T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "7"},
+                            {"string_value": "Grace"},
+                            {"string_value": "2023-10-07T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "8"},
+                            {"string_value": "Hank"},
+                            {"string_value": "2023-10-08T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "9"},
+                            {"string_value": "Ivy"},
+                            {"string_value": "2023-10-09T00:00:00Z"},
+                        ]
+                    },
+                    {
+                        "values": [
+                            {"string_value": "10"},
+                            {"string_value": "Jack"},
+                            {"string_value": "2023-10-10T00:00:00Z"},
+                        ]
+                    },
                 ]
             },
         }
@@ -331,7 +482,7 @@ def markdown_to_dataframe(markdown_str: str) -> pd.DataFrame:
 
     # Strip whitespace from column names and values
     df.columns = [col.strip() for col in df.columns]
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
 
     # Drop the first column
     df = df.drop(columns=[df.columns[0]])
@@ -359,12 +510,19 @@ def test_parse_query_result_trims_large_data(max_tokens):
             "Jack",
         ]
 
+        # Generate data in MCP format
         data_array = [
-            [
-                str(i + 1),
-                random.choice(names),
-                (base_date + timedelta(days=random.randint(0, 365))).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            ]
+            {
+                "values": [
+                    {"string_value": str(i + 1)},
+                    {"string_value": random.choice(names)},
+                    {
+                        "string_value": (
+                            base_date + timedelta(days=random.randint(0, 365))
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    },
+                ]
+            }
             for i in range(1000)
         ]
 
@@ -386,10 +544,11 @@ def test_parse_query_result_trims_large_data(max_tokens):
 
         expected_df = pd.DataFrame(
             {
-                "id": [int(row[0]) for row in data_array],
-                "name": [row[1] for row in data_array],
+                "id": [int(row["values"][0]["string_value"]) for row in data_array],
+                "name": [row["values"][1]["string_value"] for row in data_array],
                 "created_at": [
-                    datetime.strptime(row[2], "%Y-%m-%dT%H:%M:%SZ") for row in data_array
+                    datetime.strptime(row["values"][2]["string_value"], "%Y-%m-%dT%H:%M:%SZ")
+                    for row in data_array
                 ],
             }
         )
@@ -409,21 +568,60 @@ def test_parse_query_result_trims_large_data(max_tokens):
 
 def test_poll_query_results_max_iterations(genie, mock_workspace_client):
     # patch MAX_ITERATIONS to 2 for this test and sleep to avoid delays
-    with (
-        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
-        patch("time.sleep", return_value=None),
-    ):
-        mock_workspace_client.genie._api.do.side_effect = [
-            {
-                "status": "COMPLETED",
-                "attachments": [{"attachment_id": "123", "query": {"query": "SELECT *"}}],
-            },
-            {"statement_response": {"status": {"state": "PENDING"}}},
-            {"statement_response": {"status": {"state": "PENDING"}}},
-            {"statement_response": {"status": {"state": "PENDING"}}},
-        ]
-        result = genie.poll_for_result("123", "456")
-        assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
+    with patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2):
+        with patch("time.sleep", return_value=None):
+            mock_responses = [
+                CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                ),
+                CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Still processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                ),
+                CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Should not reach this",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                ),
+            ]
+
+            with patch.object(genie._mcp_client, "call_tool", side_effect=mock_responses):
+                result = genie.poll_for_result("123", "456")
+
+            assert result.result == "Genie query timed out after 2 iterations of 0.5 seconds"
 
 
 def test_parse_query_result_with_timestamp_formats():
@@ -431,13 +629,13 @@ def test_parse_query_result_with_timestamp_formats():
         "manifest": {"schema": {"columns": [{"name": "created_at", "type_name": "TIMESTAMP"}]}},
         "result": {
             "data_array": [
-                ["2023-10-01T14:30:45"],  # %Y-%m-%dT%H:%M:%S
-                ["2023-10-02 09:15:22"],  # %Y-%m-%d %H:%M:%S
-                ["2023-10-03T16:45"],  # %Y-%m-%dT%H:%M
-                ["2023-10-04 11:20"],  # %Y-%m-%d %H:%M
-                ["2023-10-05T08"],  # %Y-%m-%dT%H
-                ["2023-10-06 19"],  # %Y-%m-%d %H
-                ["2023-10-07"],  # %Y-%m-%d
+                {"values": [{"string_value": "2023-10-01T14:30:45"}]},  # %Y-%m-%dT%H:%M:%S
+                {"values": [{"string_value": "2023-10-02 09:15:22"}]},  # %Y-%m-%d %H:%M:%S
+                {"values": [{"string_value": "2023-10-03T16:45"}]},  # %Y-%m-%dT%H:%M
+                {"values": [{"string_value": "2023-10-04 11:20"}]},  # %Y-%m-%d %H:%M
+                {"values": [{"string_value": "2023-10-05T08"}]},  # %Y-%m-%dT%H
+                {"values": [{"string_value": "2023-10-06 19"}]},  # %Y-%m-%d %H
+                {"values": [{"string_value": "2023-10-07"}]},  # %Y-%m-%d
             ]
         },
     }
@@ -461,232 +659,481 @@ def test_parse_query_result_with_timestamp_formats():
 
 
 def test_poll_for_result_creates_genie_timeline_span(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-    ):
-        mock_span = MagicMock()
-        mock_span.trace_id = "trace_123"
-        mock_span.span_id = "span_456"
-        mock_start_span.return_value.__enter__.return_value = mock_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            mock_span = MagicMock()
+            mock_span.trace_id = "trace_123"
+            mock_span.span_id = "span_456"
+            mock_start_span.return_value.__enter__.return_value = mock_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
-        ]
+            mock_mcp_result = CallToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "content": "Done",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "COMPLETED",
+                            }
+                        ),
+                    }
+                ]
+            )
 
-        genie.poll_for_result("123", "456")
+            with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+                genie.poll_for_result("123", "456")
 
-        mock_start_span.assert_called_once_with(name="genie_timeline", span_type="CHAIN")
+            mock_start_span.assert_called_once_with(name="genie_timeline", span_type="CHAIN")
 
 
 def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
+                    genie.poll_for_result("123", "456")
 
-        # Verify span was created for EXECUTING_QUERY
-        mock_client.start_span.assert_called_once()
-        start_kwargs = mock_client.start_span.call_args[1]
-        assert start_kwargs["name"] == "executing_query"
-        assert start_kwargs["trace_id"] == "trace_123"
-        assert start_kwargs["parent_id"] == "parent_456"
-        assert start_kwargs["span_type"] == "CHAIN"
+                # Verify span was created for EXECUTING_QUERY
+                mock_client.start_span.assert_called_once()
+                start_kwargs = mock_client.start_span.call_args[1]
+                assert start_kwargs["name"] == "executing_query"
+                assert start_kwargs["trace_id"] == "trace_123"
+                assert start_kwargs["parent_id"] == "parent_456"
+                assert start_kwargs["span_type"] == "CHAIN"
 
 
 def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
+                    genie.poll_for_result("123", "456")
 
-        # Verify span was closed when transitioning to COMPLETED
-        mock_client.end_span.assert_called_once()
-        end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["trace_id"] == "trace_123"
-        assert end_kwargs["span_id"] == "child_789"
-        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
+                # Verify span was closed when transitioning to COMPLETED
+                mock_client.end_span.assert_called_once()
+                end_kwargs = mock_client.end_span.call_args[1]
+                assert end_kwargs["trace_id"] == "trace_123"
+                assert end_kwargs["span_id"] == "child_789"
+                assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},  # duplicate status
-            {"status": "EXECUTING_QUERY"},  # duplicate status
-            {"status": "COMPLETED", "attachments": [{"text": {"content": "Done"}}]},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",  # duplicate status
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result3 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",  # duplicate status
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result4 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Done",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "COMPLETED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client,
+                    "call_tool",
+                    side_effect=[
+                        mock_mcp_result1,
+                        mock_mcp_result2,
+                        mock_mcp_result3,
+                        mock_mcp_result4,
+                    ],
+                ):
+                    genie.poll_for_result("123", "456")
 
-        # should only create span once for EXECUTING_QUERY despite 3 status changes
-        mock_client.start_span.assert_called_once()
+                # should only create span once for EXECUTING_QUERY despite 3 status changes
+                mock_client.start_span.assert_called_once()
 
 
 def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "CANCELLED"},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: Query cancelled",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "CANCELLED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        result = genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
+                    result = genie.poll_for_result("123", "456")
 
-        assert result.result == "Genie query cancelled."
-        mock_client.end_span.assert_called_once()
-        end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
+                assert result.result == "Message processing failed: Query cancelled"
+                mock_client.end_span.assert_called_once()
+                end_kwargs = mock_client.end_span.call_args[1]
+                assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "FAILED", "error": "some error"},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: some error",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "FAILED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        result = genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
+                    result = genie.poll_for_result("123", "456")
 
-        assert result.result == "Genie query failed with error: some error"
-        mock_client.end_span.assert_called_once()
-        end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
+                assert result.result == "Message processing failed: some error"
+                mock_client.end_span.assert_called_once()
+                end_kwargs = mock_client.end_span.call_args[1]
+                assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspace_client):
-    with (
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("mlflow.start_span") as mock_start_span:
+        with patch("mlflow.tracking.MlflowClient") as MockClient:
+            with patch("time.sleep", return_value=None):
+                mock_client = MockClient.return_value
+                mock_parent_span = MagicMock()
+                mock_parent_span.trace_id = "trace_123"
+                mock_parent_span.span_id = "parent_456"
+                mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                mock_child_span = MagicMock()
+                mock_child_span.span_id = "child_789"
+                mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "QUERY_RESULT_EXPIRED"},
-        ]
+                mock_mcp_result1 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Processing",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "EXECUTING_QUERY",
+                                }
+                            ),
+                        }
+                    ]
+                )
+                mock_mcp_result2 = CallToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "content": "Message processing failed: Result expired",
+                                    "conversationId": "123",
+                                    "messageId": "456",
+                                    "status": "QUERY_RESULT_EXPIRED",
+                                }
+                            ),
+                        }
+                    ]
+                )
 
-        result = genie.poll_for_result("123", "456")
+                with patch.object(
+                    genie._mcp_client, "call_tool", side_effect=[mock_mcp_result1, mock_mcp_result2]
+                ):
+                    result = genie.poll_for_result("123", "456")
 
-        assert result.result == "Genie query query_result_expired."
-        mock_client.end_span.assert_called_once()
-        end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
+                assert result.result == "Message processing failed: Result expired"
+                mock_client.end_span.assert_called_once()
+                end_kwargs = mock_client.end_span.call_args[1]
+                assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspace_client):
-    with (
-        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
-        patch("mlflow.start_span") as mock_start_span,
-        patch("mlflow.tracking.MlflowClient") as MockClient,
-        patch("time.sleep", return_value=None),
-    ):
-        mock_client = MockClient.return_value
-        mock_parent_span = MagicMock()
-        mock_parent_span.trace_id = "trace_123"
-        mock_parent_span.span_id = "parent_456"
-        mock_start_span.return_value.__enter__.return_value = mock_parent_span
+    with patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2):
+        with patch("mlflow.start_span") as mock_start_span:
+            with patch("mlflow.tracking.MlflowClient") as MockClient:
+                with patch("time.sleep", return_value=None):
+                    mock_client = MockClient.return_value
+                    mock_parent_span = MagicMock()
+                    mock_parent_span.trace_id = "trace_123"
+                    mock_parent_span.span_id = "parent_456"
+                    mock_start_span.return_value.__enter__.return_value = mock_parent_span
 
-        mock_child_span = MagicMock()
-        mock_child_span.span_id = "child_789"
-        mock_client.start_span.return_value = mock_child_span
+                    mock_child_span = MagicMock()
+                    mock_child_span.span_id = "child_789"
+                    mock_client.start_span.return_value = mock_child_span
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-            {"status": "EXECUTING_QUERY"},
-        ]
+                    mock_responses = [
+                        CallToolResult(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Processing",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
+                        ),
+                        CallToolResult(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Still processing",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
+                        ),
+                        CallToolResult(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": json.dumps(
+                                        {
+                                            "content": "Should not reach",
+                                            "conversationId": "123",
+                                            "messageId": "456",
+                                            "status": "EXECUTING_QUERY",
+                                        }
+                                    ),
+                                }
+                            ]
+                        ),
+                    ]
 
-        result = genie.poll_for_result("123", "456")
+                    with patch.object(genie._mcp_client, "call_tool", side_effect=mock_responses):
+                        result = genie.poll_for_result("123", "456")
 
-        assert "timed out" in result.result
-        mock_client.end_span.assert_called_once()
-        end_kwargs = mock_client.end_span.call_args[1]
-        assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
+                    assert "timed out" in result.result
+                    mock_client.end_span.assert_called_once()
+                    end_kwargs = mock_client.end_span.call_args[1]
+                    assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
 
 
 def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_workspace_client):
@@ -712,12 +1159,41 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             "End span failed"
         )
 
-        mock_workspace_client.genie._api.do.side_effect = [
-            {"status": "EXECUTING_QUERY"},
-            {"status": "COMPLETED", "attachments": [{"text": {"content": "Success"}}]},
+        mock_responses = [
+            CallToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "content": "Processing",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "EXECUTING_QUERY",
+                            }
+                        ),
+                    }
+                ]
+            ),
+            CallToolResult(
+                content=[
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "content": "Success",
+                                "conversationId": "123",
+                                "messageId": "456",
+                                "status": "COMPLETED",
+                            }
+                        ),
+                    }
+                ]
+            ),
         ]
 
-        result = genie.poll_for_result("123", "456")
+        with patch.object(genie._mcp_client, "call_tool", side_effect=mock_responses):
+            result = genie.poll_for_result("123", "456")
 
         # should still complete successfully despite tracing failures
         assert result.result == "Success"
