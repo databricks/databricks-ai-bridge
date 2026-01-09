@@ -55,8 +55,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             tool_call = first_response.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             result = dbvs_tool.execute(
-                query=args["query"], filters=args.get("filters", None)
-            )  # For self-managed embeddings, optionally pass in openai_client=client
+                query=args["query"],
+                filters=args.get("filters", None),
+                num_results=5,
+                score_threshold=0.7,
+            )
 
         Step 3: Supply model with results – so it can incorporate them into its final response.
 
@@ -70,15 +73,14 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 model="gpt-4o", messages=messages, tools=tools
             )
 
-    **Note**: Any additional keyword arguments passed to the constructor will be passed along to
-    `databricks.vector_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
-    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
-    to see the full set of supported keyword arguments,
-    e.g. `score_threshold`. Also, see documentation for
-    :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for additional supported constructor
-    arguments not listed below, including `query_type` and `num_results`.
+    **Note**: Any additional keyword arguments passed to the constructor will be passed along when executing the tool.
+    The ``execute()`` method supports meta parameters such as ``num_results``, ``score_threshold``, ``query_type``,
+    ``filters``, ``columns``, and ``columns_to_rerank``. See
+    :class:`~databricks_ai_bridge.vector_search_retriever_tool.VectorSearchRetrieverToolMixin` for additional supported
+    constructor arguments.
 
-    WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.
+    WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential
+    strategy will be used to instantiate the underlying VectorSearchClient.
     """
 
     text_column: Optional[str] = Field(

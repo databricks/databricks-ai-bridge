@@ -225,15 +225,7 @@ class DatabricksMCPClient:
         Args:
             tool_name (str): The name of the tool to call.
             arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
-            meta (dict[str, Any], optional): Optional metadata parameters for additional tool configurations.
-                For Vector Search tools, this can include:
-                - num_results: Number of results to return
-                - filters: JSON string of filter conditions
-                - query_type: Type of query (e.g., "ANN", "HYBRID")
-                - columns: Comma-separated list of columns to return
-                - score_threshold: Minimum similarity score threshold
-                - include_score: Whether to include similarity scores in results
-                - columns_to_rerank: Columns to use for reranking
+            meta (dict[str, Any], optional): Optional metadata to include on execution.
 
         Returns:
             mcp.types.CallToolResult: The result of the tool call.
