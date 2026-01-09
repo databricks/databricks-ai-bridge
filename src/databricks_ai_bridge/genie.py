@@ -180,6 +180,7 @@ class Genie:
         self.headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "x-databricks-traffic-id": "testenv://liteswap/rz-exempt",
         }
         self.truncate_results = truncate_results
         self.return_pandas = return_pandas
