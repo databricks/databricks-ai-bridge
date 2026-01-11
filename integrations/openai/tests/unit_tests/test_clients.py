@@ -190,10 +190,11 @@ class TestDatabricksOpenAIStrictStripping:
             mock_ws.return_value = mock_client
 
             from databricks_openai import DatabricksOpenAI
+            from openai.resources.chat.completions import Completions
 
             client = DatabricksOpenAI()
 
-            with patch.object(client.chat._chat.completions, "create") as mock_create:
+            with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
                 tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 client.chat.completions.create(
@@ -213,10 +214,11 @@ class TestDatabricksOpenAIStrictStripping:
             mock_ws.return_value = mock_client
 
             from databricks_openai import DatabricksOpenAI
+            from openai.resources.chat.completions import Completions
 
             client = DatabricksOpenAI()
 
-            with patch.object(client.chat._chat.completions, "create") as mock_create:
+            with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
                 tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 client.chat.completions.create(
@@ -236,10 +238,11 @@ class TestDatabricksOpenAIStrictStripping:
             mock_ws.return_value = mock_client
 
             from databricks_openai import DatabricksOpenAI
+            from openai.resources.chat.completions import Completions
 
             client = DatabricksOpenAI()
 
-            with patch.object(client.chat._chat.completions, "create") as mock_create:
+            with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
                 client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
@@ -260,12 +263,11 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_ws.return_value = mock_client
 
             from databricks_openai import AsyncDatabricksOpenAI
+            from openai.resources.chat.completions import AsyncCompletions
 
             client = AsyncDatabricksOpenAI()
 
-            with patch.object(
-                client.chat._chat.completions, "create", new_callable=AsyncMock
-            ) as mock_create:
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
                 tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 await client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
@@ -285,12 +287,11 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_ws.return_value = mock_client
 
             from databricks_openai import AsyncDatabricksOpenAI
+            from openai.resources.chat.completions import AsyncCompletions
 
             client = AsyncDatabricksOpenAI()
 
-            with patch.object(
-                client.chat._chat.completions, "create", new_callable=AsyncMock
-            ) as mock_create:
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
                 tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 await client.chat.completions.create(
                     model="databricks-gpt-4o",

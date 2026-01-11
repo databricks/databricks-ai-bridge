@@ -1,6 +1,18 @@
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request
 from openai import AsyncOpenAI, OpenAI
+from openai.resources.chat import AsyncChat, Chat
+from openai.resources.chat.completions import AsyncCompletions, Completions
+
+
+class BearerAuth(Auth):
+    def __init__(self, get_headers_func):
+        self.get_headers_func = get_headers_func
+
+    def auth_flow(self, request: Request) -> Request:
+        auth_headers = self.get_headers_func()
+        request.headers["Authorization"] = auth_headers["Authorization"]
+        yield request
 
 
 def _strip_strict_from_tools(tools: list | None) -> list | None:
@@ -28,67 +40,25 @@ def _should_strip_strict(model: str | None) -> bool:
     return "gpt" not in model.lower()
 
 
-class BearerAuth(Auth):
-    def __init__(self, get_headers_func):
-        self.get_headers_func = get_headers_func
-
-    def auth_flow(self, request: Request) -> Request:
-        auth_headers = self.get_headers_func()
-        request.headers["Authorization"] = auth_headers["Authorization"]
-        yield request
-
-
 def _get_authorized_http_client(workspace_client):
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
     return Client(auth=databricks_token_auth)
 
 
-def _get_authorized_async_http_client(workspace_client):
-    databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
-    return AsyncClient(auth=databricks_token_auth)
-
-
-class _ChatCompletions:
-    """Wrapper that conditionally strips 'strict' from tools for non-GPT models."""
-
-    def __init__(self, completions):
-        self._completions = completions
+class DatabricksCompletions(Completions):
+    """Completions that conditionally strips 'strict' from tools for non-GPT models."""
 
     def create(self, **kwargs):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
-        return self._completions.create(**kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._completions, name)
+        return super().create(**kwargs)
 
 
-class _AsyncChatCompletions:
-    """Async wrapper that conditionally strips 'strict' from tools for non-GPT models."""
+class DatabricksChat(Chat):
+    """Chat resource that uses Databricks completions with strict stripping."""
 
-    def __init__(self, completions):
-        self._completions = completions
-
-    async def create(self, **kwargs):
-        model = kwargs.get("model")
-        if _should_strip_strict(model):
-            _strip_strict_from_tools(kwargs.get("tools"))
-        return await self._completions.create(**kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._completions, name)
-
-
-class _Chat:
-    """Wrapper for chat that uses completions with strict stripping."""
-
-    def __init__(self, chat, completions_wrapper_class):
-        self._chat = chat
-        self.completions = completions_wrapper_class(chat.completions)
-
-    def __getattr__(self, name):
-        return getattr(self._chat, name)
+    completions: DatabricksCompletions
 
 
 class DatabricksOpenAI(OpenAI):
@@ -133,8 +103,37 @@ class DatabricksOpenAI(OpenAI):
         )
 
     @property
-    def chat(self):
-        return _Chat(super().chat, _ChatCompletions)
+    def chat(self) -> DatabricksChat:
+        if not isinstance(super().chat, DatabricksChat):
+            chat = super().chat
+            # Replace the completions with our custom one
+            chat_with_custom_completions = DatabricksChat(client=chat._client)
+            chat_with_custom_completions.completions = DatabricksCompletions(
+                client=chat.completions._client
+            )
+            return chat_with_custom_completions
+        return super().chat
+
+
+class AsyncDatabricksCompletions(AsyncCompletions):
+    """Async completions that conditionally strips 'strict' from tools for non-GPT models."""
+
+    async def create(self, **kwargs):
+        model = kwargs.get("model")
+        if _should_strip_strict(model):
+            _strip_strict_from_tools(kwargs.get("tools"))
+        return await super().create(**kwargs)
+
+
+class AsyncDatabricksChat(AsyncChat):
+    """Async chat resource that uses Databricks completions with strict stripping."""
+
+    completions: AsyncDatabricksCompletions
+
+
+def _get_authorized_async_http_client(workspace_client):
+    databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
+    return AsyncClient(auth=databricks_token_auth)
 
 
 class AsyncDatabricksOpenAI(AsyncOpenAI):
@@ -179,5 +178,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         )
 
     @property
-    def chat(self):
-        return _Chat(super().chat, _AsyncChatCompletions)
+    def chat(self) -> AsyncDatabricksChat:
+        if not isinstance(super().chat, AsyncDatabricksChat):
+            chat = super().chat
+            # Replace the completions with our custom one
+            chat_with_custom_completions = AsyncDatabricksChat(client=chat._client)
+            chat_with_custom_completions.completions = AsyncDatabricksCompletions(
+                client=chat.completions._client
+            )
+            return chat_with_custom_completions
+        return super().chat
