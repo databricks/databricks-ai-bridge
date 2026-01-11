@@ -182,6 +182,16 @@ def test_vector_search_retriever_tool_combinations() -> None:
     assert "page_content" in result
 
 
+def test_vector_search_retriever_tool_empty_results() -> None:
+    vector_search_tool = init_vector_search_tool(index_name=DELTA_SYNC_INDEX)
+    # Mock similarity_search to return empty list
+    vector_search_tool._vector_store.similarity_search = MagicMock(return_value=[])
+    result = vector_search_tool._run("query with no results")
+    # _run should always return a string, even for empty results
+    assert isinstance(result, str)
+    assert result == "[]"
+
+
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 def test_vector_search_retriever_tool_description_generation(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
