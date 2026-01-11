@@ -189,8 +189,9 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from databricks_openai import DatabricksOpenAI
             from openai.resources.chat.completions import Completions
+
+            from databricks_openai import DatabricksOpenAI
 
             client = DatabricksOpenAI()
 
@@ -213,8 +214,9 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from databricks_openai import DatabricksOpenAI
             from openai.resources.chat.completions import Completions
+
+            from databricks_openai import DatabricksOpenAI
 
             client = DatabricksOpenAI()
 
@@ -237,8 +239,9 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from databricks_openai import DatabricksOpenAI
             from openai.resources.chat.completions import Completions
+
+            from databricks_openai import DatabricksOpenAI
 
             client = DatabricksOpenAI()
 
@@ -262,8 +265,9 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from databricks_openai import AsyncDatabricksOpenAI
             from openai.resources.chat.completions import AsyncCompletions
+
+            from databricks_openai import AsyncDatabricksOpenAI
 
             client = AsyncDatabricksOpenAI()
 
@@ -286,8 +290,9 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from databricks_openai import AsyncDatabricksOpenAI
             from openai.resources.chat.completions import AsyncCompletions
+
+            from databricks_openai import AsyncDatabricksOpenAI
 
             client = AsyncDatabricksOpenAI()
 
