@@ -1,4 +1,5 @@
 import uuid
+import warnings
 from typing import Any, Dict, List, Optional, Set
 from unittest.mock import MagicMock, patch
 
@@ -48,11 +49,23 @@ def test_init(index_name: str) -> None:
     assert vectorsearch.index.describe() == INDEX_DETAILS[index_name]
 
 
-def test_init_with_endpoint_name() -> None:
-    vectorsearch = DatabricksVectorSearch(
-        endpoint=ENDPOINT_NAME,
-        index_name=DELTA_SYNC_INDEX,
-    )
+@pytest.mark.filterwarnings("always::DeprecationWarning")
+def test_init_with_endpoint_name_emits_deprecation_warning() -> None:
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        vectorsearch = DatabricksVectorSearch(
+            endpoint=ENDPOINT_NAME,
+            index_name=DELTA_SYNC_INDEX,
+        )
+        # Filter for our specific deprecation warning (ignoring Pydantic warnings)
+        endpoint_warnings = [
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
+            and "endpoint" in str(warning.message).lower()
+        ]
+        assert len(endpoint_warnings) == 1
+        assert "deprecated" in str(endpoint_warnings[0].message).lower()
     assert vectorsearch.index.describe() == INDEX_DETAILS[DELTA_SYNC_INDEX]
 
 
