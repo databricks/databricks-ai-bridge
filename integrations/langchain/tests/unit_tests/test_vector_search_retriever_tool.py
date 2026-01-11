@@ -209,8 +209,10 @@ def test_vs_tool_tracing(index_name: str, tool_name: str | None) -> None:
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
+    # _run now returns a string representation of documents
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
-    assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+    # Check that the expected text appears in the output string
+    assert any(text in outputs for text in INPUT_TEXTS)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
