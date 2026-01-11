@@ -1055,6 +1055,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         return {"role": "user", **message_dict}
     elif isinstance(message, AIMessage):
         if tool_calls := _get_tool_calls_from_ai_message(message):
+            print(tool_calls)
             message_dict["tool_calls"] = tool_calls  # type: ignore[assignment]
             # If tool calls present, content null value should be None not empty string.
             message_dict["content"] = message_dict["content"] or None  # type: ignore[assignment]
@@ -1195,6 +1196,14 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
         }
         for tc in message.invalid_tool_calls
     ]
+
+    """
+    thought signature encodes model reasoning
+    it is required for each tool call to gemini 3 pro - https://arc.net/l/quote/jhoeoqbl
+    this means we need to encode this info in the responses events in order to fix this bug, in addition to the work on this PR
+    
+    will have to change _langchain_message_stream_to_responses_stream
+    """
 
     if tool_calls or invalid_tool_calls:
         # Merge thoughtSignature from additional_kwargs if present

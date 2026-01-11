@@ -877,6 +877,34 @@ def test_chat_databricks_with_gemini():
     os.environ["DATABRICKS_CONFIG_PROFILE"] = "dogfood"
     from .agent import AGENT
 
-    result = AGENT.predict({"input": [{"role": "user", "content": "What is 6*7 in Python?"}]})
+    result = AGENT.predict(
+        {
+            "input": [
+                {"role": "user", "content": "What is 6*7 in Python?"},
+                {
+                    "type": "function_call",
+                    "id": "lc_run--e58dec26-ce5d-4597-b4f8-28e6db62cd49",
+                    "call_id": "system__ai__python_exec",
+                    "name": "system__ai__python_exec",
+                    "arguments": '{"code": "print(6 * 7)"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "system__ai__python_exec",
+                    "output": '{"format": "SCALAR", "value": "42\\n"}',
+                },
+                {
+                    "type": "message",
+                    "id": "lc_run--dd658def-dfdc-4bc7-b0d9-b6e25d1ecc48",
+                    "content": [
+                        {"text": "The result of `6 * 7` in Python is 42.", "type": "output_text"}
+                    ],
+                    "role": "assistant",
+                },
+            ]
+        }
+    )
     assert result is not None
     assert result.output is not None
+    print(result.model_dump())
+    assert False
