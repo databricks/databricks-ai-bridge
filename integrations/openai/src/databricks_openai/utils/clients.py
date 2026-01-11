@@ -3,6 +3,31 @@ from httpx import AsyncClient, Auth, Client, Request
 from openai import AsyncOpenAI, OpenAI
 
 
+def _strip_strict_from_tools(tools: list | None) -> list | None:
+    """Remove 'strict' field from tool function definitions.
+
+    Databricks model endpoints (except GPT) don't support the 'strict' field
+    in tool schemas, but openai-agents SDK v0.6.4+ includes it.
+    """
+    if tools is None:
+        return None
+    for tool in tools:
+        if isinstance(tool, dict) and "function" in tool:
+            tool.get("function", {}).pop("strict", None)
+    return tools
+
+
+def _should_strip_strict(model: str | None) -> bool:
+    """Determine if strict should be stripped based on model name.
+
+    GPT models (hosted via Databricks) support the strict field.
+    Non-GPT models (Claude, Llama, etc.) do not.
+    """
+    if model is None:
+        return True  # Default to stripping if model unknown
+    return "gpt" not in model.lower()
+
+
 class BearerAuth(Auth):
     def __init__(self, get_headers_func):
         self.get_headers_func = get_headers_func
@@ -23,6 +48,49 @@ def _get_authorized_async_http_client(workspace_client):
     return AsyncClient(auth=databricks_token_auth)
 
 
+class _ChatCompletions:
+    """Wrapper that conditionally strips 'strict' from tools for non-GPT models."""
+
+    def __init__(self, completions):
+        self._completions = completions
+
+    def create(self, **kwargs):
+        model = kwargs.get("model")
+        if _should_strip_strict(model):
+            _strip_strict_from_tools(kwargs.get("tools"))
+        return self._completions.create(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._completions, name)
+
+
+class _AsyncChatCompletions:
+    """Async wrapper that conditionally strips 'strict' from tools for non-GPT models."""
+
+    def __init__(self, completions):
+        self._completions = completions
+
+    async def create(self, **kwargs):
+        model = kwargs.get("model")
+        if _should_strip_strict(model):
+            _strip_strict_from_tools(kwargs.get("tools"))
+        return await self._completions.create(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._completions, name)
+
+
+class _Chat:
+    """Wrapper for chat that uses completions with strict stripping."""
+
+    def __init__(self, chat, completions_wrapper_class):
+        self._chat = chat
+        self.completions = completions_wrapper_class(chat.completions)
+
+    def __getattr__(self, name):
+        return getattr(self._chat, name)
+
+
 class DatabricksOpenAI(OpenAI):
     """OpenAI client authenticated with Databricks to query LLMs and agents hosted on Databricks.
 
@@ -31,6 +99,9 @@ class DatabricksOpenAI(OpenAI):
     OpenAI SDK interface.
 
     The client automatically handles authentication using your Databricks credentials.
+
+    For non-GPT models (Claude, Llama, etc.), this client automatically strips the 'strict'
+    field from tool definitions, as these models don't support this OpenAI-specific parameter.
 
     Args:
         workspace_client: Databricks WorkspaceClient to use for authentication. Pass a custom
@@ -61,6 +132,10 @@ class DatabricksOpenAI(OpenAI):
             http_client=_get_authorized_http_client(workspace_client),
         )
 
+    @property
+    def chat(self):
+        return _Chat(super().chat, _ChatCompletions)
+
 
 class AsyncDatabricksOpenAI(AsyncOpenAI):
     """Async OpenAI client authenticated with Databricks to query LLMs and agents hosted on Databricks.
@@ -70,6 +145,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
     OpenAI SDK interface with async/await support.
 
     The client automatically handles authentication using your Databricks credentials.
+
+    For non-GPT models (Claude, Llama, etc.), this client automatically strips the 'strict'
+    field from tool definitions, as these models don't support this OpenAI-specific parameter.
 
     Args:
         workspace_client: Databricks WorkspaceClient to use for authentication. Pass a custom
@@ -99,3 +177,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             api_key="no-token",
             http_client=_get_authorized_async_http_client(workspace_client),
         )
+
+    @property
+    def chat(self):
+        return _Chat(super().chat, _AsyncChatCompletions)
