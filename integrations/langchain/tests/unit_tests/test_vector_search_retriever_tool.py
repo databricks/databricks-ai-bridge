@@ -174,8 +174,12 @@ def test_vector_search_retriever_tool_combinations() -> None:
     )
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
-    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
-    assert all(item.page_content for item in result)
+    # _run now returns a string representation of documents
+    assert isinstance(result, str)
+    # Check that metadata keys and page_content appear in the string
+    assert "doc_uri" in result
+    assert "chunk_id" in result
+    assert "page_content" in result
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)

@@ -1,4 +1,9 @@
+<<<<<<< HEAD
 from typing import Type
+=======
+import json
+from typing import List, Optional, Type
+>>>>>>> 6a56801 (start)
 
 from databricks.vector_search.reranker import DatabricksReranker
 from databricks_ai_bridge.utils.vector_search import IndexDetails
@@ -106,4 +111,9 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
                 "query_type": query_type,
             }
         )
-        return self._vector_store.similarity_search(**kwargs)  # ty:ignore[invalid-return-type]: being fixed
+        results = self._vector_store.similarity_search(**kwargs)
+        # Serialize results using same pattern as LangChain's _stringify()
+        try:
+            return json.dumps(results, ensure_ascii=False)
+        except Exception:
+            return str(results)
