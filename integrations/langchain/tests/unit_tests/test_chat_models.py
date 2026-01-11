@@ -479,9 +479,9 @@ def test_chat_model_stream_usage_only_chunk_missing_tokens():
         usage_chunks = [
             chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
         ]
-        assert len(usage_chunks) == 0, (
-            f"Expected 0 usage chunks when tokens are missing, got {len(usage_chunks)}"
-        )
+        assert (
+            len(usage_chunks) == 0
+        ), f"Expected 0 usage chunks when tokens are missing, got {len(usage_chunks)}"
 
 
 def test_chat_model_stream_usage_only_chunk_stream_usage_false():
@@ -532,9 +532,9 @@ def test_chat_model_stream_usage_only_chunk_stream_usage_false():
         usage_chunks = [
             chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
         ]
-        assert len(usage_chunks) == 0, (
-            f"Expected 0 usage chunks when stream_usage=False, got {len(usage_chunks)}"
-        )
+        assert (
+            len(usage_chunks) == 0
+        ), f"Expected 0 usage chunks when stream_usage=False, got {len(usage_chunks)}"
 
 
 class GetWeather(BaseModel):
@@ -711,6 +711,35 @@ def test_convert_message_with_tool_calls() -> None:
     dict_result = _convert_message_to_dict(result)
     message_with_tools.pop("id")  # id is not propagated
     assert dict_result == message_with_tools
+
+
+def test_convert_message_with_tool_calls_and_thought_signature() -> None:
+    ID = "system__ai__python_exec"
+    THOUGHT_SIG = "CikBjz1rXxsXPO9F7LWvkXdS3Fkl7lMvmk9yp2iIuuTv0vWI2wRd0vHm5QpZAY89a1"
+    tool_calls = [
+        {
+            "id": ID,
+            "type": "function",
+            "function": {
+                "name": "system__ai__python_exec",
+                "arguments": '{"code":"print(6 * 7)"}',
+            },
+            "thoughtSignature": THOUGHT_SIG,
+        }
+    ]
+    message = AIMessage(
+        content="",
+        additional_kwargs={"tool_calls": tool_calls},
+    )
+
+    dict_result = _convert_message_to_dict(message)
+
+    assert "tool_calls" in dict_result
+    assert len(dict_result["tool_calls"]) == 1
+    assert dict_result["tool_calls"][0]["id"] == ID
+    assert dict_result["tool_calls"][0]["type"] == "function"
+    assert dict_result["tool_calls"][0]["function"]["name"] == "system__ai__python_exec"
+    assert dict_result["tool_calls"][0]["thoughtSignature"] == THOUGHT_SIG
 
 
 def test_convert_tool_message() -> None:

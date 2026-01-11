@@ -243,9 +243,9 @@ def test_chat_databricks_tool_calls(model, tool_choice):
         return
 
     # Models should make at least one tool call when tool_choice is not "none"
-    assert len(response.tool_calls) >= 1, (
-        f"Expected at least 1 tool call, got {len(response.tool_calls)}"
-    )
+    assert (
+        len(response.tool_calls) >= 1
+    ), f"Expected at least 1 tool call, got {len(response.tool_calls)}"
 
     # The first tool call should be for GetWeather
     first_call = response.tool_calls[0]
@@ -267,9 +267,9 @@ def test_chat_databricks_tool_calls(model, tool_choice):
         ]
     )
     # Should call GetWeather tool for the followup question
-    assert len(response.tool_calls) >= 1, (
-        f"Expected at least 1 tool call, got {len(response.tool_calls)}"
-    )
+    assert (
+        len(response.tool_calls) >= 1
+    ), f"Expected at least 1 tool call, got {len(response.tool_calls)}"
     tool_call = response.tool_calls[0]
     assert tool_call["name"] == "GetWeather", f"Expected GetWeather tool, got {tool_call['name']}"
     assert "location" in tool_call["args"], f"Expected location in args, got {tool_call['args']}"
@@ -559,12 +559,8 @@ def test_chat_databricks_chatagent_invoke():
                     ):
                         python_tool_used = True
 
-    assert has_tool_calls, (
-        f"Expected ChatAgent to use tool calls for fibonacci computation. Content: {response.content}"
-    )
-    assert python_tool_used, (
-        f"Expected ChatAgent to use python execution tool for fibonacci computation. Content: {response.content}"
-    )
+    assert has_tool_calls, f"Expected ChatAgent to use tool calls for fibonacci computation. Content: {response.content}"
+    assert python_tool_used, f"Expected ChatAgent to use python execution tool for fibonacci computation. Content: {response.content}"
 
 
 @pytest.mark.st_endpoints
@@ -847,9 +843,9 @@ def test_chat_databricks_gpt5_stream_with_usage():
     ]
 
     # Should have exactly ONE usage chunk from the final usage-only chunk
-    assert len(usage_chunks) == 1, (
-        f"Expected exactly 1 usage chunk from GPT-5 final chunk, got {len(usage_chunks)}"
-    )
+    assert (
+        len(usage_chunks) == 1
+    ), f"Expected exactly 1 usage chunk from GPT-5 final chunk, got {len(usage_chunks)}"
 
     # Verify usage chunk has correct metadata structure
     usage_chunk = usage_chunks[0]
@@ -860,12 +856,12 @@ def test_chat_databricks_gpt5_stream_with_usage():
     assert "total_tokens" in usage_chunk.usage_metadata
 
     # Verify token counts are positive
-    assert usage_chunk.usage_metadata["input_tokens"] > 0, (
-        f"Expected positive input_tokens, got {usage_chunk.usage_metadata['input_tokens']}"
-    )
-    assert usage_chunk.usage_metadata["output_tokens"] > 0, (
-        f"Expected positive output_tokens, got {usage_chunk.usage_metadata['output_tokens']}"
-    )
+    assert (
+        usage_chunk.usage_metadata["input_tokens"] > 0
+    ), f"Expected positive input_tokens, got {usage_chunk.usage_metadata['input_tokens']}"
+    assert (
+        usage_chunk.usage_metadata["output_tokens"] > 0
+    ), f"Expected positive output_tokens, got {usage_chunk.usage_metadata['output_tokens']}"
 
     # Verify total_tokens equals sum of input and output
     expected_total = (
@@ -875,3 +871,12 @@ def test_chat_databricks_gpt5_stream_with_usage():
         f"Expected total_tokens ({usage_chunk.usage_metadata['total_tokens']}) "
         f"to equal input_tokens + output_tokens ({expected_total})"
     )
+
+
+def test_chat_databricks_with_gemini():
+    os.environ["DATABRICKS_CONFIG_PROFILE"] = "dogfood"
+    from .agent import AGENT
+
+    result = AGENT.predict({"input": [{"role": "user", "content": "What is 6*7 in Python?"}]})
+    assert result is not None
+    assert result.output is not None
