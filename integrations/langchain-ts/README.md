@@ -2,17 +2,20 @@
 
 LangChain TypeScript integration for Databricks Model Serving.
 
-Uses the Databricks AI SDK Provider internally to support multiple endpoint types:
+This package provides a `ChatDatabricks` class that integrates with the LangChain ecosystem, allowing you to use Databricks Model Serving endpoints with LangChain's chat model interface.
 
-- **FMAPI** - Foundation Model API (OpenAI-compatible)
-- **ChatAgent** - Databricks agent chat completion
-- **ResponsesAgent** - Rich output with reasoning, citations, function calls
+## Features
 
-## Installation
+- Compatible with LangChain's `BaseChatModel` interface
+- Supports streaming responses
+- Supports tool/function calling
+- Multiple endpoint types: FMAPI, Chat Agent, and Responses Agent
+- Automatic authentication via Databricks SDK
 
-```bash
-npm install @databricks/langchain-ts @langchain/core
-```
+## Requirements
+
+- Node.js >= 18.0.0
+- A Databricks workspace with Model Serving enabled
 
 ## Quick Start
 
@@ -29,7 +32,7 @@ console.log(response.content);
 
 ## Endpoint Types
 
-ChatDatabricks supports three endpoint types that determine which Databricks API protocol to use:
+ChatDatabricks supports three endpoint types:
 
 ### FMAPI (Foundation Model API) - Default
 
@@ -66,74 +69,32 @@ const model = new ChatDatabricks({
 
 ## Authentication
 
-ChatDatabricks uses the `@databricks/sdk-experimental` library for authentication, which supports multiple authentication methods automatically:
+ChatDatabricks uses the [Databricks SDK](https://docs.databricks.com/en/dev-tools/sdk-typescript.html) for authentication, which automatically detects credentials from:
 
-1. **Environment variables** - `DATABRICKS_HOST` and `DATABRICKS_TOKEN`
-2. **Databricks CLI config** - `~/.databrickscfg` file (via `databricks configure`)
-3. **Azure CLI / Managed Identity** - For Azure Databricks
-4. **Google Cloud credentials** - For GCP Databricks
-5. **OAuth M2M** - Service Principal authentication
-
-### Default Authentication (Recommended)
-
-By default, credentials are automatically detected from environment variables or `~/.databrickscfg`:
+- Environment variables (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`)
+- Databricks CLI config (`~/.databrickscfg`)
+- Azure CLI / Managed Identity
+- Google Cloud credentials
+- OAuth M2M (Service Principal)
 
 ```typescript
-// Uses DATABRICKS_HOST and DATABRICKS_TOKEN environment variables
-// or reads from ~/.databrickscfg
+// Credentials are automatically detected
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
 });
 ```
 
-### Explicit Config
+### Explicit Auth
 
-You can pass an explicit `Config` object for more control:
-
-```typescript
-import { Config } from "@databricks/sdk-experimental";
-
-const config = new Config({
-  host: "https://your-workspace.databricks.com",
-  token: "dapi...",
-});
-
-const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
-  config,
-});
-```
-
-### Using a Databricks Profile
+You can also pass credentials directly via the `auth` field:
 
 ```typescript
-import { Config } from "@databricks/sdk-experimental";
-
-// Use a specific profile from ~/.databrickscfg
-const config = new Config({
-  profile: "my-profile",
-});
-
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
-  config,
-});
-```
-
-### OAuth M2M (Service Principal)
-
-```typescript
-import { Config } from "@databricks/sdk-experimental";
-
-const config = new Config({
-  host: "https://your-workspace.databricks.com",
-  clientId: "your-client-id",
-  clientSecret: "your-client-secret",
-});
-
-const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
-  config,
+  auth: {
+    host: "https://your-workspace.databricks.com",
+    token: "dapi...",
+  },
 });
 ```
 
@@ -205,30 +166,17 @@ const modelWithTools = model.bindTools([weatherTool]);
 ## Configuration Options
 
 ```typescript
-import { Config } from "@databricks/sdk-experimental";
-
 const model = new ChatDatabricks({
   // Required
   endpoint: "your-endpoint-name",
 
   // Endpoint type (optional, defaults to "fmapi")
-  endpointType: "fmapi" | "chat-agent" | "responses-agent",
+  endpointType: "fmapi", // or "chat-agent" or "responses-agent"
 
-  // Authentication (optional - uses env vars / ~/.databrickscfg by default)
-  config: new Config({
-    host: "https://workspace.databricks.com",
-    token: "dapi...",
-  }),
-
-  // Model parameters
-  temperature: 0.7, // 0.0 - 2.0
-  maxTokens: 1000, // Maximum tokens to generate
-  stop: ["\n\n"], // Stop sequences
-
-  // Extra parameters (passed directly to the model)
-  extraParams: {
-    top_p: 0.9,
-  },
+  // Model parameters (optional)
+  temperature: 0.7,
+  maxTokens: 1000,
+  stop: ["\n\n"],
 });
 ```
 
@@ -257,40 +205,6 @@ const response = await model.invoke([
 ]);
 ```
 
-## Tool Calling with Responses
-
-```typescript
-import { HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
-
-// First call - model requests tool
-const response1 = await modelWithTools.invoke([new HumanMessage("What's the weather in Boston?")]);
-
-// Execute tool and continue conversation
-if (response1.tool_calls?.length) {
-  const toolResult = await executeWeatherAPI(response1.tool_calls[0].args);
-
-  const response2 = await modelWithTools.invoke([
-    new HumanMessage("What's the weather in Boston?"),
-    response1,
-    new ToolMessage({
-      content: JSON.stringify(toolResult),
-      tool_call_id: response1.tool_calls[0].id!,
-    }),
-  ]);
-
-  console.log(response2.content);
-}
-```
-
-## Supported Endpoints
-
-This package works with any Databricks Model Serving endpoint:
-
-- Foundation Model APIs (e.g., `databricks-meta-llama-3-3-70b-instruct`)
-- Custom model endpoints
-- External model endpoints
-- Databricks Agents (Chat and Responses API)
-
 ## Examples
 
 See the [examples](./examples) folder for complete working examples.
@@ -309,7 +223,12 @@ Alternatively, set environment variables directly:
 ```bash
 export DATABRICKS_HOST=https://your-workspace.databricks.com
 export DATABRICKS_TOKEN=dapi...
+
+# Run the basic example
 npm run example
+
+# Run the tools example
+npm run example:tools
 ```
 
 ## Development
@@ -325,14 +244,12 @@ npm run build
 npm test
 
 # Run integration tests (requires Databricks credentials)
-export DATABRICKS_HOST=https://your-workspace.databricks.com
-export DATABRICKS_TOKEN=dapi...
-export TEST_ENDPOINT_NAME=databricks-meta-llama-3-3-70b-instruct
 npm run test:integration
 
-# Lint
-npm run lint
+# Type check
+npm run typecheck
 
-# Format
+# Lint and format
+npm run lint
 npm run format
 ```

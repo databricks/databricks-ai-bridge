@@ -36,6 +36,16 @@ import { convertToAISDKToolSet } from "./utils/tools.js";
 export type EndpointType = "fmapi" | "chat-agent" | "responses-agent";
 
 /**
+ * Authentication options for Databricks
+ */
+export interface DatabricksAuth {
+  /** Databricks workspace host URL (e.g., https://your-workspace.databricks.com) */
+  host?: string;
+  /** Personal access token or OAuth token */
+  token?: string;
+}
+
+/**
  * Options that can be passed at call time
  */
 export interface ChatDatabricksCallOptions extends BaseChatModelCallOptions {
@@ -74,11 +84,11 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
   endpointType?: EndpointType;
 
   /**
-   * Databricks SDK Config object for authentication.
-   * If not provided, a default Config will be created that uses
-   * environment variables and ~/.databrickscfg for authentication.
+   * Authentication credentials for Databricks SDK.
+   * If not provided Databricks SDK with automatically
+   * attempt authentication using environment variables or CLI
    */
-  config?: Config;
+  auth?: DatabricksAuth;
 
   /** Temperature (0.0 - 2.0) */
   temperature?: number;
@@ -126,18 +136,14 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
  * });
  * ```
  *
- * @example With explicit Config
+ * @example With explicit authentication
  * ```typescript
- * import { Config } from "@databricks/sdk-experimental";
- *
- * const config = new Config({
- *   host: "https://your-workspace.databricks.com",
- *   token: "dapi...",
- * });
- *
  * const model = new ChatDatabricks({
  *   endpoint: "databricks-meta-llama-3-3-70b-instruct",
- *   config,
+ *   auth: {
+ *     host: "https://your-workspace.databricks.com",
+ *     token: "dapi...",
+ *   },
  * });
  * ```
  */
@@ -166,8 +172,8 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   /** Extra parameters */
   extraParams?: Record<string, unknown>;
 
-  /** Databricks SDK Config for authentication */
-  private config: Config;
+  /** Authentication credentials */
+  private auth?: DatabricksAuth;
 
   /** Databricks AI SDK Provider */
   private provider: DatabricksProvider;
@@ -190,16 +196,9 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     this.maxTokens = fields.maxTokens;
     this.stop = fields.stop;
     this.extraParams = fields.extraParams;
+    this.auth = fields.auth;
 
-    // Use provided Config or create default one
-    // The Config will automatically detect credentials from:
-    // 1. Environment variables (DATABRICKS_HOST, DATABRICKS_TOKEN)
-    // 2. ~/.databrickscfg file
-    // 3. Azure CLI / Managed Identity
-    // 4. Google Cloud credentials
-    this.config = fields.config ?? new Config({});
-
-    // Create Databricks AI SDK Provider with SDK-based authentication
+    // Create Databricks AI SDK Provider
     this.provider = this.createProvider();
 
     // Get appropriate language model based on endpoint type
@@ -207,10 +206,13 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   }
 
   /**
-   * Create the Databricks AI SDK Provider with authentication from the SDK Config
+   * Create the Databricks AI SDK Provider with authentication
    */
   private createProvider(): DatabricksProvider {
-    const config = this.config;
+    const config = new Config({
+      host: this.auth?.host,
+      token: this.auth?.token,
+    });
 
     // Capture the global fetch to avoid recursion when passing custom fetch to the provider
     const globalFetch = globalThis.fetch;
@@ -368,7 +370,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     const bound = new ChatDatabricks({
       endpoint: this.endpoint,
       endpointType: this.endpointType,
-      config: this.config,
+      auth: this.auth,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
       stop: this.stop,

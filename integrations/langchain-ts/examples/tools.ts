@@ -8,7 +8,7 @@
  * - Tool execution loop (agentic pattern)
  *
  * Run with:
- *   npx tsx examples/tools.ts
+ *   npm run example:tools
  */
 
 import "dotenv/config";
@@ -25,7 +25,6 @@ import {
   BaseMessage,
 } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { Config } from "@databricks/sdk-experimental";
 
 // ============================================================================
 // Tool Definitions - Multiple formats supported
@@ -204,10 +203,10 @@ async function main() {
     endpoint: "databricks-meta-llama-3-3-70b-instruct",
     endpointType: "fmapi",
     maxTokens: 1024,
-    config: new Config({
+    auth: {
       host: process.env.DATABRICKS_HOST,
       token: process.env.DATABRICKS_TOKEN,
-    }),
+    },
   });
 
   // Bind all tools (demonstrating different formats)

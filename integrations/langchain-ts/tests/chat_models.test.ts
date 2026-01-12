@@ -4,7 +4,6 @@
 
 import { describe, it, expect } from "vitest";
 import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import { Config } from "@databricks/sdk-experimental";
 import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 
@@ -365,17 +364,15 @@ describe("Tool Conversion", () => {
 
 describe("ChatDatabricks", () => {
   describe("constructor validation", () => {
-    it("creates model with Config object", async () => {
+    it("creates model with auth object", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
-
-      const config = new Config({
-        host: "https://test.databricks.com",
-        token: "test-token",
-      });
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        config,
+        auth: {
+          host: "https://test.databricks.com",
+          token: "test-token",
+        },
       });
 
       expect(model.endpoint).toBe("test-endpoint");
@@ -384,27 +381,27 @@ describe("ChatDatabricks", () => {
     it("supports endpoint types", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const config = new Config({
+      const auth = {
         host: "https://test.databricks.com",
         token: "test-token",
-      });
+      };
 
       const fmapiModel = new ChatDatabricks({
         endpoint: "test-endpoint",
         endpointType: "fmapi",
-        config,
+        auth,
       });
 
       const chatAgentModel = new ChatDatabricks({
         endpoint: "test-agent",
         endpointType: "chat-agent",
-        config,
+        auth,
       });
 
       const responsesAgentModel = new ChatDatabricks({
         endpoint: "test-responses",
         endpointType: "responses-agent",
-        config,
+        auth,
       });
 
       expect(fmapiModel.endpointType).toBe("fmapi");
@@ -415,29 +412,42 @@ describe("ChatDatabricks", () => {
     it("defaults to fmapi endpoint type", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const config = new Config({
-        host: "https://test.databricks.com",
-        token: "test-token",
-      });
-
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        config,
+        auth: {
+          host: "https://test.databricks.com",
+          token: "test-token",
+        },
       });
 
       expect(model.endpointType).toBe("fmapi");
     });
 
-    it("creates default Config if not provided", async () => {
+    it("throws error when host is missing", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      // This will use environment variables or ~/.databrickscfg
-      const model = new ChatDatabricks({
-        endpoint: "test-endpoint",
-      });
+      expect(() => {
+        new ChatDatabricks({
+          endpoint: "test-endpoint",
+        });
+      }).toThrow("Databricks host is required");
+    });
 
-      expect(model.endpoint).toBe("test-endpoint");
-      expect(model.endpointType).toBe("fmapi");
+    it("throws error when token is missing", async () => {
+      const { ChatDatabricks } = await import("../src/chat_models.js");
+
+      // Set host via env var but not token
+      process.env.DATABRICKS_HOST = "https://test.databricks.com";
+      delete process.env.DATABRICKS_TOKEN;
+
+      expect(() => {
+        new ChatDatabricks({
+          endpoint: "test-endpoint",
+        });
+      }).toThrow("Databricks token is required");
+
+      // Clean up
+      delete process.env.DATABRICKS_HOST;
     });
   });
 });
