@@ -1,0 +1,82 @@
+{
+  "name": "@databricks/langchain-ts",
+  "version": "0.1.0",
+  "description": "LangChain integration for Databricks Model Serving",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      },
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "watch": "tsdown --watch",
+    "clean": "rm -rf dist node_modules",
+    "lint": "eslint src --ext ts",
+    "lint:fix": "eslint src --ext ts --fix",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.config.int.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
+    "example": "tsx examples/basic.ts",
+    "example:tools": "tsx examples/tools.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^2.0.0",
+    "@ai-sdk/provider-utils": "^3.0.0",
+    "@databricks/ai-sdk-provider": "file:databricks-ai-sdk-provider-0.1.0.tgz",
+    "@databricks/sdk-experimental": "^0.15.0",
+    "@langchain/core": "^1.1.8",
+    "ai": "^5.0.118",
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsdown": "^0.2.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.49.0",
+    "vitest": "^3.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/databricks/databricks-ai-bridge.git",
+    "directory": "integrations/langchain-js"
+  },
+  "bugs": {
+    "url": "https://github.com/databricks/databricks-ai-bridge/issues"
+  },
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain-js#readme",
+  "keywords": [
+    "databricks",
+    "langchain",
+    "llm",
+    "ai",
+    "machine-learning",
+    "model-serving"
+  ]
+}
