@@ -1,0 +1,51 @@
+#!/bin/bash
+
+#
+# for-each-project <command>
+#
+# Run command in each project directory.
+#
+
+set -x
+
+KEEP_GOING=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --keep-going)
+      KEEP_GOING=true
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+CMD="$*"
+
+PROJECTS=(
+  "."
+  "databricks_mcp"
+  "integrations/dspy"
+  "integrations/llamaindex"
+  "integrations/openai"
+  "integrations/langchain"
+)
+
+main() {
+  for project in "${PROJECTS[@]}"; do
+      if pushd "$project"; then
+        $CMD
+        cmd_exit_status=$?
+        popd
+
+        if [ $cmd_exit_status -ne 0 ] && [ "$KEEP_GOING" = false ]; then
+          exit $cmd_exit_status
+        fi
+      fi
+  done
+}
+
+main

@@ -360,7 +360,7 @@ class DatabricksVectorSearch(VectorStore):
                 self._index_details.embedding_vector_column["name"]: vector,
                 **metadata,
             }
-            for text, vector, id_, metadata in zip(texts, vectors, ids, metadatas)
+            for text, vector, id_, metadata in zip(texts, vectors, ids, metadatas, strict=False)
         ]
 
         upsert_resp = self.index.upsert(updates)
