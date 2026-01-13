@@ -50,7 +50,7 @@ doc = [
   "autodoc_pydantic>=2.2.0",
 ]
 lint = [
-  "ruff==0.12.10",
+  "ruff==0.14.10",
 ]
 
 [build-system]
