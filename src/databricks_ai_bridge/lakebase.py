@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from psycopg.rows import DictRow
 
 try:
     import psycopg
@@ -168,7 +169,7 @@ class LakebasePool(_LakebasePoolBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        self._pool = ConnectionPool(
+        self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
             min_size=min_size,  # type: ignore[invalid-argument-type]
@@ -201,7 +202,7 @@ class LakebasePool(_LakebasePoolBase):
             return token
 
     @property
-    def pool(self) -> ConnectionPool:
+    def pool(self) -> ConnectionPool[psycopg.Connection[DictRow]]:
         """Access the underlying connection pool."""
         return self._pool
 
@@ -261,7 +262,7 @@ class AsyncLakebasePool(_LakebasePoolBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        self._pool = AsyncConnectionPool(
+        self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
             min_size=min_size,  # type: ignore[invalid-argument-type]
@@ -300,7 +301,7 @@ class AsyncLakebasePool(_LakebasePoolBase):
             return token
 
     @property
-    def pool(self) -> AsyncConnectionPool:
+    def pool(self) -> AsyncConnectionPool[psycopg.AsyncConnection[DictRow]]:
         """Access the underlying async connection pool."""
         return self._pool
 

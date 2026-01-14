@@ -249,9 +249,7 @@ class DatabricksVectorSearch(VectorStore):
             )
 
         try:
-            from databricks.vector_search.client import (  # type: ignore[import]
-                VectorSearchClient,
-            )
+            from databricks.vector_search.client import VectorSearchClient
             from databricks.vector_search.utils import CredentialStrategy
         except ImportError as e:
             raise ImportError(
@@ -522,15 +520,15 @@ class DatabricksVectorSearch(VectorStore):
 
     def similarity_search_by_vector(
         self,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
-        query_type: Optional[str] = None,
-        query: Optional[str] = None,
-        reranker: Optional[Reranker] = None,
+        query_type: str | None = None,
+        query: str | None = None,
+        reranker: Reranker | None = None,
         **kwargs: Any,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Return docs most similar to embedding vector.
 
         Args:
@@ -571,15 +569,15 @@ class DatabricksVectorSearch(VectorStore):
 
     def similarity_search_by_vector_with_score(
         self,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
-        query_type: Optional[str] = None,
-        query: Optional[str] = None,
-        reranker: Optional[Reranker] = None,
+        query_type: str | None = None,
+        query: str | None = None,
+        reranker: Reranker | None = None,
         **kwargs: Any,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """Return docs most similar to embedding vector, along with scores.
 
         .. note::
@@ -713,16 +711,16 @@ class DatabricksVectorSearch(VectorStore):
     def max_marginal_relevance_search_by_vector(
         self,
         query: str,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
         query_type: Optional[str] = None,
         reranker: Optional[Reranker] = None,
         **kwargs: Any,
-    ) -> List[Document]:
+    ) -> list[Document]:  # ty:ignore[invalid-method-override]: this shouldn't have happened but fixing this may break user's code
         """Return docs selected using the maximal marginal relevance.
 
         Maximal marginal relevance optimizes for similarity to query AND diversity

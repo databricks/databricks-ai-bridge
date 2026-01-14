@@ -179,7 +179,7 @@ async def test_chat_databricks_ainvoke(model):
 
     response = await chat.ainvoke("How to learn Python? Start the response by 'To learn Python,'")
     assert isinstance(response, AIMessage)
-    assert response.content.startswith("To learn Python,")
+    assert isinstance(response.content, str) and response.content.startswith("To learn Python,")
 
 
 @pytest.mark.asyncio
@@ -327,16 +327,16 @@ def test_chat_databricks_with_structured_output(model, schema, method):
     response = structured_llm.invoke(prompt)
 
     if schema == AnswerWithJustification:
-        assert response.answer == "Wednesday"
-        assert response.justification is not None
+        assert response.answer == "Wednesday"  # type: ignore[union-attr]
+        assert response.justification is not None  # type: ignore[union-attr]
     else:
-        assert response["answer"] == "Wednesday"
-        assert response["justification"] is not None
+        assert response["answer"] == "Wednesday"  # type: ignore[index]
+        assert response["justification"] is not None  # type: ignore[index]
 
     # Invoke with raw output
     structured_llm = llm.with_structured_output(schema, method=method, include_raw=True)
     response_with_raw = structured_llm.invoke(prompt)
-    assert isinstance(response_with_raw["raw"], AIMessage)
+    assert isinstance(response_with_raw["raw"], AIMessage)  # type: ignore[index]
 
 
 @pytest.mark.foundation_models
@@ -409,7 +409,7 @@ def test_chat_databricks_langgraph_with_memory(model):
     def chatbot(state: State):
         return {"messages": [llm_with_tools.invoke(state["messages"])]}
 
-    graph_builder = StateGraph(State)
+    graph_builder = StateGraph(State)  # type: ignore[arg-type]
     graph_builder.add_node("chatbot", chatbot)
 
     tool_node = ToolNode(tools=tools)
@@ -755,7 +755,7 @@ def test_chat_databricks_custom_outputs():
         "What is the 10th fibonacci number?",
         custom_inputs={"key": "value"},
     )
-    assert response.custom_outputs["key"] == "value"
+    assert response.custom_outputs["key"] == "value"  # type: ignore[attr-defined]
 
 
 def test_chat_databricks_custom_outputs_stream():
@@ -765,7 +765,7 @@ def test_chat_databricks_custom_outputs_stream():
         custom_inputs={"key": "value"},
     )
 
-    assert any(chunk.custom_outputs["key"] == "value" for chunk in response)
+    assert any(chunk.custom_outputs["key"] == "value" for chunk in response)  # type: ignore[attr-defined]
 
 
 def test_chat_databricks_token_count():

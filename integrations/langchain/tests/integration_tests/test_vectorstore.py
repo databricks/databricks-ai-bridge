@@ -26,10 +26,11 @@ def test_vectorstore():
     because the setup is too complex to run within a single python file.
     Thereby, this test simply triggers the workflow by calling the REST API.
     """
-    test_job_id = os.getenv("VS_TEST_JOB_ID")
-    if not test_job_id:
+    test_job_id_str = os.getenv("VS_TEST_JOB_ID")
+    if not test_job_id_str:
         raise RuntimeError("Please set the environment variable VS_TEST_JOB_ID")
 
+    test_job_id = int(test_job_id_str)
     w = WorkspaceClient()
 
     # Check if there is any ongoing job run
