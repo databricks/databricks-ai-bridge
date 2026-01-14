@@ -24,13 +24,13 @@ def test_databricks_integration():
     w = WorkspaceClient()
 
     # Check if there is any ongoing job run
-    run_list = list(w.jobs.list_runs(job_id=test_job_id, active_only=True))
+    run_list = list(w.jobs.list_runs(job_id=int(test_job_id), active_only=True))
     no_active_run = len(run_list) == 0
     assert no_active_run, "There is an ongoing job run. Please wait for it to complete."
 
     # Trigger the workflow
     response = w.jobs.run_now(
-        job_id=test_job_id,
+        job_id=int(test_job_id),
         job_parameters={
             "branch_name": branch_name or "main",
             "fork_name": fork_name or "databricks",
@@ -41,5 +41,7 @@ def test_databricks_integration():
 
     # Wait for the job to complete
     result = response.result(timeout=timedelta(seconds=3600))
+    assert result.status is not None
     assert result.status.state == RunLifecycleStateV2State.TERMINATED
+    assert result.status.termination_details is not None
     assert result.status.termination_details.type == TerminationTypeType.SUCCESS
