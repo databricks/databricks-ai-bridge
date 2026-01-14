@@ -1055,6 +1055,7 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
         return {"role": "user", **message_dict}
     elif isinstance(message, AIMessage):
         if tool_calls := _get_tool_calls_from_ai_message(message):
+            print(tool_calls)
             message_dict["tool_calls"] = tool_calls  # type: ignore[assignment]
             # If tool calls present, content null value should be None not empty string.
             message_dict["content"] = message_dict["content"] or None  # type: ignore[assignment]
@@ -1196,15 +1197,37 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
         for tc in message.invalid_tool_calls
     ]
 
+    """
+    thought signature encodes model reasoning
+    it is required for each tool call to gemini 3 pro - https://arc.net/l/quote/jhoeoqbl
+    this means we need to encode this info in the responses events in order to fix this bug, in addition to the work on this PR
+    
+    will have to change _langchain_message_stream_to_responses_stream
+    """
+
     if tool_calls or invalid_tool_calls:
-        return tool_calls + invalid_tool_calls
+        # Merge thoughtSignature from additional_kwargs if present
+        all_tool_calls = tool_calls + invalid_tool_calls
+        additional_tool_calls = message.additional_kwargs.get("tool_calls", [])
+        if additional_tool_calls:
+            # Create a mapping of tool call IDs to their thoughtSignature
+            thought_signatures = {
+                tc.get("id"): tc.get("thoughtSignature")
+                for tc in additional_tool_calls
+                if tc.get("thoughtSignature")
+            }
+            # Add thoughtSignature to matching tool calls
+            for tc in all_tool_calls:
+                if tc["id"] in thought_signatures:
+                    tc["thoughtSignature"] = thought_signatures[tc["id"]]
+        return all_tool_calls
 
     # Get tool calls from additional kwargs if present.
     return [
         {
             k: v
             for k, v in tool_call.items()  # type: ignore[union-attr]
-            if k in {"id", "type", "function"}
+            if k in {"id", "type", "function", "thoughtSignature"}
         }
         for tool_call in message.additional_kwargs.get("tool_calls", [])
     ]
