@@ -154,7 +154,7 @@ class DatabricksMCPClient:
                 "For more information: https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
             )
 
-    def _get_databricks_managed_mcp_url_type(self) -> str:
+    def _get_databricks_managed_mcp_url_type(self) -> str | None:
         """Determine the MCP URL type based on the path."""
         path = urlparse(self.server_url).path
         for mcp_type, pattern in MCP_URL_PATTERNS.items():

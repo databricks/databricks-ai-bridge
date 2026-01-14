@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from databricks.sdk import WorkspaceClient
-from mcp.types import CallToolResult, Tool
+from mcp.types import CallToolResult, TextContent, Tool
 
 from databricks_mcp.mcp import (
     GENIE_MCP,
@@ -151,7 +151,7 @@ class TestDatabricksMCPClient:
     @pytest.mark.asyncio
     async def test_call_tools_async(self):
         """Test asynchronous tool calling."""
-        mock_result = CallToolResult(content=[{"type": "text", "text": "test result"}])
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
         mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
         mock_session.call_tool = AsyncMock(return_value=mock_result)
@@ -189,7 +189,7 @@ class TestDatabricksMCPClient:
 
     def test_call_tool(self):
         """Test synchronous tool calling."""
-        mock_result = CallToolResult(content=[{"type": "text", "text": "test result"}])
+        mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
 
         with patch.object(DatabricksMCPClient, "_call_tools_async", return_value=mock_result):
             workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
