@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.sdk import WorkspaceClient
+from openai.types.chat import ChatCompletionToolParam
 
 
 @pytest.fixture
@@ -350,7 +351,7 @@ class TestToolInfo:
         def dummy_fn(x: int = 0):
             return x * 2 if x else "test"
 
-        tool_spec = {
+        tool_spec: ChatCompletionToolParam = {
             "type": "function",
             "function": {
                 "name": "test_tool",

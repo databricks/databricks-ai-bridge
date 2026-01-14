@@ -91,7 +91,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         "self-managed embeddings.",
     )
 
-    tool: ChatCompletionToolParam = Field(
+    tool: ChatCompletionToolParam | None = Field(
         None, description="The tool input used in the OpenAI chat completion SDK"
     )
     _index: VectorSearchIndex = PrivateAttr()
@@ -179,10 +179,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             from databricks.sdk import WorkspaceClient
             from databricks.sdk.errors.platform import ResourceDoesNotExist
 
-            if self.workspace_client is not None:
+            if self.workspace_client is not None and self.embedding_model_name is not None:
                 self.workspace_client.serving_endpoints.get(self.embedding_model_name)
-            else:
+            elif self.embedding_model_name is not None:
                 WorkspaceClient().serving_endpoints.get(self.embedding_model_name)
+
             self.resources = self._get_resources(
                 self.index_name, self.embedding_model_name, self._index_details
             )
@@ -196,7 +197,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self,
         query: str,
         filters: Optional[List[FilterItem]] = None,
-        openai_client: OpenAI = None,
+        openai_client: OpenAI | None = None,
         **kwargs: Any,
     ) -> List[Dict]:
         """
@@ -222,6 +223,11 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 raise ValueError(
                     "OpenAI API key is required to generate embeddings for retrieval queries."
                 )
+
+            # Invariant: self.embedding_model_name must be provided for non-Databricks-managed embeddings.
+            assert self.embedding_model_name is not None, (
+                "embedding_model_name is required for non-Databricks-managed embeddings."
+            )
 
             query_text = query if self.query_type and self.query_type.upper() == "HYBRID" else None
             query_vector = (
@@ -267,6 +273,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             search_resp=search_resp,
             retriever_schema=self._retriever_schema,
             document_class=dict,
-            include_score=self.include_score,
+            include_score=self.include_score or False,
         )
         return [doc for doc, _ in docs_with_score]

@@ -3,7 +3,7 @@ from typing import Callable, List
 
 from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksMCPClient
-from openai.types.chat import ChatCompletionToolParam
+from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionToolParam
 from pydantic import BaseModel
 
 
@@ -86,8 +86,8 @@ class McpServerToolkit:
     def __init__(
         self,
         url: str,
-        name: str = None,
-        workspace_client: WorkspaceClient = None,
+        name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
     ):
         self.workspace_client = workspace_client or WorkspaceClient()
         self.name = name
@@ -207,7 +207,7 @@ class McpServerToolkit:
         tool_infos = []
         for tool in all_tools:
             unique_tool_name = f"{self.name}__{tool.name}" if self.name else tool.name
-            tool_spec = {
+            tool_spec: ChatCompletionFunctionToolParam = {
                 "type": "function",
                 "function": {
                     "name": unique_tool_name,
