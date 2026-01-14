@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "lib": ["ES2022"],
+    "baseUrl": ".",
+    "paths": {
+      "@databricks/ai-sdk-provider": ["./src/index.ts"],
+      "@databricks/ai-sdk-provider/tools": ["./src/tools.ts"],
+      "@databricks/ai-sdk-provider/mcp": ["./src/mcp.ts"]
+    },
+    "noEmit": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "verbatimModuleSyntax": false
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}
