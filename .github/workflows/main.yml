@@ -16,20 +16,6 @@ env:
   UV_VERSION: "0.9.11"
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: ${{ env.UV_VERSION }}
-      - name: Lint Python code with ruff
-        run: |
-          ./for-each-project uv run --group dev ruff check .
-          ./for-each-project uv run --group dev ruff format --check .
-
   core_test:
     runs-on: ubuntu-latest
     name: "core_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"

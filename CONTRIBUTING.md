@@ -14,6 +14,15 @@ uv sync
 uv run --group tests pytest tests/
 ```
 
+## Run Type Checker
+
+
+In each project directory, run
+
+```
+uv run ty check
+```
+
 ### Build API docs
 
 See the documentation in docs/README.md for how to build docs. When releasing a new wheel, please send a pull request to change the API reference published in [docs-api-ref](https://github.com/databricks-eng/docs-api-ref/tree/main/content-publish/python/databricks-agents).
