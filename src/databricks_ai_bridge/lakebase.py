@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from threading import Lock
-from typing import Optional
+from typing import Any
 
 from databricks.sdk import WorkspaceClient
 
@@ -48,9 +48,9 @@ class _LakebasePoolBase:
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
-        self.workspace_client = workspace_client or WorkspaceClient()
-        self.instance_name = instance_name
-        self.token_cache_duration_seconds = token_cache_duration_seconds
+        self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
+        self.instance_name: str = instance_name
+        self.token_cache_duration_seconds: int = token_cache_duration_seconds
 
         # Resolve host from the Lakebase name
         try:
@@ -71,17 +71,19 @@ class _LakebasePoolBase:
                 "Ensure the instance is running and in AVAILABLE state."
             )
 
-        self.host = resolved_host
-        self.username = self._infer_username()
+        self.host: str = resolved_host
+        self.username: str = self._infer_username()
 
-        self._cached_token: Optional[str] = None
-        self._cache_ts: Optional[float] = None
+        self._cached_token: str | None = None
+        self._cache_ts: float | None = None
 
-    def _is_token_valid(self) -> bool:
+    def _get_cached_token(self) -> str | None:
         """Check if the cached token is still valid."""
         if not self._cached_token or not self._cache_ts:
-            return False
-        return (time.time() - self._cache_ts) < self.token_cache_duration_seconds
+            return None
+        if (time.time() - self._cache_ts) < self.token_cache_duration_seconds:
+            return self._cached_token
+        return None
 
     def _mint_token(self) -> str:
         try:
@@ -94,6 +96,9 @@ class _LakebasePoolBase:
                 f"Failed to obtain credential for Lakebase instance "
                 f"'{self.instance_name}'. Ensure the caller has access."
             ) from exc
+
+        if not cred.token:
+            raise RuntimeError("Failed to generate database credential: no token received")
 
         return cred.token
 
@@ -108,7 +113,7 @@ class _LakebasePoolBase:
         """Get username for database connection."""
         try:
             user = self.workspace_client.current_user.me()
-            if user and getattr(user, "user_name", None):
+            if user and user.user_name:
                 return user.user_name
         except Exception:
             logger.debug("Could not get username for Lakebase credentials.")
@@ -127,7 +132,7 @@ class LakebasePool(_LakebasePoolBase):
         instance_name: str,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
-        **pool_kwargs: object,
+        **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
             instance_name=instance_name,
@@ -166,12 +171,12 @@ class LakebasePool(_LakebasePoolBase):
         self._pool = ConnectionPool(
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
-            min_size=min_size,
-            max_size=max_size,
-            timeout=timeout,
+            min_size=min_size,  # type: ignore[invalid-argument-type]
+            max_size=max_size,  # type: ignore[invalid-argument-type]
+            timeout=timeout,  # type: ignore[invalid-argument-type]
             open=True,
             connection_class=RotatingConnection,
-            **pool_kwargs,
+            **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
         logger.info(
@@ -187,8 +192,8 @@ class LakebasePool(_LakebasePoolBase):
     def _get_token(self) -> str:
         """Get cached token or mint a new one if expired (thread-safe)."""
         with self._cache_lock:
-            if self._is_token_valid():
-                return self._cached_token
+            if cached_token := self._get_cached_token():
+                return cached_token
 
             token = self._mint_token()
             self._cached_token = token
@@ -259,12 +264,12 @@ class AsyncLakebasePool(_LakebasePoolBase):
         self._pool = AsyncConnectionPool(
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
-            min_size=min_size,
-            max_size=max_size,
-            timeout=timeout,
+            min_size=min_size,  # type: ignore[invalid-argument-type]
+            max_size=max_size,  # type: ignore[invalid-argument-type]
+            timeout=timeout,  # type: ignore[invalid-argument-type]
             open=False,  # Don't open yet, must be opened with await
             connection_class=AsyncRotatingConnection,
-            **pool_kwargs,
+            **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
         logger.info(
@@ -284,8 +289,8 @@ class AsyncLakebasePool(_LakebasePoolBase):
         runs in an executor to avoid blocking the event loop.
         """
         async with self._cache_lock:
-            if self._is_token_valid():
-                return self._cached_token
+            if cached_token := self._get_cached_token():
+                return cached_token
 
             # Run the sync SDK call in an executor to not block the event loop
             loop = asyncio.get_running_loop()

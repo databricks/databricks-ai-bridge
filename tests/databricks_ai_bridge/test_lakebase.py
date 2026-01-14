@@ -109,6 +109,7 @@ def test_lakebase_pool_gets_username(monkeypatch):
     )
 
     assert pool.username == "myuser@databricks.com"
+    assert isinstance(pool.pool.conninfo, str)
     assert "user=myuser@databricks.com" in pool.pool.conninfo
 
 
@@ -286,6 +287,7 @@ async def test_async_lakebase_pool_gets_username(monkeypatch):
     )
 
     assert pool.username == "myuser@databricks.com"
+    assert isinstance(pool.pool.conninfo, str)
     assert "user=myuser@databricks.com" in pool.pool.conninfo
 
 
