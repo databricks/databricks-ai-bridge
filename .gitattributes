@@ -1,0 +1,3 @@
+# Generated release workflows - do not edit directly
+# Regenerate with: uv run python .github/workflows/generate_release_workflows.py
+.github/workflows/release-databricks-*.yml linguist-generated=true
