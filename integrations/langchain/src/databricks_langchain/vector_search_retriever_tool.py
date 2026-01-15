@@ -1,11 +1,13 @@
-<<<<<<< HEAD
-from typing import Type
-=======
 import json
-from typing import List, Optional, Type
->>>>>>> 6a56801 (start)
+from typing import Type
 
 from databricks.vector_search.reranker import DatabricksReranker
+from databricks_langchain import DatabricksEmbeddings
+from databricks_langchain.vectorstores import DatabricksVectorSearch
+from langchain_core.embeddings import Embeddings
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
+
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
@@ -13,12 +15,6 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
-from langchain_core.embeddings import Embeddings
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
-
-from databricks_langchain import DatabricksEmbeddings
-from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
 class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
