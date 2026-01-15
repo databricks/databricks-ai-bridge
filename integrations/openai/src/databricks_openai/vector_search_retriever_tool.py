@@ -41,7 +41,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                 {"role": "system", "content": "You are a helpful assistant."},
                 {
                     "role": "user",
-                    "content": "Using the Databricks documentation, answer what is Spark?",
+                    "content": "Using the Databricks documentation, answer what are AI Gateway inference tables?",
                 },
             ]
             first_response = client.chat.completions.create(
@@ -56,7 +56,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             args = json.loads(tool_call.function.arguments)
             result = dbvs_tool.execute(
                 query=args["query"],
-                filters=args.get("filters", None),
+                filters={"category": "governance", "status": "general"},
                 num_results=5,
                 score_threshold=0.7,
             )
@@ -210,8 +210,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         Execute the VectorSearchIndex tool calls from the ChatCompletions response that correspond to the
         self.tool VectorSearchRetrieverToolInput and attach the retrieved documents into tool call messages.
 
-        Automatically routes to MCP path (Databricks-managed embeddings) or
-        Direct API path (self-managed embeddings) based on index configuration.
+        Execute vector search with automatic routing:
+          - MCP path: Used for Databricks-managed embeddings (no embedding model configuration needed)
+          - Direct API path: Used for self-managed embeddings (requires openai_client)
 
         Args:
             query: The query text to use for the retrieval.
@@ -232,6 +233,13 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             return self._execute_direct_api_path(query, filters, openai_client, **kwargs)
 
     def _get_mcp_toolkit(self) -> Callable:
+        """
+        If it does not exist, create the MCP tool execution function for this index.
+        Otherwise, return the execution function.
+
+        Uses McpServerToolkit.from_vector_search(catalog, schema, index_name, workspace_client)
+        to access tools for the specified vector search index.
+        """
         if self._mcp_tool_execute is not None:
             return self._mcp_tool_execute
 
@@ -257,7 +265,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             ) from e
 
         tools = self._mcp_toolkit.get_tools()
-        if len(tools) != 1:
+        if len(tools) < 1:
             raise ValueError(
                 f"Expected exactly 1 MCP tool for index {self.index_name}, but got {len(tools)}"
             )
