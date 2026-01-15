@@ -27,6 +27,26 @@ import {
 import { convertToResponsesInput } from './responses-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 
+function mapResponsesFinishReason({
+  finishReason,
+  hasToolCalls,
+}: {
+  finishReason: string | null | undefined
+  hasToolCalls: boolean
+}): LanguageModelV2FinishReason {
+  switch (finishReason) {
+    case undefined:
+    case null:
+      return hasToolCalls ? 'tool-calls' : 'stop'
+    case 'max_output_tokens':
+      return 'length'
+    case 'content_filter':
+      return 'content-filter'
+    default:
+      return hasToolCalls ? 'tool-calls' : 'other'
+  }
+}
+
 export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = 'v2'
 
@@ -65,13 +85,19 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
       }),
     })
 
+    const content = convertResponsesAgentResponseToMessagePart(response)
+    const hasToolCalls = content.some((p) => p.type === 'tool-call')
+
     return {
-      content: convertResponsesAgentResponseToMessagePart(response),
-      finishReason: 'stop',
+      content,
+      finishReason: mapResponsesFinishReason({
+        finishReason: response.incomplete_details?.reason,
+        hasToolCalls,
+      }),
       usage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
+        inputTokens: response.usage?.input_tokens ?? 0,
+        outputTokens: response.usage?.output_tokens ?? 0,
+        totalTokens: response.usage?.total_tokens ?? 0,
       },
       warnings: [],
     }
@@ -131,7 +157,11 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
               }
 
               if (chunk.value.type === 'responses.completed') {
-                finishReason = 'stop'
+                const hasToolCalls = allParts.some((p) => p.type === 'tool-call')
+                finishReason = mapResponsesFinishReason({
+                  finishReason: chunk.value.response.incomplete_details?.reason,
+                  hasToolCalls,
+                })
                 usage.inputTokens = chunk.value.response.usage.input_tokens
                 usage.outputTokens = chunk.value.response.usage.output_tokens
                 usage.totalTokens = chunk.value.response.usage.total_tokens

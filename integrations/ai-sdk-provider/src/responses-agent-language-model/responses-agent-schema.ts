@@ -89,6 +89,11 @@ export const responsesAgentResponseSchema = z.object({
     .nullish(),
   model: z.string().optional(),
   output: z.array(responsesAgentOutputItem),
+  incomplete_details: z
+    .object({
+      reason: z.enum(['max_output_tokens', 'content_filter']).optional(),
+    })
+    .nullish(),
   usage: z
     .object({
       input_tokens: z.number(),
@@ -164,7 +169,14 @@ const responsesCompletedSchema = z.object({
   type: z.literal('responses.completed'),
   response: z.object({
     id: z.string(),
-    status: z.literal('completed'),
+    status: z
+      .enum(['completed', 'failed', 'in_progress', 'cancelled', 'queued', 'incomplete'])
+      .optional(),
+    incomplete_details: z
+      .object({
+        reason: z.enum(['max_output_tokens', 'content_filter']).optional(),
+      })
+      .nullish(),
     usage: z.object({
       input_tokens: z.number(),
       output_tokens: z.number(),
