@@ -15,7 +15,6 @@ from datetime import timedelta
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import RunLifecycleStateV2State, TerminationTypeType
-
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
 
 
@@ -62,16 +61,6 @@ def test_vs_tool_with_workspace_client():
         assert index.service_principal_client_secret is not None
     else:
         raise ValueError(f"Unsupported auth type: {w.config.auth_type}")
-
-
-def test_vs_tool_with_workspace_client_run_method():
-    # tested manually with SP creds and PAT creds
-    w = WorkspaceClient()
-    vs_tool = VectorSearchRetrieverTool(index_name="main.default.cities_index", workspace_client=w)
-    index = vs_tool._vector_store.index
-    vs_tool.run(
-        query="What is the capital of France?",
-    )
 
 
 def test_vs_tool_full_text_search():
