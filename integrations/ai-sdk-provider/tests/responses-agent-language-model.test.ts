@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
-import { DatabricksResponsesAgentLanguageModel } from '../src/responses-agent-language-model/responses-agent-language-model'
+import {
+  DatabricksResponsesAgentLanguageModel,
+  shouldDedupeOutputItemDone,
+} from '../src/responses-agent-language-model/responses-agent-language-model'
 import { RESPONSES_AGENT_OUTPUT_WITH_TOOL_CALLS } from './__fixtures__/llm-output-fixtures'
 import {
   MCP_APPROVAL_REQUEST_FIXTURE,
@@ -546,5 +549,243 @@ data: {
     // Since we removed text-start from .done converter, we only expect the initial text-start from the stream
     const textStartParts = parts.filter((p) => p.type === 'text-start')
     expect(textStartParts.length).toBe(1)
+  })
+})
+
+describe('shouldDedupeOutputItemDone', () => {
+  // Helper to create a text-delta from response.output_text.delta (regular streaming)
+  const createTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+    type: 'text-delta',
+    id,
+    delta,
+    providerMetadata: {
+      databricks: {
+        itemId: id,
+      },
+    },
+  })
+
+  // Helper to create a text-delta from response.output_item.done
+  const createDoneTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+    type: 'text-delta',
+    id,
+    delta,
+    providerMetadata: {
+      databricks: {
+        itemId: id,
+        itemType: 'response.output_item.done',
+      },
+    },
+  })
+
+  // Helper to create a non-text part (e.g., tool-call)
+  const createToolCall = (toolCallId: string): LanguageModelV2StreamPart => ({
+    type: 'tool-call',
+    toolCallId,
+    toolName: 'test-tool',
+    input: '{}',
+  })
+
+  it('returns false when incoming parts have no response.output_item.done text-delta', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+    const previousParts: LanguageModelV2StreamPart[] = []
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('returns false when done text-delta has no id', () => {
+    // Intentionally omitting `id` to test edge case - use type assertion
+    const doneWithoutId = {
+      type: 'text-delta',
+      delta: 'Hello',
+      providerMetadata: {
+        databricks: {
+          itemType: 'response.output_item.done',
+        },
+      },
+    } as unknown as LanguageModelV2StreamPart
+    const incomingParts: LanguageModelV2StreamPart[] = [doneWithoutId]
+    const previousParts: LanguageModelV2StreamPart[] = []
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('returns true when previous parts are empty (empty string matches)', () => {
+    // When previousParts is empty, reconstructuredTexts = [''] (empty string)
+    // indexOf('') in any string returns 0, so it returns true
+    const incomingParts: LanguageModelV2StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
+    const previousParts: LanguageModelV2StreamPart[] = []
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('returns true when done text contains all previous text-deltas in order', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Hello World[^1]', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('Hello ', 'msg_1'),
+      createTextDelta('World', 'msg_1'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('returns false when footnotes interrupt the text sequence', () => {
+    // The done text has footnotes [^ref1] and [^ref2] that interrupt the original text
+    // The reconstructed text is "The answer is 42. See more." but the done delta
+    // has "The answer is 42[^ref1]. See more[^ref2]." - the footnotes break the match
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('The answer is 42[^ref1]. See more[^ref2].', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('The answer is 42', 'msg_1'),
+      createTextDelta('. See more', 'msg_1'),
+      createTextDelta('.', 'msg_1'),
+    ]
+
+    // Returns false because ". See more." is not found after "The answer is 42"
+    // since the footnote [^ref1] appears in between
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('returns false when done text does not contain previous text', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Completely different text', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('Hello ', 'msg_1'),
+      createTextDelta('World', 'msg_1'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('returns false when previous text is not in the correct order within done text', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('World Hello', 'msg_1'), // Reversed order
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('Hello', 'msg_1'),
+      createTextDelta('World', 'msg_1'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('handles multiple text blocks separated by non-text parts', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('First block. Second block.', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('First ', 'msg_1'),
+      createTextDelta('block.', 'msg_1'),
+      createToolCall('tool_1'), // Non-text part separates the blocks
+      createTextDelta('Second ', 'msg_1'),
+      createTextDelta('block.', 'msg_1'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('returns false when only partial text matches', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Hello World', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('Hello ', 'msg_1'),
+      // Missing 'World' delta
+    ]
+
+    // Should return true since "Hello " is contained in "Hello World"
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('includes leading whitespace in reconstructed text', () => {
+    // Whitespace is included in the reconstructed text, so "   Hello World"
+    // is not found in "Hello World" (no leading whitespace in done delta)
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Hello World', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('   ', 'msg_1'), // Leading whitespace becomes part of reconstructed text
+      createTextDelta('Hello World', 'msg_1'),
+    ]
+
+    // Returns false because "   Hello World" is not found in "Hello World"
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('dedupes when whitespace matches', () => {
+    // When the done delta includes the same whitespace, it should dedupe
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('   Hello World', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('   ', 'msg_1'),
+      createTextDelta('Hello World', 'msg_1'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('returns false when incoming parts is empty', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = []
+    const previousParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+
+  it('returns true when only non-text previous parts (empty string matches)', () => {
+    // When there are only non-text parts, currentText stays '', and
+    // reconstructuredTexts = [''] (empty string is pushed at end of loop)
+    // indexOf('') in any string returns 0, so it returns true
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Hello World', 'msg_1'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createToolCall('tool_1'),
+      createToolCall('tool_2'),
+    ]
+
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('only considers text-deltas after the last response.output_item.done event', () => {
+    // This is the key behavior: when there's a previous .done event,
+    // we should only reconstruct text from parts AFTER that .done event
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Second message', 'msg_2'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      // First message's text-deltas
+      createTextDelta('First ', 'msg_1'),
+      createTextDelta('message', 'msg_1'),
+      // First message's .done event
+      createDoneTextDelta('First message', 'msg_1'),
+      // Tool call between messages
+      createToolCall('tool_1'),
+      // Second message's text-deltas (only these should be considered)
+      createTextDelta('Second ', 'msg_2'),
+      createTextDelta('message', 'msg_2'),
+    ]
+
+    // Should return true because "Second message" matches the text-deltas after the last .done
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+  })
+
+  it('returns false when text after last .done does not match', () => {
+    const incomingParts: LanguageModelV2StreamPart[] = [
+      createDoneTextDelta('Different content', 'msg_2'),
+    ]
+    const previousParts: LanguageModelV2StreamPart[] = [
+      createTextDelta('First message', 'msg_1'),
+      createDoneTextDelta('First message', 'msg_1'),
+      createTextDelta('Second ', 'msg_2'),
+      createTextDelta('message', 'msg_2'),
+    ]
+
+    // Should return false because "Different content" doesn't match "Second message"
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 })

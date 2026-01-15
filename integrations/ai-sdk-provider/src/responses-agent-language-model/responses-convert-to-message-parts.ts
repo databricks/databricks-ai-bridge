@@ -1,4 +1,5 @@
 import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import { randomUUID } from 'node:crypto'
 import { type ResponsesAgentChunk, type ResponsesAgentResponse } from './responses-agent-schema'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import {
@@ -65,7 +66,7 @@ export const convertResponsesAgentChunkToMessagePart = (
         type: 'source',
         url: chunk.annotation.url,
         title: chunk.annotation.title,
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         sourceType: 'url',
       })
       break
