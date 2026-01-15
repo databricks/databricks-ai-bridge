@@ -62,3 +62,20 @@ def test_vs_tool_with_workspace_client():
         assert index.service_principal_client_secret is not None
     else:
         raise ValueError(f"Unsupported auth type: {w.config.auth_type}")
+
+
+def test_vs_tool_full_text_search():
+    w = WorkspaceClient(
+        host="https://e2-dogfood.staging.cloud.databricks.com",
+        token=os.getenv("DATABRICKS_TOKEN"),
+    )
+    vs_tool = VectorSearchRetrieverTool(
+        index_name="main.default.cities_index",
+        workspace_client=w,
+        query_type="FULL_TEXT",
+    )
+    result = vs_tool.run(
+        tool_input="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+
+    assert type(result) is str

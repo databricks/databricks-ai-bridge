@@ -174,8 +174,22 @@ def test_vector_search_retriever_tool_combinations() -> None:
     )
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
-    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
-    assert all(item.page_content for item in result)
+    # _run now returns a string representation of documents
+    assert isinstance(result, str)
+    # Check that metadata keys and page_content appear in the string
+    assert "doc_uri" in result
+    assert "chunk_id" in result
+    assert "page_content" in result
+
+
+def test_vector_search_retriever_tool_empty_results() -> None:
+    vector_search_tool = init_vector_search_tool(index_name=DELTA_SYNC_INDEX)
+    # Mock similarity_search to return empty list
+    vector_search_tool._vector_store.similarity_search = MagicMock(return_value=[])  # type: ignore[method-assign]
+    result = vector_search_tool._run("query with no results")
+    # _run should always return a string, even for empty results
+    assert isinstance(result, str)
+    assert result == "[]"
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -205,8 +219,10 @@ def test_vs_tool_tracing(index_name: str, tool_name: str | None) -> None:
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
+    # _run now returns a string representation of documents
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
-    assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+    # Check that the expected text appears in the output string
+    assert any(text in outputs for text in INPUT_TEXTS)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
