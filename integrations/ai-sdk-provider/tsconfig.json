@@ -12,7 +12,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "lib": ["ES2022"],
+    "lib": ["ES2023"],
     "baseUrl": ".",
     "paths": {
       "@databricks/ai-sdk-provider": ["./src/index.ts"],

@@ -264,7 +264,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
   }
 }
 
-function shouldDedupeOutputItemDone(
+export function shouldDedupeOutputItemDone(
   incomingParts: LanguageModelV2StreamPart[],
   previousParts: LanguageModelV2StreamPart[]
 ): boolean {
@@ -287,26 +287,49 @@ function shouldDedupeOutputItemDone(
    * The caveat is that the response.output_item.done text uses GFM footnote syntax, where as the streamed content
    * uses response.output_text.delta and response.output_text.annotation.added events. So we reconstruct all the
    * delta text and check if the .done text is contained in it (meaning we've already streamed it).
+   *
+   * We only consider text-deltas that came AFTER the last response.output_item.done event, since each .done
+   * corresponds to a specific message and we should only compare against text streamed for that message.
    */
-  // 1. Reconstruct the last contiguous text block from previous text-deltas
-  // We iterate backwards to get the most recent text block
-  let reconstructedText = ''
-  for (let i = previousParts.length - 1; i >= 0; i--) {
-    const part = previousParts[i]
-    if (part.type === 'text-delta') {
-      reconstructedText = part.delta + reconstructedText
-    } else {
-      // We've hit a non-text-delta part, stop here
-      break
-    }
-  }
+  // 1. Find the index after the last response.output_item.done event using findLastIndex
+  const lastDoneIndex = previousParts.findLastIndex(
+    (part) =>
+      part.type === 'text-delta' &&
+      part.providerMetadata?.databricks?.itemType === 'response.output_item.done'
+  )
+  const partsAfterLastDone = previousParts.slice(lastDoneIndex + 1)
 
-  // 2. Check if the reconstructed delta text is present in the .done text
-  // The .done text may include footnote syntax like [^ref] that wasn't in the deltas
-  // If the .done text contains all the delta text, we should dedupe it
-  if (reconstructedText.length === 0) {
+  // 2. Reconstruct text blocks from parts after the last .done event, separated by non-text-delta parts
+  const { texts: reconstructuredTexts, current } = partsAfterLastDone.reduce<{
+    texts: string[]
+    current: string
+  }>(
+    (acc, part) => {
+      if (part.type === 'text-delta') {
+        return { ...acc, current: acc.current + part.delta }
+      } else if (acc.current.trim().length > 0) {
+        return { texts: [...acc.texts, acc.current.trim()], current: '' }
+      }
+      return acc
+    },
+    { texts: [], current: '' }
+  )
+  reconstructuredTexts.push(current)
+
+  // 3. Check if the .done text contains all reconstructed text blocks in order
+  if (reconstructuredTexts.length === 0) {
     return false
   }
 
-  return doneTextDelta.delta.includes(reconstructedText)
+  const allTextsFoundInOrder = reconstructuredTexts.reduce<{ found: boolean; lastIndex: number }>(
+    (acc, text) => {
+      if (!acc.found) return acc
+      const index = doneTextDelta.delta.indexOf(text, acc.lastIndex)
+      if (index === -1) return { found: false, lastIndex: acc.lastIndex }
+      return { found: true, lastIndex: index + text.length }
+    },
+    { found: true, lastIndex: 0 }
+  )
+
+  return allTextsFoundInOrder.found
 }
