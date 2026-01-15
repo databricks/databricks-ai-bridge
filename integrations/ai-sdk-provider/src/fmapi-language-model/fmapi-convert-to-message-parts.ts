@@ -64,6 +64,7 @@ export const convertFmapiResponseToMessagePart = (
   response: FmapiResponse
 ): LanguageModelV2Content[] => {
   const parts: LanguageModelV2Content[] = []
+  if (response.choices.length === 0) return parts
   const choice = response.choices[0]
 
   // Handle OpenAI-format tool_calls first

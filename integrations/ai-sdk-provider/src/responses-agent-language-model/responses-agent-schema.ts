@@ -89,11 +89,13 @@ export const responsesAgentResponseSchema = z.object({
     .nullish(),
   model: z.string().optional(),
   output: z.array(responsesAgentOutputItem),
-  usage: z.object({
-    input_tokens: z.number(),
-    output_tokens: z.number(),
-    total_tokens: z.number(),
-  }),
+  usage: z
+    .object({
+      input_tokens: z.number(),
+      output_tokens: z.number(),
+      total_tokens: z.number(),
+    })
+    .optional(),
 })
 
 /**

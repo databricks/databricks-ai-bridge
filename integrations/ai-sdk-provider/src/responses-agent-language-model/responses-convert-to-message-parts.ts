@@ -93,12 +93,14 @@ type OutputItemDoneItem = Extract<
 
 const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamPart[] => {
   switch (item.type) {
-    case 'message':
+    case 'message': {
+      const firstContent = item.content[0]
+      if (!firstContent) return []
       return [
         {
           type: 'text-delta',
           id: item.id,
-          delta: item.content[0].text,
+          delta: firstContent.text,
           providerMetadata: {
             databricks: {
               itemId: item.id,
@@ -107,6 +109,7 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
           },
         },
       ]
+    }
 
     case 'function_call':
       return [
@@ -134,7 +137,9 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         },
       ]
 
-    case 'reasoning':
+    case 'reasoning': {
+      const firstSummary = item.summary[0]
+      if (!firstSummary) return []
       return [
         {
           type: 'reasoning-start',
@@ -143,7 +148,7 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         {
           type: 'reasoning-delta',
           id: item.id,
-          delta: item.summary[0].text,
+          delta: firstSummary.text,
           providerMetadata: {
             databricks: {
               itemId: item.id,
@@ -155,6 +160,7 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
           id: item.id,
         },
       ]
+    }
 
     case 'mcp_approval_request':
       return [

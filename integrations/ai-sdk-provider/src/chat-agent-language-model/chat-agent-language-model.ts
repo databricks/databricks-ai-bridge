@@ -54,8 +54,8 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
       ...networkArgs,
       successfulResponseHandler: createJsonResponseHandler(chatAgentResponseSchema),
       failedResponseHandler: createJsonErrorResponseHandler({
-        errorSchema: z.any(), // TODO: Implement error schema
-        errorToMessage: (error) => JSON.stringify(error), // TODO: Implement error to message
+        errorSchema: z.any(),
+        errorToMessage: (error) => JSON.stringify(error),
         isRetryable: () => false,
       }),
     })
@@ -85,8 +85,8 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
     const { responseHeaders, value: response } = await postJsonToApi({
       ...networkArgs,
       failedResponseHandler: createJsonErrorResponseHandler({
-        errorSchema: z.any(), // TODO: Implement error schema
-        errorToMessage: (error) => JSON.stringify(error), // TODO: Implement error to message
+        errorSchema: z.any(),
+        errorToMessage: (error) => JSON.stringify(error),
         isRetryable: () => false,
       }),
       successfulResponseHandler: createEventSourceResponseHandler(chatAgentChunkSchema),

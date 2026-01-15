@@ -1,6 +1,6 @@
 {
   "name": "@databricks/ai-sdk-provider",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Databricks provider for Vercel AI SDK",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -20,7 +20,9 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "tsdown",

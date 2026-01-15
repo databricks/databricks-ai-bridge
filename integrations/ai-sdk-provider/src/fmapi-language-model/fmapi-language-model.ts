@@ -57,8 +57,8 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
       ...networkArgs,
       successfulResponseHandler: createJsonResponseHandler(fmapiResponseSchema),
       failedResponseHandler: createJsonErrorResponseHandler({
-        errorSchema: z.any(), // TODO: Implement error schema
-        errorToMessage: (error) => JSON.stringify(error), // TODO: Implement error to message
+        errorSchema: z.any(),
+        errorToMessage: (error) => JSON.stringify(error),
         isRetryable: () => false,
       }),
     })
@@ -95,8 +95,8 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
     const { responseHeaders, value: response } = await postJsonToApi({
       ...networkArgs,
       failedResponseHandler: createJsonErrorResponseHandler({
-        errorSchema: z.any(), // TODO: Implement error schema
-        errorToMessage: (error) => JSON.stringify(error), // TODO: Implement error to message
+        errorSchema: z.any(),
+        errorToMessage: (error) => JSON.stringify(error),
         isRetryable: () => false,
       }),
       successfulResponseHandler: createEventSourceResponseHandler(fmapiChunkSchema),
