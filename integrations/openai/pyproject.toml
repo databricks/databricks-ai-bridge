@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory = [
-    "databricks-ai-bridge[memory]>=0.11.0",
+    "databricks-ai-bridge[memory]>=0.12.0",
 ]
 
 [dependency-groups]
