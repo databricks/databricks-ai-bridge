@@ -46,7 +46,7 @@
     "@ai-sdk/provider-utils": "^3.0.0"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.15.0",
