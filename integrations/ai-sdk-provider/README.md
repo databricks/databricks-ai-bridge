@@ -6,7 +6,7 @@ Databricks provider for the [Vercel AI SDK](https://sdk.vercel.ai/docs).
 
 - 🚀 Support for three Databricks endpoint types:
   - **Chat Agent** (`agent/v2/chat`) - Databricks chat agent API
-  - **Responses Agent** (`agent/v2/responses`) - Databricks responses agent API
+  - **Responses Agent** (`agent/v1/responses`) - Databricks responses agent API
   - **FM API** (`llm/v1/chat`) - Foundation model chat completions API
 - 🔄 Stream and non-stream (generate) support for all endpoint types
 - 🛠️ Custom tool calling mechanism for Databricks agents
