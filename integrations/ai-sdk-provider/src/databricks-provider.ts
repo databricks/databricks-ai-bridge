@@ -14,7 +14,7 @@ export type DatabricksLanguageModelConfig = {
 export interface DatabricksProvider extends ProviderV2 {
   /** Agents */
   chatAgent(modelId: string): LanguageModelV2 // agent/v2/chat
-  responsesAgent(modelId: string): LanguageModelV2 // agent/v2/responses
+  responsesAgent(modelId: string): LanguageModelV2 // agent/v1/responses
 
   /** FMAPI */
   fmapi(modelId: string): LanguageModelV2 // llm/v1/chat

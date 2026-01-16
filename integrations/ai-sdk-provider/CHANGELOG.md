@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release of @databricks/ai-sdk-provider
 - Support for Chat Agent endpoint (`agent/v2/chat`)
-- Support for Responses Agent endpoint (`agent/v2/responses`)
+- Support for Responses Agent endpoint (`agent/v1/responses`)
 - Support for FM API endpoint (`llm/v1/chat`)
 - Stream and non-stream (generate) support for all three endpoint types
 - Custom tool calling mechanism for Databricks agents
