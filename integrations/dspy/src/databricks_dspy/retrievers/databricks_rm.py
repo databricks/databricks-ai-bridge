@@ -346,15 +346,15 @@ class DatabricksRM(dspy.Retrieve):
             k (int): Number of relevant documents to retrieve.
             columns (list[str]): Column names to include in response.
             query_text (Optional[str]): Text query for which to find relevant documents. Exactly
-                one of query_text or query_vector must be specified.
+                one of query_text or query_vector must be specified for non-hybrid search.
             query_vector (Optional[list[float]]): Numeric query vector for which to find relevant
-                documents. Exactly one of query_text or query_vector must be specified.
+                documents. Exactly one of query_text or query_vector must be specified for non-hybrid search.
             filters_json (Optional[str]): JSON string representing additional query filters.
 
         Returns:
             dict[str, Any]: Parsed JSON response from the Databricks Vector Search Index query.
         """
-        if (query_text, query_vector).count(None) != 1:
+        if query_type.lower() != "hybrid" and (query_text, query_vector).count(None) != 1:
             raise ValueError("Exactly one of query_text or query_vector must be specified.")
 
         return self.workspace_client.vector_search_indexes.query_index(
