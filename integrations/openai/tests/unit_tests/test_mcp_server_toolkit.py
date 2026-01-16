@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.sdk import WorkspaceClient
+from openai.types.chat import ChatCompletionToolParam
 
 
 @pytest.fixture
@@ -350,7 +351,7 @@ class TestToolInfo:
         def dummy_fn(x: int = 0):
             return x * 2 if x else "test"
 
-        tool_spec = {
+        tool_spec: ChatCompletionToolParam = {
             "type": "function",
             "function": {
                 "name": "test_tool",
@@ -424,3 +425,51 @@ class TestMcpServerToolkitAsyncGetTools:
                     match="Error listing tools from test-server MCP Server: Connection error",
                 ):
                     await toolkit.aget_tools()
+
+
+class TestMcpServerToolkitFromUCResource:
+    def test_from_uc_function(self, mock_workspace_client):
+        """Test from_uc_function constructs correct URL."""
+        with patch(
+            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch("databricks_openai.mcp_server_toolkit.DatabricksMCPClient"):
+                from databricks_openai.mcp_server_toolkit import McpServerToolkit
+
+                toolkit = McpServerToolkit.from_uc_function(
+                    catalog="system",
+                    schema="ai",
+                    function_name="test_tool",
+                    workspace_client=mock_workspace_client,
+                )
+
+                assert (
+                    toolkit.url
+                    == "https://test.databricks.com/api/2.0/mcp/functions/system/ai/test_tool"
+                )
+                assert toolkit.name is None
+                assert toolkit.workspace_client == mock_workspace_client
+
+    def test_from_vector_search(self, mock_workspace_client):
+        """Test from_vector_search constructs correct URL."""
+        with patch(
+            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch("databricks_openai.mcp_server_toolkit.DatabricksMCPClient"):
+                from databricks_openai.mcp_server_toolkit import McpServerToolkit
+
+                toolkit = McpServerToolkit.from_vector_search(
+                    catalog="system",
+                    schema="ai",
+                    index_name="test_index",
+                    workspace_client=mock_workspace_client,
+                )
+
+                assert (
+                    toolkit.url
+                    == "https://test.databricks.com/api/2.0/mcp/vector-search/system/ai/test_index"
+                )
+                assert toolkit.name is None
+                assert toolkit.workspace_client == mock_workspace_client

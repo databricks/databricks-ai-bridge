@@ -1,11 +1,12 @@
 import uuid
+import warnings
 from typing import Any, Dict, List, Optional, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
-from databricks.vector_search.client import VectorSearchIndex  # type: ignore
+from databricks.vector_search.client import VectorSearchIndex
 from databricks.vector_search.reranker import DatabricksReranker, Reranker
-from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
+from databricks_ai_bridge.test_utils.vector_search import (
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
     DIRECT_ACCESS_INDEX,
@@ -14,12 +15,12 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     INPUT_TEXTS,
     mock_vs_client,  # noqa: F401
 )
-
-from databricks_langchain.vectorstores import DatabricksVectorSearch
-from tests.utils.vector_search import (
+from utils.vector_search import (
     EMBEDDING_MODEL,
     FakeEmbeddings,
 )
+
+from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
 def init_vector_search(
@@ -39,7 +40,7 @@ def init_vector_search(
                 "text_column": "text",
             }
         )
-    return DatabricksVectorSearch(**kwargs)  # type: ignore[arg-type]
+    return DatabricksVectorSearch(**kwargs)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -48,11 +49,23 @@ def test_init(index_name: str) -> None:
     assert vectorsearch.index.describe() == INDEX_DETAILS[index_name]
 
 
-def test_init_with_endpoint_name() -> None:
-    vectorsearch = DatabricksVectorSearch(
-        endpoint=ENDPOINT_NAME,
-        index_name=DELTA_SYNC_INDEX,
-    )
+@pytest.mark.filterwarnings("always::DeprecationWarning")
+def test_init_with_endpoint_name_emits_deprecation_warning() -> None:
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        vectorsearch = DatabricksVectorSearch(
+            endpoint=ENDPOINT_NAME,
+            index_name=DELTA_SYNC_INDEX,
+        )
+        # Filter for our specific deprecation warning (ignoring Pydantic warnings)
+        endpoint_warnings = [
+            warning
+            for warning in w
+            if issubclass(warning.category, DeprecationWarning)
+            and "endpoint" in str(warning.message).lower()
+        ]
+        assert len(endpoint_warnings) == 1
+        assert "deprecated" in str(endpoint_warnings[0].message).lower()
     assert vectorsearch.index.describe() == INDEX_DETAILS[DELTA_SYNC_INDEX]
 
 
@@ -150,7 +163,7 @@ def test_add_texts() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, ids, strict=False)
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
@@ -169,7 +182,7 @@ def test_add_texts_handle_single_text() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids, strict=False)
         ]
     )
     assert len(added_ids) == 1
@@ -188,7 +201,7 @@ def test_add_texts_with_default_id() -> None:
                 "text": text,
                 "text_vector": vector,
             }
-            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids)
+            for text, vector, id_ in zip(INPUT_TEXTS, vectors, added_ids, strict=False)
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)
@@ -207,9 +220,11 @@ def test_add_texts_with_metadata() -> None:
                 "id": id_,
                 "text": text,
                 "text_vector": vector,
-                **metadata,  # type: ignore[arg-type]
+                **metadata,
             }
-            for text, vector, id_, metadata in zip(INPUT_TEXTS, vectors, added_ids, metadatas)
+            for text, vector, id_, metadata in zip(
+                INPUT_TEXTS, vectors, added_ids, metadatas, strict=False
+            )
         ]
     )
     assert len(added_ids) == len(INPUT_TEXTS)

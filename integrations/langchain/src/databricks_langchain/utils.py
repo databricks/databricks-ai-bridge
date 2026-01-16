@@ -2,6 +2,7 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
+from openai import OpenAI
 
 
 def get_deployment_client(target_uri: str) -> Any:
@@ -9,7 +10,7 @@ def get_deployment_client(target_uri: str) -> Any:
         raise ValueError("Invalid target URI. The target URI must be a valid databricks URI.")
 
     try:
-        from mlflow.deployments import get_deploy_client  # type: ignore[import-untyped]
+        from mlflow.deployments import get_deploy_client
 
         return get_deploy_client(target_uri)
     except ImportError as e:
@@ -20,7 +21,7 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
-def get_openai_client(workspace_client: Any = None, **kwargs) -> Any:
+def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
     """Get an OpenAI client configured for Databricks.
 
     Args:

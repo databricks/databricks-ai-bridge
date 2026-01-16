@@ -3,7 +3,9 @@
 import inspect
 import re
 import types
-from typing import Any, Callable, TypeVar, Union
+from typing import Any, Callable, TypeVar
+
+from typing_extensions import overload
 
 C = TypeVar("C", bound=Callable[..., Any])
 
@@ -25,10 +27,17 @@ def _get_min_indent_of_docstring(docstring_str: str) -> str:
     if not docstring_str or "\n" not in docstring_str:
         return ""
 
-    return re.match(r"^\s*", docstring_str.rsplit("\n", 1)[-1]).group()
+    match = re.match(r"^\s*", docstring_str.rsplit("\n", 1)[-1])
+    return match.group() if match else ""
 
 
-def experimental(api_or_type: Union[C, str]) -> C:
+@overload
+def experimental(api_or_type: str) -> Callable[[C], C]: ...
+@overload
+def experimental(api_or_type: C) -> C: ...
+
+
+def experimental(api_or_type):
     """Decorator / decorator creator for marking APIs experimental in the docstring.
 
     Args:

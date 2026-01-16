@@ -1,0 +1,125 @@
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# Regenerate with: uv run python .github/workflows/generate_release_workflows.py
+
+name: Release databricks-openai
+
+on:
+  push:
+    tags:
+      - "databricks-openai-v*"
+  workflow_dispatch:
+    inputs:
+      production:
+        description: "Publish to PyPI? (If unchecked, will publish to TestPyPI)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on:
+      group: databricks-protected-runner-group
+      labels: linux-ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+    environment:
+      name: ${{ inputs.production && 'pypi' || 'testpypi' }}
+      url: ${{ inputs.production && 'https://pypi.org/p/databricks-openai' || 'https://test.pypi.org/p/databricks-openai' }}
+    defaults:
+      run:
+        working-directory: integrations/openai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Verify version matches tag
+        id: verify-version
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/databricks-openai-v}
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package version ($PKG_VERSION)"
+            exit 1
+          fi
+
+      - name: Build package
+        run: python -m build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist-databricks-openai
+          path: integrations/openai/dist/
+
+      - uses: ncipollo/release-action@v1
+        if: inputs.production
+        with:
+          artifacts: "integrations/openai/dist/*.whl,integrations/openai/dist/*.tar.gz"
+          draft: true
+          generateReleaseNotes: true
+
+      - name: Publish to PyPI
+        if: inputs.production
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: integrations/openai/dist/
+
+      - name: Publish to Test PyPI
+        if: github.event_name == 'push' || !inputs.production
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: integrations/openai/dist/
+
+      - name: Wait for package to be available
+        run: sleep 10
+
+      - name: Install published package from PyPI
+        if: inputs.production
+        run: |
+          pip install databricks-openai
+
+      - name: Install published package from Test PyPI
+        if: github.event_name == 'push' || !inputs.production
+        run: |
+          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple databricks-openai==${{ steps.verify-version.outputs.version }}
+
+      - name: Smoke test - verify version
+        run: |
+          EXPECTED_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          INSTALLED_VERSION=$(python -c "from importlib.metadata import version; print(version('databricks-openai'))")
+          echo "Expected version: $EXPECTED_VERSION"
+          echo "Installed version: $INSTALLED_VERSION"
+          if [ "$EXPECTED_VERSION" != "$INSTALLED_VERSION" ]; then
+            echo "Version mismatch!"
+            exit 1
+          fi
+          echo "Smoke test passed: versions match!"
+
+      - name: Generate package link
+        run: |
+          VERSION=${{ steps.verify-version.outputs.version }}
+          if [ "${{ inputs.production }}" == "true" ]; then
+            LINK="https://pypi.org/project/databricks-openai/$VERSION/"
+            echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-openai v$VERSION** has been published to PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          else
+            LINK="https://test.pypi.org/project/databricks-openai/$VERSION/"
+            echo "## :test_tube: Package Released to Test PyPI" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-openai v$VERSION** has been published to Test PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          fi

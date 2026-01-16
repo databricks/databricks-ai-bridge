@@ -95,13 +95,16 @@ class DatabricksLM(dspy.LM):
                 "for how to set up the authentication."
             ) from e
 
-        self.create_pt_endpoint = create_pt_endpoint
-        self.pt_entity = pt_entity
+        self.create_pt_endpoint: bool = create_pt_endpoint
+        self.pt_entity: PtServedModel | None = pt_entity
 
         if create_pt_endpoint:
             self.pt_endpoint = self._create_pt_endpoint()
 
     def _create_pt_endpoint(self):
+        if self.pt_entity is None:
+            raise ValueError("pt_entity must be provided when create_pt_endpoint is True")
+
         # Create the provisioned throughput endpoint configuration
         config = PtEndpointCoreConfig(served_entities=[self.pt_entity])
 
@@ -126,7 +129,7 @@ class DatabricksLM(dspy.LM):
 
         self.workspace_client.serving_endpoints.delete(self.pt_endpoint.name)
 
-    def forward(self, **kwargs):
+    def forward(self, **kwargs):  # ty:ignore[invalid-method-override]
         return super().forward(
             headers=self.workspace_client.config.authenticate(),
             api_base=f"{self.workspace_client.config.host}/serving-endpoints",

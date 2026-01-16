@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from mlflow.models.resources import DatabricksServingEndpoint, DatabricksVectorSearchIndex
+from pydantic import ValidationError
 
 from databricks_ai_bridge.test_utils.vector_search import mock_workspace_client  # noqa: F401
 from databricks_ai_bridge.utils.vector_search import IndexDetails
@@ -78,3 +79,9 @@ def test_describe_columns():
         "country (STRING): Name of the country\n"
         "description (STRING): Detailed description of the city"
     )
+
+
+def test_validate_tool_name():
+    valid = DummyVectorSearchRetrieverTool(index_name=index_name, tool_name="abcd")
+    with pytest.raises(ValidationError):
+        invalid = DummyVectorSearchRetrieverTool(index_name=index_name, tool_name="invalid@@@")

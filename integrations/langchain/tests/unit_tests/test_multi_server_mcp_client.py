@@ -1,6 +1,7 @@
 """Unit tests for DatabricksMultiServerMCPClient and related classes."""
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
@@ -8,6 +9,7 @@ import pytest
 from databricks.sdk import WorkspaceClient
 
 from databricks_langchain.multi_server_mcp_client import (
+    DatabricksMcpHttpClientFactory,
     DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
     MCPServer,
@@ -28,7 +30,7 @@ class TestMCPServer:
     @pytest.mark.parametrize(
         "extra_params",
         [
-            {"timeout": 30.0},
+            {"timeout": timedelta(seconds=30.0)},
             {"headers": {"X-API-Key": "secret"}},
             {"sse_read_timeout": 60.0},
             {"timeout": 15.0, "headers": {"Authorization": "Bearer token"}},
@@ -48,7 +50,10 @@ class TestMCPServer:
 
         # Check that extra params are in connection dict
         for key, value in extra_params.items():
-            assert connection_dict[key] == value
+            if key == "timeout" and isinstance(value, float):
+                assert connection_dict["timeout"].seconds == value
+            else:
+                assert connection_dict[key] == value  # ty:ignore[invalid-key]
             assert "name" not in connection_dict
             assert "handle_tool_error" not in connection_dict
 
@@ -135,14 +140,37 @@ class TestDatabricksMCPServer:
                 name="databricks",
                 url="https://databricks.com/mcp",
                 workspace_client=mock_workspace_client,
-                timeout=45.0,
+                timeout=timedelta(seconds=45),
                 headers={"X-Custom": "header"},
             )
 
             connection_dict = server.to_connection_dict()
 
-            assert connection_dict["timeout"] == 45.0
+            assert connection_dict["timeout"] == timedelta(seconds=45.0)
             assert connection_dict["headers"] == {"X-Custom": "header"}
+
+    def test_databricks_server_includes_http_factory(self):
+        """Test that DatabricksMCPServer includes the custom HTTP client factory."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+
+        with patch(
+            "databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider"
+        ) as mock_auth:
+            mock_auth_instance = MagicMock()
+            mock_auth.return_value = mock_auth_instance
+
+            server = DatabricksMCPServer(
+                name="databricks",
+                url="https://databricks.com/mcp",
+                workspace_client=mock_workspace_client,
+            )
+
+            connection_dict = server.to_connection_dict()
+
+            assert "httpx_client_factory" in connection_dict
+            assert isinstance(
+                connection_dict["httpx_client_factory"], DatabricksMcpHttpClientFactory
+            )
 
 
 class TestDatabricksMultiServerMCPClient:
@@ -313,3 +341,49 @@ class TestDatabricksMultiServerMCPClient:
 
             # Connection should have auth
             assert "auth" in client.connections["databricks"]
+
+
+class TestDatabricksMCPServerFromUCResource:
+    """Tests for from_uc_function and from_vector_search class methods."""
+
+    def test_from_uc_function(self):
+        """Test from_uc_function constructs correct URL."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        mock_workspace_client.config.host = "https://test.databricks.com"
+
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider"):
+            server = DatabricksMCPServer.from_uc_function(
+                catalog="system",
+                schema="ai",
+                function_name="test_tool",
+                name="my_server",
+                workspace_client=mock_workspace_client,
+            )
+
+            assert (
+                server.url
+                == "https://test.databricks.com/api/2.0/mcp/functions/system/ai/test_tool"
+            )
+            assert server.name == "my_server"
+            assert server.workspace_client == mock_workspace_client
+
+    def test_from_vector_search(self):
+        """Test from_vector_search constructs correct URL."""
+        mock_workspace_client = create_autospec(WorkspaceClient, instance=True)
+        mock_workspace_client.config.host = "https://test.databricks.com"
+
+        with patch("databricks_langchain.multi_server_mcp_client.DatabricksOAuthClientProvider"):
+            server = DatabricksMCPServer.from_vector_search(
+                catalog="system",
+                schema="ai",
+                index_name="test_index",
+                name="my_search",
+                workspace_client=mock_workspace_client,
+            )
+
+            assert (
+                server.url
+                == "https://test.databricks.com/api/2.0/mcp/vector-search/system/ai/test_index"
+            )
+            assert server.name == "my_search"
+            assert server.workspace_client == mock_workspace_client

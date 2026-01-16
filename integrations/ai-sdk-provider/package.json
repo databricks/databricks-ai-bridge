@@ -1,0 +1,90 @@
+{
+  "name": "@databricks/ai-sdk-provider",
+  "version": "0.1.1",
+  "description": "Databricks provider for Vercel AI SDK",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts'",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'",
+    "check-package": "attw --pack . --format table --ignore-rules no-resolution",
+    "prepublishOnly": "npm run clean && npm run build && npm run test && npm run lint && npm run check-package"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/provider": "^2.0.0",
+    "@ai-sdk/provider-utils": "^3.0.0"
+  },
+  "dependencies": {
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.15.0",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "@vitest/ui": "^2.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "msw": "^2.0.0",
+    "prettier": "^3.0.0",
+    "tsdown": "^0.9.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "author": {
+    "name": "Databricks",
+    "email": "agent-feedback@databricks.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/databricks/databricks-ai-bridge.git",
+    "directory": "integrations/ai-sdk-provider"
+  },
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/ai-sdk-provider",
+  "bugs": {
+    "url": "https://github.com/databricks/databricks-ai-bridge/issues"
+  },
+  "keywords": [
+    "databricks",
+    "ai",
+    "ai-sdk",
+    "vercel",
+    "llm",
+    "language-model",
+    "agent",
+    "mcp"
+  ],
+  "license": "Databricks License"
+}

@@ -1,6 +1,6 @@
 [project]
 name = "databricks-ai-bridge"
-version = "0.10.0.dev0"
+version = "0.12.0"
 description = "Official Python library for Databricks AI support"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -8,11 +8,11 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "typing_extensions",
-  "pydantic",
+  "typing_extensions>=4.15.0",
+  "pydantic>=2.10.0",
   "databricks-sdk>=0.49.0",
   "databricks-vectorsearch>=0.57",
-  "pandas",
+  "pandas>=2.2.0",
   "tiktoken>=0.8.0",
   "tabulate>=0.9.0",
   "mlflow-skinny>=2.19.0",
@@ -21,25 +21,22 @@ dependencies = [
 [project.license]
 file = "LICENSE.txt"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build]
-include = [
-  "src/*"
+[project.optional-dependencies]
+memory = [
+  "psycopg[binary,pool]>=3.2.10",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/databricks_ai_bridge"]
-
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "hatch",
-  "pytest",
-  "mlflow",
-  "ruff==0.12.10",
-  "pytest-asyncio",
+  "hatch>=1.15.1",
+  "ty>=0.0.11",
+  { include-group = "tests" },
+  { include-group = "lint" },
+]
+tests = [
+  "mlflow>=3.0.0",
+  "pytest>=9.0.0",
+  "pytest-asyncio>=1.3.0",
 ]
 doc = [
   "docutils>=0.21.2",
@@ -53,16 +50,25 @@ doc = [
   "autodoc_pydantic>=2.2.0",
 ]
 lint = [
-  "ruff==0.12.10",
+  "ruff==0.14.10",
 ]
 
-memory = [
-  "psycopg[binary,pool]>=3.1",
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+  "src/*"
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_ai_bridge"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = [
@@ -78,7 +84,7 @@ select = [
   "T201",
   "T203",
   # misuse of typing.TYPE_CHECKING
-  "TCH004",
+  "TC004",
   # import rules
   "TID251",
   # undefined-local-with-import-star
@@ -94,3 +100,14 @@ convention = "google"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_ai_bridge",
+    "default::Warning:tests",
+]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

@@ -46,21 +46,12 @@ class DatabricksVectorSearch(VectorStore):
 
         index_name: The name of the index to use. Format: "catalog.schema.index".
 
-        endpoint: The name of the Databricks Vector Search ``endpoint``.
-            If not specified, the endpoint name is automatically inferred based on the index name.
+        endpoint: **Deprecated**. This parameter is ignored.
+            The endpoint name is automatically inferred from the index name.
 
-            .. note::
-
-                If you are using `databricks-vectorsearch` version < 0.35, the `endpoint` parameter
-                is required when initializing the vector store.
-
-                .. code-block:: python
-
-                    vector_store = DatabricksVectorSearch(
-                        endpoint="<your-endpoint-name>",
-                        index_name="<your-index-name>",
-                        ...
-                    )
+            .. deprecated::
+                The ``endpoint`` parameter is deprecated and will be removed in a future release.
+                The endpoint is always auto-inferred from the index name.
 
         embedding: The embedding model.
                   Required for direct-access index or delta-sync index
@@ -258,9 +249,7 @@ class DatabricksVectorSearch(VectorStore):
             )
 
         try:
-            from databricks.vector_search.client import (  # type: ignore[import]
-                VectorSearchClient,
-            )
+            from databricks.vector_search.client import VectorSearchClient
             from databricks.vector_search.utils import CredentialStrategy
         except ImportError as e:
             raise ImportError(
@@ -268,34 +257,31 @@ class DatabricksVectorSearch(VectorStore):
                 "Please install it with `pip install databricks-vectorsearch`."
             ) from e
 
-        try:
-            client_args = client_args or {}
-            client_args.setdefault("disable_notice", True)
-            if workspace_client is not None:
-                config = workspace_client.config
-                if config.auth_type == "model_serving_user_credentials":
-                    client_args.setdefault(
-                        "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
-                    )
-                elif config.auth_type == "pat":
-                    client_args.setdefault("personal_access_token", config.token)
-                elif config.auth_type == "oauth-m2m":
-                    client_args.setdefault("workspace_url", config.host)
-                    client_args.setdefault("service_principal_client_id", config.client_id)
-                    client_args.setdefault("service_principal_client_secret", config.client_secret)
-            self.index = VectorSearchClient(**client_args).get_index(
-                endpoint_name=endpoint, index_name=index_name
+        if endpoint is not None:
+            import warnings
+
+            warnings.warn(
+                "The `endpoint` parameter is deprecated and will be ignored. "
+                "The endpoint is automatically inferred from the index name.",
+                DeprecationWarning,
+                stacklevel=2,
             )
-        except Exception as e:
-            if endpoint is None and "Wrong vector search endpoint" in str(e):
-                raise ValueError(
-                    "The `endpoint` parameter is required for instantiating "
-                    "DatabricksVectorSearch with the `databricks-vectorsearch` "
-                    "version earlier than 0.35. Please provide the endpoint "
-                    "name or upgrade to version 0.35 or later."
-                ) from e
-            else:
-                raise
+
+        client_args = client_args or {}
+        client_args.setdefault("disable_notice", True)
+        if workspace_client is not None:
+            config = workspace_client.config
+            if config.auth_type == "model_serving_user_credentials":
+                client_args.setdefault(
+                    "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
+                )
+            elif config.auth_type == "pat":
+                client_args.setdefault("personal_access_token", config.token)
+            elif config.auth_type == "oauth-m2m":
+                client_args.setdefault("workspace_url", config.host)
+                client_args.setdefault("service_principal_client_id", config.client_id)
+                client_args.setdefault("service_principal_client_secret", config.client_secret)
+        self.index = VectorSearchClient(**client_args).get_index(index_name=index_name)
 
         self._index_details = IndexDetails(self.index)
 
@@ -372,7 +358,7 @@ class DatabricksVectorSearch(VectorStore):
                 self._index_details.embedding_vector_column["name"]: vector,
                 **metadata,
             }
-            for text, vector, id_, metadata in zip(texts, vectors, ids, metadatas)
+            for text, vector, id_, metadata in zip(texts, vectors, ids, metadatas, strict=False)
         ]
 
         upsert_resp = self.index.upsert(updates)
@@ -534,15 +520,15 @@ class DatabricksVectorSearch(VectorStore):
 
     def similarity_search_by_vector(
         self,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
-        query_type: Optional[str] = None,
-        query: Optional[str] = None,
-        reranker: Optional[Reranker] = None,
+        query_type: str | None = None,
+        query: str | None = None,
+        reranker: Reranker | None = None,
         **kwargs: Any,
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Return docs most similar to embedding vector.
 
         Args:
@@ -583,15 +569,15 @@ class DatabricksVectorSearch(VectorStore):
 
     def similarity_search_by_vector_with_score(
         self,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
-        query_type: Optional[str] = None,
-        query: Optional[str] = None,
-        reranker: Optional[Reranker] = None,
+        query_type: str | None = None,
+        query: str | None = None,
+        reranker: Reranker | None = None,
         **kwargs: Any,
-    ) -> List[Tuple[Document, float]]:
+    ) -> list[tuple[Document, float]]:
         """Return docs most similar to embedding vector, along with scores.
 
         .. note::
@@ -725,16 +711,16 @@ class DatabricksVectorSearch(VectorStore):
     def max_marginal_relevance_search_by_vector(
         self,
         query: str,
-        embedding: List[float],
+        embedding: list[float],
         k: int = 4,
         fetch_k: int = 20,
         lambda_mult: float = 0.5,
-        filter: Optional[Any] = None,
+        filter: Any | None = None,
         *,
         query_type: Optional[str] = None,
         reranker: Optional[Reranker] = None,
         **kwargs: Any,
-    ) -> List[Document]:
+    ) -> list[Document]:  # ty:ignore[invalid-method-override]: this shouldn't have happened but fixing this may break user's code
         """Return docs selected using the maximal marginal relevance.
 
         Maximal marginal relevance optimizes for similarity to query AND diversity

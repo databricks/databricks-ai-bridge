@@ -1,9 +1,38 @@
-from typing import Any, Callable, List, Union
+from datetime import timedelta
+from typing import Any, Callable, Union
 
+import httpx
 from databricks.sdk import WorkspaceClient
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import McpHttpClientFactory, StreamableHttpConnection
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class DatabricksMcpHttpClientFactory(McpHttpClientFactory):
+    def __call__(
+        self,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        if isinstance(auth, DatabricksOAuthClientProvider) and auth.workspace_client is not None:
+            # Currently DatabricksOAuthClientProvider does not do a full U2M.
+            # Therefore a new fresh token is only retrieved on the first initialization.
+            #  As this factory is called for each request, we are reinitailizing the
+            # DatabricksOAuthClientProvider with the original workspace client to get a new token
+
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=DatabricksOAuthClientProvider(auth.workspace_client),
+            )
+        else:
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout,
+                auth=auth,
+            )
 
 
 class MCPServer(BaseModel):
@@ -15,7 +44,7 @@ class MCPServer(BaseModel):
 
     Common optional parameters:
         - headers: dict[str, str] - Custom HTTP headers
-        - timeout: float - Request timeout in seconds
+        - timeout: float | timedelta - Request timeout in seconds
         - sse_read_timeout: float - SSE read timeout in seconds
         - auth: httpx.Auth - Authentication handler
         - httpx_client_factory: Callable - Custom httpx client factory
@@ -32,7 +61,7 @@ class MCPServer(BaseModel):
             name="other-server",
             url="https://other-server.com/mcp",
             headers={"X-API-Key": "secret"},
-            timeout=15.0,
+            timeout=timedelta(seconds=15),
             handle_tool_error="An error occurred. Please try again.",
         )
 
@@ -54,8 +83,12 @@ class MCPServer(BaseModel):
             "If a callable, return the result of the callable as the error message."
         ),
     )
+    headers: dict[str, str] | None = Field(
+        default=None, description="HTTP headers to send to the endpoint."
+    )
+    timeout: float | timedelta | None = Field(default=None, description="HTTP timeout.")
 
-    def to_connection_dict(self) -> dict[str, Any]:
+    def to_connection_dict(self) -> StreamableHttpConnection:
         """
         Convert to connection dictionary for LangChain MultiServerMCPClient.
 
@@ -67,6 +100,8 @@ class MCPServer(BaseModel):
 
         # Add transport type (hardcoded to streamable_http)
         data["transport"] = "streamable_http"
+        if isinstance(data["timeout"], float):
+            data["timeout"] = timedelta(seconds=data["timeout"])
 
         return data
 
@@ -104,6 +139,116 @@ class DatabricksMCPServer(MCPServer):
         exclude=True,
     )
 
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str,
+        function_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        **kwargs,
+    ) -> "DatabricksMCPServer":
+        """Create a Databricks MCP server from Unity Catalog function path.
+
+        Convenience method to create a server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog function.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from UC function - no manual URL construction!
+            server = DatabricksMCPServer.from_uc_function(
+                catalog="main",
+                schema="tools",
+                function_name="send_email",
+                name="email-server",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        name: str,
+        index_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        **kwargs,
+    ) -> "DatabricksMCPServer":
+        """Create a Databricks MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create a server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            name: Name to identify this server connection.
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. If None, will be auto-initialized.
+            **kwargs: Additional connection parameters (e.g., timeout, sse_read_timeout, handle_tool_error).
+
+        Returns:
+            DatabricksMCPServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            ```python
+            from databricks_langchain import DatabricksMultiServerMCPClient, DatabricksMCPServer
+
+            # Create server from vector search index - no manual URL construction!
+            server = DatabricksMCPServer.from_vector_search(
+                catalog="main",
+                schema="embeddings",
+                index_name="product_docs",
+                name="docs-search",
+                timeout=30.0,
+                handle_tool_error=True,
+            )
+
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            ```
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(name=name, url=url, workspace_client=ws_client, **kwargs)
+
     def model_post_init(self, context: Any) -> None:
         """Initialize DatabricksServer with auth setup."""
         super().model_post_init(context)
@@ -115,7 +260,7 @@ class DatabricksMCPServer(MCPServer):
         # Store the auth provider internally
         self._auth_provider = DatabricksOAuthClientProvider(self.workspace_client)
 
-    def to_connection_dict(self) -> dict[str, Any]:
+    def to_connection_dict(self) -> StreamableHttpConnection:
         """
         Convert to connection dictionary, including Databricks auth.
         """
@@ -124,6 +269,7 @@ class DatabricksMCPServer(MCPServer):
 
         # Add Databricks auth provider
         data["auth"] = self._auth_provider
+        data["httpx_client_factory"] = DatabricksMcpHttpClientFactory()
 
         return data
 
@@ -170,7 +316,7 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
         ```
     """
 
-    def __init__(self, servers: List[MCPServer], **kwargs):
+    def __init__(self, servers: list[MCPServer], **kwargs):
         """
         Initialize the client with a list of server configurations.
 

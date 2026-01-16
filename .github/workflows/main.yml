@@ -3,7 +3,7 @@ name: tests
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     types:
       - opened
@@ -12,87 +12,83 @@ on:
       - ready_for_review
   workflow_dispatch:
 
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: |
-          pip install .[lint]
-      - name: Lint Python code with ruff
-        run: |
-          ruff check .
-          ruff format --check .
+env:
+  UV_VERSION: "0.9.11"
 
+jobs:
   core_test:
     runs-on: ubuntu-latest
+    name: "core_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install ".[dev, memory]"
       - name: Run tests
         run: |
-          pytest tests/
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/
 
   langchain_test:
     runs-on: ubuntu-latest
+    name: "langchain_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
+
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install .
-          pip install integrations/langchain[dev]
       - name: Run tests
+        working-directory: integrations/langchain
         run: |
-          pytest integrations/langchain/tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   lakebase_memory_test:
     runs-on: ubuntu-latest
+    name: "lakebase_memory_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Run databricks-ai-bridge Tests
         run: |
-          pip install .[memory]
-          pip install "integrations/langchain[dev, memory]"
-      - name: Run tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/databricks_ai_bridge/test_lakebase.py
+      - name: Run databricks-langchain Tests
+        working-directory: integrations/langchain
         run: |
-          pytest tests/databricks_ai_bridge/test_lakebase.py
-          pytest integrations/langchain/tests/unit_tests/test_checkpoint.py
-          pytest integrations/langchain/tests/unit_tests/test_store.py
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/unit_tests/test_checkpoint.py \
+              tests/unit_tests/test_store.py
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest
@@ -132,7 +128,7 @@ jobs:
           cp -r older-version/integrations/langchain integrations/
       - name: Install langchain dependency
         run: |
-          pip install integrations/langchain[dev]
+          pip install integrations/langchain --group dev
       - name: Run tests
         run: |
           # Only testing initialization since functionality can change
@@ -143,24 +139,25 @@ jobs:
 
   openai_test:
     runs-on: ubuntu-latest
+    name: "openai_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install .
-          pip install integrations/openai[dev]
       - name: Run tests
+        working-directory: integrations/openai
         run: |
-          pytest integrations/openai/tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   openai_cross_version_test:
     runs-on: ubuntu-latest
@@ -181,9 +178,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install . "${{ matrix.version.mlflow }}"
       - name: Checkout openai version
         uses: actions/checkout@v4
         with:
@@ -199,7 +193,9 @@ jobs:
           cp -r older-version/integrations/openai integrations/
       - name: Install openai dependency
         run: |
-          pip install integrations/openai[dev]
+          pip install .
+          pip install integrations/openai --group dev
+          pip install "${{ matrix.version.mlflow }}"
       - name: Run tests
         run: |
           # Only testing initialization since functionality can change
@@ -207,63 +203,65 @@ jobs:
 
   llamaindex_test:
     runs-on: ubuntu-latest
+    name: "llamaindex_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install .
-          pip install integrations/llamaindex[dev]
       - name: Run tests
+        working-directory: integrations/llamaindex
         run: |
-          pytest integrations/llamaindex/tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} --exact --group tests pytest tests/unit_tests
 
   mcp_test:
     runs-on: ubuntu-latest
+    name: "mcp_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install .
-          pip install -e databricks_mcp[dev]
       - name: Run tests
+        working-directory: databricks_mcp
         run: |
-          pytest databricks_mcp/tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests
 
   dspy_test:
     runs-on: ubuntu-latest
+    name: "dspy_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          pip install .
-          pip install integrations/dspy[dev]
       - name: Run tests
+        working-directory: integrations/dspy
         run: |
-          pytest integrations/dspy/tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests pytest tests/unit_tests

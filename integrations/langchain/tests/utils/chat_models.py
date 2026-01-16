@@ -1,11 +1,11 @@
-from typing import Generator
+from typing import Any, Generator
 from unittest import mock
 
 import pytest
 
 from databricks_langchain import ChatDatabricks
 
-_MOCK_CHAT_RESPONSE = {
+_MOCK_CHAT_RESPONSE: dict[str, Any] = {
     "id": "chatcmpl_id",
     "object": "chat.completion",
     "created": 1721875529,
@@ -152,29 +152,38 @@ def mock_client() -> Generator:
 
     def mock_openai_stream():
         for chunk_data in _MOCK_STREAM_RESPONSE:
-            choice_data = chunk_data["choices"][0]
-            delta_data = choice_data["delta"]
+            choice_data = chunk_data["choices"][0]  # type: ignore[index]
+            delta_data = choice_data["delta"]  # type: ignore[index]
             usage_data = chunk_data.get("usage")
 
             delta = ChoiceDelta(
-                role=delta_data.get("role"), content=delta_data.get("content", ""), tool_calls=None
+                role=delta_data.get("role"),  # type: ignore[arg-type]
+                content=delta_data.get("content", ""),  # type: ignore[arg-type]
+                tool_calls=None,
             )
             choice = ChunkChoice(
-                index=0, delta=delta, finish_reason=choice_data.get("finish_reason"), logprobs=None
+                index=0,
+                delta=delta,
+                finish_reason=choice_data.get("finish_reason"),  # type: ignore[arg-type]
+                logprobs=None,
             )
-            usage = CompletionUsage(**usage_data) if usage_data else None
+            usage = CompletionUsage(**usage_data) if usage_data else None  # type: ignore[arg-type]
             yield ChatCompletionChunk(
-                id=chunk_data["id"],
+                id=chunk_data["id"],  # type: ignore[arg-type]
                 choices=[choice],
-                created=chunk_data["created"],
-                model=chunk_data["model"],
+                created=chunk_data["created"],  # type: ignore[arg-type]
+                model=chunk_data["model"],  # type: ignore[arg-type]
                 object="chat.completion.chunk",
                 usage=usage,
             )
 
     def create_mock_response():
         expected_content = _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
-        message = ChatCompletionMessage(role="assistant", content=expected_content, tool_calls=None)
+        message = ChatCompletionMessage(
+            role="assistant",
+            content=expected_content,
+            tool_calls=None,
+        )
         choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
         usage = CompletionUsage(**_MOCK_CHAT_RESPONSE["usage"])
         return ChatCompletion(
@@ -216,16 +225,17 @@ def mock_client_delta() -> Generator:
         for chunk_data in _MOCK_STREAM_DELTA_RESPONSE:
             usage_data = chunk_data.get("usage")
             chunk = ChatCompletionChunk(
-                id=chunk_data["id"],
+                id=chunk_data["id"],  # type: ignore[arg-type]
                 choices=[],
-                created=chunk_data["created"],
-                model=chunk_data["model"],
+                created=chunk_data["created"],  # type: ignore[arg-type]
+                model=chunk_data["model"],  # type: ignore[arg-type]
                 object="chat.completion.chunk",
-                delta=chunk_data["delta"],
-                custom_outputs=chunk_data["custom_outputs"],
-                usage=CompletionUsage(**usage_data) if usage_data else None,
+                usage=CompletionUsage(**usage_data) if usage_data else None,  # type: ignore[arg-type]
             )
-            chunk.choices = None
+            # Set custom attributes dynamically
+            chunk.delta = chunk_data["delta"]  # ty:ignore[unresolved-attribute]
+            chunk.custom_outputs = chunk_data["custom_outputs"]  # ty:ignore[unresolved-attribute]
+            chunk.choices = None  # type: ignore[assignment]
             yield chunk
 
     # Mock OpenAI client

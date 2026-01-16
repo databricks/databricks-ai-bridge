@@ -1,5 +1,7 @@
-from typing import List, Optional, Type
+import json
+from typing import Type
 
+from databricks.vector_search.reranker import DatabricksReranker
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
@@ -32,13 +34,13 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     WorkspaceClient instances with auth types PAT, OAuth-M2M (client ID and client secret), or model serving credential strategy will be used to instantiate the underlying VectorSearchClient.
     """
 
-    text_column: Optional[str] = Field(
+    text_column: str | None = Field(
         None,
         description="The name of the text column to use for the embeddings. "
         "Required for direct-access index or delta-sync index with "
         "self-managed embeddings.",
     )
-    embedding: Optional[Embeddings] = Field(
+    embedding: Embeddings | None = Field(
         None, description="Embedding model for self-managed embeddings."
     )
 
@@ -51,18 +53,20 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
 
     @model_validator(mode="after")
     def _validate_tool_inputs(self):
-        kwargs = {
-            "index_name": self.index_name,
-            "embedding": self.embedding,
-            "text_column": self.text_column,
-            "doc_uri": self.doc_uri,
-            "primary_key": self.primary_key,
-            "columns": self.columns,
-            "workspace_client": self.workspace_client,
-            "include_score": self.include_score,
-            "reranker": self.reranker,
-        }
-        dbvs = DatabricksVectorSearch(**kwargs)
+        if self.reranker is not None and not isinstance(self.reranker, DatabricksReranker):
+            raise ValueError("reranker must be an instance of DatabricksReranker")
+
+        dbvs = DatabricksVectorSearch(
+            index_name=self.index_name,
+            embedding=self.embedding,
+            text_column=self.text_column,
+            doc_uri=self.doc_uri,
+            primary_key=self.primary_key,
+            columns=self.columns,
+            workspace_client=self.workspace_client,
+            include_score=self.include_score or False,
+            reranker=self.reranker,
+        )
         self._vector_store = dbvs
 
         self.name = self._get_tool_name()
@@ -84,7 +88,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         return self
 
     @vector_search_retriever_tool_trace
-    def _run(self, query: str, filters: Optional[List[FilterItem]] = None, **kwargs) -> str:
+    def _run(self, query: str, filters: list[FilterItem] | None = None, **kwargs) -> str:
         kwargs = {**kwargs, **(self.model_extra or {})}
         # Since LLM can generate either a dict or FilterItem, convert to dict always
         filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
@@ -103,4 +107,9 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
                 "query_type": query_type,
             }
         )
-        return self._vector_store.similarity_search(**kwargs)
+        results = self._vector_store.similarity_search(**kwargs)
+        # Serialize results using same pattern as LangChain's _stringify()
+        try:
+            return json.dumps(results, ensure_ascii=False)
+        except Exception:
+            return str(results)

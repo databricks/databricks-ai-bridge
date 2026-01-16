@@ -14,15 +14,22 @@ dependencies = [
     "mlflow>=3.0.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "pytest",
-  "ruff",
+  "ruff==0.14.10",
+  "ty>=0.0.11",
+  { include-group = "tests" },
+]
+tests = [
+  "pytest>=9.0.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../../", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -33,30 +40,22 @@ include = [
 packages = ["src/databricks_dspy"]
 
 [tool.ruff]
-line-length = 100
-target-version = "py310"
-
-[tool.ruff.lint]
-select = [
-  # isort
-  "I",
-  # bugbear rules
-  "B",
-  # remove unused imports
-  "F401",
-  # bare except statements
-  "E722",
-  # print statements
-  "T201",
-  "T203",
-  # misuse of typing.TYPE_CHECKING
-  "TCH004",
-  # import rules
-  "TID251",
-  # undefined-local-with-import-star
-  "F403",
-]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+extend = "../../pyproject.toml"
 
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 100
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_dspy",
+    "default::Warning:tests",
+]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]

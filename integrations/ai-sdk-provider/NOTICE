@@ -1,0 +1,16 @@
+Copyright (2025) Databricks, Inc.
+
+This Software includes software developed at Databricks and its use is subject to the included LICENSE file.
+
+________________
+This Software contains code from the following open source projects, licensed under the Apache 2.0 license (Apache License, Version 2.0):
+
+vercel/ai - https://github.com/vercel/ai
+Copyright 2023 Vercel, Inc.
+
+________________
+This Software contains code from the following open source projects, licensed under the MIT license (The MIT License):
+
+colinhacks/zod - https://github.com/colinhacks/zod
+Copyright (c) 2025 Colin McDonnell
+

@@ -1,11 +1,14 @@
 """Test chat model integration."""
 
 import json
+import time
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, patch
 
-import mlflow  # type: ignore # noqa: F401
+import mlflow  # noqa: F401
 import pytest
+from databricks import sdk
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -22,7 +25,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.tool import ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.runnables import RunnableMap
+from langchain_core.runnables import RunnableBinding, RunnableMap
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -39,6 +42,14 @@ from openai.types.responses import (
     ResponseTextDeltaEvent,
 )
 from pydantic import BaseModel, Field
+from utils.chat_models import (
+    _MOCK_CHAT_RESPONSE,
+    _MOCK_STREAM_DELTA_RESPONSE,
+    _MOCK_STREAM_RESPONSE,
+    llm,  # noqa: F401
+    mock_client,  # noqa: F401
+    mock_client_delta,  # noqa: F401
+)
 
 from databricks_langchain.chat_models import (
     ChatDatabricks,
@@ -47,14 +58,6 @@ from databricks_langchain.chat_models import (
     _convert_lc_messages_to_responses_api,
     _convert_message_to_dict,
     _convert_responses_api_chunk_to_lc_chunk,
-)
-from tests.utils.chat_models import (  # noqa: F401
-    _MOCK_CHAT_RESPONSE,
-    _MOCK_STREAM_DELTA_RESPONSE,
-    _MOCK_STREAM_RESPONSE,
-    llm,
-    mock_client,
-    mock_client_delta,
 )
 
 
@@ -70,13 +73,14 @@ def test_workspace_client_parameter() -> None:
     """Test the workspace_client parameter works correctly."""
     from unittest.mock import Mock, patch
 
-    mock_workspace_client = Mock()
+    mock_workspace_client = Mock(spec=sdk.WorkspaceClient)
     mock_openai_client = Mock()
 
     with patch(
         "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
     ) as mock_get_client:
         llm = ChatDatabricks(model="test-model", workspace_client=mock_workspace_client)
+        _ = llm.client
 
     assert llm.client == mock_openai_client
     mock_get_client.assert_called_once_with(workspace_client=mock_workspace_client)
@@ -86,7 +90,7 @@ def test_workspace_client_and_target_uri_conflict() -> None:
     """Test that specifying both workspace_client and target_uri raises ValueError."""
     from unittest.mock import Mock
 
-    mock_workspace_client = Mock()
+    mock_workspace_client = Mock(spec=sdk.WorkspaceClient)
     with pytest.raises(ValueError, match="Cannot specify both 'workspace_client' and 'target_uri'"):
         ChatDatabricks(
             model="test-model", workspace_client=mock_workspace_client, target_uri="databricks"
@@ -106,6 +110,7 @@ def test_timeout_and_max_retries_parameters() -> None:
     ) as mock_get_client:
         # Test with timeout and max_retries
         llm = ChatDatabricks(model="test-model", timeout=60.0, max_retries=5)
+        _ = llm.client
 
     # Verify get_openai_client was called with the correct parameters
     mock_get_client.assert_called_once_with(workspace_client=None, timeout=60.0, max_retries=5)
@@ -120,7 +125,7 @@ def test_timeout_and_max_retries_with_workspace_client() -> None:
     """Test timeout and max_retries parameters work with workspace_client."""
     from unittest.mock import Mock, patch
 
-    mock_workspace_client = Mock()
+    mock_workspace_client = Mock(spec=sdk.WorkspaceClient)
     mock_openai_client = Mock()
     mock_openai_client.timeout = None
     mock_openai_client.max_retries = None
@@ -131,6 +136,7 @@ def test_timeout_and_max_retries_with_workspace_client() -> None:
         llm = ChatDatabricks(
             model="test-model", workspace_client=mock_workspace_client, timeout=30.0, max_retries=2
         )
+        _ = llm.client
 
     # Verify get_openai_client was called with all parameters
     mock_get_client.assert_called_once_with(
@@ -156,6 +162,7 @@ def test_default_workspace_client() -> None:
             "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
         ) as mock_get_client:
             llm = ChatDatabricks(model="test-model")
+            _ = llm.client
 
     assert llm.client == mock_openai_client
     mock_get_client.assert_called_once_with(workspace_client=None)
@@ -181,7 +188,7 @@ def test_chat_model_predict(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ]
     )
-    assert res.content == _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]  # type: ignore[index]
+    assert res.content == _MOCK_CHAT_RESPONSE["choices"][0]["message"]["content"]
 
 
 def test_chat_model_stream(llm: ChatDatabricks) -> None:
@@ -191,8 +198,8 @@ def test_chat_model_stream(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ]
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
-        assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+        assert chunk.content == expected["choices"][0]["delta"]["content"]
 
 
 def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks) -> None:
@@ -202,7 +209,7 @@ def test_chat_model_stream_custom_outputs(mock_client_delta, llm: ChatDatabricks
             {"role": "user", "content": "36939 * 8922.4", "custom_outputs": {"foo": "bar"}},
         ]
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_DELTA_RESPONSE):
+    for chunk, expected in zip(res, _MOCK_STREAM_DELTA_RESPONSE, strict=False):
         assert chunk.custom_outputs == expected["custom_outputs"]
         assert chunk.content == expected["delta"]["content"]
 
@@ -223,8 +230,8 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
         ],
         stream_usage=True,
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
-        assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+        assert chunk.content == expected["choices"][0]["delta"]["content"]
         _assert_usage(chunk, expected)
 
     # Method 2: Pass stream_usage=True to the constructor
@@ -238,8 +245,8 @@ def test_chat_model_stream_with_usage(llm: ChatDatabricks) -> None:
             {"role": "user", "content": "36939 * 8922.4"},
         ],
     )
-    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE):
-        assert chunk.content == expected["choices"][0]["delta"]["content"]  # type: ignore[index]
+    for chunk, expected in zip(res, _MOCK_STREAM_RESPONSE, strict=False):
+        assert chunk.content == expected["choices"][0]["delta"]["content"]
         _assert_usage(chunk, expected)
 
 
@@ -288,6 +295,7 @@ def test_chat_model_stream_usage_chunk_emission():
         usage_chunk = usage_chunks[0]
         assert isinstance(usage_chunk, AIMessageChunk)
         assert usage_chunk.content == ""
+        assert usage_chunk.usage_metadata is not None
         assert usage_chunk.usage_metadata["input_tokens"] == 10
         assert usage_chunk.usage_metadata["output_tokens"] == 5
         assert usage_chunk.usage_metadata["total_tokens"] == 15
@@ -350,6 +358,194 @@ def test_chat_model_stream_no_duplicate_usage_chunks():
         assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
 
 
+def test_chat_model_stream_usage_only_final_chunk():
+    """Test that a final chunk with only usage data (no choices) correctly emits usage metadata."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 15
+    mock_usage.completion_tokens = 10
+
+    # Simulate GPT-5 streaming behavior: content chunks followed by usage-only chunk
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason=None,
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content=" world",
+                        model_dump=Mock(return_value={"role": "assistant", "content": " world"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with ONLY usage data, no choices/delta
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    # Verify mock structure matches GPT-5 behavior
+    # Final chunk has empty choices list and usage data (no delta)
+    assert len(mock_chunks[2].choices) == 0
+    assert mock_chunks[2].usage is not None
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Should get content chunks plus one usage chunk
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 2
+        assert content_chunks[0].content == "Hello"
+        assert content_chunks[1].content == " world"
+
+        # Should emit exactly ONE usage chunk
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 1, f"Expected exactly 1 usage chunk, got {len(usage_chunks)}"
+
+        # Verify usage chunk has correct metadata
+        usage_chunk = usage_chunks[0]
+        assert isinstance(usage_chunk, AIMessageChunk)
+        assert usage_chunk.content == ""
+        assert usage_chunk.usage_metadata is not None
+        assert usage_chunk.usage_metadata["input_tokens"] == 15
+        assert usage_chunk.usage_metadata["output_tokens"] == 10
+        assert usage_chunk.usage_metadata["total_tokens"] == 25
+
+
+def test_chat_model_stream_usage_only_chunk_missing_tokens():
+    """Test that a usage-only chunk with missing token data doesn't emit usage metadata."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = None  # Missing prompt_tokens
+    mock_usage.completion_tokens = 10
+
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with usage data but missing prompt_tokens
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=True))
+
+        # Should get content chunks but NO usage chunk (due to missing tokens)
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 1
+
+        # Should NOT emit a usage chunk when tokens are missing
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 0, (
+            f"Expected 0 usage chunks when tokens are missing, got {len(usage_chunks)}"
+        )
+
+
+def test_chat_model_stream_usage_only_chunk_stream_usage_false():
+    """Test that a usage-only chunk is ignored when stream_usage=False."""
+    from unittest.mock import Mock, patch
+
+    mock_usage = Mock()
+    mock_usage.prompt_tokens = 15
+    mock_usage.completion_tokens = 10
+
+    mock_chunks = [
+        Mock(
+            choices=[
+                Mock(
+                    delta=Mock(
+                        role="assistant",
+                        content="Hello",
+                        model_dump=Mock(return_value={"role": "assistant", "content": "Hello"}),
+                    ),
+                    finish_reason="stop",
+                    logprobs=None,
+                )
+            ],
+            usage=None,
+        ),
+        # Final chunk with usage data
+        Mock(
+            choices=[],
+            usage=mock_usage,
+        ),
+    ]
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter(mock_chunks)
+
+        llm = ChatDatabricks(model="test-model")
+        messages = [HumanMessage(content="Hello")]
+
+        chunks = list(llm.stream(messages, stream_usage=False))
+
+        # Should get content chunks only
+        content_chunks = [chunk for chunk in chunks if chunk.content != ""]
+        assert len(content_chunks) == 1
+
+        # Should NOT emit a usage chunk when stream_usage=False
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 0, (
+            f"Expected 0 usage chunks when stream_usage=False, got {len(usage_chunks)}"
+        )
+
+
 class GetWeather(BaseModel):
     """Get the current weather in a given location"""
 
@@ -386,13 +582,13 @@ def test_chat_model_bind_tools(llm: ChatDatabricks) -> None:
 def test_chat_model_bind_tools_with_choices(
     llm: ChatDatabricks, tool_choice, expected_output
 ) -> None:
-    llm_with_tool = llm.bind_tools([GetWeather], tool_choice=tool_choice)
+    llm_with_tool = cast(RunnableBinding, llm.bind_tools([GetWeather], tool_choice=tool_choice))
     assert llm_with_tool.kwargs["tool_choice"] == expected_output
 
 
 def test_chat_model_bind_tolls_with_invalid_choices(llm: ChatDatabricks) -> None:
     with pytest.raises(ValueError, match="Unrecognized tool_choice type"):
-        llm.bind_tools([GetWeather], tool_choice=123)
+        llm.bind_tools([GetWeather], tool_choice=123)  # type: ignore[arg-type]
 
     # Non-existing tool
     with pytest.raises(ValueError, match="Tool choice"):
@@ -534,6 +730,7 @@ def test_convert_tool_message() -> None:
 
     # convert back
     converted_back = _convert_dict_to_message(result)
+    assert isinstance(converted_back, ToolMessage)
     assert converted_back.content == tool_message.content
     assert converted_back.tool_call_id == tool_message.tool_call_id
 
@@ -792,7 +989,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_function_call():
             }
         ],
         tool_call_chunks=[
-            ToolCallChunk(name="get_weather", args='{"location": "SF"}', id="call_456")
+            ToolCallChunk(name="get_weather", args='{"location": "SF"}', id="call_456", index=None)
         ],
     )
     assert result == expected
@@ -839,6 +1036,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
 
     # Check text content with annotations
     text_content = result.content[0]
+    assert isinstance(text_content, dict)
     assert text_content["type"] == "text"
     assert text_content["text"] == "Hello!"
     assert len(text_content["annotations"]) == 1
@@ -849,6 +1047,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_message():
 
     # Check refusal content
     refusal_content = result.content[1]
+    assert isinstance(refusal_content, dict)
     assert refusal_content["type"] == "refusal"
     assert refusal_content["refusal"] == "I cannot help with that."
 
@@ -901,6 +1100,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
 
     # Check that annotations were included and converted to dict
     annotation_content = result.content[0]
+    assert isinstance(annotation_content, dict)
     assert "annotations" in annotation_content
     assert len(annotation_content["annotations"]) == 1
 
@@ -913,7 +1113,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_skip_duplicate_with_annotations
 
 def test_convert_responses_api_chunk_to_lc_chunk_error():
     """Test _convert_responses_api_chunk_to_lc_chunk with error."""
-    chunk = ResponseErrorEvent.model_construct(type="error", error="Something went wrong")
+    chunk = ResponseErrorEvent.model_construct(type="error", message="Something went wrong")
 
     with pytest.raises(ValueError, match="Something went wrong"):
         _convert_responses_api_chunk_to_lc_chunk(chunk)
@@ -930,7 +1130,7 @@ def test_convert_responses_api_chunk_to_lc_chunk_unknown_type():
 
     chunk = UnknownEvent()
 
-    result = _convert_responses_api_chunk_to_lc_chunk(chunk)
+    result = _convert_responses_api_chunk_to_lc_chunk(chunk)  # ty:ignore[invalid-argument-type]
     assert result is None
 
 
@@ -1003,6 +1203,7 @@ def test_convert_responses_api_response_to_chat_result():
 
     # Check text content
     text_content = message.content[0]
+    assert isinstance(text_content, dict)
     assert text_content["type"] == "text"
     assert text_content["text"] == "Hello!"
     assert text_content["id"] == "text_123"
@@ -1012,6 +1213,7 @@ def test_convert_responses_api_response_to_chat_result():
 
     # Check function call content
     func_content = message.content[1]
+    assert isinstance(func_content, dict)
     assert func_content["type"] == "function_call"
     assert func_content["name"] == "get_weather"
     assert func_content["arguments"] == '{"location": "SF"}'
@@ -1121,13 +1323,14 @@ def test_chat_databricks_init_with_extra_params():
     assert llm.extra_params == extra_params
 
 
-def test_chat_databricks_init_sets_client():
+def test_chat_databricks_client_field_sets_client():
     """Test ChatDatabricks initialization sets OpenAI client."""
     with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
 
         llm = ChatDatabricks(model="test-model")
+        _ = llm.client
 
         mock_get_client.assert_called_once_with(workspace_client=None)
         assert llm.client == mock_client
@@ -1348,25 +1551,29 @@ def test_convert_dict_to_message_chunk_without_custom_outputs():
 
 def test_convert_responses_api_response_with_custom_outputs():
     llm = ChatDatabricks(model="test-model", use_responses_api=True)
+    from openai.types.responses import Response
 
-    # Create a simple object with custom_outputs since Response.model_construct doesn't support it
-    class MockResponse:
-        def __init__(self):
-            self.id = "response_123"
-            self.custom_outputs = {"model_version": "v2.1", "processing_time": 150}
-            self.error = None
-            self.output = [
-                ResponseOutputMessage.model_construct(
-                    type="message",
-                    content=[
-                        ResponseOutputText.model_construct(
-                            type="output_text", text="Hello!", id="text_123"
-                        )
-                    ],
-                )
-            ]
-
-    response = MockResponse()
+    response = Response(
+        id="response_123",
+        created_at=time.time(),
+        error=None,
+        output=[
+            ResponseOutputMessage.model_construct(
+                type="message",
+                content=[
+                    ResponseOutputText.model_construct(
+                        type="output_text", text="Hello!", id="text_123"
+                    )
+                ],
+            )
+        ],
+        model="test-model",
+        object="response",
+        parallel_tool_calls=False,
+        tool_choice="none",
+        tools=[],
+    )
+    response.custom_outputs = {"model_version": "v2.1", "processing_time": 150}  # ty:ignore[unresolved-attribute]
     result = llm._convert_responses_api_response_to_chat_result(response)
 
     assert isinstance(result, ChatResult)

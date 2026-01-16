@@ -108,14 +108,14 @@ class McpServer(MCPServerStreamableHttp):
         self.workspace_client = workspace_client
 
         if params is None:
-            params = MCPServerStreamableHttpParams()
+            params = MCPServerStreamableHttpParams(url="")
 
-        if url is None and params.get("url") is None:
+        if url is None and not params.get("url"):
             raise ValueError(
                 "Please provide the url of the MCP Server when initializing the McpServer. McpServer(url=...)"
             )
 
-        if url is not None and params.get("url") is not None and url != params.get("url"):
+        if url is not None and params.get("url") and url != params.get("url"):
             raise ValueError(
                 "Different URLs provided in url and the MCPServerStreamableHttpParams. Please provide only one of them."
             )
@@ -139,7 +139,139 @@ class McpServer(MCPServerStreamableHttp):
         if "client_session_timeout_seconds" not in mcpserver_kwargs:
             mcpserver_kwargs["client_session_timeout_seconds"] = params["timeout"]
 
-        super().__init__(params=params, **mcpserver_kwargs)
+        super().__init__(params=params, **mcpserver_kwargs)  # ty:ignore[invalid-argument-type]
+
+    @classmethod
+    def from_uc_function(
+        cls,
+        catalog: str,
+        schema: str,
+        function_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ) -> "McpServer":
+        """Create an MCP server from Unity Catalog function path.
+
+        Convenience method to create an MCP server for UC functions by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            function_name: Optional UC function name. If omitted, provides access to all
+                functions in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog function.
+
+        Example:
+            Using a single UC function:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_uc_function(
+                        catalog="main",
+                        schema="tools",
+                        function_name="send_email",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if function_name:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}/{function_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/functions/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
+
+    @classmethod
+    def from_vector_search(
+        cls,
+        catalog: str,
+        schema: str,
+        index_name: str | None = None,
+        workspace_client: WorkspaceClient | None = None,
+        timeout: float | None = None,
+        params: MCPServerStreamableHttpParams | None = None,
+        **mcpserver_kwargs: object,
+    ) -> "McpServer":
+        """Create an MCP server from Unity Catalog vector search index path.
+
+        Convenience method to create an MCP server for vector search by specifying Unity Catalog
+        components instead of constructing the full URL manually.
+
+        Args:
+            catalog: Unity Catalog catalog name.
+            schema: Schema name within the catalog.
+            index_name: Optional vector search index name. If omitted, provides access to all
+                indexes in the schema.
+            workspace_client: WorkspaceClient for authentication. See __init__ for details.
+            timeout: HTTP connection timeout in seconds. See __init__ for details.
+            params: Additional MCP server parameters. See __init__ for details.
+            **mcpserver_kwargs: Additional keyword arguments. See __init__ for details.
+
+        Returns:
+            McpServer instance for the specified Unity Catalog vector search index.
+
+        Example:
+            Using a single vector search index:
+
+            .. code-block:: python
+
+                from agents import Agent, Runner
+                from databricks_openai.agents import McpServer
+
+                async with (
+                    McpServer.from_vector_search(
+                        catalog="main",
+                        schema="embeddings",
+                        index_name="product_docs",
+                        timeout=30.0,
+                    ) as mcp_server,
+                ):
+                    agent = Agent(
+                        name="my-agent",
+                        instructions="You are a helpful assistant",
+                        model="databricks-meta-llama-3-1-70b-instruct",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, user_messages)
+                    return result
+        """
+        ws_client = workspace_client or WorkspaceClient()
+        base_url = ws_client.config.host
+
+        if index_name:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}/{index_name}"
+        else:
+            url = f"{base_url}/api/2.0/mcp/vector-search/{catalog}/{schema}"
+
+        return cls(
+            url=url, workspace_client=ws_client, timeout=timeout, params=params, **mcpserver_kwargs
+        )
 
     @mlflow.trace(span_type=SpanType.TOOL)
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
@@ -154,16 +286,31 @@ class McpServer(MCPServerStreamableHttp):
             GetSessionIdCallback | None,
         ]
     ]:
-        kwargs = {
-            "url": self.params["url"],
-            "headers": self.params.get("headers", None),
-            "auth": DatabricksOAuthClientProvider(self.workspace_client),
-            "timeout": self.params.get("timeout", 5),
-            "sse_read_timeout": self.params.get("sse_read_timeout", 60 * 5),
-            "terminate_on_close": self.params.get("terminate_on_close", True),
-        }
+        url: str = self.params["url"]
+        headers: dict[str, str] | None = self.params.get("headers", None)
+        auth = DatabricksOAuthClientProvider(self.workspace_client)
 
-        if "httpx_client_factory" in self.params:
-            kwargs["httpx_client_factory"] = self.params["httpx_client_factory"]
+        timeout = self.params.get("timeout", 5)
+        sse_read_timeout = self.params.get("sse_read_timeout", 60 * 5)
+        terminate_on_close: bool = bool(self.params.get("terminate_on_close", True))
+        httpx_client_factory = self.params.get("httpx_client_factory", None)
 
-        return streamablehttp_client(**kwargs)
+        if httpx_client_factory := self.params.get("httpx_client_factory", None):
+            return streamablehttp_client(
+                url=url,
+                headers=headers,
+                auth=auth,
+                timeout=timeout,
+                sse_read_timeout=sse_read_timeout,
+                terminate_on_close=terminate_on_close,
+                httpx_client_factory=httpx_client_factory,
+            )
+
+        return streamablehttp_client(
+            url=url,
+            headers=headers,
+            auth=auth,
+            timeout=timeout,
+            sse_read_timeout=sse_read_timeout,
+            terminate_on_close=terminate_on_close,
+        )

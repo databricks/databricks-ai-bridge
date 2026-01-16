@@ -1,0 +1,89 @@
+name: Linting
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  UV_VERSION: "0.9.11"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run type checking for ${{ matrix.project.dir }}
+        working-directory: ${{ matrix.project.dir }}
+        run: |
+          uv run --exact ${{ matrix.project.ty_flags }} ruff format --check --diff
+
+  lint:
+    name: ruff check for ${{ matrix.project.dir }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - dir: "."
+            ty_flags: "--extra memory"
+          - dir: "databricks_mcp"
+          - dir: "integrations/dspy"
+          - dir: "integrations/llamaindex"
+          - dir: "integrations/openai"
+          - dir: "integrations/langchain"
+            ty_flags: "--extra memory"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run type checking for ${{ matrix.project.dir }}
+        working-directory: ${{ matrix.project.dir }}
+        run: |
+          uv run --exact ${{ matrix.project.ty_flags }} ruff check --output-format github
+
+  ty:
+    name: typechecking for ${{ matrix.project.dir }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - dir: "."
+            ty_flags: "--extra memory"
+          - dir: "databricks_mcp"
+          - dir: "integrations/dspy"
+          - dir: "integrations/llamaindex"
+          - dir: "integrations/openai"
+          - dir: "integrations/langchain"
+            ty_flags: "--extra memory"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run type checking for ${{ matrix.project.dir }}
+        working-directory: ${{ matrix.project.dir }}
+        run: |
+          uv run --exact ${{ matrix.project.ty_flags }} ty check --output-format github

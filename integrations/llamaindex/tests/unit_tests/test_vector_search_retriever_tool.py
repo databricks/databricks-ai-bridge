@@ -34,17 +34,17 @@ class FakeEmbeddings(BaseEmbedding):
 
     dimension: int = Field(default=DEFAULT_VECTOR_DIMENSION)
 
-    def get_text_embedding(self, text: str) -> List[float]:
+    def get_text_embedding(self, text: str) -> list[float]:
         return [1.0] * (self.dimension - 1) + [0.0]
 
-    def _aget_query_embedding(self):
-        pass
+    async def _aget_query_embedding(self, query: str) -> list[float]:
+        return []
 
-    def _get_query_embedding(self):
-        pass
+    def _get_query_embedding(self, query: str) -> list[float]:
+        return []
 
-    def _get_text_embedding(self):
-        pass
+    def _get_text_embedding(self, text: str) -> list[float]:
+        return []
 
 
 EMBEDDING_MODEL = FakeEmbeddings()
@@ -80,13 +80,14 @@ def init_vector_search_tool(
                 "text_column": "text",
             }
         )
-    return VectorSearchRetrieverTool(**kwargs)  # type: ignore[arg-type]
+    return VectorSearchRetrieverTool(**kwargs)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 def test_init(index_name: str) -> None:
     vector_search_tool = init_vector_search_tool(index_name)
     assert isinstance(vector_search_tool, FunctionTool)
+    assert vector_search_tool.metadata.fn_schema is not None
     assert "'additionalProperties': true" not in str(
         vector_search_tool.metadata.fn_schema.model_json_schema()
     )

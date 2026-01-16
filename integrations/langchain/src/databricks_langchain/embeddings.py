@@ -57,9 +57,10 @@ class DatabricksEmbeddings(Embeddings, BaseModel):
         for txt in _chunk(texts, 20):
             resp = self._client.predict(
                 endpoint=self.endpoint,
-                inputs={"input": txt, **params},  # type: ignore[arg-type]
+                inputs={"input": txt, **params},
             )
-            embeddings.extend(r["embedding"] for r in resp["data"])
+            for r in resp["data"]:
+                embeddings.append([float(v) for v in r["embedding"]])
         return embeddings
 
 
