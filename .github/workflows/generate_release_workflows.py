@@ -61,7 +61,10 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-protected-runner-group
+      labels: linux-ubuntu-latest
+
     permissions:
       id-token: write
       contents: write
