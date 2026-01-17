@@ -281,7 +281,7 @@ class TestMcpServerToolkitExecFn:
 
                 assert result == expected_result
                 mock_mcp_client_instance.call_tool.assert_called_once_with(
-                    "test_tool", expected_call_args
+                    "test_tool", expected_call_args, meta=None
                 )
 
     def test_exec_fn_with_empty_response(self, mock_workspace_client, mock_mcp_tool):
@@ -341,6 +341,45 @@ class TestMcpServerToolkitExecFn:
                 assert tools[0].execute(param="first") == "Response 1"
                 assert tools[0].execute(param="second") == "Response 2"
                 assert mock_mcp_client_instance.call_tool.call_count == 2
+
+    def test_exec_fn_with_meta_params(
+        self, mock_workspace_client, mock_mcp_tool, mock_mcp_response
+    ):
+        """Test that _meta is extracted from kwargs and passed separately to call_tool."""
+        with patch(
+            "databricks_openai.mcp_server_toolkit.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            with patch(
+                "databricks_openai.mcp_server_toolkit.DatabricksMCPClient"
+            ) as mock_mcp_client_class:
+                mock_mcp_client_instance = MagicMock()
+
+                async def mock_async():
+                    return [mock_mcp_tool]
+
+                mock_mcp_client_instance._get_tools_async = mock_async
+                mock_mcp_client_instance.call_tool.return_value = mock_mcp_response
+                mock_mcp_client_class.return_value = mock_mcp_client_instance
+
+                from databricks_openai.mcp_server_toolkit import McpServerToolkit
+
+                toolkit = McpServerToolkit(url="https://test.com/mcp", name="test-server")
+                tools = toolkit.get_tools()
+
+                meta_params = {
+                    "num_results": 5,
+                    "query_type": "HYBRID",
+                    "filters": '{"status": "active"}',
+                }
+                result = tools[0].execute(query="search text", _meta=meta_params)
+
+                assert result == "Hello World"
+                mock_mcp_client_instance.call_tool.assert_called_once_with(
+                    "test_tool",
+                    {"query": "search text"},  # _meta should NOT be in regular args
+                    meta=meta_params,  # _meta should be passed as separate parameter
+                )
 
 
 class TestToolInfo:

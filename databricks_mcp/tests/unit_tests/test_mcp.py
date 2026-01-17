@@ -172,7 +172,7 @@ class TestDatabricksMCPClient:
 
             assert result == mock_result
             mock_session.initialize.assert_called_once()
-            mock_session.call_tool.assert_called_once_with("test_tool", {"arg": "value"})
+            mock_session.call_tool.assert_called_once_with("test_tool", {"arg": "value"}, meta=None)
 
     def test_list_tools(self):
         """Test synchronous tool listing."""
