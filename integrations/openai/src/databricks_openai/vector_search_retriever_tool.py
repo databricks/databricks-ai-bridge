@@ -232,7 +232,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         else:
             return self._execute_direct_api_path(query, filters, openai_client, **kwargs)
 
-    def _get_mcp_toolkit(self) -> Callable:
+    def _create_or_get_mcp_toolkit(self) -> Callable:
         """
         If it does not exist, create the MCP tool execution function for this index.
         Otherwise, return the execution function.
@@ -289,7 +289,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             return {}
         if isinstance(filters, dict):
             return filters
-        return {dict(item)["key"]: dict(item)["value"] for item in filters}
+        return {item.model_dump()["key"]: item.model_dump()["value"] for item in filters}
 
     def _build_mcp_meta(
         self, filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None, **kwargs: Any
@@ -311,7 +311,10 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
         combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
         if combined_filters:
-            meta["filters"] = json.dumps(combined_filters)
+            try:
+                meta["filters"] = json.dumps(combined_filters)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Filters must be JSON serializable: {e}") from e
 
         if "score_threshold" in kwargs:
             meta["score_threshold"] = float(kwargs.pop("score_threshold"))
@@ -443,7 +446,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         **kwargs: Any,
     ) -> List[Dict]:
         try:
-            mcp_execute = self._get_mcp_toolkit()
+            mcp_execute = self._create_or_get_mcp_toolkit()
             meta = self._build_mcp_meta(filters, **kwargs)
             mcp_response = mcp_execute(query=query, _meta=meta)
             documents = self._parse_mcp_response(mcp_response)
