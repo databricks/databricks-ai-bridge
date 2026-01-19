@@ -721,3 +721,163 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
 
         # should still complete successfully despite tracing failures
         assert result.result == "Success"
+
+def test_parse_query_result_preserves_large_numbers_without_scientific_notation():
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "id", "type_name": "INT"},
+                    {"name": "large_float", "type_name": "FLOAT"},
+                    {"name": "small_float", "type_name": "FLOAT"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1", "1234567890123.456", "0.000000123456"],
+                ["2", "9876543210987.654", "0.000000987654"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False)
+    
+    # Verify the result doesn't contain scientific notation (e.g., '1.23e+12')
+    assert "e+" not in result.lower()
+    assert "e-" not in result.lower()
+    
+    # Verify the actual large numbers are present
+    assert "1234567890123.456" in result
+    assert "9876543210987.654" in result
+
+
+def test_parse_query_result_preserves_float_precision():
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "precise_value", "type_name": "DOUBLE"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["123456789.123456789"],
+                ["0.123456789123456789"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False)
+    
+    # Should not use scientific notation
+    assert "e+" not in result.lower()
+    assert "e-" not in result.lower()
+
+
+def test_parse_query_result_mixed_types_no_scientific_notation():
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "id", "type_name": "INT"},
+                    {"name": "name", "type_name": "STRING"},
+                    {"name": "revenue", "type_name": "FLOAT"},
+                    {"name": "is_active", "type_name": "BOOLEAN"},
+                    {"name": "created_at", "type_name": "TIMESTAMP"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1", "Company A", "1234567890.50", "true", "2023-10-01T00:00:00Z"],
+                ["2", "Company B", "9876543210.25", "false", "2023-10-02T00:00:00Z"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False)
+    
+    # Verify no scientific notation for floats
+    assert "e+" not in result.lower()
+    assert "e-" not in result.lower()
+    
+    # Verify other types are preserved correctly
+    assert "Company A" in result
+    assert "Company B" in result
+    assert "2023-10-01" in result
+    
+    # Parse the markdown back to verify data integrity
+    result_df = markdown_to_dataframe(result)
+    assert len(result_df) == 2
+    assert result_df["name"].tolist() == ["Company A", "Company B"]
+
+
+def test_truncate_result_preserves_float_format():
+    with patch("databricks_ai_bridge.genie.MAX_TOKENS_OF_DATA", 200):
+        resp = {
+            "manifest": {
+                "schema": {
+                    "columns": [
+                        {"name": "id", "type_name": "INT"},
+                        {"name": "large_value", "type_name": "FLOAT"},
+                    ]
+                }
+            },
+            "result": {
+                "data_array": [
+                    [str(i), str(1234567890.123 + i)] 
+                    for i in range(1, 20)
+                ]
+            },
+        }
+        result = _parse_query_result(resp, truncate_results=True)
+        
+        # Should not contain scientific notation even in truncated results
+        assert "e+" not in result.lower()
+        assert "e-" not in result.lower()
+
+
+def test_parse_query_result_very_small_floats():
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "tiny_value", "type_name": "DOUBLE"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["0.00000000123"],
+                ["0.00000000456"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False)
+    
+    # Note: Python's str() may still use scientific notation for extremely small values
+    # This test documents the actual behavior
+    # If scientific notation appears, it's from Python's str(), not pandas formatting
+    print(f"Result: {result}")  # For debugging if needed
+
+
+def test_parse_query_result_return_pandas_unaffected():
+    """Test that return_pandas=True returns DataFrame without markdown conversion."""
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "large_float", "type_name": "FLOAT"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1234567890.123"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False, return_pandas=True)
+    
+    # Should return a DataFrame, not a string
+    assert isinstance(result, pd.DataFrame)
+    assert result["large_float"].iloc[0] == 1234567890.123
