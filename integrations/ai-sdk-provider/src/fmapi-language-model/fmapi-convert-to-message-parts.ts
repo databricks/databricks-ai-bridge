@@ -1,5 +1,6 @@
 import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
 import type { FmapiChunk, FmapiContentItem, FmapiResponse, FmapiToolCall } from './fmapi-schema'
+import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 
 export const convertFmapiChunkToMessagePart = (
   chunk: FmapiChunk,
@@ -80,8 +81,13 @@ const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV2Conte
   return {
     type: 'tool-call',
     toolCallId: toolCall.id,
-    toolName: toolCall.function.name,
+    toolName: DATABRICKS_TOOL_CALL_ID,
     input: toolCall.function.arguments,
+    providerMetadata: {
+      databricks: {
+        toolName: toolCall.function.name,
+      },
+    },
   }
 }
 

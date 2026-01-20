@@ -169,21 +169,24 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
             flush(controller) {
               // Emit complete tool-call events for all accumulated tool calls
-              const toolCalls: Array<{ toolCallId: string; toolName: string; input: string }> = []
               for (const [toolCallId, inputText] of toolCallInputsById) {
                 const toolName = toolCallNamesById.get(toolCallId)
                 if (toolName) {
-                  toolCalls.push({ toolCallId, toolName, input: inputText })
                   // Emit tool-input-end to signal streaming is complete
                   controller.enqueue({ type: 'tool-input-end', id: toolCallId })
 
-                  // Emit a complete tool-call with raw input string
-                  // (AI SDK will parse it internally)
+                  // Emit a complete tool-call with DATABRICKS_TOOL_CALL_ID
+                  // and actual tool name in provider metadata
                   controller.enqueue({
                     type: 'tool-call',
                     toolCallId,
-                    toolName,
+                    toolName: DATABRICKS_TOOL_CALL_ID,
                     input: inputText,
+                    providerMetadata: {
+                      databricks: {
+                        toolName,
+                      },
+                    },
                   })
                 }
               }

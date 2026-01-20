@@ -231,10 +231,11 @@ export const convertResponsesAgentResponseToMessagePart = (
         parts.push({
           type: 'tool-call',
           toolCallId: output.call_id,
-          toolName: output.name,
+          toolName: DATABRICKS_TOOL_CALL_ID,
           input: output.arguments,
           providerMetadata: {
             databricks: {
+              toolName: output.name,
               itemId: output.id,
             },
           },

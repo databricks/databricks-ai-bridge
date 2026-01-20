@@ -1376,10 +1376,10 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         {
           type: 'tool-call',
           toolCallId: 'call_456',
-          toolName: 'calculator',
+          toolName: DATABRICKS_TOOL_CALL_ID,
           input: '{"a": 1, "b": 2}',
           providerMetadata: {
-            databricks: { itemId: 'item_789' },
+            databricks: { toolName: 'calculator', itemId: 'item_789' },
           },
         },
       ])
@@ -1658,10 +1658,10 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
       expect(parts[1]).toEqual({
         type: 'tool-call',
         toolCallId: 'call_456',
-        toolName: 'search',
+        toolName: DATABRICKS_TOOL_CALL_ID,
         input: '{"query": "test"}',
         providerMetadata: {
-          databricks: { itemId: 'item_789' },
+          databricks: { toolName: 'search', itemId: 'item_789' },
         },
       })
     })

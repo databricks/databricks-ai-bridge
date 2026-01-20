@@ -6,6 +6,7 @@ import {
   convertFmapiResponseToMessagePart,
 } from '../src/fmapi-language-model/fmapi-convert-to-message-parts'
 import type { FmapiChunk, FmapiResponse } from '../src/fmapi-language-model/fmapi-schema'
+import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 // ============================================================================
 // Tests for convertPromptToFmapiMessages (fmapi-convert-to-input.ts)
@@ -674,78 +675,6 @@ describe('convertFmapiChunkToMessagePart', () => {
       })
     })
 
-    it('should pass through string content with tool call tags as text-delta (no parsing)', () => {
-      const toolCallContent = '<tool_call>{"id":"call-1","name":"get_weather","arguments":{"city":"NYC"}}</tool_call>'
-      const chunk = createChunk(toolCallContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      // XML tags are no longer parsed - just returned as text
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-      expect(result[0]).toMatchObject({
-        type: 'text-delta',
-        delta: toolCallContent,
-      })
-    })
-
-    it('should pass through string content with legacy tool call tags as text-delta', () => {
-      const toolCallContent = '<uc_function_call>{"id":"call-legacy","name":"old_tool","arguments":{}}</uc_function_call>'
-      const chunk = createChunk(toolCallContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-      expect(result[0]).toMatchObject({
-        type: 'text-delta',
-        delta: toolCallContent,
-      })
-    })
-
-    it('should pass through string content with tool result tags as text-delta', () => {
-      const toolResultContent = '<tool_call_result>{"id":"call-1","content":"Sunny, 75F"}</tool_call_result>'
-      const chunk = createChunk(toolResultContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-      expect(result[0]).toMatchObject({
-        type: 'text-delta',
-        delta: toolResultContent,
-      })
-    })
-
-    it('should pass through string content with legacy tool result tags as text-delta', () => {
-      const toolResultContent = '<uc_function_result>{"id":"call-legacy","content":{"data":"result"}}</uc_function_result>'
-      const chunk = createChunk(toolResultContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-      expect(result[0]).toMatchObject({
-        type: 'text-delta',
-        delta: toolResultContent,
-      })
-    })
-
-    it('should pass through mixed content with text and tool tags as single text-delta', () => {
-      const mixedContent = 'Here is the result: <tool_call>{"id":"call-mix","name":"test","arguments":{}}</tool_call> and more text'
-      const chunk = createChunk(mixedContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      // All content is returned as text-delta (no parsing)
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-      expect(result[0]).toMatchObject({
-        type: 'text-delta',
-        delta: mixedContent,
-      })
-    })
-
     it('should return empty array for empty string content', () => {
       const chunk = createChunk('')
 
@@ -753,26 +682,6 @@ describe('convertFmapiChunkToMessagePart', () => {
 
       // Empty string content is skipped to avoid spurious text-start/text-end cycles
       expect(result).toHaveLength(0)
-    })
-
-    it('should pass through tool call with string arguments as text-delta', () => {
-      const toolCallContent = '<tool_call>{"id":"call-str","name":"echo","arguments":"hello world"}</tool_call>'
-      const chunk = createChunk(toolCallContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
-    })
-
-    it('should pass through tool call with object arguments as text-delta', () => {
-      const toolCallContent = '<tool_call>{"id":"call-obj","name":"complex","arguments":{"nested":{"key":"value"}}}</tool_call>'
-      const chunk = createChunk(toolCallContent)
-
-      const result = convertFmapiChunkToMessagePart(chunk)
-
-      expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('text-delta')
     })
   })
 
@@ -1127,46 +1036,6 @@ describe('convertFmapiResponseToMessagePart', () => {
       })
     })
 
-    it('should pass through string content with tool call tags as text (no parsing)', () => {
-      const toolCallContent = '<tool_call>{"id":"call-resp","name":"final_tool","arguments":{"key":"value"}}</tool_call>'
-      const response = createResponse(toolCallContent)
-
-      const result = convertFmapiResponseToMessagePart(response)
-
-      // XML tags are no longer parsed - just returned as text
-      expect(result).toHaveLength(1)
-      expect(result[0]).toMatchObject({
-        type: 'text',
-        text: toolCallContent,
-      })
-    })
-
-    it('should pass through string content with legacy tool call tags as text', () => {
-      const toolCallContent = '<uc_function_call>{"id":"legacy-resp","name":"legacy_fn","arguments":{}}</uc_function_call>'
-      const response = createResponse(toolCallContent)
-
-      const result = convertFmapiResponseToMessagePart(response)
-
-      expect(result).toHaveLength(1)
-      expect(result[0]).toMatchObject({
-        type: 'text',
-        text: toolCallContent,
-      })
-    })
-
-    it('should pass through string content with tool result tags as text', () => {
-      const toolResultContent = '<tool_call_result>{"id":"result-resp","content":{"status":"success"}}</tool_call_result>'
-      const response = createResponse(toolResultContent)
-
-      const result = convertFmapiResponseToMessagePart(response)
-
-      expect(result).toHaveLength(1)
-      expect(result[0]).toMatchObject({
-        type: 'text',
-        text: toolResultContent,
-      })
-    })
-
     it('should handle empty string content', () => {
       const response = createResponse('')
 
@@ -1337,8 +1206,13 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-weather-1',
-        toolName: 'get_weather',
+        toolName: DATABRICKS_TOOL_CALL_ID,
         input: '{"location":"Tokyo"}',
+        providerMetadata: {
+          databricks: {
+            toolName: 'get_weather',
+          },
+        },
       })
     })
 
@@ -1381,14 +1255,24 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-1',
-        toolName: 'tool_a',
+        toolName: DATABRICKS_TOOL_CALL_ID,
         input: '{"a":1}',
+        providerMetadata: {
+          databricks: {
+            toolName: 'tool_a',
+          },
+        },
       })
       expect(result[1]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-2',
-        toolName: 'tool_b',
+        toolName: DATABRICKS_TOOL_CALL_ID,
         input: '{"b":2}',
+        providerMetadata: {
+          databricks: {
+            toolName: 'tool_b',
+          },
+        },
       })
     })
 
@@ -1423,7 +1307,12 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-helper',
-        toolName: 'helper',
+        toolName: DATABRICKS_TOOL_CALL_ID,
+        providerMetadata: {
+          databricks: {
+            toolName: 'helper',
+          },
+        },
       })
       expect(result[1]).toMatchObject({
         type: 'text',
@@ -1462,8 +1351,13 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-complex',
-        toolName: 'process_data',
+        toolName: DATABRICKS_TOOL_CALL_ID,
         input: '{"items":[1,2,3],"config":{"nested":true,"values":["a","b"]}}',
+        providerMetadata: {
+          databricks: {
+            toolName: 'process_data',
+          },
+        },
       })
     })
 
