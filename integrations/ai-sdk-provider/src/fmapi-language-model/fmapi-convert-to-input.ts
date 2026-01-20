@@ -14,16 +14,10 @@ export const convertPromptToFmapiMessages = (
   for (const message of prompt) {
     switch (message.role) {
       case 'system':
-        messages.push({
-          role: 'system',
-          content: convertSystemContent(message),
-        })
+        messages.push(convertSystemMessage(message))
         break
       case 'user':
-        messages.push({
-          role: 'user',
-          content: convertUserContent(message),
-        })
+        messages.push(convertUserMessage(message))
         break
       case 'assistant':
         messages.push(convertAssistantMessage(message))
@@ -38,28 +32,31 @@ export const convertPromptToFmapiMessages = (
   return { messages }
 }
 
-const convertSystemContent = (message: LanguageModelV2SystemMessage): FmapiContentItem[] => {
-  return [{ type: 'text', text: message.content }]
+const convertSystemMessage = (message: LanguageModelV2SystemMessage): FmapiInputMessage => {
+  return {
+    role: 'system',
+    content: [{ type: 'text', text: message.content }],
+  }
 }
 
-const convertUserContent = (message: LanguageModelV2UserMessage): FmapiContentItem[] => {
-  const items: FmapiContentItem[] = []
+const convertUserMessage = (message: LanguageModelV2UserMessage): FmapiInputMessage => {
+  const content: FmapiContentItem[] = []
 
   for (const part of message.content) {
     switch (part.type) {
       case 'text':
-        items.push({ type: 'text', text: part.text })
+        content.push({ type: 'text', text: part.text })
         break
       case 'file':
         if (part.mediaType.startsWith('image/')) {
           const url = toHttpUrlString(part.data)
-          if (url) items.push({ type: 'image', image_url: url })
+          if (url) content.push({ type: 'image', image_url: url })
         }
         break
     }
   }
 
-  return items
+  return { role: 'user', content }
 }
 
 const convertAssistantMessage = (message: LanguageModelV2AssistantMessage): FmapiInputMessage => {
