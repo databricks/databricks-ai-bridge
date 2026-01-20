@@ -26,6 +26,7 @@ import {
 } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 
+
 // ============================================================================
 // Tool Definitions - Multiple formats supported
 // ============================================================================
@@ -201,7 +202,9 @@ async function main() {
   // Initialize the model
   const model = new ChatDatabricks({
     endpoint: "databricks-meta-llama-3-3-70b-instruct",
-    endpointType: "fmapi",
+    endpointAPI: "chat-completions",
+    // endpoint: "databricks-gpt-5-2",
+    // endpointAPI: "responses",
     maxTokens: 1024,
     auth: {
       host: process.env.DATABRICKS_HOST,
@@ -344,16 +347,46 @@ async function main() {
     const stream = await modelWithTools.stream(streamMessages);
 
     // Accumulate the full response
+    // Note: We track tool_calls by ID because AIMessageChunk.concat()
+    // doesn't properly merge tool_calls arrays when one chunk has tool_calls
+    // and the next has an empty array
     let fullResponse = new AIMessageChunk({ content: "" });
+    const toolCallsById = new Map<string, NonNullable<typeof fullResponse.tool_calls>[number]>();
 
     for await (const chunk of stream) {
       fullResponse = fullResponse.concat(chunk);
+
+      // Accumulate tool calls by ID to avoid duplicates
+      if (chunk.tool_calls && chunk.tool_calls.length > 0) {
+        for (const tc of chunk.tool_calls) {
+          if (tc.id) {
+            // Update existing or add new tool call
+            const existing = toolCallsById.get(tc.id);
+            if (existing) {
+              // Merge args if the new one has more content
+              const newArgs = tc.args ?? {};
+              const existingArgs = existing.args ?? {};
+              const mergedArgs = { ...existingArgs, ...newArgs };
+              toolCallsById.set(tc.id, { ...existing, ...tc, args: mergedArgs });
+            } else {
+              toolCallsById.set(tc.id, tc);
+            }
+          }
+        }
+      }
 
       // Stream text content to console
       if (chunk.content) {
         process.stdout.write(chunk.content as string);
       }
     }
+
+    // Use accumulated tool calls instead of relying on concat
+    const accumulatedToolCalls = Array.from(toolCallsById.values());
+    fullResponse = new AIMessageChunk({
+      content: fullResponse.content,
+      tool_calls: accumulatedToolCalls.length > 0 ? accumulatedToolCalls : fullResponse.tool_calls,
+    });
 
     // Check if the model wants to call tools
     if (fullResponse.tool_calls && fullResponse.tool_calls.length > 0) {

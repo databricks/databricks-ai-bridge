@@ -13,6 +13,7 @@ import {
 } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration, ChatGenerationChunk } from "@langchain/core/outputs";
 import { type GenerateTextResult, type ToolSet, type ModelMessage, type StreamTextResult } from "ai";
+import { getToolNameFromToolStreamPart } from "./tools.js";
 
 type UserContent = Extract<ModelMessage, { role: "user" }>["content"];
 type AssistantContent = Extract<ModelMessage, { role: "assistant" }>["content"];
@@ -42,7 +43,7 @@ export function convertLangChainToModelMessages(messages: BaseMessage[]): ModelM
           } else if (part.type === "image_url") {
             throw new Error(
               "Image content is not yet supported in ChatDatabricks. " +
-                "Please use text-only messages."
+              "Please use text-only messages."
             );
           }
         }
@@ -160,10 +161,10 @@ export function convertGenerateTextResultToChatResult(
     llmOutput: {
       tokenUsage: result.usage
         ? {
-            promptTokens: result.usage.inputTokens ?? 0,
-            completionTokens: result.usage.outputTokens ?? 0,
-            totalTokens: result.usage.totalTokens ?? 0,
-          }
+          promptTokens: result.usage.inputTokens ?? 0,
+          completionTokens: result.usage.outputTokens ?? 0,
+          totalTokens: result.usage.totalTokens ?? 0,
+        }
         : undefined,
     },
   };
@@ -180,6 +181,9 @@ export async function* convertStreamTextResultToChunks(
 ): AsyncGenerator<ChatGenerationChunk> {
   // Track accumulated tool calls for streaming
   const partialToolCalls: Map<string, { toolName: string; input: string; index: number }> = new Map();
+  // Track tool call IDs that were already processed via tool-input-start (streaming)
+  // to avoid duplicates when tool-call events arrive for the same tool call
+  const streamedToolCallIds: Set<string> = new Set();
   // Track tool call indices - each unique tool call ID gets an incrementing index
   let nextToolCallIndex = 0;
 
@@ -194,92 +198,87 @@ export async function* convertStreamTextResultToChunks(
         });
         break;
 
-      case "tool-call":
+      case "tool-call": {
         // Complete tool call from streamText
-        yield new ChatGenerationChunk({
-          message: new AIMessageChunk({
-            content: "",
-            tool_calls: [
-              {
-                id: part.toolCallId,
-                name: part.toolName,
-                args: part.input as Record<string, unknown>,
-                type: "tool_call" as const,
-              },
-            ],
-          }),
-          text: "",
-        });
-        break;
+        // This is the authoritative source for tool calls - always use it
+        // If we previously saw tool-input-start/delta, use the index we assigned
+        const toolName = getToolNameFromToolStreamPart(part);
+        const existingPartial = partialToolCalls.get(part.toolCallId);
+        const toolIndex = existingPartial?.index ?? nextToolCallIndex++;
+        const argsString = typeof part.input === "string" ? part.input : JSON.stringify(part.input);
 
-      case "tool-input-start": {
-        // Initialize partial tool call with assigned index
-        const toolIndex = nextToolCallIndex++;
-        partialToolCalls.set(part.id, {
-          toolName: part.toolName,
-          input: "",
-          index: toolIndex,
-        });
+        // Mark as processed to avoid duplicates
+        streamedToolCallIds.add(part.toolCallId);
+
         yield new ChatGenerationChunk({
           message: new AIMessageChunk({
             content: "",
             tool_call_chunks: [
               {
                 index: toolIndex,
-                id: part.id,
-                name: part.toolName,
-                args: "",
+                id: part.toolCallId,
+                name: toolName,
+                args: argsString,
                 type: "tool_call_chunk" as const,
               },
             ],
           }),
           text: "",
         });
+        break;
+      }
+
+      case "tool-input-start": {
+        // Initialize partial tool call tracking - we'll emit the full call on tool-call event
+        const toolIndex = nextToolCallIndex++;
+        partialToolCalls.set(part.id, {
+          toolName: part.toolName,
+          input: "",
+          index: toolIndex,
+        });
+        // Don't emit yet - wait for tool-call event which has complete args
         break;
       }
 
       case "tool-input-delta": {
-        // Accumulate tool call args
+        // Track accumulated args but don't emit - wait for tool-call event
         const partial = partialToolCalls.get(part.id);
         if (partial) {
           partial.input += part.delta;
         }
-        yield new ChatGenerationChunk({
-          message: new AIMessageChunk({
-            content: "",
-            tool_call_chunks: [
-              {
-                index: partial?.index ?? 0,
-                id: part.id,
-                name: partial?.toolName,
-                args: part.delta,
-                type: "tool_call_chunk" as const,
-              },
-            ],
-          }),
-          text: "",
-        });
         break;
       }
 
-      case "finish":
+      case "finish": {
+        // Note: We construct the message without tool_calls fields to avoid
+        // overwriting tool_calls from previous chunks during concatenation.
+        // LangChain's concat() will overwrite arrays even if the new value is empty.
+        const finishMessage: {
+          content: string;
+          usage_metadata?: {
+            input_tokens: number;
+            output_tokens: number;
+            total_tokens: number;
+          };
+        } = {
+          content: "",
+        };
+        if (part.totalUsage) {
+          finishMessage.usage_metadata = {
+            input_tokens: part.totalUsage.inputTokens ?? 0,
+            output_tokens: part.totalUsage.outputTokens ?? 0,
+            total_tokens: part.totalUsage.totalTokens ?? 0,
+          };
+        }
         yield new ChatGenerationChunk({
-          message: new AIMessageChunk({
-            content: "",
-            usage_metadata: part.totalUsage
-              ? {
-                  input_tokens: part.totalUsage.inputTokens ?? 0,
-                  output_tokens: part.totalUsage.outputTokens ?? 0,
-                  total_tokens: part.totalUsage.totalTokens ?? 0,
-                }
-              : undefined,
-          }),
+          message: new AIMessageChunk(finishMessage),
           text: "",
           generationInfo: {
             finish_reason: part.finishReason,
           },
         });
         break;
+      }
 
       case "error":
         yield new ChatGenerationChunk({

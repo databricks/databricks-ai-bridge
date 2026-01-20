@@ -1,10 +1,10 @@
 /**
  * ChatDatabricks - LangChain chat model integration for Databricks Model Serving
  *
- * Uses the Databricks AI SDK Provider internally to support multiple endpoint types:
- * - FMAPI (Foundation Model API) - OpenAI-compatible chat completions
- * - ChatAgent - Databricks agent chat completion
- * - ResponsesAgent - Rich output with reasoning, citations, function calls
+ * Uses the Databricks AI SDK Provider internally to support multiple endpoint APIs:
+ * - chat-completions: OpenAI-compatible chat completions API
+ * - chat-agent: Databricks agent chat completion
+ * - responses: Rich output with reasoning, citations, function calls
  */
 
 import {
@@ -31,9 +31,9 @@ import {
 import { convertToAISDKToolSet } from "./utils/tools.js";
 
 /**
- * Endpoint type determines which Databricks API protocol to use
+ * Endpoint API determines which Databricks API protocol to use
  */
-export type EndpointType = "fmapi" | "chat-agent" | "responses-agent";
+export type EndpointAPI = "responses" | "chat-completions" | "chat-agent";
 
 /**
  * Authentication options for Databricks
@@ -76,12 +76,12 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
   endpoint: string;
 
   /**
-   * Endpoint type - determines which API protocol to use
-   * - 'fmapi': Foundation Model API (OpenAI-compatible) - default
-   * - 'chat-agent': Databricks agent chat completion
-   * - 'responses-agent': Rich output with reasoning, citations
+   * Endpoint API - determines which API protocol to use
+   * - 'responses': See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api
+   * - 'chat-completions': See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#chat-completions-api
+   * - 'chat-agent': See https://docs.databricks.com/aws/en/generative-ai/agent-framework/agent-legacy-schema
    */
-  endpointType?: EndpointType;
+  endpointAPI: EndpointAPI;
 
   /**
    * Authentication credentials for Databricks SDK.
@@ -106,16 +106,16 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
 /**
  * ChatDatabricks - Chat model integration for Databricks Model Serving
  *
- * Supports three endpoint types:
- * - FMAPI: OpenAI-compatible foundation models
- * - ChatAgent: Databricks agent endpoints
- * - ResponsesAgent: Rich output with reasoning and citations
+ * Supports three endpoint APIs:
+ * - chat-completions: OpenAI-compatible chat completions
+ * - chat-agent: Databricks agent endpoints
+ * - responses: Rich output with reasoning and citations
  *
- * @example FMAPI (Foundation Model)
+ * @example Chat Completions
  * ```typescript
  * const model = new ChatDatabricks({
  *   endpoint: "databricks-meta-llama-3-3-70b-instruct",
- *   endpointType: "fmapi",
+ *   endpointAPI: "chat-completions",
  * });
  * const response = await model.invoke("Hello!");
  * ```
@@ -124,15 +124,15 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
  * ```typescript
  * const model = new ChatDatabricks({
  *   endpoint: "my-chat-agent",
- *   endpointType: "chat-agent",
+ *   endpointAPI: "chat-agent",
  * });
  * ```
  *
- * @example Responses Agent (with reasoning)
+ * @example Responses (with reasoning)
  * ```typescript
  * const model = new ChatDatabricks({
  *   endpoint: "my-responses-agent",
- *   endpointType: "responses-agent",
+ *   endpointAPI: "responses",
  * });
  * ```
  *
@@ -157,8 +157,8 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   /** Model serving endpoint name */
   endpoint: string;
 
-  /** Endpoint type */
-  endpointType: EndpointType;
+  /** Endpoint API */
+  endpointAPI: EndpointAPI;
 
   /** Temperature (0.0 - 2.0) */
   temperature?: number;
@@ -191,7 +191,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     super(fields);
 
     this.endpoint = fields.endpoint;
-    this.endpointType = fields.endpointType ?? "fmapi";
+    this.endpointAPI = fields.endpointAPI;
     this.temperature = fields.temperature;
     this.maxTokens = fields.maxTokens;
     this.stop = fields.stop;
@@ -240,12 +240,12 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   }
 
   private getLanguageModel(): LanguageModel {
-    switch (this.endpointType) {
+    switch (this.endpointAPI) {
       case "chat-agent":
         return this.provider.chatAgent(this.endpoint) as LanguageModel;
-      case "responses-agent":
+      case "responses":
         return this.provider.responsesAgent(this.endpoint) as LanguageModel;
-      case "fmapi":
+      case "chat-completions":
       default:
         return this.provider.fmapi(this.endpoint) as LanguageModel;
     }
@@ -369,7 +369,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     // Create a new instance with bound tools
     const bound = new ChatDatabricks({
       endpoint: this.endpoint,
-      endpointType: this.endpointType,
+      endpointAPI: this.endpointAPI,
       auth: this.auth,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
@@ -393,7 +393,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   get identifyingParams(): Record<string, unknown> {
     return {
       endpoint: this.endpoint,
-      endpointType: this.endpointType,
+      endpointAPI: this.endpointAPI,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
     };
