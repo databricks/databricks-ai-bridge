@@ -58,9 +58,9 @@ export const fmapiChunkSchema = z.object({
   model: z.string(),
   usage: z
     .object({
-      prompt_tokens: z.number(),
-      completion_tokens: z.number(),
-      total_tokens: z.number(),
+      prompt_tokens: z.number().nullable().optional(),
+      completion_tokens: z.number().nullable().optional(),
+      total_tokens: z.number().nullable().optional(),
     })
     .nullable()
     .optional(),
@@ -102,6 +102,20 @@ export const fmapiResponseSchema = z.object({
     })
   ),
 })
+
+// Input message schema for requests (different from response format)
+// Tool messages in requests need tool_call_id at the message level
+export type FmapiInputMessage =
+  | {
+      role: 'system' | 'user' | 'assistant'
+      content: string | z.infer<typeof contentItemSchema>[] | null
+      tool_calls?: z.infer<typeof toolCallSchema>[]
+    }
+  | {
+      role: 'tool'
+      tool_call_id: string
+      content: string
+    }
 
 // Exported types for type-only imports in other modules
 export type FmapiChunk = z.infer<typeof fmapiChunkSchema>

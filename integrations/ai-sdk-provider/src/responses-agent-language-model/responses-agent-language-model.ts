@@ -26,6 +26,7 @@ import {
 } from './responses-convert-to-message-parts'
 import { convertToResponsesInput } from './responses-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
+import { prepareResponsesTools } from './responses-prepare-tools'
 
 function mapResponsesFinishReason({
   finishReason,
@@ -249,6 +250,13 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
       prompt: options.prompt,
       systemMessageMode: 'system',
     })
+
+    // Prepare tools for the Responses API format
+    const { tools, toolChoice } = prepareResponsesTools({
+      tools: options.tools,
+      toolChoice: options.toolChoice,
+    })
+
     return {
       url: config.url({
         path: '/responses',
@@ -258,6 +266,8 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         model: modelId,
         input,
         stream,
+        ...(tools ? { tools } : {}),
+        ...(toolChoice && tools ? { tool_choice: toolChoice } : {}),
       },
       fetch: config.fetch,
     }

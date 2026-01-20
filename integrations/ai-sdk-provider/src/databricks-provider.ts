@@ -14,10 +14,18 @@ export type DatabricksLanguageModelConfig = {
 export interface DatabricksProvider extends ProviderV2 {
   /** Agents */
   chatAgent(modelId: string): LanguageModelV2 // agent/v2/chat
-  responsesAgent(modelId: string): LanguageModelV2 // agent/v1/responses
 
-  /** FMAPI */
+  /**
+   * @deprecated Use `responses` instead.
+   */
+  responsesAgent(modelId: string): LanguageModelV2 // agent/v1/responses
+  responses(modelId: string): LanguageModelV2 // agent/v1/responses
+
+  /**
+   * @deprecated Use `chatCompletions` instead.
+   */
   fmapi(modelId: string): LanguageModelV2 // llm/v1/chat
+  chatCompletions(modelId: string): LanguageModelV2 // llm/v1/chat
 }
 
 export interface DatabricksProviderSettings {
@@ -82,11 +90,15 @@ export const createDatabricksProvider = (
   }
 
   return {
+    responses: createResponsesAgent,
+    chatCompletions: createFmapi,
     chatAgent: createChatAgent,
-    responsesAgent: createResponsesAgent,
-    fmapi: createFmapi,
     imageModel: notImplemented('ImageModel'),
     textEmbeddingModel: notImplemented('TextEmbeddingModel'),
     languageModel: notImplemented('LanguageModel'),
+    // @deprecated
+    responsesAgent: createResponsesAgent,
+    // @deprecated
+    fmapi: createFmapi,
   }
 }

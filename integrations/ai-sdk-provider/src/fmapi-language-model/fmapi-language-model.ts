@@ -147,9 +147,9 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
               // Track usage from chunk
               if (chunk.value.usage) {
                 usage = {
-                  inputTokens: chunk.value.usage.prompt_tokens,
-                  outputTokens: chunk.value.usage.completion_tokens,
-                  totalTokens: chunk.value.usage.total_tokens,
+                  inputTokens: chunk.value.usage.prompt_tokens ?? 0,
+                  outputTokens: chunk.value.usage.completion_tokens ?? 0,
+                  totalTokens: chunk.value.usage.total_tokens ?? 0,
                 }
               }
 
@@ -169,9 +169,11 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
             flush(controller) {
               // Emit complete tool-call events for all accumulated tool calls
+              const toolCalls: Array<{ toolCallId: string; toolName: string; input: string }> = []
               for (const [toolCallId, inputText] of toolCallInputsById) {
                 const toolName = toolCallNamesById.get(toolCallId)
                 if (toolName) {
+                  toolCalls.push({ toolCallId, toolName, input: inputText })
                   // Emit tool-input-end to signal streaming is complete
                   controller.enqueue({ type: 'tool-input-end', id: toolCallId })
 

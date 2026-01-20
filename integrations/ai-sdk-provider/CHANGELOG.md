@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-01-15
+## [0.2.0] - 2026-01-20
+
+### Added
+
+- Added `chatCompletions` provider method as the new name for accessing FM API endpoints
+- Added `responses` provider method as the new name for accessing Responses endpoints
+- Added tool calling support for Responses endpoints
+
+### Changed
+
+- FMAPI: Removed XML tag parsing for tool calls since this is not part of the public API
+- FMAPI: System messages now preserve `role: 'system'` instead of being converted to `role: 'user'`
+- FMAPI: Tool messages now use OpenAI `tool_call_id` format instead of XML serialization
+
+### Deprecated
+
+- `fmapi()` provider method - use `chatCompletions()` instead
+- `responsesAgent()` provider method - use `responses()` instead
+
+## [0.1.1] - 2026-01-15
+
+## [0.1.0] - 2026-01-15
 
 ### Added
 

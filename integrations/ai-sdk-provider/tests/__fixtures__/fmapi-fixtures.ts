@@ -88,6 +88,7 @@ data: {
 
 /**
  * FMAPI output with tool calls using XML tags
+ * NOTE: XML tags are NO LONGER parsed - they are returned as plain text
  */
 export const FMAPI_WITH_TOOL_CALLS: LLMOutputFixtures = {
   in: `
@@ -163,20 +164,20 @@ data: {
       id: 'fmapi-456',
       delta: 'Let me check the weather for you. ',
     },
+    // XML tags are no longer parsed - returned as text-delta
+    {
+      type: 'text-delta',
+      id: 'fmapi-456',
+      delta: '<tool_call>{"id": "call_weather_001", "name": "get_weather", "arguments": {"location": "New York"}}</tool_call>',
+    },
+    {
+      type: 'text-delta',
+      id: 'fmapi-456',
+      delta: '<tool_call_result>{"id": "call_weather_001", "content": {"temperature": 22, "condition": "sunny"}}</tool_call_result>',
+    },
+    // text-end emitted when id changes
     { type: 'text-end', id: 'fmapi-456' },
-    {
-      type: 'tool-call',
-      toolCallId: 'call_weather_001',
-      toolName: 'get_weather',
-      input: '{"location":"New York"}',
-      providerExecuted: true,
-    },
-    {
-      type: 'tool-result',
-      toolCallId: 'call_weather_001',
-      toolName: 'databricks-tool-call',
-      result: { temperature: 22, condition: 'sunny' },
-    },
+    // text-start emitted for new id
     { type: 'text-start', id: 'fmapi-456-response' },
     {
       type: 'text-delta',
@@ -429,6 +430,7 @@ data: {
 
 /**
  * FMAPI output with legacy UC function call tags
+ * NOTE: Legacy tags are NO LONGER parsed - they are returned as plain text
  */
 export const FMAPI_WITH_LEGACY_TAGS: LLMOutputFixtures = {
   in: `
@@ -504,20 +506,20 @@ data: {
       id: 'fmapi-789',
       delta: "I'll execute that calculation. ",
     },
+    // Legacy tags are no longer parsed - returned as text-delta
+    {
+      type: 'text-delta',
+      id: 'fmapi-789',
+      delta: '<uc_function_call>{"id": "calc_001", "name": "calculate", "arguments": {"expression": "2 + 2"}}</uc_function_call>',
+    },
+    {
+      type: 'text-delta',
+      id: 'fmapi-789',
+      delta: '<uc_function_result>{"id": "calc_001", "content": "4"}</uc_function_result>',
+    },
+    // text-end emitted when id changes
     { type: 'text-end', id: 'fmapi-789' },
-    {
-      type: 'tool-call',
-      toolCallId: 'calc_001',
-      toolName: 'calculate',
-      input: '{"expression":"2 + 2"}',
-      providerExecuted: true,
-    },
-    {
-      type: 'tool-result',
-      toolCallId: 'calc_001',
-      toolName: 'databricks-tool-call',
-      result: '4',
-    },
+    // text-start emitted for new id
     { type: 'text-start', id: 'fmapi-789-response' },
     {
       type: 'text-delta',

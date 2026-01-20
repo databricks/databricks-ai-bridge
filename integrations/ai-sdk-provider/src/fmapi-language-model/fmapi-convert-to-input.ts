@@ -1,8 +1,6 @@
 import type { LanguageModelV2Message, LanguageModelV2ToolResultPart } from '@ai-sdk/provider'
-import type { FmapiMessage } from './fmapi-schema'
-import { serializeToolCall, serializeToolResult } from './fmapi-tags'
+import type { FmapiInputMessage, FmapiContentItem } from './fmapi-schema'
 
-type FmapiContentItem = Exclude<NonNullable<FmapiMessage['content']>, string>[number]
 type LanguageModelV2SystemMessage = Extract<LanguageModelV2Message, { role: 'system' }>
 type LanguageModelV2UserMessage = Extract<LanguageModelV2Message, { role: 'user' }>
 type LanguageModelV2AssistantMessage = Extract<LanguageModelV2Message, { role: 'assistant' }>
@@ -10,30 +8,33 @@ type LanguageModelV2ToolMessage = Extract<LanguageModelV2Message, { role: 'tool'
 
 export const convertPromptToFmapiMessages = (
   prompt: LanguageModelV2Message[]
-): { messages: Array<FmapiMessage> } => {
-  const messages: Array<FmapiMessage> = prompt.map((message) => {
-    const role = message.role === 'system' ? 'user' : message.role
+): { messages: Array<FmapiInputMessage> } => {
+  const messages: Array<FmapiInputMessage> = []
 
-    let contentItems: FmapiContentItem[] = []
-
+  for (const message of prompt) {
     switch (message.role) {
       case 'system':
-        contentItems = convertSystemContent(message)
+        messages.push({
+          role: 'system',
+          content: convertSystemContent(message),
+        })
         break
       case 'user':
-        contentItems = convertUserContent(message)
+        messages.push({
+          role: 'user',
+          content: convertUserContent(message),
+        })
         break
       case 'assistant':
-        contentItems = convertAssistantContent(message)
+        messages.push(convertAssistantMessage(message))
         break
       case 'tool':
-        contentItems = convertToolContent(message)
+        // Tool messages need special handling - one message per tool result
+        messages.push(...convertToolMessages(message))
         break
     }
+  }
 
-    const content = contentItems.length === 0 ? '' : contentItems
-    return { role, content }
-  })
   return { messages }
 }
 
@@ -61,67 +62,70 @@ const convertUserContent = (message: LanguageModelV2UserMessage): FmapiContentIt
   return items
 }
 
-const convertAssistantContent = (message: LanguageModelV2AssistantMessage): FmapiContentItem[] => {
-  const items: FmapiContentItem[] = []
+const convertAssistantMessage = (message: LanguageModelV2AssistantMessage): FmapiInputMessage => {
+  const contentItems: FmapiContentItem[] = []
+  const toolCalls: Array<{
+    id: string
+    type: 'function'
+    function: { name: string; arguments: string }
+  }> = []
 
   for (const part of message.content) {
     switch (part.type) {
       case 'text':
-        items.push({ type: 'text', text: part.text })
+        contentItems.push({ type: 'text', text: part.text })
         break
       case 'file':
         if (part.mediaType.startsWith('image/')) {
           const url = toHttpUrlString(part.data)
-          if (url) items.push({ type: 'image', image_url: url })
+          if (url) contentItems.push({ type: 'image', image_url: url })
         }
         break
       case 'reasoning':
-        items.push({
+        contentItems.push({
           type: 'reasoning',
           summary: [{ type: 'summary_text', text: part.text }],
         })
         break
       case 'tool-call':
-        items.push({
-          type: 'text',
-          text: serializeToolCall({
-            id: part.toolCallId,
+        // Convert to OpenAI tool_calls format
+        toolCalls.push({
+          id: part.toolCallId,
+          type: 'function',
+          function: {
             name: part.toolName,
-            arguments: part.input,
-          }),
-        })
-        break
-      case 'tool-result':
-        items.push({
-          type: 'text',
-          text: serializeToolResult({
-            id: part.toolCallId,
-            content: convertToolResultOutputToContentValue(part.output),
-          }),
+            arguments: typeof part.input === 'string' ? part.input : JSON.stringify(part.input),
+          },
         })
         break
     }
   }
 
-  return items
+  return {
+    role: 'assistant',
+    // Use null instead of empty string when there's no text content
+    // (required by Claude API when tool_calls are present)
+    content: contentItems.length === 0 ? null : contentItems,
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  }
 }
 
-const convertToolContent = (message: LanguageModelV2ToolMessage): FmapiContentItem[] => {
-  const items: FmapiContentItem[] = []
+const convertToolMessages = (message: LanguageModelV2ToolMessage): FmapiInputMessage[] => {
+  const messages: FmapiInputMessage[] = []
 
   for (const part of message.content) {
     if (part.type === 'tool-result') {
-      items.push({
-        type: 'text',
-        text: serializeToolResult({
-          id: part.toolCallId,
-          content: convertToolResultOutputToContentValue(part.output),
-        }),
+      // Each tool result becomes a separate tool message with tool_call_id
+      const content = convertToolResultOutputToContentValue(part.output)
+      messages.push({
+        role: 'tool',
+        tool_call_id: part.toolCallId,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
       })
     }
   }
 
-  return items
+  return messages
 }
 
 const toHttpUrlString = (data: URL | string | Uint8Array): string | null => {

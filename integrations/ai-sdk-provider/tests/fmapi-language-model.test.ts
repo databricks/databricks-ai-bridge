@@ -139,7 +139,7 @@ describe('DatabricksFmapiLanguageModel', () => {
     }
   })
 
-  it('correctly parses tool calls from XML tags', async () => {
+  it('passes through XML tags as text (no longer parses them)', async () => {
     const mockFetch = createMockFetch(FMAPI_WITH_TOOL_CALLS.in)
 
     const model = new DatabricksFmapiLanguageModel('test-model', {
@@ -175,27 +175,19 @@ describe('DatabricksFmapiLanguageModel', () => {
       expect(contentParts[i]).toMatchObject(FMAPI_WITH_TOOL_CALLS.out[i])
     }
 
-    // Verify tool call has correct structure and providerExecuted flag
+    // XML tags are no longer parsed - should all be text-delta
     const toolCallPart = contentParts.find((part) => part.type === 'tool-call')
-    expect(toolCallPart).toBeDefined()
-    expect(toolCallPart).toMatchObject({
-      type: 'tool-call',
-      toolCallId: 'call_weather_001',
-      toolName: 'get_weather',
-      providerExecuted: true,
-    })
+    expect(toolCallPart).toBeUndefined()
 
-    // Verify tool result
     const toolResultPart = contentParts.find((part) => part.type === 'tool-result')
-    expect(toolResultPart).toBeDefined()
-    expect(toolResultPart).toMatchObject({
-      type: 'tool-result',
-      toolCallId: 'call_weather_001',
-      toolName: 'databricks-tool-call',
-    })
+    expect(toolResultPart).toBeUndefined()
+
+    // All content should be text-delta
+    const textParts = contentParts.filter((part) => part.type === 'text-delta')
+    expect(textParts.length).toBeGreaterThan(0)
   })
 
-  it('correctly handles legacy UC function call tags', async () => {
+  it('passes through legacy UC function call tags as text (no longer parses them)', async () => {
     const mockFetch = createMockFetch(FMAPI_WITH_LEGACY_TAGS.in)
 
     const model = new DatabricksFmapiLanguageModel('test-model', {
@@ -226,31 +218,18 @@ describe('DatabricksFmapiLanguageModel', () => {
     // Verify the number of parts
     expect(contentParts.length).toBe(FMAPI_WITH_LEGACY_TAGS.out.length)
 
-    // Verify legacy tags are parsed correctly
+    // Legacy tags are no longer parsed - should all be text-delta
     const toolCallPart = contentParts.find((part) => part.type === 'tool-call')
-    expect(toolCallPart).toBeDefined()
-    expect(toolCallPart).toMatchObject({
-      type: 'tool-call',
-      toolCallId: 'calc_001',
-      toolName: 'calculate',
-      providerExecuted: true,
-    })
+    expect(toolCallPart).toBeUndefined()
 
-    // Verify legacy result tag
     const toolResultPart = contentParts.find((part) => part.type === 'tool-result')
-    expect(toolResultPart).toBeDefined()
-    expect(toolResultPart).toMatchObject({
-      type: 'tool-result',
-      toolCallId: 'calc_001',
-      toolName: 'databricks-tool-call',
-      result: '4',
-    })
+    expect(toolResultPart).toBeUndefined()
 
-    // Verify text parts before and after tool calls
+    // All content should be text-delta or text-start/text-end
     const textParts = contentParts.filter((part) => part.type === 'text-delta')
-    expect(textParts.length).toBe(2)
+    expect(textParts.length).toBeGreaterThan(0)
+    // First text part should contain the calculation message
     expect(textParts[0].delta).toBe("I'll execute that calculation. ")
-    expect(textParts[1].delta).toBe('The result is 4.')
   })
 
   it('correctly handles OpenAI-format streaming tool calls with ID tracking', async () => {

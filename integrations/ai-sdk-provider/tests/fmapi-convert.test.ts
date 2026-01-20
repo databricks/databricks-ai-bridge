@@ -6,7 +6,6 @@ import {
   convertFmapiResponseToMessagePart,
 } from '../src/fmapi-language-model/fmapi-convert-to-message-parts'
 import type { FmapiChunk, FmapiResponse } from '../src/fmapi-language-model/fmapi-schema'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 // ============================================================================
 // Tests for convertPromptToFmapiMessages (fmapi-convert-to-input.ts)
@@ -14,7 +13,7 @@ import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 describe('convertPromptToFmapiMessages', () => {
   describe('system messages', () => {
-    it('should convert system message to user role with text content', () => {
+    it('should keep system message role with text content', () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'system',
@@ -25,7 +24,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].role).toBe('user')
+      expect(result.messages[0].role).toBe('system')
       expect(result.messages[0].content).toEqual([
         { type: 'text', text: 'You are a helpful assistant.' },
       ])
@@ -42,7 +41,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].role).toBe('user')
+      expect(result.messages[0].role).toBe('system')
       expect(result.messages[0].content).toEqual([{ type: 'text', text: '' }])
     })
   })
@@ -167,7 +166,7 @@ describe('convertPromptToFmapiMessages', () => {
 
       expect(result.messages).toHaveLength(1)
       // Base64 data doesn't start with http:// or https://, so it should be skipped
-      expect(result.messages[0].content).toBe('')
+      expect(result.messages[0].content).toEqual([])
     })
 
     it('should ignore file part with Uint8Array data', () => {
@@ -187,7 +186,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].content).toBe('')
+      expect(result.messages[0].content).toEqual([])
     })
 
     it('should ignore non-image file types', () => {
@@ -207,7 +206,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].content).toBe('')
+      expect(result.messages[0].content).toEqual([])
     })
 
     it('should handle empty user content', () => {
@@ -221,7 +220,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].content).toBe('')
+      expect(result.messages[0].content).toEqual([])
     })
 
     it('should handle mixed text and image content', () => {
@@ -297,7 +296,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert assistant message with tool-call (serialized as tagged text)', () => {
+    it('should convert assistant message with tool-call to OpenAI format', () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -316,46 +315,19 @@ describe('convertPromptToFmapiMessages', () => {
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('assistant')
-      expect(result.messages[0].content).toHaveLength(1)
-
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].type).toBe('text')
-      expect(content[0].text).toContain('<tool_call>')
-      expect(content[0].text).toContain('</tool_call>')
-      expect(content[0].text).toContain('"id":"call-123"')
-      expect(content[0].text).toContain('"name":"get_weather"')
-      expect(content[0].text).toContain('"arguments"')
-    })
-
-    it('should convert assistant message with tool-result (serialized as tagged text)', () => {
-      const prompt: LanguageModelV2Message[] = [
-        {
-          role: 'assistant',
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: 'call-123',
-              toolName: 'get_weather',
-              output: {
-                type: 'json',
-                value: { temperature: 72, unit: 'F' },
-              },
-            },
-          ],
-        },
-      ]
-
-      const result = convertPromptToFmapiMessages(prompt)
-
-      expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].role).toBe('assistant')
-      expect(result.messages[0].content).toHaveLength(1)
-
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].type).toBe('text')
-      expect(content[0].text).toContain('<tool_call_result>')
-      expect(content[0].text).toContain('</tool_call_result>')
-      expect(content[0].text).toContain('"id":"call-123"')
+      // Content should be null when only tool calls present
+      expect(result.messages[0].content).toBeNull()
+      // Tool calls should be in OpenAI format
+      const message = result.messages[0] as {
+        role: string
+        content: unknown
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
+      }
+      expect(message.tool_calls).toHaveLength(1)
+      expect(message.tool_calls![0].id).toBe('call-123')
+      expect(message.tool_calls![0].type).toBe('function')
+      expect(message.tool_calls![0].function.name).toBe('get_weather')
+      expect(message.tool_calls![0].function.arguments).toBe('{"location":"San Francisco"}')
     })
 
     it('should convert assistant message with file/image using URL', () => {
@@ -391,7 +363,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].content).toBe('')
+      expect(result.messages[0].content).toBeNull()
     })
 
     it('should convert assistant message with mixed content', () => {
@@ -417,21 +389,23 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      const content = result.messages[0].content as Array<{
-        type: string
-        text?: string
-        summary?: unknown
-      }>
-      expect(content).toHaveLength(3)
-      expect(content[0].type).toBe('text')
-      expect(content[1].type).toBe('reasoning')
-      expect(content[2].type).toBe('text') // tool-call is serialized as text
-      expect(content[2].text).toContain('<tool_call>')
+      const message = result.messages[0] as {
+        role: string
+        content: Array<{ type: string; text?: string; summary?: unknown }>
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
+      }
+      // Content should have text and reasoning (tool-call goes to tool_calls)
+      expect(message.content).toHaveLength(2)
+      expect(message.content[0].type).toBe('text')
+      expect(message.content[1].type).toBe('reasoning')
+      // Tool calls should be in OpenAI format
+      expect(message.tool_calls).toHaveLength(1)
+      expect(message.tool_calls![0].function.name).toBe('weather_api')
     })
   })
 
   describe('tool messages', () => {
-    it('should convert tool message with tool-result parts', () => {
+    it('should convert tool message with tool-result parts to OpenAI format', () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -453,16 +427,12 @@ describe('convertPromptToFmapiMessages', () => {
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('tool')
-      expect(result.messages[0].content).toHaveLength(1)
-
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].type).toBe('text')
-      expect(content[0].text).toContain('<tool_call_result>')
-      expect(content[0].text).toContain('</tool_call_result>')
-      expect(content[0].text).toContain('"id":"call-789"')
+      const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
+      expect(message.tool_call_id).toBe('call-789')
+      expect(message.content).toBe('The weather is sunny with a high of 75F.')
     })
 
-    it('should convert tool message with multiple tool-result parts', () => {
+    it('should convert tool message with multiple tool-result parts to separate messages', () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -491,11 +461,14 @@ describe('convertPromptToFmapiMessages', () => {
 
       const result = convertPromptToFmapiMessages(prompt)
 
-      expect(result.messages).toHaveLength(1)
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content).toHaveLength(2)
-      expect(content[0].text).toContain('"id":"call-1"')
-      expect(content[1].text).toContain('"id":"call-2"')
+      // Each tool result becomes a separate message
+      expect(result.messages).toHaveLength(2)
+      const message1 = result.messages[0] as { role: string; tool_call_id: string; content: string }
+      const message2 = result.messages[1] as { role: string; tool_call_id: string; content: string }
+      expect(message1.tool_call_id).toBe('call-1')
+      expect(message1.content).toContain('"result":"first"')
+      expect(message2.tool_call_id).toBe('call-2')
+      expect(message2.content).toContain('"result":"second"')
     })
 
     it('should handle tool-result with error-text output', () => {
@@ -519,8 +492,8 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].text).toContain('API rate limit exceeded')
+      const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
+      expect(message.content).toBe('API rate limit exceeded')
     })
 
     it('should handle tool-result with error-json output', () => {
@@ -544,8 +517,8 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].text).toContain('"error":"Not found"')
+      const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
+      expect(message.content).toContain('"error":"Not found"')
     })
 
     it('should handle tool-result with content output', () => {
@@ -569,8 +542,10 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
-      const content = result.messages[0].content as Array<{ type: string; text?: string }>
-      expect(content[0].text).toContain('<tool_call_result>')
+      const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
+      expect(message.tool_call_id).toBe('call-content')
+      // Content is JSON stringified
+      expect(message.content).toContain('Complex content')
     })
 
     it('should handle empty tool message content', () => {
@@ -583,8 +558,8 @@ describe('convertPromptToFmapiMessages', () => {
 
       const result = convertPromptToFmapiMessages(prompt)
 
-      expect(result.messages).toHaveLength(1)
-      expect(result.messages[0].content).toBe('')
+      // Empty tool message results in no messages
+      expect(result.messages).toHaveLength(0)
     })
   })
 
@@ -635,7 +610,7 @@ describe('convertPromptToFmapiMessages', () => {
       const result = convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(5)
-      expect(result.messages[0].role).toBe('user') // system converted to user
+      expect(result.messages[0].role).toBe('system') // system stays as system
       expect(result.messages[1].role).toBe('user')
       expect(result.messages[2].role).toBe('assistant')
       expect(result.messages[3].role).toBe('tool')
@@ -699,115 +674,105 @@ describe('convertFmapiChunkToMessagePart', () => {
       })
     })
 
-    it('should convert string content with tool call tags to tool-call', () => {
+    it('should pass through string content with tool call tags as text-delta (no parsing)', () => {
       const toolCallContent = '<tool_call>{"id":"call-1","name":"get_weather","arguments":{"city":"NYC"}}</tool_call>'
       const chunk = createChunk(toolCallContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
+      // XML tags are no longer parsed - just returned as text
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-call')
+      expect(result[0].type).toBe('text-delta')
       expect(result[0]).toMatchObject({
-        type: 'tool-call',
-        toolCallId: 'call-1',
-        toolName: 'get_weather',
-        providerExecuted: true,
+        type: 'text-delta',
+        delta: toolCallContent,
       })
     })
 
-    it('should convert string content with legacy tool call tags', () => {
+    it('should pass through string content with legacy tool call tags as text-delta', () => {
       const toolCallContent = '<uc_function_call>{"id":"call-legacy","name":"old_tool","arguments":{}}</uc_function_call>'
       const chunk = createChunk(toolCallContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-call')
+      expect(result[0].type).toBe('text-delta')
       expect(result[0]).toMatchObject({
-        type: 'tool-call',
-        toolCallId: 'call-legacy',
-        toolName: 'old_tool',
+        type: 'text-delta',
+        delta: toolCallContent,
       })
     })
 
-    it('should convert string content with tool result tags to tool-result', () => {
+    it('should pass through string content with tool result tags as text-delta', () => {
       const toolResultContent = '<tool_call_result>{"id":"call-1","content":"Sunny, 75F"}</tool_call_result>'
       const chunk = createChunk(toolResultContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-result')
+      expect(result[0].type).toBe('text-delta')
       expect(result[0]).toMatchObject({
-        type: 'tool-result',
-        toolCallId: 'call-1',
-        toolName: DATABRICKS_TOOL_CALL_ID,
-        result: 'Sunny, 75F',
+        type: 'text-delta',
+        delta: toolResultContent,
       })
     })
 
-    it('should convert string content with legacy tool result tags', () => {
+    it('should pass through string content with legacy tool result tags as text-delta', () => {
       const toolResultContent = '<uc_function_result>{"id":"call-legacy","content":{"data":"result"}}</uc_function_result>'
       const chunk = createChunk(toolResultContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-result')
+      expect(result[0].type).toBe('text-delta')
       expect(result[0]).toMatchObject({
-        type: 'tool-result',
-        toolCallId: 'call-legacy',
-        result: { data: 'result' },
+        type: 'text-delta',
+        delta: toolResultContent,
       })
     })
 
-    it('should handle mixed content with text and tool tags', () => {
+    it('should pass through mixed content with text and tool tags as single text-delta', () => {
       const mixedContent = 'Here is the result: <tool_call>{"id":"call-mix","name":"test","arguments":{}}</tool_call> and more text'
       const chunk = createChunk(mixedContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
-      // Should split into text, tool-call, and text
-      expect(result.length).toBeGreaterThanOrEqual(2)
-
-      const textDeltas = result.filter((p) => p.type === 'text-delta')
-      const toolCalls = result.filter((p) => p.type === 'tool-call')
-
-      expect(textDeltas.length).toBeGreaterThan(0)
-      expect(toolCalls).toHaveLength(1)
+      // All content is returned as text-delta (no parsing)
+      expect(result).toHaveLength(1)
+      expect(result[0].type).toBe('text-delta')
+      expect(result[0]).toMatchObject({
+        type: 'text-delta',
+        delta: mixedContent,
+      })
     })
 
-    it('should handle empty string content', () => {
+    it('should return empty array for empty string content', () => {
       const chunk = createChunk('')
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
-      // Empty string should be filtered out
+      // Empty string content is skipped to avoid spurious text-start/text-end cycles
       expect(result).toHaveLength(0)
     })
 
-    it('should handle tool call with string arguments', () => {
+    it('should pass through tool call with string arguments as text-delta', () => {
       const toolCallContent = '<tool_call>{"id":"call-str","name":"echo","arguments":"hello world"}</tool_call>'
       const chunk = createChunk(toolCallContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-call')
-      const toolCall = result[0] as { type: 'tool-call'; input: string }
-      expect(toolCall.input).toBe('hello world')
+      expect(result[0].type).toBe('text-delta')
     })
 
-    it('should handle tool call with object arguments', () => {
+    it('should pass through tool call with object arguments as text-delta', () => {
       const toolCallContent = '<tool_call>{"id":"call-obj","name":"complex","arguments":{"nested":{"key":"value"}}}</tool_call>'
       const chunk = createChunk(toolCallContent)
 
       const result = convertFmapiChunkToMessagePart(chunk)
 
       expect(result).toHaveLength(1)
-      expect(result[0].type).toBe('tool-call')
-      const toolCall = result[0] as { type: 'tool-call'; input: string }
-      expect(toolCall.input).toContain('nested')
+      expect(result[0].type).toBe('text-delta')
     })
   })
 
@@ -1162,22 +1127,21 @@ describe('convertFmapiResponseToMessagePart', () => {
       })
     })
 
-    it('should convert string content with tool call tags', () => {
+    it('should pass through string content with tool call tags as text (no parsing)', () => {
       const toolCallContent = '<tool_call>{"id":"call-resp","name":"final_tool","arguments":{"key":"value"}}</tool_call>'
       const response = createResponse(toolCallContent)
 
       const result = convertFmapiResponseToMessagePart(response)
 
+      // XML tags are no longer parsed - just returned as text
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
-        type: 'tool-call',
-        toolCallId: 'call-resp',
-        toolName: 'final_tool',
-        providerExecuted: true,
+        type: 'text',
+        text: toolCallContent,
       })
     })
 
-    it('should convert string content with legacy tool call tags', () => {
+    it('should pass through string content with legacy tool call tags as text', () => {
       const toolCallContent = '<uc_function_call>{"id":"legacy-resp","name":"legacy_fn","arguments":{}}</uc_function_call>'
       const response = createResponse(toolCallContent)
 
@@ -1185,13 +1149,12 @@ describe('convertFmapiResponseToMessagePart', () => {
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
-        type: 'tool-call',
-        toolCallId: 'legacy-resp',
-        toolName: 'legacy_fn',
+        type: 'text',
+        text: toolCallContent,
       })
     })
 
-    it('should convert string content with tool result tags', () => {
+    it('should pass through string content with tool result tags as text', () => {
       const toolResultContent = '<tool_call_result>{"id":"result-resp","content":{"status":"success"}}</tool_call_result>'
       const response = createResponse(toolResultContent)
 
@@ -1199,10 +1162,8 @@ describe('convertFmapiResponseToMessagePart', () => {
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
-        type: 'tool-result',
-        toolCallId: 'result-resp',
-        toolName: DATABRICKS_TOOL_CALL_ID,
-        result: { status: 'success' },
+        type: 'text',
+        text: toolResultContent,
       })
     })
 

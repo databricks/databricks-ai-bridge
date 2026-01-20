@@ -89,9 +89,9 @@ Creates a Databricks provider instance.
 
 **Returns:** `DatabricksProvider` with three model creation methods:
 
+- `responses(modelId: string)`: Create a Responses model
+- `chatCompletions(modelId: string)`: Create a Chat Completions model
 - `chatAgent(modelId: string)`: Create a Chat Agent model
-- `responsesAgent(modelId: string)`: Create a Responses Agent model
-- `fmapi(modelId: string)`: Create an FM API model
 
 ### Tool Constants
 
