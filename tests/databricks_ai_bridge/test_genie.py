@@ -382,6 +382,7 @@ def test_parse_query_result_trims_large_data(max_tokens):
         }
 
         markdown_result = _parse_query_result(response, truncate_results=True)
+        assert isinstance(markdown_result, str)  # return_pandas=False by default
         result_df = markdown_to_dataframe(markdown_result)
 
         expected_df = pd.DataFrame(
@@ -476,7 +477,8 @@ def test_poll_for_result_creates_genie_timeline_span(genie, mock_workspace_clien
 
         genie.poll_for_result("123", "456")
 
-        mock_start_span.assert_called_once_with(name="genie_timeline", span_type="CHAIN")
+        # Check that genie_timeline span was created (there are 2 spans: poll_result and genie_timeline)
+        mock_start_span.assert_any_call(name="genie_timeline", span_type="CHAIN")
 
 
 def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_client):
