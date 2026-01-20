@@ -52,7 +52,6 @@ const lookupCustomerTool = new DynamicStructuredTool({
     email: z.string().describe("The customer's email address"),
   }),
   func: async ({ email }) => {
-    console.log(`DEBUG: lookup_customer called with email: ${email}`);
     const customer = customers[email.toLowerCase()];
     if (!customer) {
       return JSON.stringify({ error: `No customer found with email: ${email}` });
@@ -68,7 +67,6 @@ const getOrdersTool = new DynamicStructuredTool({
     customerId: z.string().describe("The customer ID (e.g., 'C001')"),
   }),
   func: async ({ customerId }) => {
-    console.log(`DEBUG: get_orders called with customerId: ${customerId}`);
     const customerOrders = orders[customerId];
     if (!customerOrders) {
       return JSON.stringify({ error: `No orders found for customer: ${customerId}` });
@@ -87,7 +85,6 @@ const processRefundTool = new DynamicStructuredTool({
     reason: z.string().describe("The reason for the refund"),
   }),
   func: async ({ orderId, customerTier, orderTotal, reason }) => {
-    console.log(`DEBUG: process_refund called with orderId: ${orderId}, customerTier: ${customerTier}, orderTotal: ${orderTotal}, reason: ${reason}`);
     const refundRate = refundPolicies[customerTier] ?? 0.85;
     const refundAmount = (orderTotal * refundRate).toFixed(2);
     return JSON.stringify({
@@ -106,7 +103,7 @@ async function main() {
 
   // Initialize the model
   const model = new ChatDatabricks({
-    endpoint: "databricks-meta-llama-3-3-70b-instruct",
+    endpoint: "databricks-claude-sonnet-4-5",
     endpointAPI: "chat-completions",
     // endpoint: "databricks-gpt-5-2",
     // endpointAPI: "responses",
@@ -149,7 +146,7 @@ async function main() {
       case "on_tool_start":
         console.log(`\n🔧 Tool call: ${event.name}(${JSON.stringify(event.data?.input)})`);
         break;
-      case "on_tool_end":{
+      case "on_tool_end": {
         const output = event.data?.output;
         const content = output?.content ?? JSON.stringify(output);
         console.log(`📋 Tool result [${event.name}]: ${content}\n`);

@@ -22,8 +22,10 @@ async function main() {
 
   // Initialize the model
   const model = new ChatDatabricks({
-    endpoint: "databricks-gpt-5-2",
-    endpointAPI: "responses",
+    endpoint: "databricks-claude-sonnet-4-5",
+    endpointAPI: "chat-completions",
+    // endpoint: "databricks-gpt-5-2",
+    // endpointAPI: "responses",
     maxTokens: 256,
     auth: {
       host: process.env.DATABRICKS_HOST,

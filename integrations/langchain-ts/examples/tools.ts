@@ -201,7 +201,7 @@ async function main() {
 
   // Initialize the model
   const model = new ChatDatabricks({
-    endpoint: "databricks-meta-llama-3-3-70b-instruct",
+    endpoint: "databricks-claude-sonnet-4-5",
     endpointAPI: "chat-completions",
     // endpoint: "databricks-gpt-5-2",
     // endpointAPI: "responses",
