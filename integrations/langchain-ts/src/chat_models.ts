@@ -244,10 +244,10 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
       case "chat-agent":
         return this.provider.chatAgent(this.endpoint) as LanguageModel;
       case "responses":
-        return this.provider.responsesAgent(this.endpoint) as LanguageModel;
+        return this.provider.responses(this.endpoint) as LanguageModel;
       case "chat-completions":
       default:
-        return this.provider.fmapi(this.endpoint) as LanguageModel;
+        return this.provider.chatCompletions(this.endpoint) as LanguageModel;
     }
   }
 

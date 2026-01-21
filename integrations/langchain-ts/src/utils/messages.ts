@@ -13,7 +13,7 @@ import {
 } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration, ChatGenerationChunk } from "@langchain/core/outputs";
 import { type GenerateTextResult, type ToolSet, type ModelMessage, type StreamTextResult } from "ai";
-import { getToolNameFromToolStreamPart } from "./tools.js";
+import { getToolNameFromAiSDKTool } from "./tools.js";
 
 type UserContent = Extract<ModelMessage, { role: "user" }>["content"];
 type AssistantContent = Extract<ModelMessage, { role: "assistant" }>["content"];
@@ -138,7 +138,7 @@ export function convertGenerateTextResultToChatResult(
   const toolCalls =
     result.toolCalls?.map((tc) => ({
       id: tc.toolCallId,
-      name: tc.toolName,
+      name: getToolNameFromAiSDKTool(tc),
       args: tc.input as Record<string, unknown>, // AI SDK uses 'input', LangChain uses 'args'
       type: "tool_call" as const,
     })) ?? [];
@@ -202,7 +202,7 @@ export async function* convertStreamTextResultToChunks(
         // Complete tool call from streamText
         // This is the authoritative source for tool calls - always use it
         // If we previously saw tool-input-start/delta, use the index we assigned
-        const toolName = getToolNameFromToolStreamPart(part);
+        const toolName = getToolNameFromAiSDKTool(part);
         const existingPartial = partialToolCalls.get(part.toolCallId);
         const toolIndex = existingPartial?.index ?? nextToolCallIndex++;
         const argsString = typeof part.input === "string" ? part.input : JSON.stringify(part.input);

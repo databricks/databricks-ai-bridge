@@ -13,7 +13,7 @@ import { RunnableToolLike } from "@langchain/core/runnables";
 import { isOpenAITool } from "@langchain/core/language_models/base";
 import { BindToolsInput } from "@langchain/core/language_models/chat_models";
 import type { ZodType } from "zod";
-import { tool, jsonSchema, type ToolSet, TextStreamPart } from "ai";
+import { tool, jsonSchema, type ToolSet, TextStreamPart, TypedToolCall } from "ai";
 import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from "@databricks/ai-sdk-provider";
 
 /**
@@ -140,7 +140,7 @@ export function convertToAISDKToolSet(tools: BindToolsInput[]): ToolSet {
   return toolSet;
 }
 
-export const getToolNameFromToolStreamPart = (toolStreamPart: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' | 'tool-input-start' }>) => {
+export const getToolNameFromAiSDKTool = (toolStreamPart: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' | 'tool-input-start' }> | TypedToolCall<ToolSet>) => {
   if (toolStreamPart.toolName === DATABRICKS_TOOL_CALL_ID && toolStreamPart.providerMetadata?.databricks?.toolName) {
     return toolStreamPart.providerMetadata.databricks.toolName as string;
   }
