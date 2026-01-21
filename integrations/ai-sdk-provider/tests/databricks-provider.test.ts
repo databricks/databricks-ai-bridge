@@ -18,8 +18,8 @@ describe('createDatabricksProvider', () => {
 
       expect(provider).toBeDefined()
       expect(typeof provider.chatAgent).toBe('function')
-      expect(typeof provider.responsesAgent).toBe('function')
-      expect(typeof provider.fmapi).toBe('function')
+      expect(typeof provider.responses).toBe('function')
+      expect(typeof provider.chatCompletions).toBe('function')
       expect(typeof provider.imageModel).toBe('function')
       expect(typeof provider.textEmbeddingModel).toBe('function')
       expect(typeof provider.languageModel).toBe('function')
@@ -83,16 +83,16 @@ describe('createDatabricksProvider', () => {
       expect(model.specificationVersion).toBe('v2')
     })
 
-    it('responsesAgent method exists and returns DatabricksResponsesAgentLanguageModel', () => {
-      const model = provider.responsesAgent('test-model')
+    it('responses method exists and returns DatabricksResponsesAgentLanguageModel', () => {
+      const model = provider.responses('test-model')
 
       expect(model).toBeInstanceOf(DatabricksResponsesAgentLanguageModel)
       expect(model.modelId).toBe('test-model')
       expect(model.specificationVersion).toBe('v2')
     })
 
-    it('fmapi method exists and returns DatabricksFmapiLanguageModel', () => {
-      const model = provider.fmapi('test-model')
+    it('chatCompletions method exists and returns DatabricksFmapiLanguageModel', () => {
+      const model = provider.chatCompletions('test-model')
 
       expect(model).toBeInstanceOf(DatabricksFmapiLanguageModel)
       expect(model.modelId).toBe('test-model')
@@ -101,12 +101,12 @@ describe('createDatabricksProvider', () => {
 
     it('models have correct provider name with default', () => {
       const chatModel = provider.chatAgent('test-model')
-      const responsesModel = provider.responsesAgent('test-model')
-      const fmapiModel = provider.fmapi('test-model')
+      const responsesModel = provider.responses('test-model')
+      const chatCompletionsModel = provider.chatCompletions('test-model')
 
       expect(chatModel.provider).toBe('databricks')
       expect(responsesModel.provider).toBe('databricks')
-      expect(fmapiModel.provider).toBe('databricks')
+      expect(chatCompletionsModel.provider).toBe('databricks')
     })
 
     it('models have correct provider name with custom provider', () => {
@@ -116,12 +116,12 @@ describe('createDatabricksProvider', () => {
       })
 
       const chatModel = customProvider.chatAgent('test-model')
-      const responsesModel = customProvider.responsesAgent('test-model')
-      const fmapiModel = customProvider.fmapi('test-model')
+      const responsesModel = customProvider.responses('test-model')
+      const chatCompletionsModel = customProvider.chatCompletions('test-model')
 
       expect(chatModel.provider).toBe('my-custom-provider')
       expect(responsesModel.provider).toBe('my-custom-provider')
-      expect(fmapiModel.provider).toBe('my-custom-provider')
+      expect(chatCompletionsModel.provider).toBe('my-custom-provider')
     })
   })
 
@@ -477,17 +477,17 @@ describe('createDatabricksProvider', () => {
       })
 
       const chatModel = provider.chatAgent('chat-model')
-      const responsesModel = provider.responsesAgent('responses-model')
-      const fmapiModel = provider.fmapi('fmapi-model')
+      const responsesModel = provider.responses('responses-model')
+      const chatCompletionsModel = provider.chatCompletions('chat-completions-model')
 
       expect(chatModel).toBeInstanceOf(DatabricksChatAgentLanguageModel)
       expect(responsesModel).toBeInstanceOf(DatabricksResponsesAgentLanguageModel)
-      expect(fmapiModel).toBeInstanceOf(DatabricksFmapiLanguageModel)
+      expect(chatCompletionsModel).toBeInstanceOf(DatabricksFmapiLanguageModel)
 
       // Each instance should be unique
       expect(chatModel).not.toBe(responsesModel)
-      expect(responsesModel).not.toBe(fmapiModel)
-      expect(chatModel).not.toBe(fmapiModel)
+      expect(responsesModel).not.toBe(chatCompletionsModel)
+      expect(chatModel).not.toBe(chatCompletionsModel)
     })
   })
 

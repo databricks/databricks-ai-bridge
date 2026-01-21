@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FMAPI: System messages now preserve `role: 'system'` instead of being converted to `role: 'user'`
 - FMAPI: Tool messages now use OpenAI `tool_call_id` format instead of XML serialization
 
-### Deprecated
+### Removed
 
 - `fmapi()` provider method - use `chatCompletions()` instead
 - `responsesAgent()` provider method - use `responses()` instead
