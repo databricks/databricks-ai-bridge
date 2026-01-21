@@ -126,6 +126,22 @@ class TestStrictFieldStripping:
 
         assert _strip_strict_from_tools(None) is None
 
+    def test_strip_strict_from_tools_handles_non_list(self):
+        """Test that non-list values (like OpenAI's Omit sentinel) are passed through."""
+        from databricks_openai.utils.clients import _strip_strict_from_tools
+
+        # Simulate OpenAI's Omit sentinel (a non-iterable placeholder)
+        class Omit:
+            pass
+
+        omit_sentinel = Omit()
+        result = _strip_strict_from_tools(omit_sentinel)
+        assert result is omit_sentinel  # Should return unchanged
+
+        # Also test with other non-list types
+        assert _strip_strict_from_tools("not a list") == "not a list"
+        assert _strip_strict_from_tools(123) == 123
+
     def test_strip_strict_from_tools_handles_empty_list(self):
         from databricks_openai.utils.clients import _strip_strict_from_tools
 
