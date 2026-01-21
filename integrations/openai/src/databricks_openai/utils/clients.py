@@ -18,14 +18,15 @@ class BearerAuth(Auth):
         yield request
 
 
-def _strip_strict_from_tools(tools: list | None) -> list | None:
+def _strip_strict_from_tools(tools) -> list | None:
     """Remove 'strict' field from tool function definitions.
 
     Databricks model endpoints (except GPT) don't support the 'strict' field
     in tool schemas, but openai-agents SDK v0.6.4+ includes it.
     """
-    if tools is None:
-        return None
+    # Handle None or OpenAI's Omit sentinel (non-iterable placeholder)
+    if tools is None or not isinstance(tools, list):
+        return tools
     for tool in tools:
         if isinstance(tool, dict) and "function" in tool:
             tool.get("function", {}).pop("strict", None)
