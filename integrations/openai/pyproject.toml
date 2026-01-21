@@ -31,6 +31,8 @@ dev = [
     "databricks-sdk>=0.34.0",
     "ruff==0.14.10",
     "ty>=0.0.11",
+    # memory subpackage dependencies
+    "databricks-ai-bridge[memory]>=0.12.0",
     { include-group = "tests" },
 ]
 
