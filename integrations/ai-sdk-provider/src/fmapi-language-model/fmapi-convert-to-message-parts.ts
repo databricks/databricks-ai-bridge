@@ -1,9 +1,6 @@
 import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import type { FmapiChunk, FmapiContentItem, FmapiResponse, FmapiToolCall } from './fmapi-schema'
-import { parseTaggedToolCall, parseTaggedToolResult, tagSplitRegex } from './fmapi-tags'
-
-type ToolCallOrResult = Extract<LanguageModelV2StreamPart, { type: 'tool-call' | 'tool-result' }>
+import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 
 export const convertFmapiChunkToMessagePart = (
   chunk: FmapiChunk,
@@ -41,17 +38,9 @@ export const convertFmapiChunkToMessagePart = (
   }
 
   if (typeof choice.delta.content === 'string') {
-    const extracted = extractPartsFromTextCompletion(choice.delta.content)
-    for (const part of extracted) {
-      if (part.type === 'text') {
-        parts.push({
-          type: 'text-delta',
-          id: chunk.id,
-          delta: part.text,
-        })
-      } else {
-        parts.push(part)
-      }
+    // Skip empty string content to avoid spurious text-start/text-end cycles
+    if (choice.delta.content) {
+      parts.push({ type: 'text-delta', id: chunk.id, delta: choice.delta.content })
     }
   } else if (Array.isArray(choice.delta.content)) {
     parts.push(...mapContentItemsToStreamParts(choice.delta.content, chunk.id))
@@ -80,12 +69,7 @@ export const convertFmapiResponseToMessagePart = (
   }
 
   if (typeof choice.message.content === 'string') {
-    const extracted = extractToolPartsFromText(choice.message.content)
-    if (extracted) {
-      for (const part of extracted) parts.push(part)
-    } else {
-      parts.push({ type: 'text', text: choice.message.content })
-    }
+    parts.push({ type: 'text', text: choice.message.content })
   } else {
     parts.push(...mapContentItemsToProviderContent(choice.message.content ?? []))
   }
@@ -97,54 +81,14 @@ const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV2Conte
   return {
     type: 'tool-call',
     toolCallId: toolCall.id,
-    toolName: toolCall.function.name,
+    toolName: DATABRICKS_TOOL_CALL_ID,
     input: toolCall.function.arguments,
-  }
-}
-
-const extractPartsFromTextCompletion = (
-  text: string
-): (ToolCallOrResult | { type: 'text'; text: string })[] => {
-  const parts = text.split(tagSplitRegex)
-
-  const accumulated: (ToolCallOrResult | { type: 'text'; text: string })[] = []
-  for (const segment of parts.filter((p) => p !== '')) {
-    const toolParts = extractToolPartsFromText(segment)
-    if (toolParts) {
-      accumulated.push(...toolParts)
-    } else {
-      accumulated.push({ type: 'text', text: segment })
-    }
-  }
-  return accumulated
-}
-
-const extractToolPartsFromText = (text: string): ToolCallOrResult[] | null => {
-  const trimmed = text.trim()
-  const call = parseTaggedToolCall(trimmed)
-  if (call) {
-    return [
-      {
-        type: 'tool-call',
-        input: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments),
-        toolName: call.name,
-        toolCallId: call.id,
-        providerExecuted: true,
+    providerMetadata: {
+      databricks: {
+        toolName: toolCall.function.name,
       },
-    ]
+    },
   }
-  const result = parseTaggedToolResult(trimmed)
-  if (result) {
-    return [
-      {
-        type: 'tool-result',
-        result: result.content,
-        toolCallId: result.id,
-        toolName: DATABRICKS_TOOL_CALL_ID,
-      },
-    ]
-  }
-  return null
 }
 
 const mapContentItemsToStreamParts = (

@@ -46,7 +46,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   async doGenerate(
     options: Parameters<LanguageModelV2['doGenerate']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
-    const networkArgs = this.getArgs({
+    const networkArgs = await this.getArgs({
       config: this.config,
       options,
       stream: false,
@@ -85,7 +85,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   async doStream(
     options: Parameters<LanguageModelV2['doStream']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
-    const networkArgs = this.getArgs({
+    const networkArgs = await this.getArgs({
       config: this.config,
       options,
       stream: true,
@@ -147,9 +147,9 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
               // Track usage from chunk
               if (chunk.value.usage) {
                 usage = {
-                  inputTokens: chunk.value.usage.prompt_tokens,
-                  outputTokens: chunk.value.usage.completion_tokens,
-                  totalTokens: chunk.value.usage.total_tokens,
+                  inputTokens: chunk.value.usage.prompt_tokens ?? 0,
+                  outputTokens: chunk.value.usage.completion_tokens ?? 0,
+                  totalTokens: chunk.value.usage.total_tokens ?? 0,
                 }
               }
 
@@ -175,13 +175,18 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
                   // Emit tool-input-end to signal streaming is complete
                   controller.enqueue({ type: 'tool-input-end', id: toolCallId })
 
-                  // Emit a complete tool-call with raw input string
-                  // (AI SDK will parse it internally)
+                  // Emit a complete tool-call with DATABRICKS_TOOL_CALL_ID
+                  // and actual tool name in provider metadata
                   controller.enqueue({
                     type: 'tool-call',
                     toolCallId,
-                    toolName,
+                    toolName: DATABRICKS_TOOL_CALL_ID,
                     input: inputText,
+                    providerMetadata: {
+                      databricks: {
+                        toolName,
+                      },
+                    },
                   })
                 }
               }
@@ -200,7 +205,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
     }
   }
 
-  private getArgs({
+  private async getArgs({
     config,
     options,
     stream,
@@ -221,13 +226,15 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
       ? convertToolChoiceToOpenAIFormat(options.toolChoice)
       : undefined
 
+    const { messages } = await convertPromptToFmapiMessages(options.prompt)
+
     return {
       url: config.url({
         path: '/chat/completions',
       }),
       headers: combineHeaders(config.headers(), options.headers),
       body: {
-        messages: convertPromptToFmapiMessages(options.prompt).messages,
+        messages,
         stream,
         model: modelId,
         ...(tools && tools.length > 0 ? { tools } : {}),

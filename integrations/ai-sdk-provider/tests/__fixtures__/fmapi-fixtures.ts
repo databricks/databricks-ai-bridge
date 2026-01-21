@@ -2,8 +2,7 @@ import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 /**
  * FMAPI output fixtures for testing.
- * These represent SSE streams from the FMAPI endpoint.
- * FMAPI uses XML tags for tool calls: <tool_call> and <tool_call_result>
+ * These represent SSE streams and JSON responses from the FMAPI endpoint.
  */
 
 type LLMOutputFixtures = {
@@ -83,107 +82,6 @@ data: {
       delta: 'How can I help you today?',
     },
     { type: 'text-end', id: 'fmapi-123' },
-  ],
-}
-
-/**
- * FMAPI output with tool calls using XML tags
- */
-export const FMAPI_WITH_TOOL_CALLS: LLMOutputFixtures = {
-  in: `
-data: {
-  "id": "fmapi-456",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "role": "assistant",
-        "content": "Let me check the weather for you. "
-      },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-456",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "<tool_call>{\\"id\\": \\"call_weather_001\\", \\"name\\": \\"get_weather\\", \\"arguments\\": {\\"location\\": \\"New York\\"}}</tool_call>"
-      },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-456",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "<tool_call_result>{\\"id\\": \\"call_weather_001\\", \\"content\\": {\\"temperature\\": 22, \\"condition\\": \\"sunny\\"}}</tool_call_result>"
-      },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-456-response",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "The weather in New York is 22°C and sunny."
-      },
-      "finish_reason": null
-    }
-  ]
-}
-`,
-  out: [
-    { type: 'text-start', id: 'fmapi-456' },
-    {
-      type: 'text-delta',
-      id: 'fmapi-456',
-      delta: 'Let me check the weather for you. ',
-    },
-    { type: 'text-end', id: 'fmapi-456' },
-    {
-      type: 'tool-call',
-      toolCallId: 'call_weather_001',
-      toolName: 'get_weather',
-      input: '{"location":"New York"}',
-      providerExecuted: true,
-    },
-    {
-      type: 'tool-result',
-      toolCallId: 'call_weather_001',
-      toolName: 'databricks-tool-call',
-      result: { temperature: 22, condition: 'sunny' },
-    },
-    { type: 'text-start', id: 'fmapi-456-response' },
-    {
-      type: 'text-delta',
-      id: 'fmapi-456-response',
-      delta: 'The weather in New York is 22°C and sunny.',
-    },
-    { type: 'text-end', id: 'fmapi-456-response' },
   ],
 }
 
@@ -428,102 +326,79 @@ data: {
 }
 
 /**
- * FMAPI output with legacy UC function call tags
+ * Non-streaming FMAPI response with tool_calls (for doGenerate tests)
  */
-export const FMAPI_WITH_LEGACY_TAGS: LLMOutputFixtures = {
-  in: `
-data: {
-  "id": "fmapi-789",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
+export const FMAPI_RESPONSE_WITH_TOOL_CALLS = {
+  id: 'fmapi-response-tools',
+  object: 'chat.completion',
+  created: 1234567890,
+  model: 'databricks-meta-llama-3-1-405b-instruct',
+  choices: [
     {
-      "index": 0,
-      "delta": {
-        "role": "assistant",
-        "content": "I'll execute that calculation. "
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_weather_123',
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              arguments: '{"location":"New York","unit":"celsius"}',
+            },
+          },
+        ],
       },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-789",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "<uc_function_call>{\\"id\\": \\"calc_001\\", \\"name\\": \\"calculate\\", \\"arguments\\": {\\"expression\\": \\"2 + 2\\"}}</uc_function_call>"
-      },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-789",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "<uc_function_result>{\\"id\\": \\"calc_001\\", \\"content\\": \\"4\\"}</uc_function_result>"
-      },
-      "finish_reason": null
-    }
-  ]
-}
-
-data: {
-  "id": "fmapi-789-response",
-  "object": "chat.completion.chunk",
-  "created": 1234567890,
-  "model": "databricks-meta-llama-3-1-405b-instruct",
-  "choices": [
-    {
-      "index": 0,
-      "delta": {
-        "content": "The result is 4."
-      },
-      "finish_reason": null
-    }
-  ]
-}
-`,
-  out: [
-    { type: 'text-start', id: 'fmapi-789' },
-    {
-      type: 'text-delta',
-      id: 'fmapi-789',
-      delta: "I'll execute that calculation. ",
+      finish_reason: 'tool_calls',
     },
-    { type: 'text-end', id: 'fmapi-789' },
-    {
-      type: 'tool-call',
-      toolCallId: 'calc_001',
-      toolName: 'calculate',
-      input: '{"expression":"2 + 2"}',
-      providerExecuted: true,
-    },
-    {
-      type: 'tool-result',
-      toolCallId: 'calc_001',
-      toolName: 'databricks-tool-call',
-      result: '4',
-    },
-    { type: 'text-start', id: 'fmapi-789-response' },
-    {
-      type: 'text-delta',
-      id: 'fmapi-789-response',
-      delta: 'The result is 4.',
-    },
-    { type: 'text-end', id: 'fmapi-789-response' },
   ],
+  usage: {
+    prompt_tokens: 50,
+    completion_tokens: 25,
+    total_tokens: 75,
+  },
+}
+
+/**
+ * Non-streaming FMAPI response with multiple parallel tool_calls
+ */
+export const FMAPI_RESPONSE_WITH_PARALLEL_TOOL_CALLS = {
+  id: 'fmapi-response-parallel-tools',
+  object: 'chat.completion',
+  created: 1234567890,
+  model: 'databricks-meta-llama-3-1-405b-instruct',
+  choices: [
+    {
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_tool_1',
+            type: 'function',
+            function: {
+              name: 'get_weather',
+              arguments: '{"location":"Paris"}',
+            },
+          },
+          {
+            id: 'call_tool_2',
+            type: 'function',
+            function: {
+              name: 'get_time',
+              arguments: '{"timezone":"Europe/Paris"}',
+            },
+          },
+        ],
+      },
+      finish_reason: 'tool_calls',
+    },
+  ],
+  usage: {
+    prompt_tokens: 60,
+    completion_tokens: 40,
+    total_tokens: 100,
+  },
 }
