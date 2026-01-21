@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 from uuid import UUID
 
@@ -11,7 +12,11 @@ pytest.importorskip("psycopg_pool")
 pytest.importorskip("agents.memory.session")
 
 from databricks_ai_bridge import lakebase
-from psycopg import sql
+
+if TYPE_CHECKING:
+    from psycopg import sql
+else:
+    from psycopg import sql
 
 from databricks_openai.agents.session import (
     AsyncMemorySession,
@@ -412,7 +417,7 @@ async def test_get_items_returns_parsed_json(
         workspace_client=mock_workspace,
     )
 
-    items = await session.get_items()
+    items = cast(list[dict[str, Any]], await session.get_items())
 
     assert len(items) == 2
     assert items[0]["role"] == "user"
@@ -466,12 +471,12 @@ async def test_add_items(monkeypatch, mock_workspace, mock_pool, mock_connection
         workspace_client=mock_workspace,
     )
 
-    test_items = [
+    test_items: list[dict[str, Any]] = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi!"},
     ]
 
-    await session.add_items(test_items)
+    await session.add_items(cast(Any, test_items))
 
     # Check that executemany was called on cursor
     assert len(mock_connection._cursor.executed_queries) > 0
@@ -526,7 +531,7 @@ async def test_pop_item_returns_last_item(monkeypatch, mock_workspace, mock_pool
         workspace_client=mock_workspace,
     )
 
-    popped = await session.pop_item()
+    popped = cast(dict[str, Any], await session.pop_item())
 
     assert popped is not None
     assert popped["role"] == "assistant"
@@ -662,7 +667,7 @@ async def test_get_items_handles_dict_message_data(
         workspace_client=mock_workspace,
     )
 
-    items = await session.get_items()
+    items = cast(list[dict[str, Any]], await session.get_items())
 
     assert len(items) == 1
     assert items[0]["role"] == "user"
@@ -840,7 +845,7 @@ async def test_async_get_items_returns_parsed_json(
     mock_async_connection.queue_result(MockAsyncResult())  # INSERT session
     mock_async_connection.queue_result(MockAsyncResult(rows=test_messages))  # SELECT messages
 
-    items = await session.get_items()
+    items = cast(list[dict[str, Any]], await session.get_items())
 
     assert len(items) == 2
     assert items[0]["role"] == "user"
@@ -864,12 +869,12 @@ async def test_async_add_items(monkeypatch, mock_workspace, mock_async_pool, moc
     mock_async_connection.queue_result(MockAsyncResult(rows=[{"cnt": 2}]))
     mock_async_connection.queue_result(MockAsyncResult())  # INSERT session
 
-    test_items = [
+    test_items: list[dict[str, Any]] = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi!"},
     ]
 
-    await session.add_items(test_items)
+    await session.add_items(cast(Any, test_items))
 
     # Check that executemany was called on cursor
     assert len(mock_async_connection._cursor.executed_queries) > 0
@@ -902,7 +907,7 @@ async def test_async_pop_item_returns_last_item(
     )
     mock_async_connection.queue_result(MockAsyncResult())  # UPDATE session timestamp
 
-    popped = await session.pop_item()
+    popped = cast(dict[str, Any], await session.pop_item())
 
     assert popped is not None
     assert popped["role"] == "assistant"
