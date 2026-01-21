@@ -112,7 +112,6 @@ const convertAssistantMessage = async (
   return {
     role: 'assistant',
     // Use null instead of empty string when there's no text content
-    // (required by Claude API when tool_calls are present)
     content: contentItems.length === 0 ? null : contentItems,
     ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
   }
@@ -164,7 +163,6 @@ const convertToolResultOutputToContentValue = (
 const ProviderOptionsSchema = z.object({
   toolName: z.string().nullish(),
 })
-
 
 const getToolNameFromPart = async (part: LanguageModelV2ToolCallPart): Promise<string> => {
   const providerOptions = await parseProviderOptions({

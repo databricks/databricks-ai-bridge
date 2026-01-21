@@ -78,6 +78,6 @@ function convertResponsesToolChoice(
     case 'tool':
       return { type: 'function', name: toolChoice.toolName }
     default:
-      return 'auto'
+      return undefined
   }
 }
