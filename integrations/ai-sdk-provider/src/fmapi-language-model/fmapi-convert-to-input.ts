@@ -1,4 +1,10 @@
-import type { LanguageModelV2Message, LanguageModelV2ToolResultPart } from '@ai-sdk/provider'
+import type {
+  LanguageModelV2Message,
+  LanguageModelV2ToolResultPart,
+  LanguageModelV2ToolCallPart,
+} from '@ai-sdk/provider'
+import { parseProviderOptions } from '@ai-sdk/provider-utils'
+import { z } from 'zod/v4'
 import type { FmapiInputMessage, FmapiContentItem } from './fmapi-schema'
 
 type LanguageModelV2SystemMessage = Extract<LanguageModelV2Message, { role: 'system' }>
@@ -6,9 +12,9 @@ type LanguageModelV2UserMessage = Extract<LanguageModelV2Message, { role: 'user'
 type LanguageModelV2AssistantMessage = Extract<LanguageModelV2Message, { role: 'assistant' }>
 type LanguageModelV2ToolMessage = Extract<LanguageModelV2Message, { role: 'tool' }>
 
-export const convertPromptToFmapiMessages = (
+export const convertPromptToFmapiMessages = async (
   prompt: LanguageModelV2Message[]
-): { messages: Array<FmapiInputMessage> } => {
+): Promise<{ messages: Array<FmapiInputMessage> }> => {
   const messages: Array<FmapiInputMessage> = []
 
   for (const message of prompt) {
@@ -20,7 +26,7 @@ export const convertPromptToFmapiMessages = (
         messages.push(convertUserMessage(message))
         break
       case 'assistant':
-        messages.push(convertAssistantMessage(message))
+        messages.push(await convertAssistantMessage(message))
         break
       case 'tool':
         // Tool messages need special handling - one message per tool result
@@ -59,7 +65,9 @@ const convertUserMessage = (message: LanguageModelV2UserMessage): FmapiInputMess
   return { role: 'user', content }
 }
 
-const convertAssistantMessage = (message: LanguageModelV2AssistantMessage): FmapiInputMessage => {
+const convertAssistantMessage = async (
+  message: LanguageModelV2AssistantMessage
+): Promise<FmapiInputMessage> => {
   const contentItems: FmapiContentItem[] = []
   const toolCalls: Array<{
     id: string
@@ -84,17 +92,20 @@ const convertAssistantMessage = (message: LanguageModelV2AssistantMessage): Fmap
           summary: [{ type: 'summary_text', text: part.text }],
         })
         break
-      case 'tool-call':
+      case 'tool-call': {
+        // Parse provider options to get the actual tool name
+        const toolName = await getToolNameFromPart(part)
         // Convert to OpenAI tool_calls format
         toolCalls.push({
           id: part.toolCallId,
           type: 'function',
           function: {
-            name: part.toolName,
+            name: toolName,
             arguments: typeof part.input === 'string' ? part.input : JSON.stringify(part.input),
           },
         })
         break
+      }
     }
   }
 
@@ -148,4 +159,20 @@ const convertToolResultOutputToContentValue = (
     default:
       return null
   }
+}
+
+const ProviderOptionsSchema = z.object({
+  toolName: z.string().nullish(),
+})
+
+
+const getToolNameFromPart = async (part: LanguageModelV2ToolCallPart): Promise<string> => {
+  const providerOptions = await parseProviderOptions({
+    provider: 'databricks',
+    providerOptions: part.providerOptions,
+    schema: ProviderOptionsSchema,
+  })
+  // Use the actual tool name from provider metadata if available,
+  // otherwise fall back to part.toolName (which may be DATABRICKS_TOOL_CALL_ID)
+  return providerOptions?.toolName ?? part.toolName
 }

@@ -14,7 +14,7 @@ import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 describe('convertPromptToFmapiMessages', () => {
   describe('system messages', () => {
-    it('should keep system message role with text content', () => {
+    it('should keep system message role with text content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'system',
@@ -22,7 +22,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('system')
@@ -31,7 +31,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should handle empty system message', () => {
+    it('should handle empty system message', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'system',
@@ -39,7 +39,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('system')
@@ -48,7 +48,7 @@ describe('convertPromptToFmapiMessages', () => {
   })
 
   describe('user messages', () => {
-    it('should convert user message with text parts', () => {
+    it('should convert user message with text parts', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -56,14 +56,14 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('user')
       expect(result.messages[0].content).toEqual([{ type: 'text', text: 'Hello, world!' }])
     })
 
-    it('should convert user message with multiple text parts', () => {
+    it('should convert user message with multiple text parts', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -74,7 +74,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -83,7 +83,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert user message with file/image part using URL', () => {
+    it('should convert user message with file/image part using URL', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -97,7 +97,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -105,7 +105,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert user message with file/image part using string URL', () => {
+    it('should convert user message with file/image part using string URL', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -119,7 +119,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -127,7 +127,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert user message with file/image part using http URL', () => {
+    it('should convert user message with file/image part using http URL', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -141,7 +141,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -149,7 +149,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should ignore file part with base64 data (non-URL)', () => {
+    it('should ignore file part with base64 data (non-URL)', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -163,14 +163,14 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       // Base64 data doesn't start with http:// or https://, so it should be skipped
       expect(result.messages[0].content).toEqual([])
     })
 
-    it('should ignore file part with Uint8Array data', () => {
+    it('should ignore file part with Uint8Array data', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -184,13 +184,13 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([])
     })
 
-    it('should ignore non-image file types', () => {
+    it('should ignore non-image file types', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -204,13 +204,13 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([])
     })
 
-    it('should handle empty user content', () => {
+    it('should handle empty user content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -218,13 +218,13 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([])
     })
 
-    it('should handle mixed text and image content', () => {
+    it('should handle mixed text and image content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'user',
@@ -239,7 +239,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -250,7 +250,7 @@ describe('convertPromptToFmapiMessages', () => {
   })
 
   describe('assistant messages', () => {
-    it('should convert assistant message with text', () => {
+    it('should convert assistant message with text', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -258,7 +258,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('assistant')
@@ -267,7 +267,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert assistant message with reasoning', () => {
+    it('should convert assistant message with reasoning', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -280,7 +280,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('assistant')
@@ -297,7 +297,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should convert assistant message with tool-call to OpenAI format', () => {
+    it('should convert assistant message with tool-call to OpenAI format', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -312,7 +312,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('assistant')
@@ -331,7 +331,43 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message.tool_calls![0].function.arguments).toBe('{"location":"San Francisco"}')
     })
 
-    it('should convert assistant message with file/image using URL', () => {
+    it('should convert assistant message with tool-call using provider options for actual tool name', async () => {
+      const prompt: LanguageModelV2Message[] = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call-456',
+              toolName: DATABRICKS_TOOL_CALL_ID,
+              input: { query: 'test' },
+              providerOptions: {
+                databricks: {
+                  toolName: 'execute_query',
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const result = await convertPromptToFmapiMessages(prompt)
+
+      expect(result.messages).toHaveLength(1)
+      const message = result.messages[0] as {
+        role: string
+        content: unknown
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
+      }
+      expect(message.tool_calls).toHaveLength(1)
+      expect(message.tool_calls![0].id).toBe('call-456')
+      expect(message.tool_calls![0].type).toBe('function')
+      // Should use the actual tool name from provider options, not DATABRICKS_TOOL_CALL_ID
+      expect(message.tool_calls![0].function.name).toBe('execute_query')
+      expect(message.tool_calls![0].function.arguments).toBe('{"query":"test"}')
+    })
+
+    it('should convert assistant message with file/image using URL', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -345,7 +381,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toEqual([
@@ -353,7 +389,7 @@ describe('convertPromptToFmapiMessages', () => {
       ])
     })
 
-    it('should handle empty assistant content', () => {
+    it('should handle empty assistant content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -361,13 +397,13 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].content).toBeNull()
     })
 
-    it('should convert assistant message with mixed content', () => {
+    it('should convert assistant message with mixed content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'assistant',
@@ -387,7 +423,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       const message = result.messages[0] as {
@@ -406,7 +442,7 @@ describe('convertPromptToFmapiMessages', () => {
   })
 
   describe('tool messages', () => {
-    it('should convert tool message with tool-result parts to OpenAI format', () => {
+    it('should convert tool message with tool-result parts to OpenAI format', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -424,7 +460,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       expect(result.messages[0].role).toBe('tool')
@@ -433,7 +469,7 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message.content).toBe('The weather is sunny with a high of 75F.')
     })
 
-    it('should convert tool message with multiple tool-result parts to separate messages', () => {
+    it('should convert tool message with multiple tool-result parts to separate messages', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -460,7 +496,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       // Each tool result becomes a separate message
       expect(result.messages).toHaveLength(2)
@@ -472,7 +508,7 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message2.content).toContain('"result":"second"')
     })
 
-    it('should handle tool-result with error-text output', () => {
+    it('should handle tool-result with error-text output', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -490,14 +526,14 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
       expect(message.content).toBe('API rate limit exceeded')
     })
 
-    it('should handle tool-result with error-json output', () => {
+    it('should handle tool-result with error-json output', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -515,14 +551,14 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
       expect(message.content).toContain('"error":"Not found"')
     })
 
-    it('should handle tool-result with content output', () => {
+    it('should handle tool-result with content output', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -540,7 +576,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(1)
       const message = result.messages[0] as { role: string; tool_call_id: string; content: string }
@@ -549,7 +585,7 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message.content).toContain('Complex content')
     })
 
-    it('should handle empty tool message content', () => {
+    it('should handle empty tool message content', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'tool',
@@ -557,7 +593,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       // Empty tool message results in no messages
       expect(result.messages).toHaveLength(0)
@@ -565,7 +601,7 @@ describe('convertPromptToFmapiMessages', () => {
   })
 
   describe('multiple messages', () => {
-    it('should convert a full conversation', () => {
+    it('should convert a full conversation', async () => {
       const prompt: LanguageModelV2Message[] = [
         {
           role: 'system',
@@ -608,7 +644,7 @@ describe('convertPromptToFmapiMessages', () => {
         },
       ]
 
-      const result = convertPromptToFmapiMessages(prompt)
+      const result = await convertPromptToFmapiMessages(prompt)
 
       expect(result.messages).toHaveLength(5)
       expect(result.messages[0].role).toBe('system') // system stays as system

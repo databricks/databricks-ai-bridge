@@ -46,7 +46,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   async doGenerate(
     options: Parameters<LanguageModelV2['doGenerate']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
-    const networkArgs = this.getArgs({
+    const networkArgs = await this.getArgs({
       config: this.config,
       options,
       stream: false,
@@ -85,7 +85,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   async doStream(
     options: Parameters<LanguageModelV2['doStream']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
-    const networkArgs = this.getArgs({
+    const networkArgs = await this.getArgs({
       config: this.config,
       options,
       stream: true,
@@ -205,7 +205,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
     }
   }
 
-  private getArgs({
+  private async getArgs({
     config,
     options,
     stream,
@@ -226,13 +226,15 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
       ? convertToolChoiceToOpenAIFormat(options.toolChoice)
       : undefined
 
+    const { messages } = await convertPromptToFmapiMessages(options.prompt)
+
     return {
       url: config.url({
         path: '/chat/completions',
       }),
       headers: combineHeaders(config.headers(), options.headers),
       body: {
-        messages: convertPromptToFmapiMessages(options.prompt).messages,
+        messages,
         stream,
         model: modelId,
         ...(tools && tools.length > 0 ? { tools } : {}),

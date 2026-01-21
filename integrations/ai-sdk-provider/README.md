@@ -47,11 +47,11 @@ const provider = createDatabricksProvider({
   },
 })
 
-// Use the Chat Agent endpoint
-const responsesAgent = provider.responsesAgent('your-agent-endpoint')
+// Use the Responses endpoint
+const model = provider.responses('your-agent-endpoint')
 
 const result = await generateText({
-  model: responsesAgent,
+  model,
   prompt: 'Hello, how are you?',
 })
 
@@ -101,15 +101,44 @@ import { DATABRICKS_TOOL_DEFINITION, DATABRICKS_TOOL_CALL_ID } from '@databricks
 
 #### Why are these needed?
 
-The AI SDK requires tools to be defined ahead of time with known schemas. However, Databricks agents can orchestrate tools dynamically at runtime - we don't know which tools will be called until the model executes.
+When using AI SDK functions like `streamText` or `generateText`, you must declare which tools are allowed upfront in the `tools` parameter. This works well when you control which tools are available. However, when working with Databricks agents (like Responses agents or Agents on Apps), the agent decides which tools to call at runtime - you don't know ahead of time what tools will be invoked.
 
-To bridge this gap, this provider uses a special "catch-all" tool definition:
+To bridge this gap, this provider uses a special "catch-all" tool pattern:
 
-- **`DATABRICKS_TOOL_DEFINITION`**: A universal tool definition that accepts any input/output schema. This allows the provider to handle any tool that Databricks agents orchestrate, regardless of its schema.
+- **`DATABRICKS_TOOL_DEFINITION`**: A universal tool definition that accepts any input/output schema. This allows the provider to handle any tool that Databricks agents orchestrate, regardless of its actual schema.
 
-- **`DATABRICKS_TOOL_CALL_ID`**: The constant ID (`'databricks-tool-call'`) used to identify this special tool. The actual tool name from Databricks is preserved in the metadata so it can be displayed correctly in the UI and passed back to the model.
+- **`DATABRICKS_TOOL_CALL_ID`**: The constant ID (`'databricks-tool-call'`) used to label all tool calls and tool results under a single identifier. The actual tool name from Databricks is preserved in `providerMetadata.databricks.toolName` so it can be displayed correctly in the UI and passed back to the model.
 
 This pattern enables dynamic tool orchestration by Databricks while maintaining compatibility with the AI SDK's tool interface.
+
+#### Example: Server-side streaming with tools
+
+```typescript
+import { streamText } from 'ai'
+import { createDatabricksProvider, DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
+
+const provider = createDatabricksProvider({
+  baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
+  headers: { Authorization: `Bearer ${token}` },
+})
+
+const model = provider.responses('my-agent-endpoint')
+
+const result = streamText({
+  model,
+  messages: convertToModelMessages(uiMessages),
+  tools: {
+    // Register the catch-all tool to handle any tool the agent calls
+    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
+  },
+})
+```
+
+When the agent makes a tool call, you'll receive it with:
+- `toolName: 'databricks-tool-call'` (the constant ID)
+- `providerMetadata.databricks.toolName: 'actual_tool_name'` (the real tool name)
+
+This allows your UI to display the actual tool name while the AI SDK routes all tool calls through the single registered tool definition.
 
 ### MCP Utilities
 
@@ -129,13 +158,13 @@ MCP (Model Context Protocol) approval utilities for handling approval workflows.
 
 ## Examples
 
-### Responses Agent Endpoint
+### Responses Endpoint
 
 ```typescript
-const responsesAgent = provider.responsesAgent('my-responses-agent')
+const model = provider.responses('my-responses-agent')
 
 const result = await generateText({
-  model: responsesAgent,
+  model,
   prompt: 'Analyze this data...',
 })
 
@@ -144,18 +173,30 @@ console.log(result.text)
 
 ### With Tool Calling
 
+When your Databricks agent can call tools, register the catch-all tool definition:
+
 ```typescript
 import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
 
-const responsesAgent = provider.responsesAgent('my-agent-with-tools')
+const model = provider.responses('my-agent-with-tools')
 
 const result = await generateText({
-  model: responsesAgent,
+  model,
   prompt: 'Search for information about AI',
   tools: {
     [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
   },
 })
+
+// Access tool calls from the result
+for (const part of result.content) {
+  if (part.type === 'tool-call') {
+    // part.toolName === 'databricks-tool-call' (the constant ID)
+    // part.providerMetadata.databricks.toolName contains the actual tool name
+    const actualToolName = part.providerMetadata?.databricks?.toolName
+    console.log(`Agent called tool: ${actualToolName}`)
+  }
+}
 ```
 
 ## Links
