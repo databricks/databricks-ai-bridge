@@ -140,7 +140,9 @@ def test_databricks_rm_query_vector_not_allowed_with_ann(mock_workspace_client):
 
     rm = DatabricksRM(databricks_index_name="test_index")
 
-    with pytest.raises(ValueError, match="query_vector can only be provided when query_type is 'HYBRID'"):
+    with pytest.raises(
+        ValueError, match="query_vector can only be provided when query_type is 'HYBRID'"
+    ):
         rm("test query", query_type="ANN", query_vector=[0.1, 0.2, 0.3])
 
 
@@ -152,7 +154,9 @@ def test_databricks_rm_cannot_provide_two_vectors(mock_workspace_client):
 
     rm = DatabricksRM(databricks_index_name="test_index")
 
-    with pytest.raises(ValueError, match="Cannot provide both query \\(as vector\\) and query_vector"):
+    with pytest.raises(
+        ValueError, match="Cannot provide both query \\(as vector\\) and query_vector != None"
+    ):
         rm([0.1, 0.2, 0.3], query_type="HYBRID", query_vector=[0.4, 0.5, 0.6])
 
 
