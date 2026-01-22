@@ -397,7 +397,7 @@ class LakebaseClient:
         *,
         pool: LakebasePool | None = None,
         instance_name: str | None = None,
-        **pool_kwargs: object,
+        **pool_kwargs: Any,
     ) -> None:
         """
         Initialize LakebaseClient.
@@ -514,7 +514,10 @@ class LakebaseClient:
             return None
 
     def _format_privileges_str(
-        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege] | Sequence[SequencePrivilege]
+        self,
+        privileges: Sequence[TablePrivilege]
+        | Sequence[SchemaPrivilege]
+        | Sequence[SequencePrivilege],
     ) -> str:
         """Format privileges as a string for logging."""
         privilege_values = [p.value for p in privileges]
@@ -523,8 +526,11 @@ class LakebaseClient:
         return ", ".join(privilege_values)
 
     def _format_privileges_sql(
-        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege] | Sequence[SequencePrivilege]
-    ) -> sql.SQL:
+        self,
+        privileges: Sequence[TablePrivilege]
+        | Sequence[SchemaPrivilege]
+        | Sequence[SequencePrivilege],
+    ) -> sql.SQL | sql.Composed:
         """Format privileges as a safe SQL fragment."""
         # Check if ALL is in the list - if so, use ALL PRIVILEGES
         privilege_values = [p.value for p in privileges]
@@ -679,7 +685,9 @@ class LakebaseClient:
         privs_str = self._format_privileges_str(privileges)
 
         for schema in schemas:
-            query = sql.SQL("GRANT {privs} ON ALL SEQUENCES IN SCHEMA {schema} TO {grantee}").format(
+            query = sql.SQL(
+                "GRANT {privs} ON ALL SEQUENCES IN SCHEMA {schema} TO {grantee}"
+            ).format(
                 privs=privs,
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),

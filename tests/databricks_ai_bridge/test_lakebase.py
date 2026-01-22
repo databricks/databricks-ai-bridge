@@ -674,7 +674,11 @@ class TestLakebaseClientGrantAllSequencesInSchema:
         with caplog.at_level(logging.INFO):
             client.grant_all_sequences_in_schema(
                 grantee="sp-uuid",
-                privileges=[SequencePrivilege.USAGE, SequencePrivilege.SELECT, SequencePrivilege.UPDATE],
+                privileges=[
+                    SequencePrivilege.USAGE,
+                    SequencePrivilege.SELECT,
+                    SequencePrivilege.UPDATE,
+                ],
                 schemas=["public"],
             )
 
