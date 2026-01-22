@@ -35,13 +35,11 @@ jobs:
       matrix:
         project:
           - dir: "."
-            ty_flags: "--extra memory"
           - dir: "databricks_mcp"
           - dir: "integrations/dspy"
           - dir: "integrations/llamaindex"
           - dir: "integrations/openai"
           - dir: "integrations/langchain"
-            ty_flags: "--extra memory"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,7 +53,7 @@ jobs:
       - name: Run type checking for ${{ matrix.project.dir }}
         working-directory: ${{ matrix.project.dir }}
         run: |
-          uv run --exact ${{ matrix.project.ty_flags }} ruff check --output-format github
+          uv run --exact --all-extras ${{ matrix.project.ty_flags }} ruff check --output-format github
 
   ty:
     name: typechecking for ${{ matrix.project.dir }}
@@ -65,13 +63,11 @@ jobs:
       matrix:
         project:
           - dir: "."
-            ty_flags: "--extra memory"
           - dir: "databricks_mcp"
           - dir: "integrations/dspy"
           - dir: "integrations/llamaindex"
           - dir: "integrations/openai"
           - dir: "integrations/langchain"
-            ty_flags: "--extra memory"
 
     steps:
       - name: Checkout code
@@ -86,4 +82,4 @@ jobs:
       - name: Run type checking for ${{ matrix.project.dir }}
         working-directory: ${{ matrix.project.dir }}
         run: |
-          uv run --exact ${{ matrix.project.ty_flags }} ty check --output-format github
+          uv run --exact --all-extras ${{ matrix.project.ty_flags }} ty check --output-format github
