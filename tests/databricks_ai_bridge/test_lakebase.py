@@ -15,6 +15,7 @@ from databricks_ai_bridge.lakebase import (
     LakebaseClient,
     LakebasePool,
     SchemaPrivilege,
+    SequencePrivilege,
     TablePrivilege,
 )
 
@@ -662,6 +663,58 @@ class TestLakebaseClientGrantTable:
         assert any("ALL PRIVILEGES" in msg for msg in log_messages)
 
 
+class TestLakebaseClientGrantAllSequencesInSchema:
+    """Tests for LakebaseClient.grant_all_sequences_in_schema()."""
+
+    def test_grant_all_sequences_in_schema(self, caplog):
+        """grant_all_sequences_in_schema should execute GRANT on all sequences in schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[SequencePrivilege.USAGE, SequencePrivilege.SELECT, SequencePrivilege.UPDATE],
+                schemas=["public"],
+            )
+
+        assert cursor.execute.call_count == 1
+
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "USAGE, SELECT, UPDATE" in msg and "all sequences in schema" in msg and "public" in msg
+            for msg in log_messages
+        )
+
+    def test_grant_all_sequences_multiple_schemas(self):
+        """grant_all_sequences_in_schema should execute for each schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_all_sequences_in_schema(
+            grantee="sp-uuid",
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public", "app_schema", "drizzle"],
+        )
+
+        assert cursor.execute.call_count == 3
+
+    def test_grant_all_sequences_all_privileges(self, caplog):
+        """grant_all_sequences_in_schema with ALL should use ALL PRIVILEGES."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[SequencePrivilege.ALL],
+                schemas=["public"],
+            )
+
+        log_messages = [record.message for record in caplog.records]
+        assert any("ALL PRIVILEGES" in msg for msg in log_messages)
+
+
 class TestPrivilegeFormatting:
     """Tests for privilege formatting helpers."""
 
@@ -702,3 +755,13 @@ class TestPrivilegeFormatting:
 
         result = client._format_privileges_str([SchemaPrivilege.USAGE, SchemaPrivilege.CREATE])
         assert result == "USAGE, CREATE"
+
+    def test_format_privileges_str_sequence_privileges(self):
+        """_format_privileges_str works with sequence privileges."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str(
+            [SequencePrivilege.USAGE, SequencePrivilege.SELECT, SequencePrivilege.UPDATE]
+        )
+        assert result == "USAGE, SELECT, UPDATE"

@@ -28,6 +28,7 @@ __all__ = [
     "LakebaseClient",
     "TablePrivilege",
     "SchemaPrivilege",
+    "SequencePrivilege",
 ]
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,15 @@ class SchemaPrivilege(str, Enum):
 
     USAGE = "USAGE"
     CREATE = "CREATE"
+    ALL = "ALL"  # Renders as ALL PRIVILEGES
+
+
+class SequencePrivilege(str, Enum):
+    """PostgreSQL sequence privileges for GRANT statements."""
+
+    USAGE = "USAGE"
+    SELECT = "SELECT"
+    UPDATE = "UPDATE"
     ALL = "ALL"  # Renders as ALL PRIVILEGES
 
 
@@ -504,7 +514,7 @@ class LakebaseClient:
             return None
 
     def _format_privileges_str(
-        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege]
+        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege] | Sequence[SequencePrivilege]
     ) -> str:
         """Format privileges as a string for logging."""
         privilege_values = [p.value for p in privileges]
@@ -513,7 +523,7 @@ class LakebaseClient:
         return ", ".join(privilege_values)
 
     def _format_privileges_sql(
-        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege]
+        self, privileges: Sequence[TablePrivilege] | Sequence[SchemaPrivilege] | Sequence[SequencePrivilege]
     ) -> sql.SQL:
         """Format privileges as a safe SQL fragment."""
         # Check if ALL is in the list - if so, use ALL PRIVILEGES
@@ -644,3 +654,40 @@ class LakebaseClient:
             )
             self._execute_composed(query)
             logger.info("Granted %s on table '%s' to '%s'", privs_str, table, grantee)
+
+    def grant_all_sequences_in_schema(
+        self,
+        grantee: str,
+        privileges: Sequence[SequencePrivilege],
+        schemas: Sequence[str],
+    ) -> None:
+        """
+        Grant sequence-level privileges on ALL sequences in the specified schemas.
+
+        :param grantee: The role to grant privileges to (e.g., service principal UUID).
+        :param privileges: List of SequencePrivilege to grant (USAGE, SELECT, UPDATE, ALL).
+        :param schemas: List of schema names whose sequences will receive the privileges.
+
+        Example:
+            client.grant_all_sequences_in_schema(
+                grantee="app-sp-uuid",
+                privileges=[SequencePrivilege.USAGE, SequencePrivilege.SELECT, SequencePrivilege.UPDATE],
+                schemas=["public", "app_schema"],
+            )
+        """
+        privs = self._format_privileges_sql(privileges)
+        privs_str = self._format_privileges_str(privileges)
+
+        for schema in schemas:
+            query = sql.SQL("GRANT {privs} ON ALL SEQUENCES IN SCHEMA {schema} TO {grantee}").format(
+                privs=privs,
+                schema=sql.Identifier(schema),
+                grantee=sql.Identifier(grantee),
+            )
+            self._execute_composed(query)
+            logger.info(
+                "Granted %s on all sequences in schema '%s' to '%s'",
+                privs_str,
+                schema,
+                grantee,
+            )
