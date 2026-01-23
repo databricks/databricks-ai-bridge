@@ -10,9 +10,17 @@ pip install databricks-google-adk
 
 ## Features
 
+**Tools:**
 - **VectorSearchRetrieverTool**: Search Databricks Vector Search indexes from ADK agents
 - **GenieTool**: Query Databricks Genie AI/BI spaces using natural language
+
+**Toolsets:**
 - **DatabricksToolset**: Bundle multiple Databricks tools together for easy agent configuration
+- **DatabricksMcpToolset**: Connect to Databricks MCP servers (UC Functions, Vector Search, Genie)
+
+**Deployment:**
+- **DatabricksAgentEngineApp**: Deploy Databricks-powered agents to Vertex AI Agent Engine
+- **deploy_to_agent_engine**: One-step deployment helper function
 
 ## Quick Start
 
@@ -104,6 +112,111 @@ agent = Agent(
     model="gemini-2.0-flash",
     instruction="You help users find products and analyze sales data.",
     tools=[toolset],
+)
+```
+
+### Databricks MCP Toolset
+
+Connect to Databricks MCP servers for UC Functions, Vector Search, or Genie:
+
+```python
+from databricks_google_adk import DatabricksMcpToolset
+from google.adk.agents import Agent
+
+# Connect to UC Functions MCP server
+toolset = DatabricksMcpToolset.for_uc_functions(
+    catalog="my_catalog",
+    schema="my_schema",
+)
+
+# Or connect to Vector Search MCP
+toolset = DatabricksMcpToolset.for_vector_search(
+    catalog="my_catalog",
+    schema="my_schema",
+)
+
+# Or connect to Genie MCP
+toolset = DatabricksMcpToolset.for_genie(
+    space_id="my-genie-space-id",
+)
+
+# Use with an ADK agent
+agent = Agent(
+    name="function_caller",
+    model="gemini-2.0-flash",
+    instruction="You help users by calling Databricks functions.",
+    tools=[toolset],
+)
+```
+
+## Deployment to Vertex AI Agent Engine
+
+Deploy your Databricks-powered ADK agents to Google Cloud's Vertex AI Agent Engine.
+
+### Installation
+
+```bash
+pip install databricks-google-adk[deployment]
+```
+
+### Quick Deployment
+
+```python
+from databricks_google_adk import VectorSearchRetrieverTool
+from databricks_google_adk.deployment import deploy_to_agent_engine
+from google.adk.agents import Agent
+
+# Create your agent
+vector_search = VectorSearchRetrieverTool(index_name="catalog.schema.index")
+agent = Agent(
+    name="search_agent",
+    model="gemini-2.0-flash",
+    instruction="You help users search documents.",
+    tools=[vector_search.as_tool()],
+)
+
+# Deploy to Agent Engine
+remote_agent = deploy_to_agent_engine(
+    agent=agent,
+    project="my-gcp-project",
+    location="us-central1",
+    staging_bucket="gs://my-staging-bucket",
+    databricks_host="https://my-workspace.databricks.com",
+    databricks_token_secret="projects/my-project/secrets/databricks-token/versions/latest",
+)
+
+print(f"Deployed: {remote_agent.resource_name}")
+```
+
+### Step-by-Step Deployment
+
+For more control, use the `DatabricksAgentEngineApp` class:
+
+```python
+from databricks_google_adk import DatabricksAgentEngineApp
+import vertexai
+
+# Create the deployable app
+app = DatabricksAgentEngineApp(agent=agent)
+
+# Test locally first
+async for event in app.test_locally("Search for AI documents"):
+    print(event)
+
+# Initialize Vertex AI
+client = vertexai.Client(project="my-project", location="us-central1")
+
+# Get deployment config
+config = app.get_deployment_config(
+    staging_bucket="gs://my-bucket",
+    databricks_host="https://workspace.databricks.com",
+    databricks_token_secret="projects/my-project/secrets/db-token/versions/latest",
+)
+
+# Deploy
+remote_agent = client.agent_engines.create(
+    agent=app.adk_app,
+    config=config,
 )
 ```
 
@@ -225,12 +338,44 @@ genie = GenieTool(
 | `tool_filter` | `list[str]` | Filter tools by name |
 | `tool_name_prefix` | `str` | Prefix to add to all tool names |
 
+### DatabricksMcpToolset
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `server_url` | `str` | URL of the Databricks MCP server |
+| `workspace_client` | `WorkspaceClient` | Custom Databricks client |
+| `tool_filter` | `list[str]` | Filter tools by name |
+| `tool_name_prefix` | `str` | Prefix to add to all tool names |
+
+Factory methods:
+- `DatabricksMcpToolset.for_uc_functions(catalog, schema)` - UC Functions MCP
+- `DatabricksMcpToolset.for_vector_search(catalog, schema)` - Vector Search MCP
+- `DatabricksMcpToolset.for_genie(space_id)` - Genie MCP
+
+### deploy_to_agent_engine
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent` | `Agent` | The ADK Agent to deploy |
+| `project` | `str` | Google Cloud project ID |
+| `location` | `str` | Google Cloud region |
+| `staging_bucket` | `str` | GCS bucket for staging (format: `gs://bucket`) |
+| `databricks_host` | `str` | Databricks workspace URL |
+| `databricks_token_secret` | `str` | Secret Manager secret for Databricks token |
+| `display_name` | `str` | Display name for the deployed agent |
+| `description` | `str` | Description for the deployed agent |
+
 ## Requirements
 
+Core:
 - Python >= 3.10
 - google-adk >= 1.0.0
 - databricks-ai-bridge >= 0.4.0
 - databricks-vectorsearch >= 0.40
+- databricks-mcp >= 0.5.0
+
+For deployment to Agent Engine:
+- google-cloud-aiplatform[agent_engines,adk] >= 1.112
 
 ## License
 

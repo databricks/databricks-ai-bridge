@@ -11,8 +11,14 @@ requires-python = ">=3.10"
 dependencies = [
     "databricks-vectorsearch>=0.40",
     "databricks-ai-bridge>=0.4.0",
+    "databricks-mcp>=0.5.0",
     "google-adk>=1.0.0",
     "pydantic>=2.10.0",
+]
+
+[project.optional-dependencies]
+deployment = [
+    "google-cloud-aiplatform[agent_engines,adk]>=1.112",
 ]
 
 [dependency-groups]
