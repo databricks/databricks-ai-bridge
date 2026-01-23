@@ -108,6 +108,59 @@ def test_databricks_rm_forward_vector_query(mock_workspace_client, mock_vector_s
 
 
 @patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_forward_hybrid_text_and_vector(
+    mock_workspace_client, mock_vector_search_response
+):
+    """Test HYBRID search with both query text and query vector."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+    mock_client.vector_search_indexes.query_index.return_value.as_dict.return_value = (
+        mock_vector_search_response
+    )
+
+    rm = DatabricksRM(databricks_index_name="test_index")
+    query_vector = [0.1, 0.2, 0.3]
+
+    rm("test query", query_type="HYBRID", query_vector=query_vector)
+
+    # Verify API call includes both text and vector
+    call_args = mock_client.vector_search_indexes.query_index.call_args[1]
+    assert call_args["index_name"] == "test_index"
+    assert call_args["query_type"] == "HYBRID"
+    assert call_args["query_text"] == "test query"
+    assert call_args["query_vector"] == query_vector
+    assert set(call_args["columns"]) == {"id", "text"}
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_query_vector_not_allowed_with_ann(mock_workspace_client):
+    """Test that query_vector cannot be provided with ANN search."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+
+    rm = DatabricksRM(databricks_index_name="test_index")
+
+    with pytest.raises(
+        ValueError, match="query_vector can only be provided when query_type is 'HYBRID'"
+    ):
+        rm("test query", query_type="ANN", query_vector=[0.1, 0.2, 0.3])
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
+def test_databricks_rm_cannot_provide_two_vectors(mock_workspace_client):
+    """Test that providing both query as vector and query_vector != None raises an error."""
+    mock_client = MagicMock()
+    mock_workspace_client.return_value = mock_client
+
+    rm = DatabricksRM(databricks_index_name="test_index")
+
+    with pytest.raises(
+        ValueError, match="Cannot provide both query \\(as vector\\) and query_vector"
+    ):
+        rm([0.1, 0.2, 0.3], query_type="HYBRID", query_vector=[0.4, 0.5, 0.6])
+
+
+@patch("databricks_dspy.retrievers.databricks_rm.WorkspaceClient")
 def test_databricks_rm_agent_framework_format(
     mock_workspace_client, mock_vector_search_response_with_uri
 ):
