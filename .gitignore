@@ -20,4 +20,3 @@ Pipfile
 docs/build
 
 **/uv.lock
-/venv

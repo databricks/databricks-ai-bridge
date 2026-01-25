@@ -25,10 +25,6 @@ except ImportError as e:
 __all__ = [
     "AsyncLakebasePool",
     "LakebasePool",
-    "LakebaseClient",
-    "TablePrivilege",
-    "SchemaPrivilege",
-    "SequencePrivilege",
 ]
 
 logger = logging.getLogger(__name__)
@@ -47,7 +43,10 @@ IdentityType = Literal["USER", "SERVICE_PRINCIPAL", "GROUP"]
 
 
 class TablePrivilege(str, Enum):
-    """PostgreSQL table privileges for GRANT statements."""
+    """PostgreSQL table privileges for GRANT statements.
+
+    See: https://www.postgresql.org/docs/current/sql-grant.html
+    """
 
     SELECT = "SELECT"
     INSERT = "INSERT"
@@ -61,7 +60,10 @@ class TablePrivilege(str, Enum):
 
 
 class SchemaPrivilege(str, Enum):
-    """PostgreSQL schema privileges for GRANT statements."""
+    """PostgreSQL schema privileges for GRANT statements.
+
+    See: https://www.postgresql.org/docs/current/sql-grant.html
+    """
 
     USAGE = "USAGE"
     CREATE = "CREATE"
@@ -69,7 +71,10 @@ class SchemaPrivilege(str, Enum):
 
 
 class SequencePrivilege(str, Enum):
-    """PostgreSQL sequence privileges for GRANT statements."""
+    """PostgreSQL sequence privileges for GRANT statements.
+
+    See: https://www.postgresql.org/docs/current/sql-grant.html
+    """
 
     USAGE = "USAGE"
     SELECT = "SELECT"
