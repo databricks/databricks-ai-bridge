@@ -35,6 +35,7 @@
     "lint": "eslint 'src/**/*.ts'",
     "format": "prettier --write 'src/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts'",
+    "format:fix": "prettier --write 'src/**/*.ts'",
     "check-package": "attw --pack . --format table --ignore-rules no-resolution",
     "prepublishOnly": "npm run clean && npm run build && npm run test && npm run lint && npm run check-package"
   },
