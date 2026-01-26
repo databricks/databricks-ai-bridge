@@ -74,7 +74,7 @@ export const fmapiChunkSchema = z.object({
         content: z.union([z.string(), z.array(contentItemSchema), z.null()]).optional(),
         tool_calls: z.array(toolCallDeltaSchema).optional(),
       }),
-      finish_reason: z.union([z.literal('stop'), z.literal('tool_calls'), z.null()]).optional(),
+      finish_reason: z.union([z.string(), z.null()]).optional(),
     })
   ),
 })
@@ -98,7 +98,7 @@ export const fmapiResponseSchema = z.object({
         content: z.union([z.string(), z.array(contentItemSchema), z.null()]).optional(),
         tool_calls: z.array(toolCallSchema).optional(),
       }),
-      finish_reason: z.union([z.literal('stop'), z.literal('tool_calls'), z.null()]).optional(),
+      finish_reason: z.union([z.string(), z.null()]).optional(),
     })
   ),
 })

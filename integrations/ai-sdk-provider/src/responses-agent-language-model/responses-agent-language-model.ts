@@ -27,6 +27,7 @@ import {
 import { convertToResponsesInput } from './responses-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 import { prepareResponsesTools } from './responses-prepare-tools'
+import { callOptionsToResponsesArgs } from './call-options-to-responses-args'
 
 function mapResponsesFinishReason({
   finishReason,
@@ -69,7 +70,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
   async doGenerate(
     options: Parameters<LanguageModelV2['doGenerate']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
-    const networkArgs = await this.getArgs({
+    const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
       stream: false,
@@ -100,14 +101,14 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         outputTokens: response.usage?.output_tokens ?? 0,
         totalTokens: response.usage?.total_tokens ?? 0,
       },
-      warnings: [],
+      warnings,
     }
   }
 
   async doStream(
     options: Parameters<LanguageModelV2['doStream']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
-    const networkArgs = await this.getArgs({
+    const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
       stream: true,
@@ -142,7 +143,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
             LanguageModelV2StreamPart
           >({
             start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] })
+              controller.enqueue({ type: 'stream-start', warnings })
             },
 
             transform(chunk, controller) {
@@ -257,6 +258,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
       toolChoice: options.toolChoice,
     })
 
+    // Convert call options to Responses API args
+    const { args: callArgs, warnings } = callOptionsToResponsesArgs(options)
+
     return {
       url: config.url({
         path: '/responses',
@@ -268,7 +272,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         stream,
         ...(tools ? { tools } : {}),
         ...(toolChoice && tools ? { tool_choice: toolChoice } : {}),
+        ...callArgs,
       },
+      warnings,
       fetch: config.fetch,
     }
   }

@@ -231,6 +231,7 @@ class DatabricksRM(dspy.Retrieve):
         query: str | list[float],
         query_type: str = "ANN",
         filters_json: str | None = None,
+        query_vector: list[float] | None = None,
     ) -> dspy.Prediction | list[dict[str, Any]]:  # ty:ignore[invalid-method-override]: can't fix due to backward compatibility
         """
         Retrieve documents from a Databricks Mosaic AI Vector Search Index that are relevant to the
@@ -247,6 +248,10 @@ class DatabricksRM(dspy.Retrieve):
                 less than 5, and ``{"id >=": 5, "id <": 10}`` selects records that have an ``id``
                 column value greater than or equal to 5 and less than 10. If specified, this
                 parameter overrides the `filters_json` parameter passed to the constructor.
+            query_vector (Optional[list[float]]): An optional query vector to use in combination
+                with the query text for HYBRID search. This parameter can only be provided when
+                ``query_type`` is 'HYBRID' and ``query`` is a string. When provided, both the
+                query text and query vector will be used for hybrid search.
 
         Returns:
             A list of dictionaries when ``use_with_databricks_agent_framework`` is ``True``,
@@ -258,8 +263,18 @@ class DatabricksRM(dspy.Retrieve):
 
         if isinstance(query, str):
             query_text = query
-            query_vector = None
+            if query_vector is not None and query_type.lower() != "hybrid":
+                raise ValueError(
+                    "query_vector can only be provided when query_type is 'HYBRID'. "
+                    "For ANN search, provide either query text or query vector in the "
+                    "query parameter."
+                )
         elif isinstance(query, list):
+            if query_vector is not None:
+                raise ValueError(
+                    "Cannot provide both query (as vector) and query_vector. "
+                    "Use query for text and query_vector for the embedding vector."
+                )
             query_text = None
             query_vector = query
         else:
