@@ -53,7 +53,7 @@
   "dependencies": {
     "@ai-sdk/provider": "^2.0.0",
     "@ai-sdk/provider-utils": "^3.0.0",
-    "@databricks/ai-sdk-provider": "^0.2.2",
+    "@databricks/ai-sdk-provider": "^0.2.3",
     "@databricks/sdk-experimental": "^0.15.0",
     "@langchain/core": "^1.1.8",
     "ai": "^5.0.118",

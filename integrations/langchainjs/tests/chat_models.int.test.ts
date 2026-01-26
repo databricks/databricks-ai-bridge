@@ -238,7 +238,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
         const shortModel = new ChatDatabricks({
           endpoint,
           endpointAPI,
-          maxTokens: 10,
+          maxTokens: 16,
         });
 
         const response = await shortModel.invoke([
@@ -249,21 +249,24 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
         expect(content.split(/\s+/).length).toBeLessThan(50);
       });
 
-      it("respects stop sequences", async () => {
-        const modelWithStop = new ChatDatabricks({
-          endpoint,
-          endpointAPI,
-          maxTokens: 100,
-          stop: ["5"],
+      it
+        // Responses API doesn't support stop sequences
+        // See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api-request
+        .skipIf(endpointAPI === "responses")("respects stop sequences", async () => {
+          const modelWithStop = new ChatDatabricks({
+            endpoint,
+            endpointAPI,
+            maxTokens: 100,
+            stop: ["5"],
+          });
+
+          const response = await modelWithStop.invoke([
+            new HumanMessage("Count from 1 to 10, one number per line"),
+          ]);
+
+          const content = response.content as string;
+          expect(content).not.toContain("6");
         });
-
-        const response = await modelWithStop.invoke([
-          new HumanMessage("Count from 1 to 10, one number per line"),
-        ]);
-
-        const content = response.content as string;
-        expect(content).not.toContain("6");
-      });
     });
 
     describe("Error Handling", () => {
