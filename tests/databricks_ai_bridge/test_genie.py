@@ -866,7 +866,10 @@ def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_clie
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -881,7 +884,10 @@ def test_poll_for_result_span_create_on_status_change(genie, mock_workspace_clie
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Done"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Done"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "COMPLETED",
@@ -925,7 +931,10 @@ def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_clien
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -940,7 +949,10 @@ def test_poll_for_result_span_close_on_status_change(genie, mock_workspace_clien
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Done"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Done"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "COMPLETED",
@@ -983,7 +995,10 @@ def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -998,7 +1013,10 @@ def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",  # duplicate status
@@ -1013,7 +1031,10 @@ def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",  # duplicate status
@@ -1028,7 +1049,10 @@ def test_poll_for_result_no_duplicate_span_on_same_status(genie, mock_workspace_
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Done"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Done"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "COMPLETED",
@@ -1074,7 +1098,10 @@ def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -1089,7 +1116,12 @@ def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Message processing failed: Query cancelled"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": [
+                                            "Message processing failed: Query cancelled"
+                                        ],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "CANCELLED",
@@ -1130,7 +1162,10 @@ def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -1145,7 +1180,12 @@ def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Message processing failed: some error"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": [
+                                            "Message processing failed: some error"
+                                        ],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "FAILED",
@@ -1186,7 +1226,10 @@ def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspa
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": ["Processing"],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "EXECUTING_QUERY",
@@ -1201,7 +1244,12 @@ def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspa
                             "type": "text",
                             "text": json.dumps(
                                 {
-                                    "content": {"queryAttachments": [], "textAttachments": ["Message processing failed: Result expired"]},
+                                    "content": {
+                                        "queryAttachments": [],
+                                        "textAttachments": [
+                                            "Message processing failed: Result expired"
+                                        ],
+                                    },
                                     "conversationId": "123",
                                     "messageId": "456",
                                     "status": "QUERY_RESULT_EXPIRED",
@@ -1244,7 +1292,10 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
                                     "type": "text",
                                     "text": json.dumps(
                                         {
-                                            "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                            "content": {
+                                                "queryAttachments": [],
+                                                "textAttachments": ["Processing"],
+                                            },
                                             "conversationId": "123",
                                             "messageId": "456",
                                             "status": "EXECUTING_QUERY",
@@ -1259,7 +1310,10 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
                                     "type": "text",
                                     "text": json.dumps(
                                         {
-                                            "content": {"queryAttachments": [], "textAttachments": ["Still processing"]},
+                                            "content": {
+                                                "queryAttachments": [],
+                                                "textAttachments": ["Still processing"],
+                                            },
                                             "conversationId": "123",
                                             "messageId": "456",
                                             "status": "EXECUTING_QUERY",
@@ -1274,7 +1328,10 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
                                     "type": "text",
                                     "text": json.dumps(
                                         {
-                                            "content": {"queryAttachments": [], "textAttachments": ["Should not reach"]},
+                                            "content": {
+                                                "queryAttachments": [],
+                                                "textAttachments": ["Should not reach"],
+                                            },
                                             "conversationId": "123",
                                             "messageId": "456",
                                             "status": "EXECUTING_QUERY",
@@ -1324,7 +1381,10 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                         "type": "text",
                         "text": json.dumps(
                             {
-                                "content": {"queryAttachments": [], "textAttachments": ["Processing"]},
+                                "content": {
+                                    "queryAttachments": [],
+                                    "textAttachments": ["Processing"],
+                                },
                                 "conversationId": "123",
                                 "messageId": "456",
                                 "status": "EXECUTING_QUERY",

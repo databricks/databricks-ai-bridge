@@ -214,7 +214,10 @@ def _parse_genie_mcp_response(
             description = first_query.get("description", "")
             statement_response = first_query.get("statement_response")
 
-            if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
+            if (
+                statement_response
+                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
+            ):
                 result = _parse_query_result(statement_response, truncate_results, return_pandas)
             elif text_attachments:
                 result = text_attachments[0]
