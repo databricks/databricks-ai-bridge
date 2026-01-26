@@ -25,6 +25,7 @@ import { convertPromptToFmapiMessages } from './fmapi-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import { mapFmapiFinishReason } from './fmapi-finish-reason'
+import { callOptionsToFmapiArgs } from './call-options-to-fmapi-args'
 
 export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = 'v2'
@@ -47,7 +48,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   async doGenerate(
     options: Parameters<LanguageModelV2['doGenerate']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
-    const networkArgs = await this.getArgs({
+    const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
       stream: false,
@@ -76,14 +77,14 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
         outputTokens: response.usage?.completion_tokens ?? 0,
         totalTokens: response.usage?.total_tokens ?? 0,
       },
-      warnings: [],
+      warnings,
     }
   }
 
   async doStream(
     options: Parameters<LanguageModelV2['doStream']>[0]
   ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
-    const networkArgs = await this.getArgs({
+    const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
       stream: true,
@@ -119,7 +120,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
             LanguageModelV2StreamPart
           >({
             start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] })
+              controller.enqueue({ type: 'stream-start', warnings })
             },
 
             transform(chunk, controller) {
@@ -222,6 +223,9 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
     const { messages } = await convertPromptToFmapiMessages(options.prompt)
 
+    // Convert call options to FMAPI args
+    const { args: callArgs, warnings } = callOptionsToFmapiArgs(options)
+
     return {
       url: config.url({
         path: '/chat/completions',
@@ -233,12 +237,9 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
         model: modelId,
         ...(tools && tools.length > 0 ? { tools } : {}),
         ...(toolChoice && tools && tools.length > 0 ? { tool_choice: toolChoice } : {}),
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(options.maxOutputTokens !== undefined ? { max_tokens: options.maxOutputTokens } : {}),
-        ...(options.stopSequences && options.stopSequences.length > 0
-          ? { stop: options.stopSequences }
-          : {}),
+        ...callArgs,
       },
+      warnings,
       fetch: config.fetch,
     }
   }
