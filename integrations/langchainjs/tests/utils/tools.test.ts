@@ -228,5 +228,4 @@ describe("getToolNameFromAiSDKTool", () => {
 
     expect(result).toBe(DATABRICKS_TOOL_CALL_ID);
   });
-
 });

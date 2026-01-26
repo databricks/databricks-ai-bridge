@@ -39,6 +39,7 @@
     "lint:fix": "eslint src --ext ts --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
+    "format:fix": "prettier . --write",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.config.int.ts",

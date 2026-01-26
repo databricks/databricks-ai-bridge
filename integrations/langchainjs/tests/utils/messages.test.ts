@@ -324,5 +324,4 @@ describe("convertGenerateTextResultToChatResult", () => {
     expect(chatResult.generations[0].generationInfo?.finish_reason).toBe("stop");
     expect(chatResult.llmOutput?.tokenUsage).toBeUndefined();
   });
-
 });
