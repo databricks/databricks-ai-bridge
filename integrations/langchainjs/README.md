@@ -1,4 +1,4 @@
-# @databricks/langchain-ts
+# @databricks/langchainjs
 
 LangChain TypeScript integration for Databricks Model Serving.
 
@@ -20,13 +20,13 @@ This package provides a `ChatDatabricks` class that integrates with the LangChai
 ## Installation
 
 ```bash
-npm install @databricks/langchain-ts
+npm install @databricks/langchainjs
 ```
 
 ## Quick Start
 
 ```typescript
-import { ChatDatabricks } from "@databricks/langchain-ts";
+import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
   endpoint: "databricks-meta-llama-3-3-70b-instruct",
@@ -170,6 +170,27 @@ const weatherTool = tool(
 );
 
 const modelWithTools = model.bindTools([weatherTool]);
+```
+
+## Using with LangChain Agents
+
+`ChatDatabricks` works with LangChain's `createAgent`:
+
+```typescript
+import { createAgent } from "langchain";
+import { ChatDatabricks } from "@databricks/langchainjs";
+
+const model = new ChatDatabricks({
+  endpoint: "databricks-meta-llama-3-3-70b-instruct",
+  endpointAPI: "chat-completions",
+});
+
+const agent = createAgent({
+  llm: model,
+  tools: [weatherTool, searchTool],
+});
+
+const result = await agent.invoke("What's the weather in Paris?");
 ```
 
 ## Configuration Options

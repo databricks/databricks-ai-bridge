@@ -31,7 +31,7 @@ const EXAMPLE_CONFIG = {
   endpointAPI: "chat-completions",
   // endpoint: "databricks-gpt-5-2",
   // endpointAPI: "responses",
-} as const
+} as const;
 
 // ============================================================================
 // Tool Definitions - Multiple formats supported

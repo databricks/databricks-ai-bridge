@@ -1,12 +1,12 @@
-name: langchain-ts
+name: langchainjs
 
 on:
   push:
     branches:
       - main
     paths:
-      - "integrations/langchain-ts/**"
-      - ".github/workflows/langchain-ts.yml"
+      - "integrations/langchainjs/**"
+      - ".github/workflows/langchainjs.yml"
   pull_request:
     types:
       - opened
@@ -14,13 +14,13 @@ on:
       - reopened
       - ready_for_review
     paths:
-      - "integrations/langchain-ts/**"
-      - ".github/workflows/langchain-ts.yml"
+      - "integrations/langchainjs/**"
+      - ".github/workflows/langchainjs.yml"
   workflow_dispatch:
 
 defaults:
   run:
-    working-directory: integrations/langchain-ts
+    working-directory: integrations/langchainjs
 
 jobs:
   test:

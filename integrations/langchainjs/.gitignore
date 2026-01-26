@@ -31,3 +31,5 @@ yarn-error.log*
 # Lock files (using npm)
 yarn.lock
 pnpm-lock.yaml
+
+.claude/

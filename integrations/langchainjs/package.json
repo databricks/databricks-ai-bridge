@@ -1,5 +1,5 @@
 {
-  "name": "@databricks/langchain-ts",
+  "name": "@databricks/langchainjs",
   "version": "0.1.0",
   "description": "LangChain integration for Databricks Model Serving",
   "author": {
@@ -74,12 +74,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/databricks/databricks-ai-bridge.git",
-    "directory": "integrations/langchain-ts"
+    "directory": "integrations/langchainjs"
   },
   "bugs": {
     "url": "https://github.com/databricks/databricks-ai-bridge/issues"
   },
-  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain-ts#readme",
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchainjs#readme",
   "keywords": [
     "databricks",
     "langchain",

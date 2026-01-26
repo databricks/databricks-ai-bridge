@@ -12,8 +12,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { ChatDatabricks } from "../src/chat_models.js";
 
-const ENDPOINT_NAME = 'databricks-claude-sonnet-4-5';
-const ENDPOINT_API = 'chat-completions';
+const ENDPOINT_NAME = "databricks-claude-sonnet-4-5";
+const ENDPOINT_API = "chat-completions";
 
 // Skip all tests if no Databricks credentials are configured
 const hasCredentials = process.env.DATABRICKS_HOST || process.env.DATABRICKS_TOKEN;

@@ -23,7 +23,7 @@ const EXAMPLE_CONFIG = {
   // For an example that uses the Responses API:
   // endpoint: "databricks-gpt-5-2",
   // endpointAPI: "responses",
-} as const
+} as const;
 
 async function main() {
   console.log("=== FMAPI (Foundation Model API) ===\n");

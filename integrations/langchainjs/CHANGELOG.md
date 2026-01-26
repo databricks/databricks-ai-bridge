@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of `@databricks/langchain-ts`
+- Initial release of `@databricks/langchainjs`
 - `ChatDatabricks` class implementing LangChain `BaseChatModel` interface
 - Support for three endpoint APIs:
   - `chat-completions`: OpenAI-compatible chat completions for Foundation Models

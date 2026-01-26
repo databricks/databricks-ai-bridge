@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to `@databricks/langchain-ts`.
+Thank you for your interest in contributing to `@databricks/langchainjs`.
 
 ## Development Setup
 

@@ -26,7 +26,7 @@ const EXAMPLE_CONFIG = {
   endpointAPI: "chat-completions",
   // endpoint: "databricks-gpt-5-2",
   // endpointAPI: "responses",
-} as const
+} as const;
 
 // Simulated database
 const customers: Record<string, { id: string; name: string; email: string; tier: string }> = {
