@@ -11,7 +11,10 @@ export type FmapiBodyArgs = {
   top_k?: number
   stop?: string[]
   n?: number
-  response_format?: { type: 'text' } | { type: 'json_object' } | { type: 'json_schema'; json_schema: unknown }
+  response_format?:
+    | { type: 'text' }
+    | { type: 'json_object' }
+    | { type: 'json_schema'; json_schema: unknown }
   logprobs?: boolean
   top_logprobs?: number
   reasoning_effort?: 'low' | 'medium' | 'high'
@@ -43,7 +46,9 @@ export function callOptionsToFmapiArgs(options: LanguageModelV2CallOptions): {
 } {
   const warnings: LanguageModelV2CallWarning[] = []
 
-  const databricksOptions = options.providerOptions?.databricks as DatabricksFmapiProviderOptions | undefined
+  const databricksOptions = options.providerOptions?.databricks as
+    | DatabricksFmapiProviderOptions
+    | undefined
 
   // Generate warnings for unsupported options
   if (options.presencePenalty != null) {

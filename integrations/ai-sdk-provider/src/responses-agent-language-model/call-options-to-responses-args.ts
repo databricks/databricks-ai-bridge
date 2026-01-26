@@ -14,7 +14,10 @@ export type ResponsesBodyArgs = {
     effort?: 'low' | 'medium' | 'high'
   }
   text?: {
-    format?: { type: 'text' } | { type: 'json_object' } | { type: 'json_schema'; json_schema: unknown }
+    format?:
+      | { type: 'text' }
+      | { type: 'json_object' }
+      | { type: 'json_schema'; json_schema: unknown }
   }
 }
 
@@ -45,7 +48,9 @@ export function callOptionsToResponsesArgs(options: LanguageModelV2CallOptions):
   const warnings: LanguageModelV2CallWarning[] = []
 
   // Extract Databricks-specific provider options
-  const databricksOptions = options.providerOptions?.databricks as DatabricksProviderOptions | undefined
+  const databricksOptions = options.providerOptions?.databricks as
+    | DatabricksProviderOptions
+    | undefined
 
   // Generate warnings for unsupported options
   if (options.topK != null) {
