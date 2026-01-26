@@ -4,11 +4,24 @@ import pytest
 from databricks.sdk.service.dashboards import GenieSpace
 from databricks_ai_bridge.genie import Genie, GenieResponse
 from langchain_core.messages import AIMessage
+from packaging.version import Version
 
 from databricks_langchain.genie import (
     GenieAgent,
     _concat_messages_array,
     _query_genie_as_agent,
+)
+
+try:
+    import langchain_core
+
+    LANGCHAIN_CORE_VERSION = Version(langchain_core.__version__)
+except (ImportError, AttributeError):
+    LANGCHAIN_CORE_VERSION = Version("0.0.0")
+
+SKIP_ON_LANGCHAIN_V04_V05 = pytest.mark.skipif(
+    Version("0.4.0") <= LANGCHAIN_CORE_VERSION < Version("0.6.0"),
+    reason="Test has mock compatibility issues with langchain-core 0.4.x and 0.5.x",
 )
 
 
@@ -57,6 +70,7 @@ def test_concat_messages_array():
     assert result == expected
 
 
+@SKIP_ON_LANGCHAIN_V04_V05
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
@@ -105,6 +119,7 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
         assert result == expected_messages
 
 
+@SKIP_ON_LANGCHAIN_V04_V05
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
 @patch("langchain_core.runnables.RunnableLambda")
@@ -147,6 +162,7 @@ def test_create_genie_agent_with_description(
     assert agent == MockRunnableLambda.return_value
 
 
+@SKIP_ON_LANGCHAIN_V04_V05
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
 def test_query_genie_with_client(mock_workspace_client, MockMCPClient):
