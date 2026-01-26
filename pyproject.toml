@@ -107,3 +107,7 @@ filterwarnings = [
 
 [tool.uv.sources]
 databricks-mcp = { path = "databricks_mcp/", editable = true }
+databricks-langchain = { path = "integrations/langchain/", editable = true }
+databricks-openai = { path = "integrations/openai/", editable = true }
+databricks-dspy = { path = "integrations/dspy/", editable = true }
+databricks-llamaindex = { path = "integrations/llamaindex/", editable = true }
