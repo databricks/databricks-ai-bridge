@@ -12,7 +12,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { ChatDatabricks } from "../src/chat_models.js";
 
-const ENDPOINT_NAME = process.env.TEST_ENDPOINT_NAME || "databricks-meta-llama-3-3-70b-instruct";
+const ENDPOINT_NAME = 'databricks-claude-sonnet-4-5';
+const ENDPOINT_API = 'chat-completions';
 
 // Skip all tests if no Databricks credentials are configured
 const hasCredentials = process.env.DATABRICKS_HOST || process.env.DATABRICKS_TOKEN;
@@ -23,6 +24,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
   beforeAll(() => {
     model = new ChatDatabricks({
       endpoint: ENDPOINT_NAME,
+      endpointAPI: ENDPOINT_API,
       maxTokens: 100,
     });
   });
@@ -199,8 +201,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       const finalChunk = chunks[chunks.length - 1];
       // Tool calls may be accumulated in the final chunk
       expect(
-        finalChunk.tool_calls !== undefined ||
-          finalChunk.tool_call_chunks !== undefined
+        finalChunk.tool_calls !== undefined || finalChunk.tool_call_chunks !== undefined
       ).toBeTruthy();
     });
   });
@@ -209,6 +210,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     it("respects temperature parameter", async () => {
       const coldModel = new ChatDatabricks({
         endpoint: ENDPOINT_NAME,
+        endpointAPI: ENDPOINT_API,
         temperature: 0,
         maxTokens: 50,
       });
@@ -227,6 +229,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     it("respects maxTokens parameter", async () => {
       const shortModel = new ChatDatabricks({
         endpoint: ENDPOINT_NAME,
+        endpointAPI: ENDPOINT_API,
         maxTokens: 10,
       });
 
@@ -242,6 +245,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     it("respects stop sequences", async () => {
       const modelWithStop = new ChatDatabricks({
         endpoint: ENDPOINT_NAME,
+        endpointAPI: ENDPOINT_API,
         maxTokens: 100,
         stop: ["5"],
       });
@@ -260,6 +264,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     it("throws on invalid endpoint", async () => {
       const badModel = new ChatDatabricks({
         endpoint: "nonexistent-endpoint-12345",
+        endpointAPI: ENDPOINT_API,
       });
 
       await expect(badModel.invoke([new HumanMessage("Hello")])).rejects.toThrow();

@@ -59,7 +59,7 @@ function convertSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
 export function convertToAISDKToolSet(tools: BindToolsInput[]): ToolSet {
   const toolSet: ToolSet = {
     // Include the Databricks tool to allow for tools executed by the model to be called
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION
+    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
   };
 
   for (const t of tools) {
@@ -140,9 +140,16 @@ export function convertToAISDKToolSet(tools: BindToolsInput[]): ToolSet {
   return toolSet;
 }
 
-export const getToolNameFromAiSDKTool = (toolStreamPart: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' | 'tool-input-start' }> | TypedToolCall<ToolSet>) => {
-  if (toolStreamPart.toolName === DATABRICKS_TOOL_CALL_ID && toolStreamPart.providerMetadata?.databricks?.toolName) {
+export const getToolNameFromAiSDKTool = (
+  toolStreamPart:
+    | Extract<TextStreamPart<ToolSet>, { type: "tool-call" | "tool-input-start" }>
+    | TypedToolCall<ToolSet>
+): string => {
+  if (
+    toolStreamPart.toolName === DATABRICKS_TOOL_CALL_ID &&
+    toolStreamPart.providerMetadata?.databricks?.toolName
+  ) {
     return toolStreamPart.providerMetadata.databricks.toolName as string;
   }
   return toolStreamPart.toolName;
-}
+};

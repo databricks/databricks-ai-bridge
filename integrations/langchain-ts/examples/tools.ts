@@ -26,6 +26,12 @@ import {
 } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 
+const EXAMPLE_CONFIG = {
+  endpoint: "databricks-claude-sonnet-4-5",
+  endpointAPI: "chat-completions",
+  // endpoint: "databricks-gpt-5-2",
+  // endpointAPI: "responses",
+} as const
 
 // ============================================================================
 // Tool Definitions - Multiple formats supported
@@ -201,15 +207,8 @@ async function main() {
 
   // Initialize the model
   const model = new ChatDatabricks({
-    endpoint: "databricks-claude-sonnet-4-5",
-    endpointAPI: "chat-completions",
-    // endpoint: "databricks-gpt-5-2",
-    // endpointAPI: "responses",
+    ...EXAMPLE_CONFIG,
     maxTokens: 1024,
-    auth: {
-      host: process.env.DATABRICKS_HOST,
-      token: process.env.DATABRICKS_TOKEN,
-    },
   });
 
   // Bind all tools (demonstrating different formats)

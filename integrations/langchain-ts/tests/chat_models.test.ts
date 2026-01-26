@@ -369,6 +369,7 @@ describe("ChatDatabricks", () => {
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
+        endpointAPI: "chat-completions",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -376,9 +377,10 @@ describe("ChatDatabricks", () => {
       });
 
       expect(model.endpoint).toBe("test-endpoint");
+      expect(model.endpointAPI).toBe("chat-completions");
     });
 
-    it("supports endpoint types", async () => {
+    it("supports endpoint APIs", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
       const auth = {
@@ -386,68 +388,47 @@ describe("ChatDatabricks", () => {
         token: "test-token",
       };
 
-      const fmapiModel = new ChatDatabricks({
+      const chatCompletionsModel = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointType: "fmapi",
+        endpointAPI: "chat-completions",
         auth,
       });
 
       const chatAgentModel = new ChatDatabricks({
         endpoint: "test-agent",
-        endpointType: "chat-agent",
+        endpointAPI: "chat-agent",
         auth,
       });
 
-      const responsesAgentModel = new ChatDatabricks({
+      const responsesModel = new ChatDatabricks({
         endpoint: "test-responses",
-        endpointType: "responses-agent",
+        endpointAPI: "responses",
         auth,
       });
 
-      expect(fmapiModel.endpointType).toBe("fmapi");
-      expect(chatAgentModel.endpointType).toBe("chat-agent");
-      expect(responsesAgentModel.endpointType).toBe("responses-agent");
+      expect(chatCompletionsModel.endpointAPI).toBe("chat-completions");
+      expect(chatAgentModel.endpointAPI).toBe("chat-agent");
+      expect(responsesModel.endpointAPI).toBe("responses");
     });
 
-    it("defaults to fmapi endpoint type", async () => {
+    it("accepts model parameters", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
+        endpointAPI: "chat-completions",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
         },
+        temperature: 0.7,
+        maxTokens: 1000,
+        stop: ["\n\n"],
       });
 
-      expect(model.endpointType).toBe("fmapi");
-    });
-
-    it("throws error when host is missing", async () => {
-      const { ChatDatabricks } = await import("../src/chat_models.js");
-
-      expect(() => {
-        new ChatDatabricks({
-          endpoint: "test-endpoint",
-        });
-      }).toThrow("Databricks host is required");
-    });
-
-    it("throws error when token is missing", async () => {
-      const { ChatDatabricks } = await import("../src/chat_models.js");
-
-      // Set host via env var but not token
-      process.env.DATABRICKS_HOST = "https://test.databricks.com";
-      delete process.env.DATABRICKS_TOKEN;
-
-      expect(() => {
-        new ChatDatabricks({
-          endpoint: "test-endpoint",
-        });
-      }).toThrow("Databricks token is required");
-
-      // Clean up
-      delete process.env.DATABRICKS_HOST;
+      expect(model.temperature).toBe(0.7);
+      expect(model.maxTokens).toBe(1000);
+      expect(model.stop).toEqual(["\n\n"]);
     });
   });
 });

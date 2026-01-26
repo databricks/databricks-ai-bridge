@@ -2,6 +2,11 @@
   "name": "@databricks/langchain-ts",
   "version": "0.1.0",
   "description": "LangChain integration for Databricks Model Serving",
+  "author": {
+    "name": "Databricks",
+    "email": "agent-feedback@databricks.com"
+  },
+  "license": "Databricks License",
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
@@ -19,7 +24,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=18.0.0"
@@ -36,7 +43,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.config.int.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build",
+    "check-package": "attw --pack .",
+    "prepublishOnly": "npm run build && npm run test && npm run lint && npm run format:check",
     "example": "tsx examples/basic.ts",
     "example:tools": "tsx examples/tools.ts",
     "example:agent": "tsx examples/agent.ts"
@@ -51,6 +59,7 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.15.0",
     "@types/node": "^22.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^9.0.0",
@@ -65,12 +74,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/databricks/databricks-ai-bridge.git",
-    "directory": "integrations/langchain-js"
+    "directory": "integrations/langchain-ts"
   },
   "bugs": {
     "url": "https://github.com/databricks/databricks-ai-bridge/issues"
   },
-  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain-js#readme",
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/langchain-ts#readme",
   "keywords": [
     "databricks",
     "langchain",

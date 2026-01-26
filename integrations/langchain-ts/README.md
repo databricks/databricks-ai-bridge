@@ -9,13 +9,19 @@ This package provides a `ChatDatabricks` class that integrates with the LangChai
 - Compatible with LangChain's `BaseChatModel` interface
 - Supports streaming responses
 - Supports tool/function calling
-- Multiple endpoint types: FMAPI, Chat Agent, and Responses Agent
+- Multiple endpoint APIs: Chat Completions, Chat Agent, and Responses
 - Automatic authentication via Databricks SDK
 
 ## Requirements
 
 - Node.js >= 18.0.0
 - A Databricks workspace with Model Serving enabled
+
+## Installation
+
+```bash
+npm install @databricks/langchain-ts
+```
 
 ## Quick Start
 
@@ -24,24 +30,25 @@ import { ChatDatabricks } from "@databricks/langchain-ts";
 
 const model = new ChatDatabricks({
   endpoint: "databricks-meta-llama-3-3-70b-instruct",
+  endpointAPI: "chat-completions",
 });
 
 const response = await model.invoke("Hello, how are you?");
 console.log(response.content);
 ```
 
-## Endpoint Types
+## Endpoint APIs
 
-ChatDatabricks supports three endpoint types:
+ChatDatabricks supports three endpoint APIs via the `endpointAPI` parameter:
 
-### FMAPI (Foundation Model API) - Default
+### Chat Completions
 
 OpenAI-compatible chat completions for Foundation Models.
 
 ```typescript
 const model = new ChatDatabricks({
   endpoint: "databricks-meta-llama-3-3-70b-instruct",
-  endpointType: "fmapi", // Default, can be omitted
+  endpointAPI: "chat-completions",
 });
 ```
 
@@ -52,24 +59,24 @@ Databricks agent chat completion for deployed agents.
 ```typescript
 const model = new ChatDatabricks({
   endpoint: "my-chat-agent",
-  endpointType: "chat-agent",
+  endpointAPI: "chat-agent",
 });
 ```
 
-### Responses Agent
+### Responses
 
 Rich output with reasoning, citations, and function calls.
 
 ```typescript
 const model = new ChatDatabricks({
   endpoint: "my-responses-agent",
-  endpointType: "responses-agent",
+  endpointAPI: "responses",
 });
 ```
 
 ## Authentication
 
-ChatDatabricks uses the [Databricks SDK](https://docs.databricks.com/en/dev-tools/sdk-typescript.html) for authentication, which automatically detects credentials from:
+ChatDatabricks uses the [Databricks SDK](https://github.com/databricks/databricks-sdk-js?tab=readme-ov-file#authentication) for authentication, which automatically detects credentials from:
 
 - Environment variables (`DATABRICKS_HOST`, `DATABRICKS_TOKEN`)
 - Databricks CLI config (`~/.databrickscfg`)
@@ -81,6 +88,7 @@ ChatDatabricks uses the [Databricks SDK](https://docs.databricks.com/en/dev-tool
 // Credentials are automatically detected
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
+  endpointAPI: "chat-completions",
 });
 ```
 
@@ -91,6 +99,7 @@ You can also pass credentials directly via the `auth` field:
 ```typescript
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
+  endpointAPI: "chat-completions",
   auth: {
     host: "https://your-workspace.databricks.com",
     token: "dapi...",
@@ -169,9 +178,7 @@ const modelWithTools = model.bindTools([weatherTool]);
 const model = new ChatDatabricks({
   // Required
   endpoint: "your-endpoint-name",
-
-  // Endpoint type (optional, defaults to "fmapi")
-  endpointType: "fmapi", // or "chat-agent" or "responses-agent"
+  endpointAPI: "chat-completions", // or "chat-agent" or "responses"
 
   // Model parameters (optional)
   temperature: 0.7,
@@ -253,3 +260,14 @@ npm run typecheck
 npm run lint
 npm run format
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines.
+
+## Links
+
+- [Databricks AI Bridge](https://github.com/databricks/databricks-ai-bridge)
+- [LangChain.js](https://js.langchain.com/)
+- [Databricks Model Serving](https://docs.databricks.com/machine-learning/model-serving/index.html)
+- [Databricks TypeScript SDK](https://docs.databricks.com/en/dev-tools/sdk-typescript.html)

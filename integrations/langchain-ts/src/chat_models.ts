@@ -38,12 +38,8 @@ export type EndpointAPI = "responses" | "chat-completions" | "chat-agent";
 /**
  * Authentication options for Databricks
  */
-export interface DatabricksAuth {
-  /** Databricks workspace host URL (e.g., https://your-workspace.databricks.com) */
-  host?: string;
-  /** Personal access token or OAuth token */
-  token?: string;
-}
+type DatabricksSdkConfig = ConstructorParams<typeof Config>[0];
+type ConstructorParams<T> = T extends new (...args: infer A) => any ? A : never;
 
 /**
  * Options that can be passed at call time
@@ -88,7 +84,7 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
    * If not provided Databricks SDK with automatically
    * attempt authentication using environment variables or CLI
    */
-  auth?: DatabricksAuth;
+  auth?: DatabricksSdkConfig;
 
   /** Temperature (0.0 - 2.0) */
   temperature?: number;
@@ -173,13 +169,13 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   extraParams?: Record<string, unknown>;
 
   /** Authentication credentials */
-  private auth?: DatabricksAuth;
+  private auth?: DatabricksSdkConfig;
 
   /** Databricks AI SDK Provider */
-  private provider: DatabricksProvider;
+  private provider: Promise<DatabricksProvider>;
 
   /** AI SDK Language Model */
-  private languageModel: LanguageModel;
+  private languageModel: Promise<LanguageModel>;
 
   /** Bound tools */
   private boundTools?: BindToolsInput[];
@@ -208,11 +204,10 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   /**
    * Create the Databricks AI SDK Provider with authentication
    */
-  private createProvider(): DatabricksProvider {
-    const config = new Config({
-      host: this.auth?.host,
-      token: this.auth?.token,
-    });
+  private async createProvider(): Promise<DatabricksProvider> {
+    const config = new Config(this.auth ?? {});
+
+    await config.ensureResolved();
 
     // Capture the global fetch to avoid recursion when passing custom fetch to the provider
     const globalFetch = globalThis.fetch;
@@ -239,15 +234,16 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     });
   }
 
-  private getLanguageModel(): LanguageModel {
+  private async getLanguageModel(): Promise<LanguageModel> {
+    const provider = await this.provider;
     switch (this.endpointAPI) {
       case "chat-agent":
-        return this.provider.chatAgent(this.endpoint) as LanguageModel;
+        return provider.chatAgent(this.endpoint) as LanguageModel;
       case "responses":
-        return this.provider.responses(this.endpoint) as LanguageModel;
+        return provider.responses(this.endpoint) as LanguageModel;
       case "chat-completions":
       default:
-        return this.provider.chatCompletions(this.endpoint) as LanguageModel;
+        return provider.chatCompletions(this.endpoint) as LanguageModel;
     }
   }
 
@@ -278,9 +274,11 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     // Merge extra params from instance and options
     const extraParams = { ...this.extraParams, ...options.extraParams };
 
+    const languageModel = await this.languageModel;
+
     // Use generateText from AI SDK
     const result = await generateText({
-      model: this.languageModel,
+      model: languageModel,
       messages: modelMessages,
       tools: aiSdkTools,
       toolChoice: toolChoice as "auto" | "none" | "required" | undefined,
@@ -325,9 +323,11 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     // Merge extra params from instance and options
     const extraParams = { ...this.extraParams, ...options.extraParams };
 
+    const languageModel = await this.languageModel;
+
     // Use streamText from AI SDK for high-level streaming with normalized events
     const result = streamText({
-      model: this.languageModel,
+      model: languageModel,
       messages: modelMessages,
       tools: aiSdkTools,
       toolChoice: toolChoice as "auto" | "none" | "required" | undefined,

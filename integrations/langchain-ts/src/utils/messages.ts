@@ -12,7 +12,12 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { ChatResult, ChatGeneration, ChatGenerationChunk } from "@langchain/core/outputs";
-import { type GenerateTextResult, type ToolSet, type ModelMessage, type StreamTextResult } from "ai";
+import {
+  type GenerateTextResult,
+  type ToolSet,
+  type ModelMessage,
+  type StreamTextResult,
+} from "ai";
 import { getToolNameFromAiSDKTool } from "./tools.js";
 
 type UserContent = Extract<ModelMessage, { role: "user" }>["content"];
@@ -43,7 +48,7 @@ export function convertLangChainToModelMessages(messages: BaseMessage[]): ModelM
           } else if (part.type === "image_url") {
             throw new Error(
               "Image content is not yet supported in ChatDatabricks. " +
-              "Please use text-only messages."
+                "Please use text-only messages."
             );
           }
         }
@@ -161,10 +166,10 @@ export function convertGenerateTextResultToChatResult(
     llmOutput: {
       tokenUsage: result.usage
         ? {
-          promptTokens: result.usage.inputTokens ?? 0,
-          completionTokens: result.usage.outputTokens ?? 0,
-          totalTokens: result.usage.totalTokens ?? 0,
-        }
+            promptTokens: result.usage.inputTokens ?? 0,
+            completionTokens: result.usage.outputTokens ?? 0,
+            totalTokens: result.usage.totalTokens ?? 0,
+          }
         : undefined,
     },
   };
@@ -180,7 +185,8 @@ export async function* convertStreamTextResultToChunks(
   result: StreamTextResult<ToolSet, unknown>
 ): AsyncGenerator<ChatGenerationChunk> {
   // Track accumulated tool calls for streaming
-  const partialToolCalls: Map<string, { toolName: string; input: string; index: number }> = new Map();
+  const partialToolCalls: Map<string, { toolName: string; input: string; index: number }> =
+    new Map();
   // Track tool call IDs that were already processed via tool-input-start (streaming)
   // to avoid duplicates when tool-call events arrive for the same tool call
   const streamedToolCallIds: Set<string> = new Set();

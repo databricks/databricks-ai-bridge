@@ -17,20 +17,21 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
+const EXAMPLE_CONFIG = {
+  endpoint: "databricks-claude-sonnet-4-5",
+  endpointAPI: "chat-completions",
+  // For an example that uses the Responses API:
+  // endpoint: "databricks-gpt-5-2",
+  // endpointAPI: "responses",
+} as const
+
 async function main() {
   console.log("=== FMAPI (Foundation Model API) ===\n");
 
   // Initialize the model
   const model = new ChatDatabricks({
-    endpoint: "databricks-claude-sonnet-4-5",
-    endpointAPI: "chat-completions",
-    // endpoint: "databricks-gpt-5-2",
-    // endpointAPI: "responses",
+    ...EXAMPLE_CONFIG,
     maxTokens: 256,
-    auth: {
-      host: process.env.DATABRICKS_HOST,
-      token: process.env.DATABRICKS_TOKEN,
-    },
   });
 
   // Simple string input
