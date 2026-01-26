@@ -178,6 +178,13 @@ def _parse_genie_mcp_response(
     conversation_id: Optional[str] = None,
     message_id: Optional[str] = None,
 ) -> GenieResponse:
+    # DEBUG: Print raw MCP response
+    print(f"DEBUG mcp_result: {mcp_result}")
+    if mcp_result.content:
+        print(f"DEBUG content[0]: {mcp_result.content[0]}")
+        if hasattr(mcp_result.content[0], 'text'):
+            print(f"DEBUG content[0].text: {mcp_result.content[0].text[:500]}")
+
     if not mcp_result.content or len(mcp_result.content) == 0:
         return GenieResponse(
             result="No content returned from Genie",
