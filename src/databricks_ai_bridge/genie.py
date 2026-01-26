@@ -205,25 +205,35 @@ def _parse_genie_mcp_response(
             message_id=message_id,
         )
 
-    content = genie_response.get("content", "")
+    content = genie_response.get("content", {})
     conv_id = genie_response.get("conversationId", conversation_id)
     msg_id = genie_response.get("messageId", message_id)
     query_str = ""
     description = ""
 
     try:
-        content_data = json.loads(content)
-        query_str = content_data.get("query", "")
-        description = content_data.get("description", "")
-        statement_response = content_data.get("statement_response")
+        query_attachments = content.get("queryAttachments", [])
+        text_attachments = content.get("textAttachments", [])
 
-        if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
-            result = _parse_query_result(statement_response, truncate_results, return_pandas)
+        if query_attachments:
+            first_query = query_attachments[0]
+            query_str = first_query.get("query", "")
+            description = first_query.get("description", "")
+            statement_response = first_query.get("statement_response")
+
+            if statement_response and statement_response.get("status", {}).get("state") == "SUCCEEDED":
+                result = _parse_query_result(statement_response, truncate_results, return_pandas)
+            elif text_attachments:
+                result = text_attachments[0]
+            else:
+                result = str(content)
+        elif text_attachments:
+            result = text_attachments[0]
         else:
-            result = content
+            result = str(content)
 
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-        result = content
+    except (KeyError, TypeError, AttributeError):
+        result = str(content)
 
     return GenieResponse(
         result=result,
