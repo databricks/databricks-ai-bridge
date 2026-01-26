@@ -91,7 +91,7 @@ export const responsesAgentResponseSchema = z.object({
   output: z.array(responsesAgentOutputItem),
   incomplete_details: z
     .object({
-      reason: z.enum(['max_output_tokens', 'content_filter']).optional(),
+      reason: z.string().nullish().optional(),
     })
     .nullish(),
   usage: z
@@ -174,7 +174,7 @@ const responsesCompletedSchema = z.object({
       .optional(),
     incomplete_details: z
       .object({
-        reason: z.enum(['max_output_tokens', 'content_filter']).optional(),
+        reason: z.string().nullish().optional(),
       })
       .nullish(),
     usage: z.object({

@@ -24,6 +24,7 @@ import {
 import { convertPromptToFmapiMessages } from './fmapi-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
+import { mapFmapiFinishReason } from './fmapi-finish-reason'
 
 export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = 'v2'
@@ -65,10 +66,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
     // Determine finish reason from response
     const choice = response.choices[0]
-    let finishReason: LanguageModelV2FinishReason = 'stop'
-    if (choice?.finish_reason === 'tool_calls') {
-      finishReason = 'tool-calls'
-    }
+    const finishReason = mapFmapiFinishReason(choice?.finish_reason)
 
     return {
       content: convertFmapiResponseToMessagePart(response),
@@ -138,11 +136,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
               // Track finish reason from chunk
               const choice = chunk.value.choices[0]
-              if (choice?.finish_reason === 'stop') {
-                finishReason = 'stop'
-              } else if (choice?.finish_reason === 'tool_calls') {
-                finishReason = 'tool-calls'
-              }
+              finishReason = mapFmapiFinishReason(choice?.finish_reason)
 
               // Track usage from chunk
               if (chunk.value.usage) {
