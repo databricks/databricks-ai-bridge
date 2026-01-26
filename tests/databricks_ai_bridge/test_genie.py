@@ -86,6 +86,36 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
         assert genie_result.message_id == "456"
 
 
+def test_poll_for_result_joins_multiple_text_attachments(genie, mock_workspace_client):
+    """Multiple text attachments are joined with newlines."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": [
+                                "First message",
+                                "Second message",
+                                "Third message",
+                            ],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        genie_result = genie.poll_for_result("123", "456")
+        assert genie_result.result == "First message\nSecond message\nThird message"
+
+
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
     mock_mcp_result = CallToolResult(
         content=[

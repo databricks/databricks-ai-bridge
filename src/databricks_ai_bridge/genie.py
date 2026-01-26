@@ -220,11 +220,11 @@ def _parse_genie_mcp_response(
             ):
                 result = _parse_query_result(statement_response, truncate_results, return_pandas)
             elif text_attachments:
-                result = text_attachments[0]
+                result = "\n".join(text_attachments)
             else:
                 result = str(content)
         elif text_attachments:
-            result = text_attachments[0]
+            result = "\n".join(text_attachments)
         else:
             result = str(content)
 
