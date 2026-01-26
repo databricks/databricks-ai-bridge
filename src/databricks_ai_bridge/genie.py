@@ -395,7 +395,20 @@ class Genie:
             )
 
     @mlflow.trace()
-    def ask_question(self, question, conversation_id: Optional[str] = None):
+    def ask_question(self, question, conversation_id: Optional[str] = None, poll: bool = True):
+        """
+        Ask a question to Genie and return the response.
+
+        Args:
+            question: The question to ask.
+            conversation_id: Optional conversation ID to continue an existing conversation.
+            poll: If True (default), automatically poll until the query reaches a terminal
+                state (COMPLETED, FAILED, etc.). If False, return immediately with whatever
+                response is available, which may be an intermediate state.
+
+        Returns:
+            GenieResponse with the result, query, description, conversation_id, and message_id.
+        """
         if not self._query_tool_name:
             raise ValueError(
                 f"Query tool not available for Genie space {self.space_id}. "
@@ -407,6 +420,23 @@ class Genie:
             args["conversation_id"] = conversation_id
 
         mcp_result = self._mcp_client.call_tool(self._query_tool_name, args)
-        return _parse_genie_mcp_response(
+
+        response = _parse_genie_mcp_response(
             mcp_result, self.truncate_results, self.return_pandas, conversation_id
         )
+
+        if poll:
+            try:
+                content_block = mcp_result.content[0] if mcp_result.content else None
+                if content_block and hasattr(content_block, "text"):
+                    genie_response = json.loads(content_block.text)
+                    status = genie_response.get("status", "")
+                    if status and status not in TERMINAL_STATES:
+                        return self.poll_for_result(
+                            response.conversation_id or genie_response.get("conversationId"),
+                            response.message_id or genie_response.get("messageId"),
+                        )
+            except (json.JSONDecodeError, AttributeError, IndexError) as e:
+                logging.warning(f"Failed to parse MCP response status for auto-polling: {e}")
+
+        return response

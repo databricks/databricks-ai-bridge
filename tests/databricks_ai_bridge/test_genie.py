@@ -1445,3 +1445,248 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
 
         # should still complete successfully despite tracing failures
         assert result.result == "Success"
+
+def test_ask_question_auto_polls_on_executing_query_status(genie, mock_workspace_client):
+    """Verify ask_question() automatically polls when query returns EXECUTING_QUERY."""
+    mock_query_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Processing"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "EXECUTING_QUERY",
+                    }
+                ),
+            }
+        ]
+    )
+    mock_poll_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Done"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch("time.sleep", return_value=None):
+        with patch.object(
+            genie._mcp_client, "call_tool", side_effect=[mock_query_result, mock_poll_result]
+        ) as mock_call:
+            result = genie.ask_question("Test")
+            assert mock_call.call_count == 2  # query + poll
+            assert result.result == "Done"
+
+
+def test_ask_question_no_poll_on_completed_status(genie, mock_workspace_client):
+    """Verify ask_question() does NOT poll when query returns COMPLETED."""
+    mock_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Answer"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
+        result = genie.ask_question("Test")
+        mock_call.assert_called_once()  # Only query, no poll
+        assert result.result == "Answer"
+
+
+def test_ask_question_blocks_until_complete(genie, mock_workspace_client):
+    """Integration: ask_question blocks until query reaches terminal state."""
+    responses = [
+        CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "content": {
+                                "queryAttachments": [],
+                                "textAttachments": ["Starting"],
+                            },
+                            "conversationId": "123",
+                            "messageId": "456",
+                            "status": "EXECUTING_QUERY",
+                        }
+                    ),
+                }
+            ]
+        ),
+        CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "content": {
+                                "queryAttachments": [],
+                                "textAttachments": ["Still running"],
+                            },
+                            "conversationId": "123",
+                            "messageId": "456",
+                            "status": "EXECUTING_QUERY",
+                        }
+                    ),
+                }
+            ]
+        ),
+        CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "content": {
+                                "queryAttachments": [],
+                                "textAttachments": ["Final"],
+                            },
+                            "conversationId": "123",
+                            "messageId": "456",
+                            "status": "COMPLETED",
+                        }
+                    ),
+                }
+            ]
+        ),
+    ]
+
+    with patch("time.sleep", return_value=None):
+        with patch.object(genie._mcp_client, "call_tool", side_effect=responses) as mock_call:
+            result = genie.ask_question("Test")
+            assert mock_call.call_count == 3
+            assert result.result == "Final"
+
+
+def test_ask_question_uses_correct_ids_for_polling(genie, mock_workspace_client):
+    """Verify auto-polling uses correct conversation_id and message_id."""
+    mock_query_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Processing"],
+                        },
+                        "conversationId": "expected-conv",
+                        "messageId": "expected-msg",
+                        "status": "RUNNING",
+                    }
+                ),
+            }
+        ]
+    )
+    mock_poll_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Done"],
+                        },
+                        "conversationId": "expected-conv",
+                        "messageId": "expected-msg",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch("time.sleep", return_value=None):
+        with patch.object(
+            genie._mcp_client, "call_tool", side_effect=[mock_query_result, mock_poll_result]
+        ) as mock_call:
+            genie.ask_question("Test")
+            poll_call = mock_call.call_args_list[1]
+            assert poll_call[0][1]["conversation_id"] == "expected-conv"
+            assert poll_call[0][1]["message_id"] == "expected-msg"
+
+
+def test_ask_question_handles_missing_status(genie, mock_workspace_client):
+    """Verify ask_question returns response when status field is missing."""
+    mock_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Answer"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        # No status field - should return without polling
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
+        result = genie.ask_question("Test")
+        mock_call.assert_called_once()
+        assert result.result == "Answer"
+
+
+def test_ask_question_poll_false_returns_immediately(genie, mock_workspace_client):
+    """Verify ask_question(poll=False) returns immediately without polling."""
+    mock_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": ["Processing"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "EXECUTING_QUERY",  # Non-terminal state
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
+        result = genie.ask_question("Test", poll=False)
+        mock_call.assert_called_once()  # Only query, no poll despite non-terminal status
+        assert result.result == "Processing"
+        assert result.conversation_id == "123"
+        assert result.message_id == "456"
