@@ -38,7 +38,8 @@ def genie(mock_workspace_client):
 
 def test_start_conversation(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.return_value = {"conversation_id": "123"}
-    response = genie.start_conversation("Hello")
+    with pytest.warns(DeprecationWarning, match="start_conversation.*deprecated"):
+        response = genie.start_conversation("Hello")
     assert response == {"conversation_id": "123"}
     mock_workspace_client.genie._api.do.assert_called_once_with(
         "POST",
@@ -50,7 +51,8 @@ def test_start_conversation(genie, mock_workspace_client):
 
 def test_create_message(genie, mock_workspace_client):
     mock_workspace_client.genie._api.do.return_value = {"message_id": "456"}
-    response = genie.create_message("123", "Hello again")
+    with pytest.warns(DeprecationWarning, match="create_message.*deprecated"):
+        response = genie.create_message("123", "Hello again")
     assert response == {"message_id": "456"}
     mock_workspace_client.genie._api.do.assert_called_once_with(
         "POST",

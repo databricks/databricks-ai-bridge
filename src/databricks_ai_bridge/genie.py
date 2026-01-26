@@ -2,6 +2,7 @@ import bisect
 import json
 import logging
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
@@ -57,6 +58,9 @@ def _parse_query_result(
         row = []
         values = item["values"]
         for column, value_obj in zip(columns, values):
+            # MCP server may return values as either:
+            # - A dict with "string_value" key: {"string_value": "123"}
+            # - A direct value: "123" or None
             value = value_obj.get("string_value") if isinstance(value_obj, dict) else value_obj
 
             type_name = column["type_name"]
@@ -165,7 +169,7 @@ def _end_current_span(client, parent_trace_id, current_span, final_state, error=
             span_id=current_span.span_id,
             attributes=attributes,
         )
-    except Exception as e:
+    except mlflow.exceptions.MlflowTracingException as e:
         logging.warning(f"Failed to end span for {final_state}: {e}")
 
     return None
@@ -178,6 +182,35 @@ def _parse_genie_mcp_response(
     conversation_id: Optional[str] = None,
     message_id: Optional[str] = None,
 ) -> GenieResponse:
+    """
+    Parse the MCP response from Genie into a GenieResponse.
+
+    The Genie MCP server returns JSON with the following structure:
+    {
+        "content": {
+            "queryAttachments": [...],  # SQL query results
+            "textAttachments": [...]    # Text responses
+        },
+        "conversationId": "...",
+        "messageId": "...",
+        "status": "COMPLETED" | "EXECUTING_QUERY" | "FAILED" | ...
+    }
+
+    Response formats and parsing priority:
+    1. Query with results (queryAttachments + successful statement_response):
+       - Extract SQL query and description from first queryAttachment
+       - Parse statement_response into DataFrame/markdown via _parse_query_result()
+
+    2. Query without results (queryAttachments but no successful statement_response):
+       - Fall back to textAttachments if present
+       - Otherwise stringify raw content
+
+    3. Text-only response (textAttachments only):
+       - Join all text attachments with newlines
+
+    4. Fallback (empty or malformed):
+       - Return stringified content dict
+    """
     if not mcp_result.content or len(mcp_result.content) == 0:
         return GenieResponse(
             result="No content returned from Genie",
@@ -260,11 +293,14 @@ class Genie:
         if not tools:
             raise ValueError(f"No tools found in Genie MCP server for space {space_id}")
 
-        query_tools = [tool for tool in tools if "query" in tool.name.lower()]
-        poll_tools = [tool for tool in tools if "poll" in tool.name.lower()]
-
-        self._query_tool_name = query_tools[0].name if query_tools else None
-        self._poll_tool_name = poll_tools[0].name if poll_tools else None
+        self._query_tool_name = next(
+            (tool.name for tool in tools if tool.name.startswith("query_space_")),
+            None,
+        )
+        self._poll_tool_name = next(
+            (tool.name for tool in tools if tool.name.startswith("poll_response_")),
+            None,
+        )
 
         self.headers = {
             "Accept": "application/json",
@@ -275,6 +311,15 @@ class Genie:
 
     @mlflow.trace()
     def start_conversation(self, content):
+        """
+        .. deprecated::
+            Use ask_question() instead. This method will be removed in a future version.
+        """
+        warnings.warn(
+            "start_conversation() is deprecated. Use ask_question() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
@@ -285,6 +330,15 @@ class Genie:
 
     @mlflow.trace()
     def create_message(self, conversation_id, content):
+        """
+        .. deprecated::
+            Use ask_question() instead. This method will be removed in a future version.
+        """
+        warnings.warn(
+            "create_message() is deprecated. Use ask_question() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages",
@@ -364,7 +418,7 @@ class Genie:
                                     "message_id": message_id,
                                 },
                             )
-                        except Exception as e:
+                        except mlflow.exceptions.MlflowTracingException as e:
                             logging.warning(f"Failed to create span for {status}: {e}")
                             current_span = None
 
