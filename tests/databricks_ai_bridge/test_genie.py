@@ -1446,6 +1446,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
         # should still complete successfully despite tracing failures
         assert result.result == "Success"
 
+
 def test_ask_question_auto_polls_on_executing_query_status(genie, mock_workspace_client):
     """Verify ask_question() automatically polls when query returns EXECUTING_QUERY."""
     mock_query_result = CallToolResult(
