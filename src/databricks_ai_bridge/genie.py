@@ -38,6 +38,7 @@ class GenieResponse:
     query: Optional[str] = ""
     description: Optional[str] = ""
     conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
 
 
 @mlflow.trace(span_type="PARSER")
@@ -171,12 +172,17 @@ def _end_current_span(client, parent_trace_id, current_span, final_state, error=
 
 
 def _parse_genie_mcp_response(
-    mcp_result, truncate_results: bool, return_pandas: bool, conversation_id: Optional[str] = None
+    mcp_result,
+    truncate_results: bool,
+    return_pandas: bool,
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
 ) -> GenieResponse:
     if not mcp_result.content or len(mcp_result.content) == 0:
         return GenieResponse(
             result="No content returned from Genie",
             conversation_id=conversation_id,
+            message_id=message_id,
         )
 
     # Genie backend always returns 1 content block with JSON
@@ -189,10 +195,12 @@ def _parse_genie_mcp_response(
         return GenieResponse(
             result=f"Failed to parse response: {content_text}",
             conversation_id=conversation_id,
+            message_id=message_id,
         )
 
     content = genie_response.get("content", "")
     conv_id = genie_response.get("conversationId", conversation_id)
+    msg_id = genie_response.get("messageId", message_id)
     query_str = ""
     description = ""
 
@@ -215,6 +223,7 @@ def _parse_genie_mcp_response(
         query=query_str,
         description=description,
         conversation_id=conv_id,
+        message_id=msg_id,
     )
 
 
@@ -303,6 +312,7 @@ class Genie:
                         return GenieResponse(
                             result="No content returned from Genie poll",
                             conversation_id=conversation_id,
+                            message_id=message_id,
                         )
 
                     content_block = mcp_result.content[0]
@@ -313,7 +323,11 @@ class Genie:
                     # End any active span before returning
                     _end_current_span(client, parent_trace_id, current_span, last_status)
                     return _parse_genie_mcp_response(
-                        mcp_result, self.truncate_results, self.return_pandas, conversation_id
+                        mcp_result,
+                        self.truncate_results,
+                        self.return_pandas,
+                        conversation_id,
+                        message_id,
                     )
 
                 # On status change: end previous span, start new one
@@ -349,7 +363,11 @@ class Genie:
                     # End any active span before returning
                     _end_current_span(client, parent_trace_id, current_span, last_status)
                     return _parse_genie_mcp_response(
-                        mcp_result, self.truncate_results, self.return_pandas, conversation_id
+                        mcp_result,
+                        self.truncate_results,
+                        self.return_pandas,
+                        conversation_id,
+                        message_id,
                     )
 
                 logging.debug(f"Polling: status={status}, iteration={iteration_count}")
@@ -360,6 +378,7 @@ class Genie:
             return GenieResponse(
                 result=f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds",
                 conversation_id=conversation_id,
+                message_id=message_id,
             )
 
     @mlflow.trace()

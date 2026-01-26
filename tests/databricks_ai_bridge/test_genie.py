@@ -249,6 +249,40 @@ def test_ask_question_calls_mcp_with_conversation_id(genie, mock_workspace_clien
         )
 
 
+def test_ask_question_returns_message_id(genie, mock_workspace_client):
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Answer", "conversationId": "123", "messageId": "456", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.ask_question("What is the meaning of life?")
+        assert result.message_id == "456"
+        assert result.conversation_id == "123"
+        assert result.result == "Answer"
+
+
+def test_poll_for_result_returns_message_id(genie, mock_workspace_client):
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": '{"content": "Result", "conversationId": "123", "messageId": "456", "status": "COMPLETED"}',
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+        assert result.message_id == "456"
+        assert result.conversation_id == "123"
+        assert result.result == "Result"
+
+
 def test_parse_query_result_empty():
     resp = {"manifest": {"schema": {"columns": []}}, "result": None}
     result = _parse_query_result(resp, truncate_results=True)

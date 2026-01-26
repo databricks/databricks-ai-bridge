@@ -73,7 +73,8 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
         result="It is sunny.",
         query="SELECT * FROM weather",
         description="This is the reasoning for the query",
-        conversation_id="conv-123",  # Add this
+        conversation_id="conv-123",
+        message_id="msg-123",
     )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
@@ -85,7 +86,8 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_message = {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
-            "conversation_id": "conv-123",  # Add this
+            "conversation_id": "conv-123",
+            "message_id": "msg-123",
         }
         assert result == expected_message
 
@@ -97,7 +99,8 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
                 AIMessage(content="SELECT * FROM weather", name="query_sql"),
                 AIMessage(content="It is sunny.", name="query_result"),
             ],
-            "conversation_id": "conv-123",  # Add this
+            "conversation_id": "conv-123",
+            "message_id": "msg-123",
         }
         assert result == expected_messages
 
@@ -160,6 +163,7 @@ def test_query_genie_with_client(mock_workspace_client, MockMCPClient):
         query="SELECT weather FROM data",
         description="Query reasoning",
         conversation_id="conv-456",
+        message_id="msg-456",
     )
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
@@ -171,6 +175,7 @@ def test_query_genie_with_client(mock_workspace_client, MockMCPClient):
         expected_message = {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
             "conversation_id": "conv-456",
+            "message_id": "msg-456",
         }
         assert result == expected_message
 
@@ -237,7 +242,8 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
         result="It is sunny.",
         query="SELECT * FROM weather",
         description="Query reasoning",
-        conversation_id="conv-abc",  # Add this
+        conversation_id="conv-abc",
+        message_id="msg-abc",
     )
 
     # Test data with multiple messages
@@ -266,10 +272,11 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
             input_data, genie, "Genie", message_processor=custom_processor
         )
         expected_query = "First message | Assistant response | Second message"
-        mock_ask.assert_called_with(expected_query, conversation_id=None)  # Update this
+        mock_ask.assert_called_with(expected_query, conversation_id=None)
         assert result == {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
-            "conversation_id": "conv-abc",  # Add this
+            "conversation_id": "conv-abc",
+            "message_id": "msg-abc",
         }
 
     # Test 2: Last message processor (as requested in the user's example)
@@ -287,10 +294,11 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
             input_data, genie, "Genie", message_processor=last_message_processor
         )
         expected_query = "Second message"
-        mock_ask.assert_called_with(expected_query, conversation_id=None)  # Update this
+        mock_ask.assert_called_with(expected_query, conversation_id=None)
         assert result == {
             "messages": [AIMessage(content="It is sunny.", name="query_result")],
-            "conversation_id": "conv-abc",  # Add this
+            "conversation_id": "conv-abc",
+            "message_id": "msg-abc",
         }
 
     # Test 4: GenieAgent end-to-end with message_processor
@@ -307,11 +315,10 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
         ) as mock_ask_agent:
             result = agent.invoke(input_data)
             expected_query = "Second message"
-            mock_ask_agent.assert_called_once_with(
-                expected_query, conversation_id=None
-            )  # Update this
+            mock_ask_agent.assert_called_once_with(expected_query, conversation_id=None)
             assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
-            assert result["conversation_id"] == "conv-abc"  # Add this
+            assert result["conversation_id"] == "conv-abc"
+            assert result["message_id"] == "msg-abc"
 
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
