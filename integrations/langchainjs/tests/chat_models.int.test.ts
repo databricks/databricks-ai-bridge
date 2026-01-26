@@ -7,6 +7,9 @@
  *   - DATABRICKS_TOKEN: Your personal access token (or use other auth methods)
  *   - TEST_ENDPOINT_NAME: Model serving endpoint to test against (default: databricks-meta-llama-3-3-70b-instruct)
  */
+import "dotenv/config";
+import { config } from "dotenv";
+config({ path: ".env.local" });
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
@@ -16,7 +19,7 @@ const ENDPOINT_NAME = "databricks-claude-sonnet-4-5";
 const ENDPOINT_API = "chat-completions";
 
 // Skip all tests if no Databricks credentials are configured
-const hasCredentials = process.env.DATABRICKS_HOST || process.env.DATABRICKS_TOKEN;
+const hasCredentials = process.env.DATABRICKS_HOST || process.env.DATABRICKS_TOKEN || (process.env.CLIENT_ID && process.env.CLIENT_SECRET);
 
 describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
   let model: ChatDatabricks;
