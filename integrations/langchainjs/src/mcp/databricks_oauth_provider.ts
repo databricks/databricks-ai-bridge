@@ -33,7 +33,7 @@ const TOKEN_EXPIRATION_SECONDS = 60;
  * @example
  * ```typescript
  * import { Config } from "@databricks/sdk-experimental";
- * import { DatabricksOAuthClientProvider } from "@databricks/langchain-ts";
+ * import { DatabricksOAuthClientProvider } from "@databricks/langchainjs";
  *
  * const config = new Config();
  * const authProvider = new DatabricksOAuthClientProvider(config);

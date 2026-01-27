@@ -7,7 +7,11 @@
 
 import { Config } from "@databricks/sdk-experimental";
 import type { StreamableHTTPConnection } from "@langchain/mcp-adapters";
-import type { MCPServerConfig, DatabricksMCPServerConfig } from "./types.js";
+import type {
+  MCPServerConfig,
+  DatabricksMCPServerConfig,
+  DatabricksMCPServerCreateConfig,
+} from "./types.js";
 import { DatabricksOAuthClientProvider } from "./databricks_oauth_provider.js";
 
 /**
@@ -19,7 +23,7 @@ import { DatabricksOAuthClientProvider } from "./databricks_oauth_provider.js";
  *
  * @example
  * ```typescript
- * import { MCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchain-ts";
+ * import { MCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchainjs";
  *
  * const server = new MCPServer({
  *   name: "my-mcp-server",
@@ -86,7 +90,7 @@ export class MCPServer {
  *
  * @example
  * ```typescript
- * import { DatabricksMCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchain-ts";
+ * import { DatabricksMCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchainjs";
  *
  * // Using default SDK authentication (env vars, CLI, etc.)
  * const server = new DatabricksMCPServer({
@@ -98,7 +102,7 @@ export class MCPServer {
  * const serverWithM2M = new DatabricksMCPServer({
  *   name: "databricks-mcp",
  *   url: "https://my-workspace.databricks.com/api/mcp",
- *   databricksConfig: {
+ *   auth: {
  *     authType: "oauth-m2m",
  *     host: "https://my-workspace.databricks.com",
  *     clientId: "your-client-id",
@@ -111,7 +115,7 @@ export class MCPServer {
  * const serverWithPAT = new DatabricksMCPServer({
  *   name: "databricks-mcp",
  *   url: "https://my-workspace.databricks.com/api/mcp",
- *   databricksConfig: {
+ *   auth: {
  *     host: "https://my-workspace.databricks.com",
  *     token: "dapi...",
  *   },
@@ -122,19 +126,19 @@ export class MCPServer {
  * ```
  */
 export class DatabricksMCPServer extends MCPServer {
-  private readonly databricksConfig: Config;
+  private readonly auth: Config;
   private readonly authProvider: DatabricksOAuthClientProvider;
 
   constructor(config: DatabricksMCPServerConfig & Record<string, unknown>) {
     // Extract Databricks-specific config before passing to base
-    const { databricksConfig, ...baseConfig } = config;
+    const { auth, ...baseConfig } = config;
     super(baseConfig);
 
     // Initialize Databricks SDK config from options
-    this.databricksConfig = new Config(databricksConfig ?? {});
+    this.auth = new Config(auth ?? {});
 
     // Create OAuth provider for MCP authentication
-    this.authProvider = new DatabricksOAuthClientProvider(this.databricksConfig);
+    this.authProvider = new DatabricksOAuthClientProvider(this.auth);
   }
 
   /**
@@ -142,10 +146,10 @@ export class DatabricksMCPServer extends MCPServer {
    * Call this before using toConnectionConfig() to ensure auth is ready.
    */
   async initializeAuth(): Promise<string> {
-    await this.databricksConfig.ensureResolved();
+    await this.auth.ensureResolved();
 
     const headers = new Headers();
-    await this.databricksConfig.authenticate(headers);
+    await this.auth.authenticate(headers);
     const authHeader = headers.get("Authorization");
 
     if (!authHeader?.startsWith("Bearer ")) {
@@ -186,6 +190,56 @@ export class DatabricksMCPServer extends MCPServer {
   }
 
   /**
+   * Factory method to create a DatabricksMCPServer with a path.
+   * The host is resolved from auth (or environment variables).
+   *
+   * @param config - Server configuration with name, path, and optional auth
+   * @returns DatabricksMCPServer configured with the resolved host
+   *
+   * @example
+   * ```typescript
+   * // Using default auth - host from DATABRICKS_HOST env var
+   * const server = await DatabricksMCPServer.create({
+   *   name: "sql",
+   *   path: "/api/2.0/mcp/sql",
+   * });
+   *
+   * // Using explicit config
+   * const server = await DatabricksMCPServer.create({
+   *   name: "sql",
+   *   path: "/api/2.0/mcp/sql",
+   *   auth: {
+   *     host: "https://my-workspace.databricks.com",
+   *     token: "dapi...",
+   *   },
+   * });
+   * ```
+   */
+  static async create(
+    config: DatabricksMCPServerCreateConfig & Record<string, unknown>
+  ): Promise<DatabricksMCPServer> {
+    const { name, path, auth, ...rest } = config;
+    const sdkConfig = new Config(auth ?? {});
+
+    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
+    if (!host) {
+      throw new Error(
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
+      );
+    }
+
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const url = `${host}${normalizedPath}`;
+
+    return new DatabricksMCPServer({
+      name,
+      url,
+      auth,
+      ...rest,
+    });
+  }
+
+  /**
    * Factory method to create a DatabricksMCPServer for a Unity Catalog function.
    *
    * @param catalog - UC catalog name
@@ -210,13 +264,13 @@ export class DatabricksMCPServer extends MCPServer {
     functionName?: string,
     options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
   ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.databricksConfig ?? {});
+    const sdkConfig = new Config(options.auth ?? {});
 
     // Build the UC function MCP endpoint URL
     const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
     if (!host) {
       throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
       );
     }
     const functionPath = functionName
@@ -260,13 +314,13 @@ export class DatabricksMCPServer extends MCPServer {
     indexName?: string,
     options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
   ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.databricksConfig ?? {});
+    const sdkConfig = new Config(options.auth ?? {});
 
     // Build the Vector Search MCP endpoint URL
     const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
     if (!host) {
       throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
       );
     }
     const url = indexName
@@ -303,13 +357,13 @@ export class DatabricksMCPServer extends MCPServer {
     spaceId: string,
     options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
   ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.databricksConfig ?? {});
+    const sdkConfig = new Config(options.auth ?? {});
 
     // Build the Genie Space MCP endpoint URL
     const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
     if (!host) {
       throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
       );
     }
     const url = `${host}/api/2.0/mcp/genie/${spaceId}`;

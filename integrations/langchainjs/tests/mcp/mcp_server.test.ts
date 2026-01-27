@@ -182,4 +182,35 @@ describe("DatabricksMCPServer", () => {
       expect(server.timeout).toBe(90);
     });
   });
+
+  describe("create", () => {
+    it("creates server with path and resolves host from config", async () => {
+      const server = await DatabricksMCPServer.create({
+        name: "my-server",
+        path: "/api/2.0/mcp/sql",
+      });
+
+      expect(server.name).toBe("my-server");
+      expect(server.url).toContain("/api/2.0/mcp/sql");
+    });
+
+    it("normalizes path without leading slash", async () => {
+      const server = await DatabricksMCPServer.create({
+        name: "my-server",
+        path: "api/2.0/mcp/sql",
+      });
+
+      expect(server.url).toContain("/api/2.0/mcp/sql");
+    });
+
+    it("accepts additional options", async () => {
+      const server = await DatabricksMCPServer.create({
+        name: "my-server",
+        path: "/api/2.0/mcp/sql",
+        timeout: 45,
+      });
+
+      expect(server.timeout).toBe(45);
+    });
+  });
 });

@@ -31,7 +31,7 @@ export type ServerInstance = MCPServer | DatabricksMCPServer;
  *   DatabricksMultiServerMCPClient,
  *   DatabricksMCPServer,
  *   MCPServer
- * } from "@databricks/langchain-ts";
+ * } from "@databricks/langchainjs";
  *
  * // Use the static create method for async initialization
  * const client = await DatabricksMultiServerMCPClient.create([

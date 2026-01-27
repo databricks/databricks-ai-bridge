@@ -64,7 +64,17 @@ export interface DatabricksMCPServerConfig extends MCPServerConfig {
    * {} // or omit entirely
    * ```
    */
-  databricksConfig?: DatabricksConfigOptions;
+  auth?: DatabricksConfigOptions;
+}
+
+/**
+ * Configuration for DatabricksMCPServer.create() factory method.
+ * Uses path instead of full URL - host is resolved from auth.
+ */
+export interface DatabricksMCPServerCreateConfig
+  extends Omit<DatabricksMCPServerConfig, "url"> {
+  /** API path (e.g., "/api/2.0/mcp/sql"). Host is resolved from auth. */
+  path: string;
 }
 
 /**

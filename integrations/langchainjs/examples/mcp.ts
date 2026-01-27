@@ -33,10 +33,10 @@ async function main() {
   console.log("--- Creating MCP Server Configurations ---\n");
 
   // Databricks SQL MCP server - provides SQL query capabilities
-  // Replace with your workspace URL
-  const dbsqlMCP = new DatabricksMCPServer({
+  // Host is resolved from DATABRICKS_HOST env var
+  const dbsqlMCP = await DatabricksMCPServer.create({
     name: "dbsql-mcp",
-    url: `${process.env.DATABRICKS_HOST}/api/2.0/mcp/sql`,
+    path: "/api/2.0/mcp/sql",
     timeout: 60, // 60 second timeout
   });
 

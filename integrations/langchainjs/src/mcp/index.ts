@@ -11,7 +11,7 @@
  *   DatabricksMultiServerMCPClient,
  *   DatabricksMCPServer,
  *   MCPServer,
- * } from "@databricks/langchain-ts";
+ * } from "@databricks/langchainjs";
  *
  * // Create MCP client with Databricks authentication
  * const mcpClient = new DatabricksMultiServerMCPClient([

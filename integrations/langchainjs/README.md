@@ -207,10 +207,10 @@ import {
   DatabricksMCPServer,
 } from "@databricks/langchainjs";
 
-// Create MCP server for Databricks SQL
-const sqlServer = new DatabricksMCPServer({
+// Create MCP server for Databricks SQL (host resolved from DATABRICKS_HOST env var)
+const sqlServer = await DatabricksMCPServer.create({
   name: "dbsql",
-  url: `${process.env.DATABRICKS_HOST}/api/2.0/mcp/sql`,
+  path: "/api/2.0/mcp/sql",
 });
 
 // Load tools from MCP servers
@@ -261,6 +261,39 @@ const client = new DatabricksMultiServerMCPClient(
 
 const tools = await client.getTools();
 console.log(`Loaded ${tools.length} tools from ${client.getServerNames().length} servers`);
+```
+
+### Explicit Authentication per Server
+
+Each `DatabricksMCPServer` can use different credentials via `auth`:
+
+```typescript
+// Server using service principal (M2M OAuth)
+const server1 = await DatabricksMCPServer.create({
+  name: "workspace-1",
+  path: "/api/2.0/mcp/sql",
+  auth: {
+    host: "https://workspace-1.databricks.com",
+    clientId: process.env.SP_CLIENT_ID,
+    clientSecret: process.env.SP_CLIENT_SECRET,
+  },
+});
+
+// Server using personal access token
+const server2 = await DatabricksMCPServer.create({
+  name: "workspace-2",
+  path: "/api/2.0/mcp/sql",
+  auth: {
+    host: "https://workspace-2.databricks.com",
+    token: process.env.DATABRICKS_TOKEN_WS2,
+  },
+});
+
+// Server using default auth chain (env vars, CLI config, etc.)
+const server3 = await DatabricksMCPServer.create({
+  name: "default-workspace",
+  path: "/api/2.0/mcp/sql",
+});
 ```
 
 ### Generic MCP Servers
