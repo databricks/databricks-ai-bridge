@@ -89,11 +89,3 @@ export interface DatabricksMCPClientOptions {
   additionalToolNamePrefix?: string;
 }
 
-/**
- * Type guard to check if server config is DatabricksMCPServerConfig
- */
-export function isDatabricksMCPServerConfig(
-  config: MCPServerConfig | DatabricksMCPServerConfig
-): config is DatabricksMCPServerConfig {
-  return "config" in config;
-}

@@ -213,7 +213,12 @@ export class DatabricksMCPServer extends MCPServer {
     const sdkConfig = new Config(options.databricksConfig ?? {});
 
     // Build the UC function MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "") ?? "";
+    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
+    if (!host) {
+      throw new Error(
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+      );
+    }
     const functionPath = functionName
       ? `${catalog}/${schema}/${functionName}`
       : `${catalog}/${schema}`;
@@ -258,7 +263,12 @@ export class DatabricksMCPServer extends MCPServer {
     const sdkConfig = new Config(options.databricksConfig ?? {});
 
     // Build the Vector Search MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "") ?? "";
+    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
+    if (!host) {
+      throw new Error(
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+      );
+    }
     const url = indexName
       ? `${host}/api/2.0/mcp/vector-search/${catalog}/${schema}/${indexName}`
       : `${host}/api/2.0/mcp/vector-search/${catalog}/${schema}`;
@@ -296,7 +306,12 @@ export class DatabricksMCPServer extends MCPServer {
     const sdkConfig = new Config(options.databricksConfig ?? {});
 
     // Build the Genie Space MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "") ?? "";
+    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
+    if (!host) {
+      throw new Error(
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in databricksConfig."
+      );
+    }
     const url = `${host}/api/2.0/mcp/genie/${spaceId}`;
 
     const name = `genie-space-${spaceId}`;
