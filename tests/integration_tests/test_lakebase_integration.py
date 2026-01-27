@@ -29,20 +29,20 @@ Basic test run:
     export LAKEBASE_INSTANCE_NAME=your-lakebase-instance
     export TEST_SERVICE_PRINCIPAL=your-test-sp-uuid
     export LAKEBASE_INTEGRATION_TESTS=1
-    pytest tests/databricks_ai_bridge/test_lakebase_integration.py -v
+    pytest tests/integration_tests/test_lakebase_integration.py -v
 
 Test with specific OAuth token:
     export DATABRICKS_HOST=https://your-workspace.databricks.com
     export DATABRICKS_TOKEN=your-oauth-token
-    pytest tests/databricks_ai_bridge/test_lakebase_integration.py -v
+    pytest tests/integration_tests/test_lakebase_integration.py -v
 
 Test "no role" error scenario:
     export NO_ROLE_USER_TOKEN=oauth-token-for-user-without-database-role
-    pytest tests/databricks_ai_bridge/test_lakebase_integration.py::TestNoRoleUserErrors -v
+    pytest tests/integration_tests/test_lakebase_integration.py::TestNoRoleUserErrors -v
 
 Test "limited permission" error scenario:
     export LIMITED_PERMISSION_USER_TOKEN=oauth-token-for-user-with-role-but-no-grant
-    pytest tests/databricks_ai_bridge/test_lakebase_integration.py::TestLimitedPermissionUserErrors -v
+    pytest tests/integration_tests/test_lakebase_integration.py::TestLimitedPermissionUserErrors -v
 
 Example to run all tests:
     export DATABRICKS_HOST=[host]
@@ -52,7 +52,7 @@ Example to run all tests:
     export LAKEBASE_INSTANCE_NAME=[lakebase]
     export TEST_SERVICE_PRINCIPAL=[sp-uuid]
     export LAKEBASE_INTEGRATION_TESTS=1
-    pytest tests/databricks_ai_bridge/test_lakebase_integration.py -v
+    pytest tests/integration_tests/test_lakebase_integration.py -v
 """
 
 from __future__ import annotations

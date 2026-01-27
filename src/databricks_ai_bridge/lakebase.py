@@ -45,7 +45,7 @@ IdentityType = Literal["USER", "SERVICE_PRINCIPAL", "GROUP"]
 class TablePrivilege(str, Enum):
     """PostgreSQL table privileges for GRANT statements.
 
-    See: https://www.postgresql.org/docs/current/sql-grant.html
+    See: https://www.postgresql.org/docs/16/sql-grant.html
     """
 
     SELECT = "SELECT"
@@ -383,17 +383,53 @@ class AsyncLakebasePool(_LakebasePoolBase):
 class LakebaseClient:
     """Client for executing SQL queries and managing Lakebase resources.
 
-    Example (simple - creates pool internally):
+    Example (simple):
         client = LakebaseClient(instance_name="my-lakebase")
         client.execute("SELECT * FROM users")
-        client.create_role("user@example.com", PrincipalType.USER)
+        client.create_role("user@example.com", "USER")
         client.close()
 
-    Example (advanced - bring your own pool):
+    Example (end-to-end permission setup for an application):
+        from databricks_ai_bridge.lakebase import (
+            LakebaseClient,
+            SchemaPrivilege,
+            SequencePrivilege,
+            TablePrivilege,
+        )
+
+        # Create client and set up permissions for a service principal
+        with LakebaseClient(instance_name="my-lakebase") as client:
+            # 1. Create a PostgreSQL role for the service principal
+            client.create_role("my-app-service-principal-uuid", "SERVICE_PRINCIPAL")
+
+            # 2. Grant schema access
+            client.grant_schema(
+                grantee="my-app-service-principal-uuid",
+                privileges=[SchemaPrivilege.USAGE, SchemaPrivilege.CREATE],
+                schemas=["public", "app_schema"],
+            )
+
+            # 3. Grant table privileges on all tables in the schema
+            client.grant_all_tables_in_schema(
+                grantee="my-app-service-principal-uuid",
+                privileges=[TablePrivilege.SELECT, TablePrivilege.INSERT,
+                            TablePrivilege.UPDATE, TablePrivilege.DELETE],
+                schemas=["public", "app_schema"],
+            )
+
+            # 4. Grant sequence privileges (needed for INSERT with SERIAL columns)
+            client.grant_all_sequences_in_schema(
+                grantee="my-app-service-principal-uuid",
+                privileges=[SequencePrivilege.USAGE, SequencePrivilege.SELECT],
+                schemas=["public", "app_schema"],
+            )
+
+    Example (bring your own pool):
         pool = LakebasePool(instance_name="my-lakebase", max_size=20)
         client = LakebaseClient(pool=pool)
         client.execute("SELECT * FROM users")
-        # Pool is managed externally, close it yourself
+        client.close()
+        pool.close()  # Pool is managed externally
     """
 
     def __init__(
@@ -440,6 +476,15 @@ class LakebaseClient:
         """Close the client (and pool if it was created internally)."""
         if self._owns_pool:
             self._pool.close()
+
+    def __enter__(self):
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and close the client."""
+        self.close()
+        return False
 
     # ---------------------------------------------------------
     # SQL Execution
@@ -541,6 +586,7 @@ class LakebaseClient:
             raise RuntimeError(
                 f"The databricks_create_role function is not available. "
                 f"Ensure the databricks_auth extension is properly installed. "
+                f"See https://docs.databricks.com/aws/en/oltp/instances/pg-roles?language=PostgreSQL. "
                 f"Original error: {e}"
             ) from e
 
