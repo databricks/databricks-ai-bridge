@@ -11,6 +11,7 @@ This package provides a `ChatDatabricks` class that integrates with the LangChai
 - Supports tool/function calling
 - Multiple endpoint APIs: Chat Completions, and Responses
 - Automatic authentication via Databricks SDK
+- MCP (Model Context Protocol) integration for dynamic tool loading
 
 ## Requirements
 
@@ -193,6 +194,90 @@ const agent = createAgent({
 const result = await agent.invoke("What's the weather in Paris?");
 ```
 
+## MCP (Model Context Protocol) Integration
+
+Connect to MCP servers to dynamically load tools from Databricks services and external APIs.
+
+### Connecting to Databricks MCP Servers
+
+```typescript
+import {
+  ChatDatabricks,
+  DatabricksMultiServerMCPClient,
+  DatabricksMCPServer,
+} from "@databricks/langchainjs";
+
+// Create MCP server for Databricks SQL
+const sqlServer = new DatabricksMCPServer({
+  name: "dbsql",
+  url: `${process.env.DATABRICKS_HOST}/api/2.0/mcp/sql`,
+});
+
+// Load tools from MCP servers
+const client = new DatabricksMultiServerMCPClient([sqlServer]);
+const tools = await client.getTools();
+
+// Use with ChatDatabricks
+const model = new ChatDatabricks({ endpoint: "databricks-claude-sonnet-4-5" });
+const modelWithTools = model.bindTools(tools);
+
+const response = await modelWithTools.invoke("Query the sales table");
+
+// Clean up when done
+await client.close();
+```
+
+### Factory Methods for Databricks Services
+
+```typescript
+// Unity Catalog Functions
+const ucServer = await DatabricksMCPServer.fromUCFunction(
+  "catalog",
+  "schema",
+  "function_name" // optional - omit to expose all functions in schema
+);
+
+// Vector Search
+const vectorServer = await DatabricksMCPServer.fromVectorSearch(
+  "catalog",
+  "schema",
+  "index_name" // optional
+);
+
+// Genie Space
+const genieServer = await DatabricksMCPServer.fromGenieSpace("space_id");
+```
+
+### Multiple MCP Servers
+
+```typescript
+const client = new DatabricksMultiServerMCPClient(
+  [sqlServer, ucServer, vectorServer],
+  {
+    throwOnLoadError: false, // Continue if some servers fail
+    prefixToolNameWithServerName: true, // Avoid tool name conflicts
+  }
+);
+
+const tools = await client.getTools();
+console.log(`Loaded ${tools.length} tools from ${client.getServerNames().length} servers`);
+```
+
+### Generic MCP Servers
+
+For non-Databricks MCP servers, use `MCPServer`:
+
+```typescript
+import { MCPServer } from "@databricks/langchainjs";
+
+const externalServer = new MCPServer({
+  name: "external-api",
+  url: "https://api.example.com/mcp",
+  headers: { "X-API-Key": process.env.API_KEY },
+  timeout: 30, // seconds
+});
+```
+
 ## Configuration Options
 
 ```typescript
@@ -259,6 +344,9 @@ npm run example
 
 # Run the tools example
 npm run example:tools
+
+# Run the MCP example
+npm run example:mcp
 ```
 
 ## Development
