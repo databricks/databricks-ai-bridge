@@ -14,15 +14,11 @@ type InferConstructorParams<T> = T extends new (arg: infer P) => any ? P : never
 export type DatabricksConfigOptions = InferConstructorParams<typeof Config>;
 
 /**
- * Base server configuration options for MCP servers.
- * Uses streamable HTTP transport (aligned with Python implementation).
+ * Base configuration options shared by all MCP server types.
  */
-export interface MCPServerConfig {
+export interface BaseMCPServerConfig {
   /** Unique name to identify this server connection */
   name: string;
-
-  /** MCP server URL endpoint */
-  url: string;
 
   /** Custom HTTP headers to include in requests */
   headers?: Record<string, string>;
@@ -35,24 +31,21 @@ export interface MCPServerConfig {
 }
 
 /**
- * Databricks-specific MCP server configuration.
+ * Configuration for generic MCP servers.
+ * Uses streamable HTTP transport.
+ */
+export interface MCPServerConfig extends BaseMCPServerConfig {
+  /** MCP server URL endpoint */
+  url: string;
+}
+
+/**
+ * Configuration for Databricks MCP servers.
  * Uses path instead of full URL - host is resolved from auth config.
  */
-export interface DatabricksMCPServerConfig {
-  /** Unique name to identify this server connection */
-  name: string;
-
+export interface DatabricksMCPServerConfig extends BaseMCPServerConfig {
   /** API path (e.g., "/api/2.0/mcp/sql"). Host is resolved from auth. */
   path: string;
-
-  /** Custom HTTP headers to include in requests */
-  headers?: Record<string, string>;
-
-  /** Request timeout in seconds */
-  timeout?: number;
-
-  /** SSE read timeout in seconds */
-  sseReadTimeout?: number;
 
   /**
    * Databricks SDK configuration options for authentication.

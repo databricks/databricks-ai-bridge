@@ -7,18 +7,13 @@
 
 import { Config } from "@databricks/sdk-experimental";
 import type { StreamableHTTPConnection } from "@langchain/mcp-adapters";
-import type { MCPServerConfig, DatabricksMCPServerConfig, DatabricksConfigOptions } from "./types.js";
+import type {
+  BaseMCPServerConfig,
+  MCPServerConfig,
+  DatabricksMCPServerConfig,
+  DatabricksConfigOptions,
+} from "./types.js";
 import { DatabricksOAuthClientProvider } from "./databricks_oauth_provider.js";
-
-/**
- * Base configuration shared by all MCP server types.
- */
-interface BaseMCPServerConfig {
-  name: string;
-  headers?: Record<string, string>;
-  timeout?: number;
-  sseReadTimeout?: number;
-}
 
 /**
  * Abstract base class for MCP server configurations.
@@ -31,16 +26,12 @@ abstract class BaseMCPServer {
   readonly headers?: Record<string, string>;
   readonly timeout?: number;
   readonly sseReadTimeout?: number;
-  protected readonly extraConfig: Record<string, unknown>;
 
-  constructor(config: BaseMCPServerConfig & Record<string, unknown>) {
-    const { name, headers, timeout, sseReadTimeout, ...extra } = config;
-
-    this.name = name;
-    this.headers = headers;
-    this.timeout = timeout;
-    this.sseReadTimeout = sseReadTimeout;
-    this.extraConfig = extra;
+  constructor(config: BaseMCPServerConfig) {
+    this.name = config.name;
+    this.headers = config.headers;
+    this.timeout = config.timeout;
+    this.sseReadTimeout = config.sseReadTimeout;
   }
 
   /**
@@ -56,7 +47,6 @@ abstract class BaseMCPServer {
     const config: StreamableHTTPConnection = {
       transport: "http",
       url,
-      ...this.extraConfig,
     };
 
     if (this.headers) {
@@ -93,10 +83,9 @@ abstract class BaseMCPServer {
 export class MCPServer extends BaseMCPServer {
   readonly url: string;
 
-  constructor(config: MCPServerConfig & Record<string, unknown>) {
-    const { url, ...rest } = config;
-    super(rest);
-    this.url = url;
+  constructor(config: MCPServerConfig) {
+    super(config);
+    this.url = config.url;
   }
 
   override toConnectionConfig(): StreamableHTTPConnection {
@@ -144,15 +133,14 @@ export class DatabricksMCPServer extends BaseMCPServer {
   private readonly path: string;
   private resolvedUrl?: string;
 
-  constructor(config: DatabricksMCPServerConfig & Record<string, unknown>) {
-    const { auth, path, ...rest } = config;
-    super(rest);
+  constructor(config: DatabricksMCPServerConfig) {
+    super(config);
 
     // Normalize and store path
-    this.path = path.startsWith("/") ? path : `/${path}`;
+    this.path = config.path.startsWith("/") ? config.path : `/${config.path}`;
 
     // Initialize Databricks SDK config from options
-    this.sdkConfig = new Config(auth ?? {});
+    this.sdkConfig = new Config(config.auth ?? {});
 
     // Create OAuth provider for MCP authentication
     this.authProvider = new DatabricksOAuthClientProvider(this.sdkConfig);
@@ -244,7 +232,7 @@ export class DatabricksMCPServer extends BaseMCPServer {
     catalog: string,
     schema: string,
     functionName?: string,
-    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+    options: { auth?: DatabricksConfigOptions; timeout?: number } = {}
   ): DatabricksMCPServer {
     const functionPath = functionName
       ? `${catalog}/${schema}/${functionName}`
@@ -283,7 +271,7 @@ export class DatabricksMCPServer extends BaseMCPServer {
     catalog: string,
     schema: string,
     indexName?: string,
-    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+    options: { auth?: DatabricksConfigOptions; timeout?: number } = {}
   ): DatabricksMCPServer {
     const indexPath = indexName
       ? `${catalog}/${schema}/${indexName}`
@@ -316,7 +304,7 @@ export class DatabricksMCPServer extends BaseMCPServer {
    */
   static fromGenieSpace(
     spaceId: string,
-    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+    options: { auth?: DatabricksConfigOptions; timeout?: number } = {}
   ): DatabricksMCPServer {
     const name = `genie-space-${spaceId}`;
 

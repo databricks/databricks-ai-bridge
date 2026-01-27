@@ -80,18 +80,6 @@ describe("MCPServer", () => {
 
     expect(config).not.toHaveProperty("name");
   });
-
-  it("preserves extra config properties", () => {
-    const server = new MCPServer({
-      name: "test-server",
-      url: "https://example.com/mcp",
-      customProperty: "custom-value",
-    } as any);
-
-    const config = server.toConnectionConfig();
-
-    expect((config as any).customProperty).toBe("custom-value");
-  });
 });
 
 describe("DatabricksMCPServer", () => {
