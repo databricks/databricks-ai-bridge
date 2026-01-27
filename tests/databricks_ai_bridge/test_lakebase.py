@@ -10,7 +10,14 @@ pytest.importorskip("psycopg")
 pytest.importorskip("psycopg_pool")
 
 import databricks_ai_bridge.lakebase as lakebase
-from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
+from databricks_ai_bridge.lakebase import (
+    AsyncLakebasePool,
+    LakebaseClient,
+    LakebasePool,
+    SchemaPrivilege,
+    SequencePrivilege,
+    TablePrivilege,
+)
 
 
 def _make_workspace(
@@ -410,3 +417,642 @@ async def test_async_lakebase_pool_open_close_methods(monkeypatch):
 
     await pool.close()
     assert pool.pool._closed
+
+
+# =============================================================================
+# LakebaseClient Tests
+# =============================================================================
+
+
+def _make_mock_pool():
+    """Create a mock LakebasePool for testing LakebaseClient."""
+    pool = MagicMock(spec=LakebasePool)
+    cursor = MagicMock()
+    cursor.description = None  # DDL statements return no rows
+    cursor.fetchall.return_value = []
+    connection = MagicMock()
+    connection.__enter__ = MagicMock(return_value=connection)
+    connection.__exit__ = MagicMock(return_value=False)
+    connection.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    connection.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    pool.connection.return_value = connection
+    return pool, cursor
+
+
+class TestLakebaseClientInit:
+    """Tests for LakebaseClient initialization."""
+
+    def test_client_requires_pool_or_instance_name(self):
+        """Client must be given either pool or instance_name."""
+        with pytest.raises(ValueError, match="Must provide either 'pool' or 'instance_name'"):
+            LakebaseClient()
+
+
+class TestLakebaseClientCreateRole:
+    """Tests for LakebaseClient.create_role()."""
+
+    def test_create_role_executes_correct_sql(self):
+        """create_role should execute CREATE EXTENSION and databricks_create_role."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.create_role("sp-uuid-123", "SERVICE_PRINCIPAL")
+
+        # Should have executed two queries
+        assert cursor.execute.call_count == 2
+
+        # First call: CREATE EXTENSION
+        first_call = cursor.execute.call_args_list[0]
+        assert "CREATE EXTENSION IF NOT EXISTS databricks_auth" in first_call[0][0]
+
+        # Second call: databricks_create_role
+        second_call = cursor.execute.call_args_list[1]
+        assert "databricks_create_role" in second_call[0][0]
+        assert "SERVICE_PRINCIPAL" in second_call[0][0]
+        assert second_call[0][1] == ("sp-uuid-123",)
+
+    def test_create_role_handles_duplicate_object(self, caplog):
+        """create_role should log info and return None if role already exists."""
+        pool, cursor = _make_mock_pool()
+
+        # Make the second execute call raise DuplicateObject
+        call_count = [0]
+
+        def execute_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 2:  # Second call is create_role
+                raise lakebase.psycopg.errors.DuplicateObject("role already exists")
+
+        cursor.execute.side_effect = execute_side_effect
+
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            result = client.create_role("existing-role", "SERVICE_PRINCIPAL")
+
+        assert result is None
+        assert any("already exists" in record.message for record in caplog.records)
+
+    def test_create_role_with_group_identity_type(self):
+        """create_role works with GROUP identity type."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.create_role("group-id-123", "GROUP")
+
+        second_call = cursor.execute.call_args_list[1]
+        assert "GROUP" in second_call[0][0]
+
+    def test_create_role_handles_invalid_identity(self):
+        """create_role should raise ValueError with helpful message if identity not found."""
+        pool, cursor = _make_mock_pool()
+
+        # Make the second execute call raise InvalidParameterValue
+        call_count = [0]
+
+        def execute_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 2:  # Second call is create_role
+                raise lakebase.psycopg.errors.InvalidParameterValue(
+                    "[Databricks Auth] Identity not found."
+                )
+
+        cursor.execute.side_effect = execute_side_effect
+
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError) as exc_info:
+            client.create_role("nonexistent-sp-uuid", "SERVICE_PRINCIPAL")
+
+        error_msg = str(exc_info.value)
+        assert "not found" in error_msg
+        assert "nonexistent-sp-uuid" in error_msg
+        assert "service principal" in error_msg  # Should format identity type nicely
+
+
+class TestLakebaseClientGrantSchema:
+    """Tests for LakebaseClient.grant_schema()."""
+
+    def test_grant_schema_single_schema(self, caplog):
+        """grant_schema should execute GRANT on schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[SchemaPrivilege.USAGE, SchemaPrivilege.CREATE],
+                schemas=["public"],
+            )
+
+        assert cursor.execute.call_count == 1
+
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "USAGE, CREATE" in msg and "schema" in msg and "public" in msg and "sp-uuid" in msg
+            for msg in log_messages
+        )
+
+    def test_grant_schema_multiple_schemas(self):
+        """grant_schema should execute GRANT for each schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_schema(
+            grantee="sp-uuid",
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["drizzle", "ai_chatbot", "public"],
+        )
+
+        assert cursor.execute.call_count == 3
+
+    def test_grant_schema_all_privileges(self, caplog):
+        """grant_schema with ALL should use ALL PRIVILEGES."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[SchemaPrivilege.ALL],
+                schemas=["public"],
+            )
+
+        log_messages = [record.message for record in caplog.records]
+        assert any("ALL PRIVILEGES" in msg for msg in log_messages)
+
+
+class TestLakebaseClientGrantAllTablesInSchema:
+    """Tests for LakebaseClient.grant_all_tables_in_schema()."""
+
+    def test_grant_all_tables_in_schema(self, caplog):
+        """grant_all_tables_in_schema should execute GRANT on all tables in schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_all_tables_in_schema(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT, TablePrivilege.INSERT],
+                schemas=["drizzle"],
+            )
+
+        assert cursor.execute.call_count == 1
+
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "SELECT, INSERT" in msg and "all tables in schema" in msg and "drizzle" in msg
+            for msg in log_messages
+        )
+
+    def test_grant_all_tables_multiple_schemas(self):
+        """grant_all_tables_in_schema should execute for each schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_all_tables_in_schema(
+            grantee="sp-uuid",
+            privileges=[TablePrivilege.SELECT],
+            schemas=["schema1", "schema2"],
+        )
+
+        assert cursor.execute.call_count == 2
+
+
+class TestLakebaseClientGrantTable:
+    """Tests for LakebaseClient.grant_table()."""
+
+    def test_grant_table_single_table(self, caplog):
+        """grant_table should execute GRANT on specific table."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT, TablePrivilege.INSERT, TablePrivilege.UPDATE],
+                tables=["public.users"],
+            )
+
+        assert cursor.execute.call_count == 1
+
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "SELECT, INSERT, UPDATE" in msg and "table" in msg and "public.users" in msg
+            for msg in log_messages
+        )
+
+    def test_grant_table_multiple_tables(self):
+        """grant_table should execute GRANT for each table."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_table(
+            grantee="sp-uuid",
+            privileges=[TablePrivilege.SELECT],
+            tables=[
+                "public.checkpoint_migrations",
+                "public.checkpoint_writes",
+                "public.checkpoints",
+                "public.checkpoint_blobs",
+            ],
+        )
+
+        assert cursor.execute.call_count == 4
+
+    def test_grant_table_without_schema_prefix(self):
+        """grant_table should work with tables without schema prefix."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_table(
+            grantee="sp-uuid",
+            privileges=[TablePrivilege.SELECT],
+            tables=["users"],
+        )
+
+        assert cursor.execute.call_count == 1
+
+    def test_grant_table_all_privileges(self, caplog):
+        """grant_table with ALL should use ALL PRIVILEGES."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.ALL],
+                tables=["public.users"],
+            )
+
+        log_messages = [record.message for record in caplog.records]
+        assert any("ALL PRIVILEGES" in msg for msg in log_messages)
+
+
+class TestLakebaseClientGrantAllSequencesInSchema:
+    """Tests for LakebaseClient.grant_all_sequences_in_schema()."""
+
+    def test_grant_all_sequences_in_schema(self, caplog):
+        """grant_all_sequences_in_schema should execute GRANT on all sequences in schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[
+                    SequencePrivilege.USAGE,
+                    SequencePrivilege.SELECT,
+                    SequencePrivilege.UPDATE,
+                ],
+                schemas=["public"],
+            )
+
+        assert cursor.execute.call_count == 1
+
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "USAGE, SELECT, UPDATE" in msg and "all sequences in schema" in msg and "public" in msg
+            for msg in log_messages
+        )
+
+    def test_grant_all_sequences_multiple_schemas(self):
+        """grant_all_sequences_in_schema should execute for each schema."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        client.grant_all_sequences_in_schema(
+            grantee="sp-uuid",
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public", "app_schema", "drizzle"],
+        )
+
+        assert cursor.execute.call_count == 3
+
+    def test_grant_all_sequences_all_privileges(self, caplog):
+        """grant_all_sequences_in_schema with ALL should use ALL PRIVILEGES."""
+        pool, cursor = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with caplog.at_level(logging.INFO):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[SequencePrivilege.ALL],
+                schemas=["public"],
+            )
+
+        log_messages = [record.message for record in caplog.records]
+        assert any("ALL PRIVILEGES" in msg for msg in log_messages)
+
+
+class TestPrivilegeFormatting:
+    """Tests for privilege formatting helpers."""
+
+    def test_format_privileges_str_single(self):
+        """_format_privileges_str formats single privilege."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str([TablePrivilege.SELECT])
+        assert result == "SELECT"
+
+    def test_format_privileges_str_multiple(self):
+        """_format_privileges_str formats multiple privileges."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str(
+            [
+                TablePrivilege.SELECT,
+                TablePrivilege.INSERT,
+                TablePrivilege.UPDATE,
+            ]
+        )
+        assert result == "SELECT, INSERT, UPDATE"
+
+    def test_format_privileges_str_all(self):
+        """_format_privileges_str returns ALL PRIVILEGES for ALL."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str([TablePrivilege.ALL])
+        assert result == "ALL PRIVILEGES"
+
+    def test_format_privileges_str_schema_privileges(self):
+        """_format_privileges_str works with schema privileges."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str([SchemaPrivilege.USAGE, SchemaPrivilege.CREATE])
+        assert result == "USAGE, CREATE"
+
+    def test_format_privileges_str_sequence_privileges(self):
+        """_format_privileges_str works with sequence privileges."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        result = client._format_privileges_str(
+            [SequencePrivilege.USAGE, SequencePrivilege.SELECT, SequencePrivilege.UPDATE]
+        )
+        assert result == "USAGE, SELECT, UPDATE"
+
+
+class TestValidationErrors:
+    """Tests for input validation and helpful error messages."""
+
+    def test_grant_schema_empty_schemas_raises_error(self):
+        """grant_schema should raise ValueError when schemas is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'schemas' cannot be empty"):
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[SchemaPrivilege.USAGE],
+                schemas=[],
+            )
+
+    def test_grant_schema_empty_privileges_raises_error(self):
+        """grant_schema should raise ValueError when privileges is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'privileges' cannot be empty"):
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[],
+                schemas=["public"],
+            )
+
+    def test_grant_all_tables_empty_schemas_raises_error(self):
+        """grant_all_tables_in_schema should raise ValueError when schemas is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'schemas' cannot be empty"):
+            client.grant_all_tables_in_schema(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                schemas=[],
+            )
+
+    def test_grant_all_tables_empty_privileges_raises_error(self):
+        """grant_all_tables_in_schema should raise ValueError when privileges is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'privileges' cannot be empty"):
+            client.grant_all_tables_in_schema(
+                grantee="sp-uuid",
+                privileges=[],
+                schemas=["public"],
+            )
+
+    def test_grant_table_empty_tables_raises_error(self):
+        """grant_table should raise ValueError when tables is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'tables' cannot be empty"):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                tables=[],
+            )
+
+    def test_grant_table_empty_privileges_raises_error(self):
+        """grant_table should raise ValueError when privileges is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'privileges' cannot be empty"):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[],
+                tables=["public.users"],
+            )
+
+    def test_grant_all_sequences_empty_schemas_raises_error(self):
+        """grant_all_sequences_in_schema should raise ValueError when schemas is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'schemas' cannot be empty"):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[SequencePrivilege.USAGE],
+                schemas=[],
+            )
+
+    def test_grant_all_sequences_empty_privileges_raises_error(self):
+        """grant_all_sequences_in_schema should raise ValueError when privileges is empty."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="'privileges' cannot be empty"):
+            client.grant_all_sequences_in_schema(
+                grantee="sp-uuid",
+                privileges=[],
+                schemas=["public"],
+            )
+
+    def test_grant_table_invalid_table_format_raises_error(self):
+        """grant_table should raise ValueError for invalid table name format."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="Invalid table format"):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                tables=["schema."],  # Invalid: missing table name
+            )
+
+    def test_grant_table_empty_table_name_raises_error(self):
+        """grant_table should raise ValueError for empty table name."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="Table name cannot be empty"):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                tables=[""],
+            )
+
+    def test_grant_table_whitespace_table_name_raises_error(self):
+        """grant_table should raise ValueError for whitespace-only table name."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="Table name cannot be empty"):
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                tables=["   "],
+            )
+
+    def test_create_role_empty_identity_raises_error(self):
+        """create_role should raise ValueError for empty identity name."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="identity_name cannot be empty"):
+            client.create_role("", "SERVICE_PRINCIPAL")
+
+    def test_create_role_whitespace_identity_raises_error(self):
+        """create_role should raise ValueError for whitespace-only identity name."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="identity_name cannot be empty"):
+            client.create_role("   ", "SERVICE_PRINCIPAL")
+
+
+class TestTableIdentifierParsing:
+    """Tests for table identifier parsing."""
+
+    def test_parse_table_identifier_simple_name(self):
+        """_parse_table_identifier handles simple table names."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        ident = client._parse_table_identifier("users")
+        assert ident is not None
+
+    def test_parse_table_identifier_schema_qualified(self):
+        """_parse_table_identifier handles schema.table format."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        ident = client._parse_table_identifier("public.users")
+        assert ident is not None
+
+    def test_parse_table_identifier_strips_whitespace(self):
+        """_parse_table_identifier strips whitespace from names."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        ident = client._parse_table_identifier("  public.users  ")
+        assert ident is not None
+
+    def test_parse_table_identifier_invalid_format(self):
+        """_parse_table_identifier raises ValueError for invalid formats."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="Invalid table format"):
+            client._parse_table_identifier(".table")
+
+        with pytest.raises(ValueError, match="Invalid table format"):
+            client._parse_table_identifier("schema.")
+
+    def test_parse_table_identifier_empty_raises_error(self):
+        """_parse_table_identifier raises ValueError for empty string."""
+        pool, _ = _make_mock_pool()
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError, match="Table name cannot be empty"):
+            client._parse_table_identifier("")
+
+        with pytest.raises(ValueError, match="Table name cannot be empty"):
+            client._parse_table_identifier("   ")
+
+
+class TestExecuteGrantErrorHandling:
+    """Tests for _execute_grant error handling with helpful messages."""
+
+    def test_execute_grant_handles_invalid_schema_name(self):
+        """_execute_grant should raise ValueError with helpful message for invalid schema."""
+        pool, cursor = _make_mock_pool()
+        cursor.execute.side_effect = lakebase.psycopg.errors.InvalidSchemaName(
+            'schema "nonexistent" does not exist'
+        )
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError) as exc_info:
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[SchemaPrivilege.USAGE],
+                schemas=["nonexistent"],
+            )
+
+        error_msg = str(exc_info.value)
+        assert "schema does not exist" in error_msg
+
+    def test_execute_grant_handles_undefined_table(self):
+        """_execute_grant should raise ValueError with helpful message for undefined table."""
+        pool, cursor = _make_mock_pool()
+        cursor.execute.side_effect = lakebase.psycopg.errors.UndefinedTable(
+            'relation "public.nonexistent" does not exist'
+        )
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(ValueError) as exc_info:
+            client.grant_table(
+                grantee="sp-uuid",
+                privileges=[TablePrivilege.SELECT],
+                tables=["public.nonexistent"],
+            )
+
+        error_msg = str(exc_info.value)
+        assert "table does not exist" in error_msg
+
+    def test_execute_grant_handles_insufficient_privilege(self):
+        """_execute_grant should raise PermissionError for insufficient privileges."""
+        pool, cursor = _make_mock_pool()
+        cursor.execute.side_effect = lakebase.psycopg.errors.InsufficientPrivilege(
+            "permission denied for schema public"
+        )
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(PermissionError) as exc_info:
+            client.grant_schema(
+                grantee="sp-uuid",
+                privileges=[SchemaPrivilege.USAGE],
+                schemas=["public"],
+            )
+
+        error_msg = str(exc_info.value)
+        assert "Insufficient privileges" in error_msg
+        assert "CAN MANAGE" in error_msg
