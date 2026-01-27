@@ -3,8 +3,6 @@ import logging
 from typing import Any, Dict, List, Optional, Type, Union
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
-
-_logger = logging.getLogger(__name__)
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
     VectorSearchRetrieverToolInput,
@@ -14,7 +12,6 @@ from databricks_ai_bridge.vector_search_retriever_tool import (
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
-from langchain_core.tools import BaseTool as LangChainBaseTool
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from databricks_langchain import DatabricksEmbeddings
@@ -23,6 +20,8 @@ from databricks_langchain.multi_server_mcp_client import (
     DatabricksMultiServerMCPClient,
 )
 from databricks_langchain.vectorstores import DatabricksVectorSearch
+
+_logger = logging.getLogger(__name__)
 
 
 class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
@@ -58,7 +57,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     args_schema: Type[BaseModel] = VectorSearchRetrieverToolInput
 
     _vector_store: DatabricksVectorSearch = PrivateAttr()
-    _mcp_tool: Optional[LangChainBaseTool] = PrivateAttr(default=None)
+    _mcp_tool: Optional[BaseTool] = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _validate_tool_inputs(self):
@@ -94,7 +93,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
 
         return self
 
-    def _create_or_get_mcp_tool(self) -> LangChainBaseTool:
+    def _create_or_get_mcp_tool(self) -> BaseTool:
         """Create or return existing MCP tool using LangChain MCP Server."""
         if self._mcp_tool is not None:
             return self._mcp_tool
@@ -132,7 +131,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
 
     def _parse_mcp_response(self, mcp_response: str) -> List[Document]:
         """Parse MCP tool response into LangChain Documents."""
-        dicts = self._parse_mcp_response_to_dicts(mcp_response, strict=False)
+        dicts = self._parse_mcp_response_to_dicts(mcp_response, strict=True)
         return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in dicts]
 
     def _execute_mcp_path(

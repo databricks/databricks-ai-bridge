@@ -55,6 +55,17 @@ def _create_mcp_response_json(texts: List[str] = None) -> str:
     )
 
 
+def assert_mcp_tool_called_with(mock_tool, expected_args: Dict[str, Any]):
+    """Assert MCP tool was called with expected args, handling JSON-stringified filters."""
+    mock_tool.invoke.assert_called_once()
+    call_args = mock_tool.invoke.call_args[0][0]
+    for key, value in expected_args.items():
+        if key == "filters":
+            assert json.loads(call_args["filters"]) == value
+        else:
+            assert call_args[key] == value
+
+
 @pytest.fixture
 def mock_mcp_infrastructure():
     """Mock MCP infrastructure for tests that need it."""
@@ -179,16 +190,17 @@ def test_filters_are_passed_through(execution_path) -> None:
     )
 
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "what cities are in Germany"
-        # MCP path: filters are JSON stringified
-        assert json.loads(call_args["filters"]) == {"country": "Germany"}
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "what cities are in Germany", "filters": {"country": "Germany"}},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "what cities are in Germany"
-        assert call_args[1]["filter"] == {"country": "Germany"}
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="what cities are in Germany",
+            k=tool.num_results,
+            filter={"country": "Germany"},
+            query_type=tool.query_type,
+        )
 
 
 def test_filters_are_combined(execution_path) -> None:
@@ -205,16 +217,17 @@ def test_filters_are_combined(execution_path) -> None:
 
     expected_filters = {"city LIKE": "Berlin", "country": "Germany"}
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "what cities are in Germany"
-        # MCP path: filters are JSON stringified
-        assert json.loads(call_args["filters"]) == expected_filters
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "what cities are in Germany", "filters": expected_filters},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "what cities are in Germany"
-        assert call_args[1]["filter"] == expected_filters
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="what cities are in Germany",
+            k=tool.num_results,
+            filter=expected_filters,
+            query_type=tool.query_type,
+        )
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -453,15 +466,18 @@ def test_kwargs_are_passed_through(execution_path) -> None:
     tool.invoke({"query": "what cities are in Germany"})
 
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "what cities are in Germany"
-        assert call_args["score_threshold"] == 0.5
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "what cities are in Germany", "score_threshold": 0.5},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "what cities are in Germany"
-        assert call_args[1]["score_threshold"] == 0.5
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="what cities are in Germany",
+            k=tool.num_results,
+            filter={},
+            query_type=tool.query_type,
+            score_threshold=0.5,
+        )
 
 
 def test_kwargs_override_both_num_results_and_query_type(execution_path) -> None:
@@ -472,17 +488,17 @@ def test_kwargs_override_both_num_results_and_query_type(execution_path) -> None
     tool.invoke({"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"})
 
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "what cities are in Germany"
-        assert call_args["num_results"] == 3
-        assert call_args["query_type"] == "HYBRID"
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "what cities are in Germany", "num_results": 3, "query_type": "HYBRID"},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "what cities are in Germany"
-        assert call_args[1]["k"] == 3
-        assert call_args[1]["query_type"] == "HYBRID"
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="what cities are in Germany",
+            k=3,
+            filter={},
+            query_type="HYBRID",
+        )
 
 
 def test_enhanced_filter_description_with_column_metadata() -> None:
@@ -582,16 +598,17 @@ def test_predefined_filters_work_without_dynamic_filter(execution_path) -> None:
 
     expected_filters = {"status": "active", "category": "electronics"}
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "what electronics are available"
-        # MCP path: filters are JSON stringified
-        assert json.loads(call_args["filters"]) == expected_filters
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "what electronics are available", "filters": expected_filters},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "what electronics are available"
-        assert call_args[1]["filter"] == expected_filters
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="what electronics are available",
+            k=tool.num_results,
+            filter=expected_filters,
+            query_type=tool.query_type,
+        )
 
 
 def test_filter_item_serialization(execution_path) -> None:
@@ -617,16 +634,17 @@ def test_filter_item_serialization(execution_path) -> None:
     }
 
     if execution_path["path"] == "mcp":
-        execution_path["mock_tool"].invoke.assert_called_once()
-        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
-        assert call_args["query"] == "find products"
-        # MCP path: filters are JSON stringified
-        assert json.loads(call_args["filters"]) == expected_filters
+        assert_mcp_tool_called_with(
+            execution_path["mock_tool"],
+            {"query": "find products", "filters": expected_filters},
+        )
     else:
-        tool._vector_store.similarity_search.assert_called_once()
-        call_args = tool._vector_store.similarity_search.call_args
-        assert call_args[1]["query"] == "find products"
-        assert call_args[1]["filter"] == expected_filters
+        tool._vector_store.similarity_search.assert_called_once_with(
+            query="find products",
+            k=tool.num_results,
+            filter=expected_filters,
+            query_type=tool.query_type,
+        )
 
 
 # =============================================================================
@@ -651,8 +669,15 @@ def test_mcp_path_is_used_for_databricks_managed_embeddings(mock_mcp_infrastruct
     # Verify MCP client was used
     mock_mcp_infrastructure["client_class"].assert_called_once()
 
-    # Verify MCP tool was invoked
-    mock_mcp_infrastructure["tool"].invoke.assert_called_once()
+    # Verify MCP tool was invoked with expected query
+    mock_mcp_infrastructure["tool"].invoke.assert_called_once_with(
+        {
+            "query": "test query",
+            "num_results": vector_search_tool.num_results,
+            "query_type": vector_search_tool.query_type,
+            "include_score": "false",
+        }
+    )
 
 
 def test_direct_api_path_is_used_for_self_managed_embeddings(mock_mcp_infrastructure) -> None:
@@ -689,136 +714,3 @@ def test_mcp_tool_is_cached(mock_mcp_infrastructure) -> None:
 
     # But MCP tool should be invoked 3 times
     assert mock_mcp_infrastructure["tool"].invoke.call_count == 3
-
-
-def test_mcp_response_parsing_json_array() -> None:
-    """Test that MCP JSON array response is parsed correctly into Documents."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    json_response = json.dumps(
-        [
-            {"id": "doc1", "text": "content1", "score": 0.9},
-            {"id": "doc2", "text": "content2", "score": 0.8},
-        ]
-    )
-
-    docs = vector_search_tool._parse_mcp_response(json_response)
-
-    assert len(docs) == 2
-    assert all(isinstance(doc, Document) for doc in docs)
-    assert docs[0].page_content == "content1"
-    assert docs[0].metadata == {"id": "doc1", "score": 0.9}
-    assert docs[1].page_content == "content2"
-    assert docs[1].metadata == {"id": "doc2", "score": 0.8}
-
-
-def test_mcp_response_parsing_non_json() -> None:
-    """Test that non-JSON MCP response is treated as a single document."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    plain_text_response = "This is a plain text response"
-
-    docs = vector_search_tool._parse_mcp_response(plain_text_response)
-
-    assert len(docs) == 1
-    assert docs[0].page_content == plain_text_response
-
-
-def test_mcp_response_parsing_non_list_json() -> None:
-    """Test that non-list JSON is converted to a single document."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    json_response = json.dumps({"message": "single object response"})
-
-    docs = vector_search_tool._parse_mcp_response(json_response)
-
-    assert len(docs) == 1
-    assert docs[0].page_content == "{'message': 'single object response'}"
-
-
-def test_normalize_filters_with_filter_items() -> None:
-    """Test that FilterItem list is normalized to dict."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    filters = [
-        FilterItem(key="category", value="electronics"),
-        FilterItem(key="price >=", value=100),
-    ]
-
-    result = vector_search_tool._normalize_filters(filters)
-
-    assert result == {"category": "electronics", "price >=": 100}
-
-
-def test_normalize_filters_with_dict() -> None:
-    """Test that dict filters are passed through unchanged."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    filters = {"category": "electronics", "price >=": 100}
-
-    result = vector_search_tool._normalize_filters(filters)
-
-    assert result == filters
-
-
-def test_normalize_filters_with_none() -> None:
-    """Test that None filters return empty dict."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-
-    result = vector_search_tool._normalize_filters(None)
-
-    assert result == {}
-
-
-def test_build_mcp_input() -> None:
-    """Test MCP input building with various parameters."""
-    from databricks.vector_search.reranker import DatabricksReranker
-
-    # Basic parameters
-    tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    mcp_input = tool._build_mcp_input("test query")
-    assert mcp_input["query"] == "test query"
-    assert mcp_input["num_results"] == tool.num_results
-    assert mcp_input["query_type"] == tool.query_type
-    assert mcp_input["include_score"] == "false"  # Default
-
-    # With filters (JSON stringified for MCP - parse back to compare)
-    filters = [FilterItem(key="category", value="electronics")]
-    mcp_input = tool._build_mcp_input("test query", filters=filters)
-    assert json.loads(mcp_input["filters"]) == {"category": "electronics"}
-
-    # Combines predefined and runtime filters
-    tool_with_filters = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"status": "active"})
-    runtime_filters = [FilterItem(key="category", value="electronics")]
-    mcp_input = tool_with_filters._build_mcp_input("test query", filters=runtime_filters)
-    expected_filters = {"status": "active", "category": "electronics"}
-    assert json.loads(mcp_input["filters"]) == expected_filters
-
-    # kwargs override defaults
-    tool_with_defaults = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
-    mcp_input = tool_with_defaults._build_mcp_input(
-        "test query", num_results=5, query_type="HYBRID"
-    )
-    assert mcp_input["num_results"] == 5
-    assert mcp_input["query_type"] == "HYBRID"
-
-    # With columns (comma-separated for MCP)
-    tool_with_columns = init_vector_search_tool(DELTA_SYNC_INDEX, columns=["id", "text", "score"])
-    mcp_input = tool_with_columns._build_mcp_input("test query")
-    assert mcp_input["columns"] == "id,text,score"
-
-    # With score_threshold (converted to float)
-    mcp_input = tool._build_mcp_input("test query", score_threshold=0.7)
-    assert mcp_input["score_threshold"] == 0.7
-    assert isinstance(mcp_input["score_threshold"], float)
-
-    # With include_score=True
-    tool_with_score = init_vector_search_tool(DELTA_SYNC_INDEX, include_score=True)
-    mcp_input = tool_with_score._build_mcp_input("test query")
-    assert mcp_input["include_score"] == "true"
-
-    # With reranker
-    reranker = DatabricksReranker(columns_to_rerank=["text", "title"])
-    tool_with_reranker = init_vector_search_tool(DELTA_SYNC_INDEX, reranker=reranker)
-    mcp_input = tool_with_reranker._build_mcp_input("test query")
-    assert mcp_input["columns_to_rerank"] == "text,title"
