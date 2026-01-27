@@ -586,9 +586,7 @@ class LakebaseClient:
                 f"'{param_name}' cannot be empty. Provide at least one {param_name[:-1]}."
             )
 
-    def _execute_grant(
-        self, query: sql.Composed, operation_desc: str, grantee: str
-    ) -> None:
+    def _execute_grant(self, query: sql.Composed, operation_desc: str, grantee: str) -> None:
         """Execute a GRANT query with helpful error handling.
 
         :param query: The composed SQL query to execute.
@@ -687,9 +685,7 @@ class LakebaseClient:
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),
             )
-            self._execute_grant(
-                query, f"grant {privs_str} on schema '{schema}'", grantee
-            )
+            self._execute_grant(query, f"grant {privs_str} on schema '{schema}'", grantee)
             logger.info("Granted %s on schema '%s' to '%s'", privs_str, schema, grantee)
 
     def grant_all_tables_in_schema(
@@ -721,9 +717,7 @@ class LakebaseClient:
         privs_str = self._format_privileges_str(privileges)
 
         for schema in schemas:
-            query = sql.SQL(
-                "GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}"
-            ).format(
+            query = sql.SQL("GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}").format(
                 privs=privs,
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),

@@ -57,6 +57,7 @@ Example to run all tests:
 
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
@@ -189,9 +190,7 @@ class TestValidationErrors:
                 schemas=[],
             )
 
-    def test_grant_schema_empty_privileges_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_schema_empty_privileges_raises_error(self, client, test_service_principal):
         """grant_schema should raise ValueError when privileges is empty."""
         with pytest.raises(ValueError, match="'privileges' cannot be empty"):
             client.grant_schema(
@@ -200,9 +199,7 @@ class TestValidationErrors:
                 schemas=["public"],
             )
 
-    def test_grant_all_tables_empty_schemas_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_all_tables_empty_schemas_raises_error(self, client, test_service_principal):
         """grant_all_tables_in_schema should raise ValueError when schemas is empty."""
         with pytest.raises(ValueError, match="'schemas' cannot be empty"):
             client.grant_all_tables_in_schema(
@@ -211,9 +208,7 @@ class TestValidationErrors:
                 schemas=[],
             )
 
-    def test_grant_all_tables_empty_privileges_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_all_tables_empty_privileges_raises_error(self, client, test_service_principal):
         """grant_all_tables_in_schema should raise ValueError when privileges is empty."""
         with pytest.raises(ValueError, match="'privileges' cannot be empty"):
             client.grant_all_tables_in_schema(
@@ -231,9 +226,7 @@ class TestValidationErrors:
                 tables=[],
             )
 
-    def test_grant_table_empty_privileges_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_table_empty_privileges_raises_error(self, client, test_service_principal):
         """grant_table should raise ValueError when privileges is empty."""
         with pytest.raises(ValueError, match="'privileges' cannot be empty"):
             client.grant_table(
@@ -242,9 +235,7 @@ class TestValidationErrors:
                 tables=["public.users"],
             )
 
-    def test_grant_all_sequences_empty_schemas_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_all_sequences_empty_schemas_raises_error(self, client, test_service_principal):
         """grant_all_sequences_in_schema should raise ValueError when schemas is empty."""
         with pytest.raises(ValueError, match="'schemas' cannot be empty"):
             client.grant_all_sequences_in_schema(
@@ -264,9 +255,7 @@ class TestValidationErrors:
                 schemas=["public"],
             )
 
-    def test_grant_table_invalid_table_format_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_table_invalid_table_format_raises_error(self, client, test_service_principal):
         """grant_table should raise ValueError for invalid table name format."""
         with pytest.raises(ValueError, match="Invalid table format"):
             client.grant_table(
@@ -275,9 +264,7 @@ class TestValidationErrors:
                 tables=["schema."],  # Invalid: missing table name
             )
 
-    def test_grant_table_empty_table_name_raises_error(
-        self, client, test_service_principal
-    ):
+    def test_grant_table_empty_table_name_raises_error(self, client, test_service_principal):
         """grant_table should raise ValueError for empty table name."""
         with pytest.raises(ValueError, match="Table name cannot be empty"):
             client.grant_table(
@@ -419,9 +406,7 @@ class TestTableGrants:
             TablePrivilege.ALL,
         ],
     )
-    def test_grant_table_single_privilege(
-        self, client, test_grantee, test_table, privilege
-    ):
+    def test_grant_table_single_privilege(self, client, test_grantee, test_table, privilege):
         """Test granting each privilege on a specific table."""
         client.grant_table(
             grantee=test_grantee,
@@ -447,9 +432,7 @@ class TestTableGrants:
     def test_grant_table_without_schema_prefix(self, client, test_grantee):
         """Test granting privileges on table without schema prefix."""
         # This assumes the table exists in the search_path
-        client.execute(
-            "CREATE TABLE IF NOT EXISTS test_no_schema (id SERIAL PRIMARY KEY)"
-        )
+        client.execute("CREATE TABLE IF NOT EXISTS test_no_schema (id SERIAL PRIMARY KEY)")
         try:
             client.grant_table(
                 grantee=test_grantee,
@@ -477,9 +460,7 @@ class TestSequencePrivilegeMatrix:
             SequencePrivilege.ALL,
         ],
     )
-    def test_grant_all_sequences_single_privilege(
-        self, client, test_grantee, privilege
-    ):
+    def test_grant_all_sequences_single_privilege(self, client, test_grantee, privilege):
         """Test granting each individual sequence privilege."""
         client.grant_all_sequences_in_schema(
             grantee=test_grantee,
@@ -551,9 +532,7 @@ class TestMultipleSchemas:
         for schema in schemas:
             client.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
 
-    def test_grant_schema_multiple_schemas(
-        self, client, test_grantee, test_schemas
-    ):
+    def test_grant_schema_multiple_schemas(self, client, test_grantee, test_schemas):
         """Test granting schema privileges on multiple schemas."""
         client.grant_schema(
             grantee=test_grantee,
@@ -561,9 +540,7 @@ class TestMultipleSchemas:
             schemas=test_schemas,
         )
 
-    def test_grant_all_tables_multiple_schemas(
-        self, client, test_grantee, test_schemas
-    ):
+    def test_grant_all_tables_multiple_schemas(self, client, test_grantee, test_schemas):
         """Test granting table privileges across multiple schemas."""
         # Create tables in test schemas
         for schema in test_schemas:
@@ -577,9 +554,7 @@ class TestMultipleSchemas:
             schemas=test_schemas,
         )
 
-    def test_grant_all_sequences_multiple_schemas(
-        self, client, test_grantee, test_schemas
-    ):
+    def test_grant_all_sequences_multiple_schemas(self, client, test_grantee, test_schemas):
         """Test granting sequence privileges across multiple schemas."""
         client.grant_all_sequences_in_schema(
             grantee=test_grantee,
@@ -657,10 +632,7 @@ class TestNoRoleUserErrors:
         If the user unexpectedly HAS a role, they should still get a permission
         denied error when trying to grant (since they lack GRANT permissions).
         """
-        import logging
         from psycopg_pool import PoolTimeout
-
-        print("\n[INFO] Testing NO_ROLE_USER_TOKEN user attempting to grant schema privileges...")
 
         # Capture WARNING level logs to verify "role does not exist" message
         with caplog.at_level(logging.WARNING):
@@ -681,32 +653,22 @@ class TestNoRoleUserErrors:
                     "This user appears to have a database role with GRANT permissions. "
                     "Please use a token for a user/SP that truly has no role in Lakebase."
                 )
-            except PoolTimeout as e:
+            except PoolTimeout:
                 # Expected: user has no role, connection failed with PoolTimeout
-                print(f"[INFO] PoolTimeout raised (expected for no-role user): {e}")
-
                 # Verify the logs contain "role" and "does not exist"
                 log_text = " ".join(record.message for record in caplog.records)
-                print(f"[INFO] Captured log messages: {log_text[:200]}...")
-
                 assert "role" in log_text.lower(), (
                     f"Expected 'role' in log messages but got: {log_text}"
                 )
                 assert "does not exist" in log_text.lower(), (
                     f"Expected 'does not exist' in log messages but got: {log_text}"
                 )
-                print("[INFO] Verified: logs contain 'role' and 'does not exist' messages")
-
             except PermissionError as e:
-                # Also acceptable: user has a role but no GRANT permission
-                print(f"[INFO] PermissionError raised (user has role but no GRANT): {e}")
                 error_str = str(e)
-                assert "Insufficient privileges" in error_str or "permission denied" in error_str.lower()
-            except Exception as e:
-                # Other connection/permission errors are also acceptable
-                # as long as the grant didn't succeed
-                print(f"[INFO] Other exception raised: {type(e).__name__}: {e}")
-                pass  # Test passes - the grant failed with some error
+                assert (
+                    "Insufficient privileges" in error_str
+                    or "permission denied" in error_str.lower()
+                )
 
     def test_create_role_without_database_role_fails(self, no_role_client, caplog):
         """
@@ -718,10 +680,7 @@ class TestNoRoleUserErrors:
         1. User has no role -> PoolTimeout with "role does not exist" in logs
         2. User has a role but no CAN MANAGE -> PermissionError
         """
-        import logging
         from psycopg_pool import PoolTimeout
-
-        print("\n[INFO] Testing NO_ROLE_USER_TOKEN user attempting to create a role...")
 
         # Capture WARNING level logs to verify "role does not exist" message
         with caplog.at_level(logging.WARNING):
@@ -736,25 +695,15 @@ class TestNoRoleUserErrors:
                     "This user appears to have CAN MANAGE permission. "
                     "Please use a token for a user/SP without this permission."
                 )
-            except PoolTimeout as e:
-                print(f"[INFO] PoolTimeout raised (expected for no-role user): {e}")
-
+            except PoolTimeout:
                 # Verify the logs contain "role" and "does not exist"
                 log_text = " ".join(record.message for record in caplog.records)
-                print(f"[INFO] Captured log messages: {log_text[:200]}...")
-
                 assert "role" in log_text.lower(), (
                     f"Expected 'role' in log messages but got: {log_text}"
                 )
                 assert "does not exist" in log_text.lower(), (
                     f"Expected 'does not exist' in log messages but got: {log_text}"
                 )
-                print("[INFO] Verified: logs contain 'role' and 'does not exist' messages")
-
-            except PermissionError as e:
-                print(f"[INFO] PermissionError raised (user has role but no CAN MANAGE): {e}")
-            except Exception as e:
-                print(f"[INFO] Other exception raised: {type(e).__name__}: {e}")
 
 
 class TestLimitedPermissionUserErrors:
@@ -821,8 +770,6 @@ class TestLimitedPermissionUserErrors:
         often has special default permissions that allow broader GRANT access.
         """
         test_schema = "test_limited_perm_schema"
-        print(f"\n[INFO] Attempting to grant on '{test_schema}' with limited permission user...")
-
         try:
             limited_permission_client.grant_schema(
                 grantee=test_grantee,
@@ -835,9 +782,10 @@ class TestLimitedPermissionUserErrors:
                 "Ensure this schema is owned by a different user."
             )
         except PermissionError as e:
-            print(f"[INFO] grant_schema raised PermissionError (expected): {e}")
             error_msg = str(e)
-            assert "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
+            assert (
+                "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
+            )
         except ValueError as e:
             # Schema might not exist
             if "does not exist" in str(e):
@@ -845,9 +793,6 @@ class TestLimitedPermissionUserErrors:
                     f"Schema '{test_schema}' does not exist. "
                     f"Create it as admin: CREATE SCHEMA IF NOT EXISTS {test_schema};"
                 )
-            raise
-        except Exception as e:
-            print(f"[ERROR] Unexpected exception: {type(e).__name__}: {e}")
             raise
 
     def test_grant_table_without_permission_raises_error(
@@ -869,13 +814,10 @@ class TestLimitedPermissionUserErrors:
                 "This user should NOT have GRANT permission on tables."
             )
         except PermissionError as e:
-            print(f"\n[INFO] grant_all_tables_in_schema raised PermissionError (expected): {e}")
             error_msg = str(e)
-            assert "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
-        except Exception as e:
-            print(f"\n[ERROR] grant_all_tables_in_schema raised unexpected exception: {type(e).__name__}")
-            print(f"[ERROR] Exception message: {e}")
-            raise
+            assert (
+                "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
+            )
 
     def test_create_role_without_can_manage_raises_error(self, limited_permission_client):
         """
@@ -897,14 +839,11 @@ class TestLimitedPermissionUserErrors:
                 "This user should NOT have CAN MANAGE permission."
             )
         except PermissionError as e:
-            print(f"\n[INFO] create_role raised PermissionError (expected): {e}")
             error_msg = str(e)
-            assert "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
+            assert (
+                "Insufficient privileges" in error_msg or "permission denied" in error_msg.lower()
+            )
             assert "CAN MANAGE" in error_msg
-        except Exception as e:
-            print(f"\n[ERROR] create_role raised unexpected exception: {type(e).__name__}")
-            print(f"[ERROR] Exception message: {e}")
-            raise
 
 
 class TestObjectNotFoundErrors:
