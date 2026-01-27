@@ -48,7 +48,8 @@
     "prepublishOnly": "npm run build && npm run test && npm run lint && npm run format:check",
     "example": "tsx examples/basic.ts",
     "example:tools": "tsx examples/tools.ts",
-    "example:agent": "tsx examples/agent.ts"
+    "example:agent": "tsx examples/agent.ts",
+    "example:mcp": "tsx examples/mcp.ts"
   },
   "dependencies": {
     "@ai-sdk/provider": "^2.0.0",
@@ -56,11 +57,13 @@
     "@databricks/ai-sdk-provider": "^0.2.3",
     "@databricks/sdk-experimental": "^0.15.0",
     "@langchain/core": "^1.1.8",
+    "@langchain/mcp-adapters": "^1.1.1",
     "ai": "^5.0.118",
     "zod": "^4.3.5"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.15.0",
+    "@langchain/langgraph": "^1.0.0",
     "@types/node": "^22.0.0",
     "dotenv": "^17.2.3",
     "eslint": "^9.0.0",
@@ -71,6 +74,14 @@
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.49.0",
     "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "@langchain/langgraph": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/langgraph": {
+      "optional": true
+    }
   },
   "repository": {
     "type": "git",
