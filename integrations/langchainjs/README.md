@@ -51,7 +51,6 @@ const model = new ChatDatabricks({
 });
 ```
 
-
 ### Responses
 
 Rich output with reasoning, citations, and function calls.
@@ -81,10 +80,11 @@ const model = new ChatDatabricks({
 ```
 
 ### Environment Variables
+
 The following environment variables are supported
 
 | Variable                          | Description                                          |
-|-----------------------------------|------------------------------------------------------|
+| --------------------------------- | ---------------------------------------------------- |
 | DATABRICKS_HOST                   | Workspace or account URL                             |
 | DATABRICKS_TOKEN                  | Personal access token                                |
 | DATABRICKS_CLIENT_ID              | OAuth client ID / Azure client ID                    |

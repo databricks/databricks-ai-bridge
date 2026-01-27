@@ -73,10 +73,10 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
 
   /**
    * Whether to use the Responses API or Chat Completions API
-   * 
+   *
    * - Chat Completions: See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#chat-completions-api
    * - Responses: See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api
-   * 
+   *
    * @default false
    */
   useResponsesApi?: boolean;
