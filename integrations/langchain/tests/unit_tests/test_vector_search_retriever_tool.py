@@ -252,6 +252,7 @@ def test_vector_search_retriever_tool_resources(
             else []
         )
     )
+    assert vector_search_tool.resources is not None
     assert [res.to_dict() for res in vector_search_tool.resources] == [
         res.to_dict() for res in expected_resources
     ]

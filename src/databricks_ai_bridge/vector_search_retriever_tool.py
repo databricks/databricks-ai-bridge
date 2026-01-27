@@ -87,7 +87,7 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     )
     tool_name: Optional[str] = Field(None, description="The name of the retrieval tool.")
     tool_description: Optional[str] = Field(None, description="A description of the tool.")
-    resources: Optional[List[dict]] = Field(
+    resources: Optional[List[Resource]] = Field(
         None, description="Resources required to log a model that uses this tool."
     )
     workspace_client: Optional[WorkspaceClient] = Field(

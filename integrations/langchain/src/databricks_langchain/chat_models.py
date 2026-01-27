@@ -371,11 +371,11 @@ class ChatDatabricks(BaseChatModel):
 
         if self.use_responses_api:
             # Use OpenAI client with responses API
-            resp = cast(OpenAI, self.client).responses.create(**data)
+            resp = self.client.responses.create(**data)
             return self._convert_responses_api_response_to_chat_result(resp)
         else:
             # Use OpenAI client with chat completions API
-            resp = cast(OpenAI, self.client).chat.completions.create(**data)
+            resp = self.client.chat.completions.create(**data)
             return self._convert_response_to_chat_result(resp)
 
     def _prepare_inputs(
@@ -390,7 +390,7 @@ class ChatDatabricks(BaseChatModel):
         data: Dict[str, Any] = {
             "model": self.model,
             "stream": stream,
-            **self.extra_params,
+            **(self.extra_params or {}),
             **kwargs,
         }
         if custom_inputs is not None:
@@ -613,7 +613,7 @@ class ChatDatabricks(BaseChatModel):
 
         if self.use_responses_api:
             prev_chunk = None
-            stream: Stream[ResponseStreamEvent] = cast(OpenAI, self.client).responses.create(**data)
+            stream: Stream[ResponseStreamEvent] = self.client.responses.create(**data)
             for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
@@ -645,9 +645,7 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            stream: Stream[ChatCompletionChunk] = cast(OpenAI, self.client).chat.completions.create(
-                **data
-            )
+            stream: Stream[ChatCompletionChunk] = self.client.chat.completions.create(**data)
             for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
                 if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
