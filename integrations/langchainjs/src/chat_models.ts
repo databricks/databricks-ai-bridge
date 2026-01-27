@@ -72,12 +72,14 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
   endpoint: string;
 
   /**
-   * Endpoint API - determines which API protocol to use
-   * - 'responses': See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api
-   * - 'chat-completions': See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#chat-completions-api
-   * - 'chat-agent': See https://docs.databricks.com/aws/en/generative-ai/agent-framework/agent-legacy-schema
+   * Whether to use the Responses API or Chat Completions API
+   * 
+   * - Chat Completions: See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#chat-completions-api
+   * - Responses: See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api
+   * 
+   * @default false
    */
-  endpointAPI: EndpointAPI;
+  useResponsesApi?: boolean;
 
   /**
    * Authentication credentials for Databricks SDK.
@@ -102,40 +104,30 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
 /**
  * ChatDatabricks - Chat model integration for Databricks Model Serving
  *
- * Supports three endpoint APIs:
- * - chat-completions: OpenAI-compatible chat completions
- * - chat-agent: Databricks agent endpoints
- * - responses: Rich output with reasoning and citations
+ * Supports Chat Completions or Responses via `useResponsesApi`:
  *
  * @example Chat Completions
  * ```typescript
  * const model = new ChatDatabricks({
- *   endpoint: "databricks-meta-llama-3-3-70b-instruct",
- *   endpointAPI: "chat-completions",
+ *   endpoint: "databricks-claude-sonnet-4-5",
+ *   useResponsesApi: false, // can be omitted
  * });
  * const response = await model.invoke("Hello!");
  * ```
  *
- * @example Chat Agent
+ * @example Responses
  * ```typescript
  * const model = new ChatDatabricks({
- *   endpoint: "my-chat-agent",
- *   endpointAPI: "chat-agent",
+ *   endpoint: "databricks-gpt-5-2",
+ *   useResponsesApi: true,
  * });
- * ```
- *
- * @example Responses (with reasoning)
- * ```typescript
- * const model = new ChatDatabricks({
- *   endpoint: "my-responses-agent",
- *   endpointAPI: "responses",
- * });
+ * const response = await model.invoke("Hello!");
  * ```
  *
  * @example With explicit authentication
  * ```typescript
  * const model = new ChatDatabricks({
- *   endpoint: "databricks-meta-llama-3-3-70b-instruct",
+ *   endpoint: "databricks-claude-sonnet-4-5",
  *   auth: {
  *     host: "https://your-workspace.databricks.com",
  *     token: "dapi...",
@@ -153,8 +145,8 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   /** Model serving endpoint name */
   endpoint: string;
 
-  /** Endpoint API */
-  endpointAPI: EndpointAPI;
+  /** Whether to use the Responses API or Chat Completions API */
+  useResponsesApi?: boolean;
 
   /** Temperature (0.0 - 2.0) */
   temperature?: number;
@@ -187,7 +179,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     super(fields);
 
     this.endpoint = fields.endpoint;
-    this.endpointAPI = fields.endpointAPI;
+    this.useResponsesApi = fields.useResponsesApi;
     this.temperature = fields.temperature;
     this.maxTokens = fields.maxTokens;
     this.stop = fields.stop;
@@ -236,15 +228,10 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
 
   private async getLanguageModel(): Promise<LanguageModel> {
     const provider = await this.provider;
-    switch (this.endpointAPI) {
-      case "chat-agent":
-        return provider.chatAgent(this.endpoint) as LanguageModel;
-      case "responses":
-        return provider.responses(this.endpoint) as LanguageModel;
-      case "chat-completions":
-      default:
-        return provider.chatCompletions(this.endpoint) as LanguageModel;
+    if (this.useResponsesApi) {
+      return provider.responses(this.endpoint) as LanguageModel;
     }
+    return provider.chatCompletions(this.endpoint) as LanguageModel;
   }
 
   _llmType(): string {
@@ -369,7 +356,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     // Create a new instance with bound tools
     const bound = new ChatDatabricks({
       endpoint: this.endpoint,
-      endpointAPI: this.endpointAPI,
+      useResponsesApi: this.useResponsesApi,
       auth: this.auth,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
@@ -393,7 +380,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   get identifyingParams(): Record<string, unknown> {
     return {
       endpoint: this.endpoint,
-      endpointAPI: this.endpointAPI,
+      useResponsesApi: this.useResponsesApi,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
     };

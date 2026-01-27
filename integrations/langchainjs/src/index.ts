@@ -1,5 +1,5 @@
 /**
- * @databricks/langchain-ts - LangChain integration for Databricks Model Serving
+ * @databricks/langchainjs - LangChain integration for Databricks Model Serving
  *
  * Uses the Databricks AI SDK Provider internally to support multiple endpoint APIs:
  * - chat-completions: OpenAI-compatible chat completions

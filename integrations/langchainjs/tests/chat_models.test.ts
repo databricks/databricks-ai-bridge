@@ -11,7 +11,6 @@ describe("ChatDatabricks", () => {
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointAPI: "chat-completions",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -19,10 +18,10 @@ describe("ChatDatabricks", () => {
       });
 
       expect(model.endpoint).toBe("test-endpoint");
-      expect(model.endpointAPI).toBe("chat-completions");
+      expect(model.useResponsesApi).toBeUndefined();
     });
 
-    it("supports endpoint APIs", async () => {
+    it("supports useResponsesApi flag", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
       const auth = {
@@ -32,25 +31,18 @@ describe("ChatDatabricks", () => {
 
       const chatCompletionsModel = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointAPI: "chat-completions",
-        auth,
-      });
-
-      const chatAgentModel = new ChatDatabricks({
-        endpoint: "test-agent",
-        endpointAPI: "chat-agent",
+        useResponsesApi: false,
         auth,
       });
 
       const responsesModel = new ChatDatabricks({
         endpoint: "test-responses",
-        endpointAPI: "responses",
+        useResponsesApi: true,
         auth,
       });
 
-      expect(chatCompletionsModel.endpointAPI).toBe("chat-completions");
-      expect(chatAgentModel.endpointAPI).toBe("chat-agent");
-      expect(responsesModel.endpointAPI).toBe("responses");
+      expect(chatCompletionsModel.useResponsesApi).toBe(false);
+      expect(responsesModel.useResponsesApi).toBe(true);
     });
 
     it("accepts model parameters", async () => {
@@ -58,7 +50,6 @@ describe("ChatDatabricks", () => {
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointAPI: "chat-completions",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -78,7 +69,6 @@ describe("ChatDatabricks", () => {
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointAPI: "chat-completions",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -93,7 +83,7 @@ describe("ChatDatabricks", () => {
 
       const model = new ChatDatabricks({
         endpoint: "test-endpoint",
-        endpointAPI: "chat-completions",
+        useResponsesApi: true,
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -105,7 +95,7 @@ describe("ChatDatabricks", () => {
       const params = model.identifyingParams;
 
       expect(params.endpoint).toBe("test-endpoint");
-      expect(params.endpointAPI).toBe("chat-completions");
+      expect(params.useResponsesApi).toBe(true);
       expect(params.temperature).toBe(0.5);
       expect(params.maxTokens).toBe(500);
     });

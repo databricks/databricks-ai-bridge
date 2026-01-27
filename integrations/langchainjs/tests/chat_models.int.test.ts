@@ -12,18 +12,18 @@ config({ path: ".env.local" });
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import { ChatDatabricks, EndpointAPI } from "../src/chat_models.js";
+import { ChatDatabricks } from "../src/chat_models.js";
 
 // Endpoint configurations to test
-const endpointConfigs: { name: string; endpointAPI: EndpointAPI; endpoint: string }[] = [
+const endpointConfigs: { name: string; useResponsesApi: boolean; endpoint: string }[] = [
   {
     name: "chat-completions",
-    endpointAPI: "chat-completions",
+    useResponsesApi: false,
     endpoint: "databricks-claude-sonnet-4-5",
   },
   {
     name: "responses",
-    endpointAPI: "responses",
+    useResponsesApi: true,
     endpoint: "databricks-gpt-5-2",
   },
 ];
@@ -35,13 +35,13 @@ const hasCredentials =
   (process.env.CLIENT_ID && process.env.CLIENT_SECRET);
 
 describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
-  describe.each(endpointConfigs)("$name endpoint", ({ endpointAPI, endpoint }) => {
+  describe.each(endpointConfigs)("$name endpoint", ({ useResponsesApi, endpoint }) => {
     let model: ChatDatabricks;
 
     beforeAll(() => {
       model = new ChatDatabricks({
         endpoint,
-        endpointAPI,
+        useResponsesApi,
         maxTokens: 100,
       });
     });
@@ -220,7 +220,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       it("respects temperature parameter", async () => {
         const coldModel = new ChatDatabricks({
           endpoint,
-          endpointAPI,
+          useResponsesApi,
           temperature: 0,
           maxTokens: 50,
         });
@@ -237,7 +237,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       it("respects maxTokens parameter", async () => {
         const shortModel = new ChatDatabricks({
           endpoint,
-          endpointAPI,
+          useResponsesApi,
           maxTokens: 16,
         });
 
@@ -252,10 +252,10 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       it
         // Responses API doesn't support stop sequences
         // See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api-request
-        .skipIf(endpointAPI === "responses")("respects stop sequences", async () => {
+        .skipIf(useResponsesApi)("respects stop sequences", async () => {
           const modelWithStop = new ChatDatabricks({
             endpoint,
-            endpointAPI,
+            useResponsesApi,
             maxTokens: 100,
             stop: ["5"],
           });
@@ -273,7 +273,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       it("throws on invalid endpoint", async () => {
         const badModel = new ChatDatabricks({
           endpoint: "nonexistent-endpoint-12345",
-          endpointAPI,
+          useResponsesApi,
         });
 
         await expect(badModel.invoke([new HumanMessage("Hello")])).rejects.toThrow();

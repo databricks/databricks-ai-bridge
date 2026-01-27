@@ -19,10 +19,9 @@ config({ path: ".env.local" });
 
 const EXAMPLE_CONFIG = {
   endpoint: "databricks-claude-sonnet-4-5",
-  endpointAPI: "chat-completions",
   // For an example that uses the Responses API:
   // endpoint: "databricks-gpt-5-2",
-  // endpointAPI: "responses",
+  // useResponsesApi: true,
 } as const;
 
 async function main() {

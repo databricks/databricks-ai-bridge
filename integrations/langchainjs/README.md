@@ -9,7 +9,7 @@ This package provides a `ChatDatabricks` class that integrates with the LangChai
 - Compatible with LangChain's `BaseChatModel` interface
 - Supports streaming responses
 - Supports tool/function calling
-- Multiple endpoint APIs: Chat Completions, Chat Agent, and Responses
+- Multiple endpoint APIs: Chat Completions, and Responses
 - Automatic authentication via Databricks SDK
 
 ## Requirements
@@ -29,8 +29,7 @@ npm install @databricks/langchainjs
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-meta-llama-3-3-70b-instruct",
-  endpointAPI: "chat-completions",
+  endpoint: "databricks-claude-sonnet-4-5",
 });
 
 const response = await model.invoke("Hello, how are you?");
@@ -39,7 +38,7 @@ console.log(response.content);
 
 ## Endpoint APIs
 
-ChatDatabricks supports three endpoint APIs via the `endpointAPI` parameter:
+ChatDatabricks supports Chat Completions or Responses via `useResponsesApi`:
 
 ### Chat Completions
 
@@ -47,21 +46,11 @@ OpenAI-compatible chat completions for Foundation Models.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "databricks-meta-llama-3-3-70b-instruct",
-  endpointAPI: "chat-completions",
+  endpoint: "databricks-claude-sonnet-4-5",
+  useResponsesApi: false, // can be omitted
 });
 ```
 
-### Chat Agent
-
-Databricks agent chat completion for deployed agents.
-
-```typescript
-const model = new ChatDatabricks({
-  endpoint: "my-chat-agent",
-  endpointAPI: "chat-agent",
-});
-```
 
 ### Responses
 
@@ -69,8 +58,8 @@ Rich output with reasoning, citations, and function calls.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "my-responses-agent",
-  endpointAPI: "responses",
+  endpoint: "databricks-gpt-5-2",
+  useResponsesApi: true,
 });
 ```
 
@@ -88,9 +77,22 @@ ChatDatabricks uses the [Databricks SDK](https://github.com/databricks/databrick
 // Credentials are automatically detected
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
-  endpointAPI: "chat-completions",
 });
 ```
+
+### Environment Variables
+The following environment variables are supported
+
+| Variable                          | Description                                          |
+|-----------------------------------|------------------------------------------------------|
+| DATABRICKS_HOST                   | Workspace or account URL                             |
+| DATABRICKS_TOKEN                  | Personal access token                                |
+| DATABRICKS_CLIENT_ID              | OAuth client ID / Azure client ID                    |
+| DATABRICKS_CLIENT_SECRET          | OAuth client secret / Azure client secret            |
+| DATABRICKS_ACCOUNT_ID             | Databricks account ID (for account-level operations) |
+| DATABRICKS_AZURE_TENANT_ID        | Azure tenant ID                                      |
+| DATABRICKS_GOOGLE_SERVICE_ACCOUNT | GCP service account email                            |
+| DATABRICKS_AUTH_TYPE              | Force specific auth type                             |
 
 ### Explicit Auth
 
@@ -99,7 +101,6 @@ You can also pass credentials directly via the `auth` field:
 ```typescript
 const model = new ChatDatabricks({
   endpoint: "your-endpoint",
-  endpointAPI: "chat-completions",
   auth: {
     host: "https://your-workspace.databricks.com",
     token: "dapi...",
@@ -181,8 +182,7 @@ import { createAgent } from "langchain";
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-meta-llama-3-3-70b-instruct",
-  endpointAPI: "chat-completions",
+  endpoint: "databricks-claude-sonnet-4-5",
 });
 
 const agent = createAgent({
@@ -199,7 +199,9 @@ const result = await agent.invoke("What's the weather in Paris?");
 const model = new ChatDatabricks({
   // Required
   endpoint: "your-endpoint-name",
-  endpointAPI: "chat-completions", // or "chat-agent" or "responses"
+
+  // Use Responses API instead of Chat Completions (optional)
+  useResponsesApi: true,
 
   // Model parameters (optional)
   temperature: 0.7,
@@ -241,7 +243,7 @@ See the [examples](./examples) folder for complete working examples.
 # Copy the example env file and fill in your credentials
 cp .env.example .env.local
 
-# Edit .env.local with your Databricks host and token
+# Edit .env.local with your environment variables
 # Then run the example
 npm run example
 ```
@@ -285,10 +287,3 @@ npm run format
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines.
-
-## Links
-
-- [Databricks AI Bridge](https://github.com/databricks/databricks-ai-bridge)
-- [LangChain.js](https://js.langchain.com/)
-- [Databricks Model Serving](https://docs.databricks.com/machine-learning/model-serving/index.html)
-- [Databricks TypeScript SDK](https://docs.databricks.com/en/dev-tools/sdk-typescript.html)
