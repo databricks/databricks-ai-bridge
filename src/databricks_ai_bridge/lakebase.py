@@ -55,7 +55,6 @@ class TablePrivilege(str, Enum):
     TRUNCATE = "TRUNCATE"
     REFERENCES = "REFERENCES"
     TRIGGER = "TRIGGER"
-    MAINTAIN = "MAINTAIN"
     ALL = "ALL"  # Renders as ALL PRIVILEGES
 
 
@@ -498,6 +497,8 @@ class LakebaseClient:
         :param ensure_extension: If True (default), ensures the databricks_auth
             extension is created before creating the role.
         :return: Result from databricks_create_role, or None if role already exists.
+        :raises ValueError: If identity_name is empty.
+        :raises PermissionError: If the caller lacks required permissions.
 
         Example:
             # Create a role for a service principal
@@ -506,17 +507,42 @@ class LakebaseClient:
                 "SERVICE_PRINCIPAL"
             )
         """
+        if not identity_name or not identity_name.strip():
+            raise ValueError(
+                "identity_name cannot be empty. Provide a valid Databricks identity "
+                "(user email, service principal UUID, or group ID)."
+            )
+
         # Create the databricks_auth extension. Each Postgres database must have its own extension.
         # https://docs.databricks.com/aws/en/oltp/instances/pg-roles#create-postgres-roles-and-grant-privileges-for-databricks-identities
-        if ensure_extension:
-            self.execute("CREATE EXTENSION IF NOT EXISTS databricks_auth;")
-
-        query = f"SELECT databricks_create_role(%s, '{identity_type}');"
         try:
+            if ensure_extension:
+                self.execute("CREATE EXTENSION IF NOT EXISTS databricks_auth;")
+
+            query = f"SELECT databricks_create_role(%s, '{identity_type}');"
             return self.execute(query, (identity_name,))
         except psycopg.errors.DuplicateObject:
             logger.info("Role '%s' already exists, skipping creation.", identity_name)
             return None
+        except psycopg.errors.InvalidParameterValue as e:
+            raise ValueError(
+                f"Identity '{identity_name}' not found in the Databricks workspace. "
+                f"Ensure the {identity_type.lower().replace('_', ' ')} exists in your "
+                f"Databricks workspace before creating a role. "
+                f"Original error: {e}"
+            ) from e
+        except psycopg.errors.InsufficientPrivilege as e:
+            raise PermissionError(
+                f"Insufficient privileges to create role '{identity_name}'. "
+                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance. "
+                f"Original error: {e}"
+            ) from e
+        except psycopg.errors.UndefinedFunction as e:
+            raise RuntimeError(
+                f"The databricks_create_role function is not available. "
+                f"Ensure the databricks_auth extension is properly installed. "
+                f"Original error: {e}"
+            ) from e
 
     def _format_privileges_str(
         self,
@@ -553,6 +579,80 @@ class LakebaseClient:
                     return cur.fetchall()
                 return None
 
+    def _validate_non_empty(self, items: Sequence[Any], param_name: str) -> None:
+        """Validate that a sequence is not empty."""
+        if not items:
+            raise ValueError(
+                f"'{param_name}' cannot be empty. Provide at least one {param_name[:-1]}."
+            )
+
+    def _execute_grant(
+        self, query: sql.Composed, operation_desc: str, grantee: str
+    ) -> None:
+        """Execute a GRANT query with helpful error handling.
+
+        :param query: The composed SQL query to execute.
+        :param operation_desc: Description of the operation for error messages.
+        :param grantee: The role being granted privileges (for error messages).
+        :raises PermissionError: If the user lacks required permissions.
+        :raises ValueError: If the target object does not exist.
+        """
+        try:
+            self._execute_composed(query)
+        except psycopg.errors.InsufficientPrivilege as e:
+            raise PermissionError(
+                f"Insufficient privileges to {operation_desc}. "
+                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance "
+                f"and appropriate ownership or GRANT OPTION on the target objects. "
+                f"Original error: {e}"
+            ) from e
+        except psycopg.errors.UndefinedObject as e:
+            raise ValueError(
+                f"Failed to {operation_desc}: object does not exist. "
+                f"Ensure the schema/table/sequence exists and the role '{grantee}' "
+                f"has been created. Original error: {e}"
+            ) from e
+        except psycopg.errors.InvalidSchemaName as e:
+            raise ValueError(
+                f"Failed to {operation_desc}: schema does not exist. "
+                f"Verify the schema name is correct. Original error: {e}"
+            ) from e
+        except psycopg.errors.UndefinedTable as e:
+            raise ValueError(
+                f"Failed to {operation_desc}: table does not exist. "
+                f"Verify the table name is correct. Original error: {e}"
+            ) from e
+        except psycopg.errors.InvalidGrantor as e:
+            raise PermissionError(
+                f"Cannot {operation_desc}: you must be the owner or have "
+                f"GRANT OPTION for these privileges. Original error: {e}"
+            ) from e
+
+    def _parse_table_identifier(self, table: str) -> sql.Identifier:
+        """Parse a table name into a SQL identifier.
+
+        :param table: Table name, optionally schema-qualified (e.g., "public.users").
+        :return: A psycopg sql.Identifier for safe SQL composition.
+        :raises ValueError: If the table name format is invalid.
+        """
+        if not table or not table.strip():
+            raise ValueError(
+                "Table name cannot be empty. Provide a valid table name "
+                "(e.g., 'users' or 'public.users')."
+            )
+
+        # Handle schema.table format
+        if "." in table:
+            parts = table.split(".", 1)
+            schema_name, table_name = parts[0].strip(), parts[1].strip()
+            if not schema_name or not table_name:
+                raise ValueError(
+                    f"Invalid table format '{table}'. Expected 'schema.table' "
+                    f"(e.g., 'public.users') or just 'table_name'."
+                )
+            return sql.Identifier(schema_name, table_name)
+        return sql.Identifier(table.strip())
+
     def grant_schema(
         self,
         grantee: str,
@@ -565,6 +665,8 @@ class LakebaseClient:
         :param grantee: The role to grant privileges to (e.g., service principal UUID).
         :param privileges: List of SchemaPrivilege to grant.
         :param schemas: List of schema names to grant privileges on.
+        :raises ValueError: If schemas or privileges is empty.
+        :raises PermissionError: If the caller lacks required permissions.
 
         Example:
             client.grant_schema(
@@ -573,6 +675,9 @@ class LakebaseClient:
                 schemas=["drizzle", "ai_chatbot", "public"],
             )
         """
+        self._validate_non_empty(schemas, "schemas")
+        self._validate_non_empty(privileges, "privileges")
+
         privs = self._format_privileges_sql(privileges)
         privs_str = self._format_privileges_str(privileges)
 
@@ -582,7 +687,9 @@ class LakebaseClient:
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),
             )
-            self._execute_composed(query)
+            self._execute_grant(
+                query, f"grant {privs_str} on schema '{schema}'", grantee
+            )
             logger.info("Granted %s on schema '%s' to '%s'", privs_str, schema, grantee)
 
     def grant_all_tables_in_schema(
@@ -597,6 +704,8 @@ class LakebaseClient:
         :param grantee: The role to grant privileges to (e.g., service principal UUID).
         :param privileges: List of TablePrivilege to grant.
         :param schemas: List of schema names whose tables will receive the privileges.
+        :raises ValueError: If schemas or privileges is empty.
+        :raises PermissionError: If the caller lacks required permissions.
 
         Example:
             client.grant_all_tables_in_schema(
@@ -605,16 +714,23 @@ class LakebaseClient:
                 schemas=["drizzle", "ai_chatbot"],
             )
         """
+        self._validate_non_empty(schemas, "schemas")
+        self._validate_non_empty(privileges, "privileges")
+
         privs = self._format_privileges_sql(privileges)
         privs_str = self._format_privileges_str(privileges)
 
         for schema in schemas:
-            query = sql.SQL("GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}").format(
+            query = sql.SQL(
+                "GRANT {privs} ON ALL TABLES IN SCHEMA {schema} TO {grantee}"
+            ).format(
                 privs=privs,
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),
             )
-            self._execute_composed(query)
+            self._execute_grant(
+                query, f"grant {privs_str} on all tables in schema '{schema}'", grantee
+            )
             logger.info(
                 "Granted %s on all tables in schema '%s' to '%s'",
                 privs_str,
@@ -634,6 +750,8 @@ class LakebaseClient:
         :param grantee: The role to grant privileges to (e.g., service principal UUID).
         :param privileges: List of TablePrivilege to grant.
         :param tables: List of table names (can be schema-qualified like "public.users").
+        :raises ValueError: If tables or privileges is empty, or table name format is invalid.
+        :raises PermissionError: If the caller lacks required permissions.
 
         Example:
             client.grant_table(
@@ -647,23 +765,21 @@ class LakebaseClient:
                 ],
             )
         """
+        self._validate_non_empty(tables, "tables")
+        self._validate_non_empty(privileges, "privileges")
+
         privs = self._format_privileges_sql(privileges)
         privs_str = self._format_privileges_str(privileges)
 
         for table in tables:
-            # Handle schema.table format
-            if "." in table:
-                schema_name, table_name = table.split(".", 1)
-                table_ident = sql.Identifier(schema_name, table_name)
-            else:
-                table_ident = sql.Identifier(table)
+            table_ident = self._parse_table_identifier(table)
 
             query = sql.SQL("GRANT {privs} ON {table} TO {grantee}").format(
                 privs=privs,
                 table=table_ident,
                 grantee=sql.Identifier(grantee),
             )
-            self._execute_composed(query)
+            self._execute_grant(query, f"grant {privs_str} on table '{table}'", grantee)
             logger.info("Granted %s on table '%s' to '%s'", privs_str, table, grantee)
 
     def grant_all_sequences_in_schema(
@@ -678,6 +794,8 @@ class LakebaseClient:
         :param grantee: The role to grant privileges to (e.g., service principal UUID).
         :param privileges: List of SequencePrivilege to grant (USAGE, SELECT, UPDATE, ALL).
         :param schemas: List of schema names whose sequences will receive the privileges.
+        :raises ValueError: If schemas or privileges is empty.
+        :raises PermissionError: If the caller lacks required permissions.
 
         Example:
             client.grant_all_sequences_in_schema(
@@ -686,6 +804,9 @@ class LakebaseClient:
                 schemas=["public", "app_schema"],
             )
         """
+        self._validate_non_empty(schemas, "schemas")
+        self._validate_non_empty(privileges, "privileges")
+
         privs = self._format_privileges_sql(privileges)
         privs_str = self._format_privileges_str(privileges)
 
@@ -697,7 +818,11 @@ class LakebaseClient:
                 schema=sql.Identifier(schema),
                 grantee=sql.Identifier(grantee),
             )
-            self._execute_composed(query)
+            self._execute_grant(
+                query,
+                f"grant {privs_str} on all sequences in schema '{schema}'",
+                grantee,
+            )
             logger.info(
                 "Granted %s on all sequences in schema '%s' to '%s'",
                 privs_str,
