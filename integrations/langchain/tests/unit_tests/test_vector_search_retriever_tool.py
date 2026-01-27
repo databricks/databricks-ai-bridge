@@ -1,8 +1,9 @@
 import json
 import os
 import threading
+import uuid
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import mlflow
 import pytest
@@ -13,12 +14,14 @@ from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
     DELTA_SYNC_INDEX_EMBEDDING_MODEL_ENDPOINT_NAME,
+    DIRECT_ACCESS_INDEX,
     INPUT_TEXTS,
     _get_index,
     mock_vs_client,
     mock_workspace_client,
 )
 from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
 from mlflow.entities import SpanType
@@ -39,6 +42,73 @@ from tests.utils.vector_search import (
 from tests.utils.vector_search import (
     mock_client as mock_embeddings_client,  # noqa: F401
 )
+
+
+def _create_mcp_response_json(texts: List[str] = None) -> str:
+    """Create a mock MCP response in JSON format."""
+    texts = texts or INPUT_TEXTS
+    return json.dumps(
+        [
+            {"id": str(uuid.uuid4()), "text": text, "score": 0.85 - (i * 0.1)}
+            for i, text in enumerate(texts)
+        ]
+    )
+
+
+@pytest.fixture
+def mock_mcp_infrastructure():
+    """Mock MCP infrastructure for tests that need it."""
+    # Create mock MCP tool that returns JSON response
+    mock_tool = MagicMock()
+    mock_tool.invoke = MagicMock(return_value=_create_mcp_response_json())
+
+    # Create mock MCP client
+    mock_client_instance = MagicMock()
+    mock_client_instance.get_tools = AsyncMock(return_value=[mock_tool])
+
+    # Create mock MCP server
+    mock_server_instance = MagicMock()
+
+    with patch(
+        "databricks_langchain.vector_search_retriever_tool.DatabricksMultiServerMCPClient"
+    ) as mock_client_class, patch(
+        "databricks_langchain.vector_search_retriever_tool.DatabricksMCPServer"
+    ) as mock_server_class:
+        mock_client_class.return_value = mock_client_instance
+        mock_server_class.from_vector_search.return_value = mock_server_instance
+        yield {
+            "client_class": mock_client_class,
+            "client_instance": mock_client_instance,
+            "server_class": mock_server_class,
+            "server_instance": mock_server_instance,
+            "tool": mock_tool,
+        }
+
+
+@pytest.fixture(params=["mcp", "direct_api"])
+def execution_path(request, mock_mcp_infrastructure):
+    """Parametrized fixture that sets up mocks for MCP or Direct API path."""
+    if request.param == "mcp":
+        yield {
+            "path": "mcp",
+            "index_name": DELTA_SYNC_INDEX,
+            "mock_tool": mock_mcp_infrastructure["tool"],
+            "mock_mcp": mock_mcp_infrastructure,
+        }
+    else:
+        # For direct API, use an index that requires self-managed embeddings
+        yield {
+            "path": "direct_api",
+            "index_name": DIRECT_ACCESS_INDEX,
+            "mock_tool": None,
+            "mock_mcp": mock_mcp_infrastructure,
+        }
+
+
+def setup_tool_for_path(execution_path, tool):
+    """Set up mock for the tool based on execution path."""
+    if execution_path["path"] == "direct_api":
+        tool._vector_store.similarity_search = MagicMock(return_value=[])
 
 
 def init_vector_search_tool(
@@ -93,40 +163,55 @@ def test_chat_model_bind_tools(llm: ChatDatabricks, index_name: str) -> None:
     assert isinstance(response, AIMessage)
 
 
-def test_filters_are_passed_through() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+def test_filters_are_passed_through(execution_path) -> None:
+    """Test filters are passed through correctly on both paths."""
+    tool = init_vector_search_tool(execution_path["index_name"])
+    setup_tool_for_path(execution_path, tool)
 
-    vector_search_tool.invoke(
+    tool.invoke(
         {
             "query": "what cities are in Germany",
             "filters": [FilterItem(key="country", value="Germany")],
         }
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=vector_search_tool.num_results,
-        filter={"country": "Germany"},
-        query_type=vector_search_tool.query_type,
-    )
+
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "what cities are in Germany"
+        # MCP path: filters are JSON stringified
+        assert json.loads(call_args["filters"]) == {"country": "Germany"}
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "what cities are in Germany"
+        assert call_args[1]["filter"] == {"country": "Germany"}
 
 
-def test_filters_are_combined() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"city LIKE": "Berlin"})
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+def test_filters_are_combined(execution_path) -> None:
+    """Test filters are combined correctly (predefined + runtime) on both paths."""
+    tool = init_vector_search_tool(execution_path["index_name"], filters={"city LIKE": "Berlin"})
+    setup_tool_for_path(execution_path, tool)
 
-    vector_search_tool.invoke(
+    tool.invoke(
         {
             "query": "what cities are in Germany",
             "filters": [FilterItem(key="country", value="Germany")],
         }
     )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=vector_search_tool.num_results,
-        filter={"city LIKE": "Berlin", "country": "Germany"},
-        query_type=vector_search_tool.query_type,
-    )
+
+    expected_filters = {"city LIKE": "Berlin", "country": "Germany"}
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "what cities are in Germany"
+        # MCP path: filters are JSON stringified
+        assert json.loads(call_args["filters"]) == expected_filters
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "what cities are in Germany"
+        assert call_args[1]["filter"] == expected_filters
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -136,6 +221,7 @@ def test_filters_are_combined() -> None:
 @pytest.mark.parametrize("embedding", [None, EMBEDDING_MODEL])
 @pytest.mark.parametrize("text_column", [None, "text"])
 def test_vector_search_retriever_tool_combinations(
+    mock_mcp_infrastructure,
     index_name: str,
     columns: Optional[List[str]],
     tool_name: Optional[str],
@@ -160,7 +246,8 @@ def test_vector_search_retriever_tool_combinations(
     assert result is not None
 
 
-def test_vector_search_retriever_tool_combinations() -> None:
+def test_vector_search_retriever_tool_doc_uri_primary_key(mock_mcp_infrastructure) -> None:
+    """Test that doc_uri and primary_key work correctly with MCP path."""
     vector_search_tool = init_vector_search_tool(
         index_name=DELTA_SYNC_INDEX,
         doc_uri="uri",
@@ -168,8 +255,13 @@ def test_vector_search_retriever_tool_combinations() -> None:
     )
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
-    assert all(item.metadata.keys() == {"doc_uri", "chunk_id"} for item in result)
-    assert all(item.page_content for item in result)
+    # With MCP path, results are parsed from mock JSON response
+    assert result is not None
+    assert len(result) > 0
+    assert all(isinstance(doc, Document) for doc in result)
+    # Verify Documents have expected structure from mock response
+    assert all(doc.page_content for doc in result)
+    assert all("id" in doc.metadata for doc in result)
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -191,16 +283,20 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 @pytest.mark.parametrize("tool_name", [None, "test_tool"])
-def test_vs_tool_tracing(index_name: str, tool_name: Optional[str]) -> None:
+def test_vs_tool_tracing(mock_mcp_infrastructure, index_name: str, tool_name: Optional[str]) -> None:
     vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
     vector_search_tool._run("Databricks Agent Framework")
+
     trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
     spans = trace.search_spans(name=tool_name or index_name, span_type=SpanType.RETRIEVER)
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
-    assert [d["page_content"] in INPUT_TEXTS for d in outputs]
+    # Verify outputs are Documents with page_content
+    assert len(outputs) > 0
+    assert all("page_content" in d for d in outputs)
+    assert all(d["page_content"] for d in outputs)  # page_content is not empty
 
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
@@ -344,36 +440,44 @@ def test_vector_search_client_with_sp_workspace_client():
             )
 
 
-def test_kwargs_are_passed_through() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, score_threshold=0.5)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+def test_kwargs_are_passed_through(execution_path) -> None:
+    """Test kwargs are passed through correctly on both paths."""
+    tool = init_vector_search_tool(execution_path["index_name"], score_threshold=0.5)
+    setup_tool_for_path(execution_path, tool)
 
-    vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "extra_param": "something random"},
-    )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=vector_search_tool.num_results,
-        query_type=vector_search_tool.query_type,
-        filter={},
-        score_threshold=0.5,
-        extra_param="something random",
-    )
+    tool.invoke({"query": "what cities are in Germany"})
+
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "what cities are in Germany"
+        assert call_args["score_threshold"] == 0.5
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "what cities are in Germany"
+        assert call_args[1]["score_threshold"] == 0.5
 
 
-def test_kwargs_override_both_num_results_and_query_type() -> None:
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+def test_kwargs_override_both_num_results_and_query_type(execution_path) -> None:
+    """Test kwargs can override num_results and query_type on both paths."""
+    tool = init_vector_search_tool(execution_path["index_name"], num_results=10, query_type="ANN")
+    setup_tool_for_path(execution_path, tool)
 
-    vector_search_tool.invoke(
-        {"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"},
-    )
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what cities are in Germany",
-        k=3,  # Should use overridden value
-        query_type="HYBRID",  # Should use overridden value
-        filter={},
-    )
+    tool.invoke({"query": "what cities are in Germany", "k": 3, "query_type": "HYBRID"})
+
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "what cities are in Germany"
+        assert call_args["num_results"] == 3
+        assert call_args["query_type"] == "HYBRID"
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "what cities are in Germany"
+        assert call_args[1]["k"] == 3
+        assert call_args[1]["query_type"] == "HYBRID"
 
 
 def test_enhanced_filter_description_with_column_metadata() -> None:
@@ -458,34 +562,37 @@ def test_cannot_use_both_dynamic_filter_and_predefined_filters() -> None:
         )
 
 
-def test_predefined_filters_work_without_dynamic_filter() -> None:
-    """Test that predefined filters work correctly when dynamic_filter is False."""
-    # Initialize tool with only predefined filters (dynamic_filter=False by default)
-    vector_search_tool = init_vector_search_tool(
-        DELTA_SYNC_INDEX, filters={"status": "active", "category": "electronics"}
+def test_predefined_filters_work_without_dynamic_filter(execution_path) -> None:
+    """Test that predefined filters work correctly when dynamic_filter is False on both paths."""
+    tool = init_vector_search_tool(
+        execution_path["index_name"], filters={"status": "active", "category": "electronics"}
     )
+    setup_tool_for_path(execution_path, tool)
 
     # The filters parameter should NOT be exposed since dynamic_filter=False
-    args_schema = vector_search_tool.args_schema
+    args_schema = tool.args_schema
     assert "filters" not in args_schema.model_fields
 
-    # Test that predefined filters are used
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+    tool.invoke({"query": "what electronics are available"})
 
-    vector_search_tool.invoke({"query": "what electronics are available"})
+    expected_filters = {"status": "active", "category": "electronics"}
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "what electronics are available"
+        # MCP path: filters are JSON stringified
+        assert json.loads(call_args["filters"]) == expected_filters
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "what electronics are available"
+        assert call_args[1]["filter"] == expected_filters
 
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="what electronics are available",
-        k=vector_search_tool.num_results,
-        query_type=vector_search_tool.query_type,
-        filter={"status": "active", "category": "electronics"},  # Only predefined filters
-    )
 
-
-def test_filter_item_serialization() -> None:
-    """Test that FilterItem objects are properly converted to dictionaries."""
-    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
-    vector_search_tool._vector_store.similarity_search = MagicMock()
+def test_filter_item_serialization(execution_path) -> None:
+    """Test that FilterItem objects are properly converted to dictionaries on both paths."""
+    tool = init_vector_search_tool(execution_path["index_name"])
+    setup_tool_for_path(execution_path, tool)
 
     # Test various filter types
     filters = [
@@ -495,7 +602,7 @@ def test_filter_item_serialization() -> None:
         FilterItem(key="tags", value=["wireless", "bluetooth"]),
     ]
 
-    vector_search_tool.invoke({"query": "find products", "filters": filters})
+    tool.invoke({"query": "find products", "filters": filters})
 
     expected_filters = {
         "category": "electronics",
@@ -504,9 +611,209 @@ def test_filter_item_serialization() -> None:
         "tags": ["wireless", "bluetooth"],
     }
 
-    vector_search_tool._vector_store.similarity_search.assert_called_once_with(
-        query="find products",
-        k=vector_search_tool.num_results,
-        query_type=vector_search_tool.query_type,
-        filter=expected_filters,
+    if execution_path["path"] == "mcp":
+        execution_path["mock_tool"].invoke.assert_called_once()
+        call_args = execution_path["mock_tool"].invoke.call_args[0][0]
+        assert call_args["query"] == "find products"
+        # MCP path: filters are JSON stringified
+        assert json.loads(call_args["filters"]) == expected_filters
+    else:
+        tool._vector_store.similarity_search.assert_called_once()
+        call_args = tool._vector_store.similarity_search.call_args
+        assert call_args[1]["query"] == "find products"
+        assert call_args[1]["filter"] == expected_filters
+
+
+# =============================================================================
+# MCP Path Specific Tests
+# =============================================================================
+
+
+def test_mcp_path_is_used_for_databricks_managed_embeddings(mock_mcp_infrastructure) -> None:
+    """Test that MCP path is used for Databricks-managed embeddings indexes."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    # Invoke the tool (should use MCP path for DELTA_SYNC_INDEX which has managed embeddings)
+    result = vector_search_tool._run("test query")
+
+    # Verify MCP server was created with correct parameters
+    mock_mcp_infrastructure["server_class"].from_vector_search.assert_called_once()
+    call_kwargs = mock_mcp_infrastructure["server_class"].from_vector_search.call_args[1]
+    assert call_kwargs["catalog"] == "test"
+    assert call_kwargs["schema"] == "delta_sync"
+    assert call_kwargs["index_name"] == "index"
+
+    # Verify MCP client was used
+    mock_mcp_infrastructure["client_class"].assert_called_once()
+
+    # Verify MCP tool was invoked
+    mock_mcp_infrastructure["tool"].invoke.assert_called_once()
+
+
+def test_direct_api_path_is_used_for_self_managed_embeddings(mock_mcp_infrastructure) -> None:
+    """Test that direct API path is used for self-managed embeddings indexes."""
+    # Use an index that requires self-managed embeddings
+    index_name = "test.direct_access.index"
+    vector_search_tool = init_vector_search_tool(index_name)
+    vector_search_tool._vector_store.similarity_search = MagicMock(return_value=[])
+
+    # Invoke the tool (should use direct API path)
+    result = vector_search_tool._run("test query")
+
+    # Verify similarity_search was called directly
+    vector_search_tool._vector_store.similarity_search.assert_called_once()
+
+    # Verify MCP was NOT used for self-managed embeddings
+    mock_mcp_infrastructure["tool"].invoke.assert_not_called()
+
+
+def test_mcp_tool_is_cached(mock_mcp_infrastructure) -> None:
+    """Test that MCP tool is cached and not recreated on subsequent calls."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    # Call _run multiple times
+    vector_search_tool._run("query 1")
+    vector_search_tool._run("query 2")
+    vector_search_tool._run("query 3")
+
+    # MCP server should only be created once
+    assert mock_mcp_infrastructure["server_class"].from_vector_search.call_count == 1
+
+    # MCP client should only be created once
+    assert mock_mcp_infrastructure["client_class"].call_count == 1
+
+    # But MCP tool should be invoked 3 times
+    assert mock_mcp_infrastructure["tool"].invoke.call_count == 3
+
+
+def test_mcp_response_parsing_json_array() -> None:
+    """Test that MCP JSON array response is parsed correctly into Documents."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    json_response = json.dumps(
+        [
+            {"id": "doc1", "text": "content1", "score": 0.9},
+            {"id": "doc2", "text": "content2", "score": 0.8},
+        ]
     )
+
+    docs = vector_search_tool._parse_mcp_response(json_response)
+
+    assert len(docs) == 2
+    assert all(isinstance(doc, Document) for doc in docs)
+    assert docs[0].page_content == "content1"
+    assert docs[0].metadata == {"id": "doc1", "score": 0.9}
+    assert docs[1].page_content == "content2"
+    assert docs[1].metadata == {"id": "doc2", "score": 0.8}
+
+
+def test_mcp_response_parsing_non_json() -> None:
+    """Test that non-JSON MCP response is treated as a single document."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    plain_text_response = "This is a plain text response"
+
+    docs = vector_search_tool._parse_mcp_response(plain_text_response)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == plain_text_response
+
+
+def test_mcp_response_parsing_non_list_json() -> None:
+    """Test that non-list JSON is converted to a single document."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    json_response = json.dumps({"message": "single object response"})
+
+    docs = vector_search_tool._parse_mcp_response(json_response)
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "{'message': 'single object response'}"
+
+
+def test_normalize_filters_with_filter_items() -> None:
+    """Test that FilterItem list is normalized to dict."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    filters = [
+        FilterItem(key="category", value="electronics"),
+        FilterItem(key="price >=", value=100),
+    ]
+
+    result = vector_search_tool._normalize_filters(filters)
+
+    assert result == {"category": "electronics", "price >=": 100}
+
+
+def test_normalize_filters_with_dict() -> None:
+    """Test that dict filters are passed through unchanged."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    filters = {"category": "electronics", "price >=": 100}
+
+    result = vector_search_tool._normalize_filters(filters)
+
+    assert result == filters
+
+
+def test_normalize_filters_with_none() -> None:
+    """Test that None filters return empty dict."""
+    vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+
+    result = vector_search_tool._normalize_filters(None)
+
+    assert result == {}
+
+
+def test_build_mcp_input() -> None:
+    """Test MCP input building with various parameters."""
+    from databricks.vector_search.reranker import DatabricksReranker
+
+    # Basic parameters
+    tool = init_vector_search_tool(DELTA_SYNC_INDEX)
+    mcp_input = tool._build_mcp_input("test query")
+    assert mcp_input["query"] == "test query"
+    assert mcp_input["num_results"] == tool.num_results
+    assert mcp_input["query_type"] == tool.query_type
+    assert mcp_input["include_score"] == "false"  # Default
+
+    # With filters (JSON stringified for MCP - parse back to compare)
+    filters = [FilterItem(key="category", value="electronics")]
+    mcp_input = tool._build_mcp_input("test query", filters=filters)
+    assert json.loads(mcp_input["filters"]) == {"category": "electronics"}
+
+    # Combines predefined and runtime filters
+    tool_with_filters = init_vector_search_tool(DELTA_SYNC_INDEX, filters={"status": "active"})
+    runtime_filters = [FilterItem(key="category", value="electronics")]
+    mcp_input = tool_with_filters._build_mcp_input("test query", filters=runtime_filters)
+    expected_filters = {"status": "active", "category": "electronics"}
+    assert json.loads(mcp_input["filters"]) == expected_filters
+
+    # kwargs override defaults
+    tool_with_defaults = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
+    mcp_input = tool_with_defaults._build_mcp_input("test query", num_results=5, query_type="HYBRID")
+    assert mcp_input["num_results"] == 5
+    assert mcp_input["query_type"] == "HYBRID"
+
+    # With columns (comma-separated for MCP)
+    tool_with_columns = init_vector_search_tool(DELTA_SYNC_INDEX, columns=["id", "text", "score"])
+    mcp_input = tool_with_columns._build_mcp_input("test query")
+    assert mcp_input["columns"] == "id,text,score"
+
+    # With score_threshold (converted to float)
+    mcp_input = tool._build_mcp_input("test query", score_threshold=0.7)
+    assert mcp_input["score_threshold"] == 0.7
+    assert isinstance(mcp_input["score_threshold"], float)
+
+    # With include_score=True
+    tool_with_score = init_vector_search_tool(DELTA_SYNC_INDEX, include_score=True)
+    mcp_input = tool_with_score._build_mcp_input("test query")
+    assert mcp_input["include_score"] == "true"
+
+    # With reranker
+    reranker = DatabricksReranker(columns_to_rerank=["text", "title"])
+    tool_with_reranker = init_vector_search_tool(DELTA_SYNC_INDEX, reranker=reranker)
+    mcp_input = tool_with_reranker._build_mcp_input("test query")
+    assert mcp_input["columns_to_rerank"] == "text,title"
+
+

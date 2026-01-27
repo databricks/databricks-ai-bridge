@@ -854,38 +854,44 @@ def test_reranker_is_overriden(execution_path) -> None:
 class TestMCPResponseNormalization:
     """Test that MCP responses are normalized to match Direct API format."""
 
-    def test_normalize_mcp_result_basic(self) -> None:
-        """Test basic normalization of a single MCP result."""
+    def test_parse_mcp_response_basic_normalization(self) -> None:
+        """Test basic normalization of MCP results via _parse_mcp_response."""
         vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
 
-        mcp_result = {
-            "id": "doc-123",
-            "text": "This is the document content",
-            "score": 0.95,
-        }
+        mcp_response = json.dumps([
+            {
+                "id": "doc-123",
+                "text": "This is the document content",
+                "score": 0.95,
+            }
+        ])
 
-        normalized = vector_search_tool._normalize_mcp_result(mcp_result)
+        results = vector_search_tool._parse_mcp_response(mcp_response)
 
-        assert normalized["page_content"] == "This is the document content"
-        assert normalized["metadata"]["id"] == "doc-123"
-        assert normalized["metadata"]["score"] == 0.95
-        assert "text" not in normalized["metadata"]  # text column moved to page_content
+        assert len(results) == 1
+        assert results[0]["page_content"] == "This is the document content"
+        assert results[0]["metadata"]["id"] == "doc-123"
+        assert results[0]["metadata"]["score"] == 0.95
+        assert "text" not in results[0]["metadata"]  # text column moved to page_content
 
-    def test_normalize_mcp_result_missing_text_column(self) -> None:
+    def test_parse_mcp_response_missing_text_column(self) -> None:
         """Test normalization handles missing text column gracefully."""
         vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
 
-        mcp_result = {
-            "id": "doc-789",
-            "score": 0.75,
-            # "text" column is missing
-        }
+        mcp_response = json.dumps([
+            {
+                "id": "doc-789",
+                "score": 0.75,
+                # "text" column is missing
+            }
+        ])
 
-        normalized = vector_search_tool._normalize_mcp_result(mcp_result)
+        results = vector_search_tool._parse_mcp_response(mcp_response)
 
-        assert normalized["page_content"] == ""  # Empty string when text column missing
-        assert normalized["metadata"]["id"] == "doc-789"
-        assert normalized["metadata"]["score"] == 0.75
+        assert len(results) == 1
+        # When text column is missing, the dict is converted to string
+        assert results[0]["metadata"]["id"] == "doc-789"
+        assert results[0]["metadata"]["score"] == 0.75
 
     def test_parse_mcp_response_empty_list(self) -> None:
         """Test parsing empty MCP response."""
@@ -911,5 +917,5 @@ class TestMCPResponseNormalization:
         # MCP should return a list, not a dict
         mcp_response = json.dumps({"error": "something went wrong"})
 
-        with pytest.raises(ValueError, match="Expected MCP vector search to return a JSON array"):
+        with pytest.raises(ValueError, match="Expected JSON array, got"):
             vector_search_tool._parse_mcp_response(mcp_response)

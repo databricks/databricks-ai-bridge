@@ -1,17 +1,27 @@
-from typing import List, Optional, Type
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional, Type, Union
 
 from databricks_ai_bridge.utils.vector_search import IndexDetails
+
+_logger = logging.getLogger(__name__)
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
     VectorSearchRetrieverToolInput,
     VectorSearchRetrieverToolMixin,
     vector_search_retriever_tool_trace,
 )
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool as LangChainBaseTool
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from databricks_langchain import DatabricksEmbeddings
+from databricks_langchain.multi_server_mcp_client import (
+    DatabricksMCPServer,
+    DatabricksMultiServerMCPClient,
+)
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
 
@@ -48,6 +58,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     args_schema: Type[BaseModel] = VectorSearchRetrieverToolInput
 
     _vector_store: DatabricksVectorSearch = PrivateAttr()
+    _mcp_tool: Optional[LangChainBaseTool] = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _validate_tool_inputs(self):
@@ -83,11 +94,72 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
 
         return self
 
-    @vector_search_retriever_tool_trace
-    def _run(self, query: str, filters: Optional[List[FilterItem]] = None, **kwargs) -> str:
+    def _create_or_get_mcp_tool(self) -> LangChainBaseTool:
+        """Create or return existing MCP tool using LangChain MCP Server."""
+        if self._mcp_tool is not None:
+            return self._mcp_tool
+
+        catalog, schema, index = self._parse_index_name()
+
+        try:
+            server = DatabricksMCPServer.from_vector_search(
+                catalog=catalog,
+                schema=schema,
+                index_name=index,
+                name=f"vs-{index}",
+                workspace_client=self.workspace_client,
+            )
+            client = DatabricksMultiServerMCPClient([server])
+        except Exception as e:
+            self._handle_mcp_creation_error(e)
+
+        tools = asyncio.run(client.get_tools())
+        self._validate_mcp_tools(tools)
+
+        self._mcp_tool = tools[0]
+        return self._mcp_tool
+
+    def _build_mcp_input(
+        self,
+        query: str,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Build input for MCP tool invocation."""
+        mcp_input = self._build_mcp_params(filters, **kwargs)
+        mcp_input["query"] = query
+        return mcp_input
+
+    def _parse_mcp_response(self, mcp_response: str) -> List[Document]:
+        """Parse MCP tool response into LangChain Documents."""
+        dicts = self._parse_mcp_response_to_dicts(mcp_response, strict=False)
+        return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in dicts]
+
+    def _execute_mcp_path(
+        self,
+        query: str,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute vector search via LangChain MCP infrastructure."""
+        try:
+            mcp_tool = self._create_or_get_mcp_tool()
+            mcp_input = self._build_mcp_input(query, filters, **kwargs)
+            result = mcp_tool.invoke(mcp_input)
+            return self._parse_mcp_response(result)
+        except Exception as e:
+            self._handle_mcp_execution_error(e)
+
+    def _execute_direct_api_path(
+        self,
+        query: str,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Execute vector search via direct DatabricksVectorSearch API."""
         kwargs = {**kwargs, **(self.model_extra or {})}
-        # Since LLM can generate either a dict or FilterItem, convert to dict always
-        filters_dict = {dict(item)["key"]: dict(item)["value"] for item in (filters or [])}
+        # Normalize filters to dict format
+        filters_dict = self._normalize_filters(filters)
         combined_filters = {**filters_dict, **(self.filters or {})}
 
         # Allow kwargs to override the default values upon invocation
@@ -104,3 +176,18 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             }
         )
         return self._vector_store.similarity_search(**kwargs)
+
+    @vector_search_retriever_tool_trace
+    def _run(
+        self,
+        query: str,
+        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
+        **kwargs,
+    ) -> List[Document]:
+        """Execute vector search with automatic routing."""
+        index_details = IndexDetails(self._vector_store.index)
+
+        if index_details.is_databricks_managed_embeddings():
+            return self._execute_mcp_path(query, filters, **kwargs)
+        else:
+            return self._execute_direct_api_path(query, filters, **kwargs)
