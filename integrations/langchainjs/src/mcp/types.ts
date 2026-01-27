@@ -36,9 +36,24 @@ export interface MCPServerConfig {
 
 /**
  * Databricks-specific MCP server configuration.
- * Extends base config with Databricks SDK authentication.
+ * Uses path instead of full URL - host is resolved from auth config.
  */
-export interface DatabricksMCPServerConfig extends MCPServerConfig {
+export interface DatabricksMCPServerConfig {
+  /** Unique name to identify this server connection */
+  name: string;
+
+  /** API path (e.g., "/api/2.0/mcp/sql"). Host is resolved from auth. */
+  path: string;
+
+  /** Custom HTTP headers to include in requests */
+  headers?: Record<string, string>;
+
+  /** Request timeout in seconds */
+  timeout?: number;
+
+  /** SSE read timeout in seconds */
+  sseReadTimeout?: number;
+
   /**
    * Databricks SDK configuration options for authentication.
    * If not provided, will use default SDK authentication chain
@@ -68,16 +83,6 @@ export interface DatabricksMCPServerConfig extends MCPServerConfig {
 }
 
 /**
- * Configuration for DatabricksMCPServer.create() factory method.
- * Uses path instead of full URL - host is resolved from auth.
- */
-export interface DatabricksMCPServerCreateConfig
-  extends Omit<DatabricksMCPServerConfig, "url"> {
-  /** API path (e.g., "/api/2.0/mcp/sql"). Host is resolved from auth. */
-  path: string;
-}
-
-/**
  * Options for DatabricksMultiServerMCPClient
  */
 export interface DatabricksMCPClientOptions {
@@ -98,4 +103,3 @@ export interface DatabricksMCPClientOptions {
    */
   additionalToolNamePrefix?: string;
 }
-

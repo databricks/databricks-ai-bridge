@@ -33,8 +33,8 @@ async function main() {
   console.log("--- Creating MCP Server Configurations ---\n");
 
   // Databricks SQL MCP server - provides SQL query capabilities
-  // Host is resolved from DATABRICKS_HOST env var
-  const dbsqlMCP = await DatabricksMCPServer.create({
+  // Host is resolved lazily from DATABRICKS_HOST env var
+  const dbsqlMCP = new DatabricksMCPServer({
     name: "dbsql-mcp",
     path: "/api/2.0/mcp/sql",
     timeout: 60, // 60 second timeout
@@ -42,21 +42,21 @@ async function main() {
 
   // Example: Create server for Unity Catalog functions
   // This exposes UC functions as MCP tools
-  const ucFunctionServer = await DatabricksMCPServer.fromUCFunction(
+  const ucFunctionServer = DatabricksMCPServer.fromUCFunction(
     "system",
     "ai",
     "python_exec"
   );
 
   // Example: Create server for Vector Search
-  // const vectorSearchServer = await DatabricksMCPServer.fromVectorSearch(
+  // const vectorSearchServer = DatabricksMCPServer.fromVectorSearch(
   //   "my_catalog",
   //   "my_schema",
   //   "my_index"
   // );
 
   // Example: Create server for Genie Space
-  // const genieSpaceServer = await DatabricksMCPServer.fromGenieSpace(
+  // const genieSpaceServer = DatabricksMCPServer.fromGenieSpace(
   //   "your_genie_space_id"
   // );
 

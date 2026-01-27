@@ -37,7 +37,7 @@ describe("DatabricksMultiServerMCPClient", () => {
       const servers = [
         new MCPServer({ name: "server1", url: "https://server1.com/mcp" }),
         new MCPServer({ name: "server2", url: "https://server2.com/mcp" }),
-        new DatabricksMCPServer({ name: "databricks", url: "https://databricks.com/mcp" }),
+        new DatabricksMCPServer({ name: "databricks", path: "/api/2.0/mcp/sql" }),
       ];
 
       const client = new DatabricksMultiServerMCPClient(servers);

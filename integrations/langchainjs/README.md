@@ -208,7 +208,7 @@ import {
 } from "@databricks/langchainjs";
 
 // Create MCP server for Databricks SQL (host resolved from DATABRICKS_HOST env var)
-const sqlServer = await DatabricksMCPServer.create({
+const sqlServer = new DatabricksMCPServer({
   name: "dbsql",
   path: "/api/2.0/mcp/sql",
 });
@@ -231,21 +231,21 @@ await client.close();
 
 ```typescript
 // Unity Catalog Functions
-const ucServer = await DatabricksMCPServer.fromUCFunction(
+const ucServer = DatabricksMCPServer.fromUCFunction(
   "catalog",
   "schema",
   "function_name" // optional - omit to expose all functions in schema
 );
 
 // Vector Search
-const vectorServer = await DatabricksMCPServer.fromVectorSearch(
+const vectorServer = DatabricksMCPServer.fromVectorSearch(
   "catalog",
   "schema",
   "index_name" // optional
 );
 
 // Genie Space
-const genieServer = await DatabricksMCPServer.fromGenieSpace("space_id");
+const genieServer = DatabricksMCPServer.fromGenieSpace("space_id");
 ```
 
 ### Multiple MCP Servers
@@ -269,7 +269,7 @@ Each `DatabricksMCPServer` can use different credentials via `auth`:
 
 ```typescript
 // Server using service principal (M2M OAuth)
-const server1 = await DatabricksMCPServer.create({
+const server1 = new DatabricksMCPServer({
   name: "workspace-1",
   path: "/api/2.0/mcp/sql",
   auth: {
@@ -280,7 +280,7 @@ const server1 = await DatabricksMCPServer.create({
 });
 
 // Server using personal access token
-const server2 = await DatabricksMCPServer.create({
+const server2 = new DatabricksMCPServer({
   name: "workspace-2",
   path: "/api/2.0/mcp/sql",
   auth: {
@@ -290,7 +290,7 @@ const server2 = await DatabricksMCPServer.create({
 });
 
 // Server using default auth chain (env vars, CLI config, etc.)
-const server3 = await DatabricksMCPServer.create({
+const server3 = new DatabricksMCPServer({
   name: "default-workspace",
   path: "/api/2.0/mcp/sql",
 });

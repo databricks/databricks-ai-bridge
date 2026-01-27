@@ -7,51 +7,36 @@
 
 import { Config } from "@databricks/sdk-experimental";
 import type { StreamableHTTPConnection } from "@langchain/mcp-adapters";
-import type {
-  MCPServerConfig,
-  DatabricksMCPServerConfig,
-  DatabricksMCPServerCreateConfig,
-} from "./types.js";
+import type { MCPServerConfig, DatabricksMCPServerConfig, DatabricksConfigOptions } from "./types.js";
 import { DatabricksOAuthClientProvider } from "./databricks_oauth_provider.js";
 
 /**
- * Base MCP server configuration for streamable HTTP transport.
- *
- * This class provides a typed interface for configuring MCP server connections.
- * All extra parameters are passed through to the underlying langchain-mcp-adapters
- * connection type, making this forward-compatible with future updates.
- *
- * @example
- * ```typescript
- * import { MCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchainjs";
- *
- * const server = new MCPServer({
- *   name: "my-mcp-server",
- *   url: "https://my-mcp-server.com/mcp",
- *   headers: { "X-API-Key": "secret" },
- *   timeout: 30,
- *   handleToolError: true,
- * });
- *
- * const client = new DatabricksMultiServerMCPClient([server]);
- * const tools = await client.getTools();
- * ```
+ * Base configuration shared by all MCP server types.
  */
-export class MCPServer {
+interface BaseMCPServerConfig {
+  name: string;
+  headers?: Record<string, string>;
+  timeout?: number;
+  sseReadTimeout?: number;
+}
+
+/**
+ * Abstract base class for MCP server configurations.
+ *
+ * Provides common properties and the interface for connection config generation.
+ * Subclasses implement `toConnectionConfig()` to provide transport-specific configuration.
+ */
+abstract class BaseMCPServer {
   readonly name: string;
-  readonly url: string;
   readonly headers?: Record<string, string>;
   readonly timeout?: number;
   readonly sseReadTimeout?: number;
-
-  // Store any additional properties for forward compatibility
   protected readonly extraConfig: Record<string, unknown>;
 
-  constructor(config: MCPServerConfig & Record<string, unknown>) {
-    const { name, url, headers, timeout, sseReadTimeout, ...extra } = config;
+  constructor(config: BaseMCPServerConfig & Record<string, unknown>) {
+    const { name, headers, timeout, sseReadTimeout, ...extra } = config;
 
     this.name = name;
-    this.url = url;
     this.headers = headers;
     this.timeout = timeout;
     this.sseReadTimeout = sseReadTimeout;
@@ -62,10 +47,15 @@ export class MCPServer {
    * Convert to connection dictionary for MultiServerMCPClient.
    * Returns the format expected by @langchain/mcp-adapters.
    */
-  toConnectionConfig(): StreamableHTTPConnection {
+  abstract toConnectionConfig(): StreamableHTTPConnection;
+
+  /**
+   * Build base connection config with common properties.
+   */
+  protected buildBaseConfig(url: string): StreamableHTTPConnection {
     const config: StreamableHTTPConnection = {
       transport: "http",
-      url: this.url,
+      url,
       ...this.extraConfig,
     };
 
@@ -75,9 +65,42 @@ export class MCPServer {
     if (this.timeout !== undefined) {
       config.defaultToolTimeout = this.timeout * 1000; // Convert seconds to milliseconds
     }
-    // Note: sseReadTimeout is kept in extraConfig if passed, for forward compatibility
 
     return config;
+  }
+}
+
+/**
+ * MCP server configuration for streamable HTTP transport.
+ *
+ * Use this for generic (non-Databricks) MCP servers where you have a full URL.
+ *
+ * @example
+ * ```typescript
+ * import { MCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchainjs";
+ *
+ * const server = new MCPServer({
+ *   name: "my-mcp-server",
+ *   url: "https://my-mcp-server.com/mcp",
+ *   headers: { "X-API-Key": "secret" },
+ *   timeout: 30,
+ * });
+ *
+ * const client = new DatabricksMultiServerMCPClient([server]);
+ * const tools = await client.getTools();
+ * ```
+ */
+export class MCPServer extends BaseMCPServer {
+  readonly url: string;
+
+  constructor(config: MCPServerConfig & Record<string, unknown>) {
+    const { url, ...rest } = config;
+    super(rest);
+    this.url = url;
+  }
+
+  override toConnectionConfig(): StreamableHTTPConnection {
+    return this.buildBaseConfig(this.url);
   }
 }
 
@@ -88,33 +111,23 @@ export class MCPServer {
  * This handles all Databricks authentication methods (PAT, OAuth, Azure MSI, etc.)
  * transparently through the SDK's authentication chain.
  *
+ * The host is resolved lazily from the Databricks SDK config (via DATABRICKS_HOST
+ * environment variable, CLI config, or explicit auth config).
+ *
  * @example
  * ```typescript
  * import { DatabricksMCPServer, DatabricksMultiServerMCPClient } from "@databricks/langchainjs";
  *
- * // Using default SDK authentication (env vars, CLI, etc.)
+ * // Host resolved from DATABRICKS_HOST env var or auth config
  * const server = new DatabricksMCPServer({
  *   name: "databricks-mcp",
- *   url: "https://my-workspace.databricks.com/api/mcp",
+ *   path: "/api/2.0/mcp/sql",
  * });
  *
- * // With M2M OAuth (service principal)
- * const serverWithM2M = new DatabricksMCPServer({
+ * // With explicit auth (host resolved from auth config)
+ * const serverWithAuth = new DatabricksMCPServer({
  *   name: "databricks-mcp",
- *   url: "https://my-workspace.databricks.com/api/mcp",
- *   auth: {
- *     authType: "oauth-m2m",
- *     host: "https://my-workspace.databricks.com",
- *     clientId: "your-client-id",
- *     clientSecret: "your-client-secret",
- *   },
- *   handleToolError: true,
- * });
- *
- * // With personal access token
- * const serverWithPAT = new DatabricksMCPServer({
- *   name: "databricks-mcp",
- *   url: "https://my-workspace.databricks.com/api/mcp",
+ *   path: "/api/2.0/mcp/sql",
  *   auth: {
  *     host: "https://my-workspace.databricks.com",
  *     token: "dapi...",
@@ -125,31 +138,53 @@ export class MCPServer {
  * const tools = await client.getTools();
  * ```
  */
-export class DatabricksMCPServer extends MCPServer {
-  private readonly auth: Config;
+export class DatabricksMCPServer extends BaseMCPServer {
+  private readonly sdkConfig: Config;
   private readonly authProvider: DatabricksOAuthClientProvider;
+  private readonly path: string;
+  private resolvedUrl?: string;
 
   constructor(config: DatabricksMCPServerConfig & Record<string, unknown>) {
-    // Extract Databricks-specific config before passing to base
-    const { auth, ...baseConfig } = config;
-    super(baseConfig);
+    const { auth, path, ...rest } = config;
+    super(rest);
+
+    // Normalize and store path
+    this.path = path.startsWith("/") ? path : `/${path}`;
 
     // Initialize Databricks SDK config from options
-    this.auth = new Config(auth ?? {});
+    this.sdkConfig = new Config(auth ?? {});
 
     // Create OAuth provider for MCP authentication
-    this.authProvider = new DatabricksOAuthClientProvider(this.auth);
+    this.authProvider = new DatabricksOAuthClientProvider(this.sdkConfig);
+  }
+
+  /**
+   * Resolve the full URL by combining the host from SDK config with the path.
+   */
+  private async resolveUrl(): Promise<string> {
+    if (this.resolvedUrl) {
+      return this.resolvedUrl;
+    }
+
+    const host = (await this.sdkConfig.getHost())?.toString().replace(/\/$/, "");
+    if (!host) {
+      throw new Error(
+        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
+      );
+    }
+
+    this.resolvedUrl = `${host}${this.path}`;
+    return this.resolvedUrl;
   }
 
   /**
    * Initialize authentication and get the Bearer token.
-   * Call this before using toConnectionConfig() to ensure auth is ready.
    */
   async initializeAuth(): Promise<string> {
-    await this.auth.ensureResolved();
+    await this.sdkConfig.ensureResolved();
 
     const headers = new Headers();
-    await this.auth.authenticate(headers);
+    await this.sdkConfig.authenticate(headers);
     const authHeader = headers.get("Authorization");
 
     if (!authHeader?.startsWith("Bearer ")) {
@@ -160,83 +195,31 @@ export class DatabricksMCPServer extends MCPServer {
 
   /**
    * Convert to connection dictionary, including Databricks OAuth provider.
+   * Note: URL is empty here as it's resolved lazily in toConnectionConfigWithHeaders().
    */
   override toConnectionConfig(): StreamableHTTPConnection {
-    const baseConfig = super.toConnectionConfig();
-
     return {
-      ...baseConfig,
+      ...this.buildBaseConfig(""),
       authProvider: this.authProvider,
     };
   }
 
   /**
    * Convert to connection dictionary using headers-based authentication.
-   * This bypasses the MCP SDK's OAuth flow and uses the Bearer token directly.
+   * This resolves the URL and adds the Bearer token directly to headers.
    * Use this when connecting to servers that don't support OAuth discovery.
    */
   async toConnectionConfigWithHeaders(): Promise<StreamableHTTPConnection> {
-    const baseConfig = super.toConnectionConfig();
+    const resolvedUrl = await this.resolveUrl();
     const authHeader = await this.initializeAuth();
 
-    return {
-      ...baseConfig,
-      headers: {
-        ...baseConfig.headers,
-        Authorization: authHeader,
-      },
-      // Don't use authProvider - use headers directly
+    const config = this.buildBaseConfig(resolvedUrl);
+    config.headers = {
+      ...config.headers,
+      Authorization: authHeader,
     };
-  }
 
-  /**
-   * Factory method to create a DatabricksMCPServer with a path.
-   * The host is resolved from auth (or environment variables).
-   *
-   * @param config - Server configuration with name, path, and optional auth
-   * @returns DatabricksMCPServer configured with the resolved host
-   *
-   * @example
-   * ```typescript
-   * // Using default auth - host from DATABRICKS_HOST env var
-   * const server = await DatabricksMCPServer.create({
-   *   name: "sql",
-   *   path: "/api/2.0/mcp/sql",
-   * });
-   *
-   * // Using explicit config
-   * const server = await DatabricksMCPServer.create({
-   *   name: "sql",
-   *   path: "/api/2.0/mcp/sql",
-   *   auth: {
-   *     host: "https://my-workspace.databricks.com",
-   *     token: "dapi...",
-   *   },
-   * });
-   * ```
-   */
-  static async create(
-    config: DatabricksMCPServerCreateConfig & Record<string, unknown>
-  ): Promise<DatabricksMCPServer> {
-    const { name, path, auth, ...rest } = config;
-    const sdkConfig = new Config(auth ?? {});
-
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
-    if (!host) {
-      throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
-      );
-    }
-
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-    const url = `${host}${normalizedPath}`;
-
-    return new DatabricksMCPServer({
-      name,
-      url,
-      auth,
-      ...rest,
-    });
+    return config;
   }
 
   /**
@@ -250,33 +233,22 @@ export class DatabricksMCPServer extends MCPServer {
    *
    * @example
    * ```typescript
-   * const server = await DatabricksMCPServer.fromUCFunction(
+   * const server = DatabricksMCPServer.fromUCFunction(
    *   "my_catalog",
    *   "my_schema",
-   *   "my_function",
-   *   { handleToolError: true }
+   *   "my_function"
    * );
    * ```
    */
-  static async fromUCFunction(
+  static fromUCFunction(
     catalog: string,
     schema: string,
     functionName?: string,
-    options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
-  ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.auth ?? {});
-
-    // Build the UC function MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
-    if (!host) {
-      throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
-      );
-    }
+    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+  ): DatabricksMCPServer {
     const functionPath = functionName
       ? `${catalog}/${schema}/${functionName}`
       : `${catalog}/${schema}`;
-    const url = `${host}/api/2.0/mcp/functions/${functionPath}`;
 
     const name = functionName
       ? `uc-function-${catalog}-${schema}-${functionName}`
@@ -284,7 +256,7 @@ export class DatabricksMCPServer extends MCPServer {
 
     return new DatabricksMCPServer({
       name,
-      url,
+      path: `/api/2.0/mcp/functions/${functionPath}`,
       ...options,
     });
   }
@@ -303,29 +275,19 @@ export class DatabricksMCPServer extends MCPServer {
    * const server = DatabricksMCPServer.fromVectorSearch(
    *   "my_catalog",
    *   "my_schema",
-   *   "my_index",
-   *   { handleToolError: true }
+   *   "my_index"
    * );
    * ```
    */
-  static async fromVectorSearch(
+  static fromVectorSearch(
     catalog: string,
     schema: string,
     indexName?: string,
-    options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
-  ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.auth ?? {});
-
-    // Build the Vector Search MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
-    if (!host) {
-      throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
-      );
-    }
-    const url = indexName
-      ? `${host}/api/2.0/mcp/vector-search/${catalog}/${schema}/${indexName}`
-      : `${host}/api/2.0/mcp/vector-search/${catalog}/${schema}`;
+    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+  ): DatabricksMCPServer {
+    const indexPath = indexName
+      ? `${catalog}/${schema}/${indexName}`
+      : `${catalog}/${schema}`;
 
     const name = indexName
       ? `vector-search-${catalog}-${schema}-${indexName}`
@@ -333,7 +295,7 @@ export class DatabricksMCPServer extends MCPServer {
 
     return new DatabricksMCPServer({
       name,
-      url,
+      path: `/api/2.0/mcp/vector-search/${indexPath}`,
       ...options,
     });
   }
@@ -347,32 +309,20 @@ export class DatabricksMCPServer extends MCPServer {
    *
    * @example
    * ```typescript
-   * const server = await DatabricksMCPServer.fromGenieSpace(
-   *   "01ef19c578b21dc6af6e10983fb1e3f9",
-   *   { handleToolError: true }
+   * const server = DatabricksMCPServer.fromGenieSpace(
+   *   "01ef19c578b21dc6af6e10983fb1e3f9"
    * );
    * ```
    */
-  static async fromGenieSpace(
+  static fromGenieSpace(
     spaceId: string,
-    options: Partial<Omit<DatabricksMCPServerConfig, "name" | "url">> = {}
-  ): Promise<DatabricksMCPServer> {
-    const sdkConfig = new Config(options.auth ?? {});
-
-    // Build the Genie Space MCP endpoint URL
-    const host = (await sdkConfig.getHost())?.toString().replace(/\/$/, "");
-    if (!host) {
-      throw new Error(
-        "Databricks host not configured. Set DATABRICKS_HOST environment variable or provide host in auth."
-      );
-    }
-    const url = `${host}/api/2.0/mcp/genie/${spaceId}`;
-
+    options: { auth?: DatabricksConfigOptions; timeout?: number } & Record<string, unknown> = {}
+  ): DatabricksMCPServer {
     const name = `genie-space-${spaceId}`;
 
     return new DatabricksMCPServer({
       name,
-      url,
+      path: `/api/2.0/mcp/genie/${spaceId}`,
       ...options,
     });
   }

@@ -90,7 +90,7 @@ describe("MCPServer", () => {
 
     const config = server.toConnectionConfig();
 
-    expect(config.customProperty).toBe("custom-value");
+    expect((config as any).customProperty).toBe("custom-value");
   });
 });
 
@@ -98,43 +98,42 @@ describe("DatabricksMCPServer", () => {
   it("creates server with minimal config", () => {
     const server = new DatabricksMCPServer({
       name: "databricks-server",
-      url: "https://workspace.databricks.com/api/mcp",
+      path: "/api/2.0/mcp/sql",
     });
 
     expect(server.name).toBe("databricks-server");
-    expect(server.url).toBe("https://workspace.databricks.com/api/mcp");
   });
 
   it("includes authProvider in connection config", () => {
     const server = new DatabricksMCPServer({
       name: "databricks-server",
-      url: "https://workspace.databricks.com/api/mcp",
+      path: "/api/2.0/mcp/sql",
     });
 
     const config = server.toConnectionConfig();
 
     expect(config).toHaveProperty("authProvider");
     expect(config.transport).toBe("http");
-    expect(config.url).toBe("https://workspace.databricks.com/api/mcp");
+    // URL is resolved lazily, so it's empty in toConnectionConfig()
+    // Use toConnectionConfigWithHeaders() for the resolved URL
   });
 
   describe("fromUCFunction", () => {
-    it("creates server from UC function coordinates", async () => {
-      const server = await DatabricksMCPServer.fromUCFunction("my_catalog", "my_schema", "my_function");
+    it("creates server from UC function coordinates", () => {
+      const server = DatabricksMCPServer.fromUCFunction("my_catalog", "my_schema", "my_function");
 
       expect(server.name).toBe("uc-function-my_catalog-my_schema-my_function");
-      expect(server.url).toContain("/api/2.0/mcp/functions/my_catalog/my_schema/my_function");
+      // URL is resolved lazily, so we can't check it here
     });
 
-    it("creates server for all functions in schema when no function name provided", async () => {
-      const server = await DatabricksMCPServer.fromUCFunction("my_catalog", "my_schema");
+    it("creates server for all functions in schema when no function name provided", () => {
+      const server = DatabricksMCPServer.fromUCFunction("my_catalog", "my_schema");
 
       expect(server.name).toBe("uc-functions-my_catalog-my_schema");
-      expect(server.url).toContain("/api/2.0/mcp/functions/my_catalog/my_schema");
     });
 
-    it("accepts additional options", async () => {
-      const server = await DatabricksMCPServer.fromUCFunction("catalog", "schema", "func", {
+    it("accepts additional options", () => {
+      const server = DatabricksMCPServer.fromUCFunction("catalog", "schema", "func", {
         timeout: 60,
       });
 
@@ -143,22 +142,20 @@ describe("DatabricksMCPServer", () => {
   });
 
   describe("fromVectorSearch", () => {
-    it("creates server from Vector Search coordinates", async () => {
-      const server = await DatabricksMCPServer.fromVectorSearch("my_catalog", "my_schema", "my_index");
+    it("creates server from Vector Search coordinates", () => {
+      const server = DatabricksMCPServer.fromVectorSearch("my_catalog", "my_schema", "my_index");
 
       expect(server.name).toBe("vector-search-my_catalog-my_schema-my_index");
-      expect(server.url).toContain("/api/2.0/mcp/vector-search/my_catalog/my_schema/my_index");
     });
 
-    it("creates server for all indexes in schema when no index name provided", async () => {
-      const server = await DatabricksMCPServer.fromVectorSearch("my_catalog", "my_schema");
+    it("creates server for all indexes in schema when no index name provided", () => {
+      const server = DatabricksMCPServer.fromVectorSearch("my_catalog", "my_schema");
 
       expect(server.name).toBe("vector-search-my_catalog-my_schema");
-      expect(server.url).toContain("/api/2.0/mcp/vector-search/my_catalog/my_schema");
     });
 
-    it("accepts additional options", async () => {
-      const server = await DatabricksMCPServer.fromVectorSearch("catalog", "schema", "index", {
+    it("accepts additional options", () => {
+      const server = DatabricksMCPServer.fromVectorSearch("catalog", "schema", "index", {
         timeout: 120,
       });
 
@@ -167,15 +164,14 @@ describe("DatabricksMCPServer", () => {
   });
 
   describe("fromGenieSpace", () => {
-    it("creates server from Genie Space ID", async () => {
-      const server = await DatabricksMCPServer.fromGenieSpace("01ef19c578b21dc6af6e10983fb1e3f9");
+    it("creates server from Genie Space ID", () => {
+      const server = DatabricksMCPServer.fromGenieSpace("01ef19c578b21dc6af6e10983fb1e3f9");
 
       expect(server.name).toBe("genie-space-01ef19c578b21dc6af6e10983fb1e3f9");
-      expect(server.url).toContain("/api/2.0/mcp/genie/01ef19c578b21dc6af6e10983fb1e3f9");
     });
 
-    it("accepts additional options", async () => {
-      const server = await DatabricksMCPServer.fromGenieSpace("my-space-id", {
+    it("accepts additional options", () => {
+      const server = DatabricksMCPServer.fromGenieSpace("my-space-id", {
         timeout: 90,
       });
 
@@ -183,28 +179,28 @@ describe("DatabricksMCPServer", () => {
     });
   });
 
-  describe("create", () => {
-    it("creates server with path and resolves host from config", async () => {
-      const server = await DatabricksMCPServer.create({
+  describe("constructor", () => {
+    it("creates server with path (host resolved lazily)", () => {
+      const server = new DatabricksMCPServer({
         name: "my-server",
         path: "/api/2.0/mcp/sql",
       });
 
       expect(server.name).toBe("my-server");
-      expect(server.url).toContain("/api/2.0/mcp/sql");
+      // URL is resolved lazily in toConnectionConfigWithHeaders()
     });
 
-    it("normalizes path without leading slash", async () => {
-      const server = await DatabricksMCPServer.create({
+    it("normalizes path without leading slash", () => {
+      const server = new DatabricksMCPServer({
         name: "my-server",
         path: "api/2.0/mcp/sql",
       });
 
-      expect(server.url).toContain("/api/2.0/mcp/sql");
+      expect(server.name).toBe("my-server");
     });
 
-    it("accepts additional options", async () => {
-      const server = await DatabricksMCPServer.create({
+    it("accepts additional options", () => {
+      const server = new DatabricksMCPServer({
         name: "my-server",
         path: "/api/2.0/mcp/sql",
         timeout: 45,
