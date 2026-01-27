@@ -10,14 +10,13 @@
  *   ChatDatabricks,
  *   DatabricksMultiServerMCPClient,
  *   DatabricksMCPServer,
- *   MCPServer,
  * } from "@databricks/langchainjs";
  *
  * // Create MCP client with Databricks authentication
  * const mcpClient = new DatabricksMultiServerMCPClient([
  *   new DatabricksMCPServer({
  *     name: "my-mcp-server",
- *     url: "https://my-workspace.databricks.com/api/mcp",
+ *     path: "/api/2.0/mcp/sql",
  *   }),
  * ]);
  *
@@ -25,6 +24,9 @@
  * const tools = await mcpClient.getTools();
  * const model = new ChatDatabricks({ endpoint: "my-endpoint" });
  * const modelWithTools = model.bindTools(tools);
+ *
+ * // Clean up when done
+ * await mcpClient.close();
  * ```
  */
 

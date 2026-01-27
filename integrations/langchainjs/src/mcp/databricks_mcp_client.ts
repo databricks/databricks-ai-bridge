@@ -22,7 +22,6 @@ export type ServerInstance = MCPServer | DatabricksMCPServer;
  *
  * - Simplified server configuration through MCPServer/DatabricksMCPServer classes
  * - Automatic OAuth token management for Databricks servers
- * - Per-server error handling configuration applied to tools
  * - Parallel tool loading for improved performance
  *
  * @example
@@ -33,13 +32,11 @@ export type ServerInstance = MCPServer | DatabricksMCPServer;
  *   MCPServer
  * } from "@databricks/langchainjs";
  *
- * // Use the static create method for async initialization
- * const client = await DatabricksMultiServerMCPClient.create([
- *   // Databricks server with automatic OAuth
+ * const client = new DatabricksMultiServerMCPClient([
+ *   // Databricks server with automatic OAuth (host from DATABRICKS_HOST env var)
  *   new DatabricksMCPServer({
  *     name: "databricks",
- *     url: "https://workspace.databricks.com/api/mcp",
- *     handleToolError: true,
+ *     path: "/api/2.0/mcp/sql",
  *   }),
  *   // Generic MCP server with custom auth
  *   new MCPServer({
@@ -52,8 +49,11 @@ export type ServerInstance = MCPServer | DatabricksMCPServer;
  * const tools = await client.getTools();
  *
  * // Use with ChatDatabricks
- * const model = new ChatDatabricks({ endpoint: "..." });
+ * const model = new ChatDatabricks({ endpoint: "databricks-claude-sonnet-4-5" });
  * const modelWithTools = model.bindTools(tools);
+ *
+ * // Clean up when done
+ * await client.close();
  * ```
  */
 export class DatabricksMultiServerMCPClient {
