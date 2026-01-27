@@ -126,7 +126,6 @@ describe("DatabricksMultiServerMCPClient", () => {
       expect(mockGetTools).toHaveBeenCalledWith("server1");
       expect(mockGetTools).toHaveBeenCalledTimes(1);
     });
-
   });
 
   describe("close", () => {

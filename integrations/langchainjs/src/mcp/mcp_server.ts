@@ -273,9 +273,7 @@ export class DatabricksMCPServer extends BaseMCPServer {
     indexName?: string,
     options: { auth?: DatabricksConfigOptions; timeout?: number } = {}
   ): DatabricksMCPServer {
-    const indexPath = indexName
-      ? `${catalog}/${schema}/${indexName}`
-      : `${catalog}/${schema}`;
+    const indexPath = indexName ? `${catalog}/${schema}/${indexName}` : `${catalog}/${schema}`;
 
     const name = indexName
       ? `vector-search-${catalog}-${schema}-${indexName}`

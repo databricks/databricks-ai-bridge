@@ -251,13 +251,10 @@ const genieServer = DatabricksMCPServer.fromGenieSpace("space_id");
 ### Multiple MCP Servers
 
 ```typescript
-const client = new DatabricksMultiServerMCPClient(
-  [sqlServer, ucServer, vectorServer],
-  {
-    throwOnLoadError: false, // Continue if some servers fail
-    prefixToolNameWithServerName: true, // Avoid tool name conflicts
-  }
-);
+const client = new DatabricksMultiServerMCPClient([sqlServer, ucServer, vectorServer], {
+  throwOnLoadError: false, // Continue if some servers fail
+  prefixToolNameWithServerName: true, // Avoid tool name conflicts
+});
 
 const tools = await client.getTools();
 console.log(`Loaded ${tools.length} tools from ${client.getServerNames().length} servers`);

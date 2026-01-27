@@ -42,11 +42,7 @@ async function main() {
 
   // Example: Create server for Unity Catalog functions
   // This exposes UC functions as MCP tools
-  const ucFunctionServer = DatabricksMCPServer.fromUCFunction(
-    "system",
-    "ai",
-    "python_exec"
-  );
+  const ucFunctionServer = DatabricksMCPServer.fromUCFunction("system", "ai", "python_exec");
 
   // Example: Create server for Vector Search
   // const vectorSearchServer = DatabricksMCPServer.fromVectorSearch(
