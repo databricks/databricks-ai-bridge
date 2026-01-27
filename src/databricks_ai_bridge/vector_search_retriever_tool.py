@@ -376,32 +376,37 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             params["columns_to_rerank"] = ",".join(reranker.columns_to_rerank)
 
         if kwargs:
-            _logger.warning(f"Ignoring unsupported kwargs for MCP vector search: {list(kwargs.keys())}")
+            _logger.warning(
+                f"Ignoring unsupported kwargs for MCP vector search: {list(kwargs.keys())}"
+            )
 
         return params
 
     def _parse_mcp_response_to_dicts(
-        self,
-        mcp_response: str,
-        text_column: Optional[str] = None,
-        strict: bool = True
+        self, mcp_response: str, text_column: Optional[str] = None, strict: bool = True
     ) -> List[Dict[str, Any]]:
         """Parse MCP JSON response to list of dicts with page_content/metadata structure."""
-        text_col = text_column or getattr(self, 'text_column', None) or "text"
+        text_col = text_column or getattr(self, "text_column", None) or "text"
 
         try:
             parsed = json.loads(mcp_response)
         except json.JSONDecodeError as e:
             if strict:
                 _logger.error(f"Failed to parse MCP response as JSON: {mcp_response[:200]}...")
-                raise ValueError(f"Unable to parse MCP response. Expected JSON format. Error: {e}") from e
+                raise ValueError(
+                    f"Unable to parse MCP response. Expected JSON format. Error: {e}"
+                ) from e
             return [{"page_content": mcp_response, "metadata": {}}]
 
         if not isinstance(parsed, list):
             if strict:
                 response_preview = str(parsed)[:500]
-                _logger.error(f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}")
-                raise ValueError(f"Expected JSON array, got {type(parsed).__name__}: {response_preview}")
+                _logger.error(
+                    f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}"
+                )
+                raise ValueError(
+                    f"Expected JSON array, got {type(parsed).__name__}: {response_preview}"
+                )
             return [{"page_content": str(parsed), "metadata": {}}]
 
         results = []

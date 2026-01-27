@@ -69,11 +69,14 @@ def mock_mcp_infrastructure():
     # Create mock MCP server
     mock_server_instance = MagicMock()
 
-    with patch(
-        "databricks_langchain.vector_search_retriever_tool.DatabricksMultiServerMCPClient"
-    ) as mock_client_class, patch(
-        "databricks_langchain.vector_search_retriever_tool.DatabricksMCPServer"
-    ) as mock_server_class:
+    with (
+        patch(
+            "databricks_langchain.vector_search_retriever_tool.DatabricksMultiServerMCPClient"
+        ) as mock_client_class,
+        patch(
+            "databricks_langchain.vector_search_retriever_tool.DatabricksMCPServer"
+        ) as mock_server_class,
+    ):
         mock_client_class.return_value = mock_client_instance
         mock_server_class.from_vector_search.return_value = mock_server_instance
         yield {
@@ -283,7 +286,9 @@ def test_vector_search_retriever_tool_description_generation(index_name: str) ->
 
 @pytest.mark.parametrize("index_name", ALL_INDEX_NAMES)
 @pytest.mark.parametrize("tool_name", [None, "test_tool"])
-def test_vs_tool_tracing(mock_mcp_infrastructure, index_name: str, tool_name: Optional[str]) -> None:
+def test_vs_tool_tracing(
+    mock_mcp_infrastructure, index_name: str, tool_name: Optional[str]
+) -> None:
     vector_search_tool = init_vector_search_tool(index_name, tool_name=tool_name)
     vector_search_tool._run("Databricks Agent Framework")
 
@@ -791,7 +796,9 @@ def test_build_mcp_input() -> None:
 
     # kwargs override defaults
     tool_with_defaults = init_vector_search_tool(DELTA_SYNC_INDEX, num_results=10, query_type="ANN")
-    mcp_input = tool_with_defaults._build_mcp_input("test query", num_results=5, query_type="HYBRID")
+    mcp_input = tool_with_defaults._build_mcp_input(
+        "test query", num_results=5, query_type="HYBRID"
+    )
     assert mcp_input["num_results"] == 5
     assert mcp_input["query_type"] == "HYBRID"
 
@@ -815,5 +822,3 @@ def test_build_mcp_input() -> None:
     tool_with_reranker = init_vector_search_tool(DELTA_SYNC_INDEX, reranker=reranker)
     mcp_input = tool_with_reranker._build_mcp_input("test query")
     assert mcp_input["columns_to_rerank"] == "text,title"
-
-

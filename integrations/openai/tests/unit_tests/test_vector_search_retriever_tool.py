@@ -858,13 +858,15 @@ class TestMCPResponseNormalization:
         """Test basic normalization of MCP results via _parse_mcp_response."""
         vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
 
-        mcp_response = json.dumps([
-            {
-                "id": "doc-123",
-                "text": "This is the document content",
-                "score": 0.95,
-            }
-        ])
+        mcp_response = json.dumps(
+            [
+                {
+                    "id": "doc-123",
+                    "text": "This is the document content",
+                    "score": 0.95,
+                }
+            ]
+        )
 
         results = vector_search_tool._parse_mcp_response(mcp_response)
 
@@ -878,13 +880,15 @@ class TestMCPResponseNormalization:
         """Test normalization handles missing text column gracefully."""
         vector_search_tool = init_vector_search_tool(DELTA_SYNC_INDEX)
 
-        mcp_response = json.dumps([
-            {
-                "id": "doc-789",
-                "score": 0.75,
-                # "text" column is missing
-            }
-        ])
+        mcp_response = json.dumps(
+            [
+                {
+                    "id": "doc-789",
+                    "score": 0.75,
+                    # "text" column is missing
+                }
+            ]
+        )
 
         results = vector_search_tool._parse_mcp_response(mcp_response)
 
