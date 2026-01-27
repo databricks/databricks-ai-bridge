@@ -57,8 +57,8 @@ def _create_mcp_response_json(texts: List[str] = None) -> str:
 
 def assert_mcp_tool_called_with(mock_tool, expected_args: Dict[str, Any]):
     """Assert MCP tool was called with expected args, handling JSON-stringified filters."""
-    mock_tool.invoke.assert_called_once()
-    call_args = mock_tool.invoke.call_args[0][0]
+    mock_tool.ainvoke.assert_called_once()
+    call_args = mock_tool.ainvoke.call_args[0][0]
     for key, value in expected_args.items():
         if key == "filters":
             assert json.loads(call_args["filters"]) == value
@@ -70,8 +70,9 @@ def assert_mcp_tool_called_with(mock_tool, expected_args: Dict[str, Any]):
 def mock_mcp_infrastructure():
     """Mock MCP infrastructure for tests that need it."""
     # Create mock MCP tool that returns JSON response
+    # MCP tools are async-only, so we mock ainvoke
     mock_tool = MagicMock()
-    mock_tool.invoke = MagicMock(return_value=_create_mcp_response_json())
+    mock_tool.ainvoke = AsyncMock(return_value=_create_mcp_response_json())
 
     # Create mock MCP client
     mock_client_instance = MagicMock()
@@ -669,8 +670,8 @@ def test_mcp_path_is_used_for_databricks_managed_embeddings(mock_mcp_infrastruct
     # Verify MCP client was used
     mock_mcp_infrastructure["client_class"].assert_called_once()
 
-    # Verify MCP tool was invoked with expected query
-    mock_mcp_infrastructure["tool"].invoke.assert_called_once_with(
+    # Verify MCP tool was invoked with expected query (ainvoke since MCP tools are async-only)
+    mock_mcp_infrastructure["tool"].ainvoke.assert_called_once_with(
         {
             "query": "test query",
             "num_results": vector_search_tool.num_results,
@@ -694,7 +695,7 @@ def test_direct_api_path_is_used_for_self_managed_embeddings(mock_mcp_infrastruc
     vector_search_tool._vector_store.similarity_search.assert_called_once()
 
     # Verify MCP was NOT used for self-managed embeddings
-    mock_mcp_infrastructure["tool"].invoke.assert_not_called()
+    mock_mcp_infrastructure["tool"].ainvoke.assert_not_called()
 
 
 def test_mcp_tool_is_cached(mock_mcp_infrastructure) -> None:
@@ -713,4 +714,4 @@ def test_mcp_tool_is_cached(mock_mcp_infrastructure) -> None:
     assert mock_mcp_infrastructure["client_class"].call_count == 1
 
     # But MCP tool should be invoked 3 times
-    assert mock_mcp_infrastructure["tool"].invoke.call_count == 3
+    assert mock_mcp_infrastructure["tool"].ainvoke.call_count == 3

@@ -144,7 +144,8 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         try:
             mcp_tool = self._create_or_get_mcp_tool()
             mcp_input = self._build_mcp_input(query, filters, **kwargs)
-            result = mcp_tool.invoke(mcp_input)
+            # MCP tools only support async invocation
+            result = asyncio.run(mcp_tool.ainvoke(mcp_input))
             return self._parse_mcp_response(result)
         except Exception as e:
             self._handle_mcp_execution_error(e)
