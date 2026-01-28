@@ -2,7 +2,7 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 
 
 def get_deployment_client(target_uri: str) -> Any:
@@ -45,6 +45,35 @@ def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
         raise ImportError(
             "Failed to create the OpenAI client. "
             "Please run `pip install databricks-sdk` to install "
+            "required dependencies."
+        ) from e
+
+
+def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpenAI:
+    """Get an async OpenAI client configured for Databricks using databricks-openai.
+
+    Args:
+        workspace_client: Optional WorkspaceClient instance to use for authentication.
+            If not provided, creates a default WorkspaceClient.
+        **kwargs: Additional keyword arguments to pass to AsyncDatabricksOpenAI(),
+            such as timeout and max_retries.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        # If workspace_client is provided, use it directly
+        if workspace_client is not None:
+            return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
+        else:
+            # Otherwise, create default workspace client and use it
+            workspace_client = WorkspaceClient()
+            return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
+
+    except ImportError as e:
+        raise ImportError(
+            "Failed to create the async OpenAI client. "
+            "Please run `pip install databricks-openai databricks-sdk` to install "
             "required dependencies."
         ) from e
 
