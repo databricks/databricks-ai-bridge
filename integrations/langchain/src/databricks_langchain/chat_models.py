@@ -623,6 +623,51 @@ class ChatDatabricks(BaseChatModel):
 
         return ChatResult(generations=generations, llm_output=llm_output)
 
+    def _extract_usage_from_chunk(
+        self, chunk: Any, stream_usage: bool
+    ) -> Optional[Dict[str, int]]:
+        """Extract usage information from a chunk if available.
+
+        Args:
+            chunk: The chunk to extract usage from
+            stream_usage: Whether to extract usage information
+
+        Returns:
+            Dictionary with usage info or None if not available
+        """
+        if not stream_usage or not hasattr(chunk, "usage") or not chunk.usage:
+            return None
+
+        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+        output_tokens = getattr(chunk.usage, "completion_tokens", None)
+        if input_tokens is not None and output_tokens is not None:
+            return {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            }
+        return None
+
+    def _build_usage_chunk(self, usage: Dict[str, int]) -> ChatGenerationChunk:
+        """Build a usage metadata chunk.
+
+        Args:
+            usage: Dictionary containing input_tokens, output_tokens, and total_tokens
+
+        Returns:
+            ChatGenerationChunk with usage metadata
+        """
+        return ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="",
+                usage_metadata=UsageMetadata(
+                    input_tokens=usage["input_tokens"],
+                    output_tokens=usage["output_tokens"],
+                    total_tokens=usage["total_tokens"],
+                ),
+            )
+        )
+
     def _stream(
         self,
         messages: List[BaseMessage],
@@ -652,28 +697,12 @@ class ChatDatabricks(BaseChatModel):
                 if chunk_message:
                     yield ChatGenerationChunk(message=chunk_message)
                 # Check for usage in the chunk if available
-                if stream_usage and hasattr(chunk, "usage") and chunk.usage:
-                    input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                    output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                    if input_tokens is not None and output_tokens is not None:
-                        final_usage = {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
-                        }
+                usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                if usage:
+                    final_usage = usage
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
-                # Usage chunk is an AIMessageChunk with empty content and usage_metadata
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content="",
-                        usage_metadata=UsageMetadata(
-                            input_tokens=final_usage["input_tokens"],
-                            output_tokens=final_usage["output_tokens"],
-                            total_tokens=final_usage["total_tokens"],
-                        ),
-                    )
-                )
+                yield self._build_usage_chunk(final_usage)
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
@@ -706,16 +735,9 @@ class ChatDatabricks(BaseChatModel):
 
                     usage = None
                     # Collect usage info only if both are present
-                    if stream_usage and chunk.usage:
-                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                        if input_tokens is not None and output_tokens is not None:
-                            usage = {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": input_tokens + output_tokens,
-                            }
-                            final_usage = usage  # store for usage chunk at end
+                    usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                    if usage:
+                        final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
                     chunk_message = _convert_dict_to_message_chunk(
@@ -742,27 +764,13 @@ class ChatDatabricks(BaseChatModel):
                     # Some models send a final chunk that does not have
                     # a delta or choices, but does have usage info
                     if not usage_chunk_emitted:
-                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                        if input_tokens is not None and output_tokens is not None:
-                            final_usage = {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": input_tokens + output_tokens,
-                            }
+                        usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                        if usage:
+                            final_usage = usage
 
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content="",
-                        usage_metadata=UsageMetadata(
-                            input_tokens=final_usage["input_tokens"],
-                            output_tokens=final_usage["output_tokens"],
-                            total_tokens=final_usage["total_tokens"],
-                        ),
-                    )
-                )
+                yield self._build_usage_chunk(final_usage)
                 usage_chunk_emitted = True
 
     async def _astream(
@@ -796,28 +804,12 @@ class ChatDatabricks(BaseChatModel):
                 if chunk_message:
                     yield ChatGenerationChunk(message=chunk_message)
                 # Check for usage in the chunk if available
-                if stream_usage and hasattr(chunk, "usage") and chunk.usage:
-                    input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                    output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                    if input_tokens is not None and output_tokens is not None:
-                        final_usage = {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
-                        }
+                usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                if usage:
+                    final_usage = usage
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
-                # Usage chunk is an AIMessageChunk with empty content and usage_metadata
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content="",
-                        usage_metadata=UsageMetadata(
-                            input_tokens=final_usage["input_tokens"],
-                            output_tokens=final_usage["output_tokens"],
-                            total_tokens=final_usage["total_tokens"],
-                        ),
-                    )
-                )
+                yield self._build_usage_chunk(final_usage)
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
@@ -852,16 +844,9 @@ class ChatDatabricks(BaseChatModel):
 
                     usage = None
                     # Collect usage info only if both are present
-                    if stream_usage and chunk.usage:
-                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                        if input_tokens is not None and output_tokens is not None:
-                            usage = {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": input_tokens + output_tokens,
-                            }
-                            final_usage = usage  # store for usage chunk at end
+                    usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                    if usage:
+                        final_usage = usage  # store for usage chunk at end
                     # Use model_dump instead of manual dict reconstruction
                     chunk_delta_dict = chunk_delta.model_dump(exclude_unset=True)
                     chunk_message = _convert_dict_to_message_chunk(
@@ -888,27 +873,13 @@ class ChatDatabricks(BaseChatModel):
                     # Some models send a final chunk that does not have
                     # a delta or choices, but does have usage info
                     if not usage_chunk_emitted:
-                        input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                        output_tokens = getattr(chunk.usage, "completion_tokens", None)
-                        if input_tokens is not None and output_tokens is not None:
-                            final_usage = {
-                                "input_tokens": input_tokens,
-                                "output_tokens": output_tokens,
-                                "total_tokens": input_tokens + output_tokens,
-                            }
+                        usage = self._extract_usage_from_chunk(chunk, stream_usage)
+                        if usage:
+                            final_usage = usage
 
             # Emit special usage chunk at end of stream
             if stream_usage and final_usage and not usage_chunk_emitted:
-                yield ChatGenerationChunk(
-                    message=AIMessageChunk(
-                        content="",
-                        usage_metadata=UsageMetadata(
-                            input_tokens=final_usage["input_tokens"],
-                            output_tokens=final_usage["output_tokens"],
-                            total_tokens=final_usage["total_tokens"],
-                        ),
-                    )
-                )
+                yield self._build_usage_chunk(final_usage)
                 usage_chunk_emitted = True
 
     @override
