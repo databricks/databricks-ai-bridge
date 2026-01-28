@@ -1,37 +1,37 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2Prompt } from '@ai-sdk/provider'
-import { convertLanguageModelV2PromptToChatAgentResponse } from '../src/chat-agent-language-model/chat-agent-convert-to-input'
+import type { LanguageModelV3Prompt } from '@ai-sdk/provider'
+import { convertLanguageModelV3PromptToChatAgentResponse } from '../src/chat-agent-language-model/chat-agent-convert-to-input'
 
-describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
+describe('convertLanguageModelV3PromptToChatAgentResponse', () => {
   describe('System messages', () => {
     it('should skip system messages and not include them in output', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([])
     })
 
     it('should skip multiple system messages', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'System prompt 1' },
         { role: 'system', content: 'System prompt 2' },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([])
     })
 
     it('should skip system messages but process other message types', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
         { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
@@ -44,11 +44,11 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
 
   describe('User messages', () => {
     it('should convert simple text content', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'user', content: [{ type: 'text', text: 'Hello, how are you?' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -60,7 +60,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should join multiple text parts with newline', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           content: [
@@ -71,7 +71,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -83,9 +83,9 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle empty content array', () => {
-      const prompt: LanguageModelV2Prompt = [{ role: 'user', content: [] }]
+      const prompt: LanguageModelV3Prompt = [{ role: 'user', content: [] }]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -97,7 +97,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should filter non-text parts from user content', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           content: [
@@ -108,7 +108,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -120,12 +120,12 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle multiple user messages with correct IDs', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'user', content: [{ type: 'text', text: 'First message' }] },
         { role: 'user', content: [{ type: 'text', text: 'Second message' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         { role: 'user', content: 'First message', id: 'user-0' },
@@ -136,11 +136,11 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
 
   describe('Assistant messages', () => {
     it('should convert text content', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'assistant', content: [{ type: 'text', text: 'Hello! How can I help?' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -153,7 +153,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should merge reasoning content with text', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -163,7 +163,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -176,7 +176,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should extract tool calls', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -191,7 +191,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -213,7 +213,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle tool calls with string arguments', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -227,7 +227,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -249,7 +249,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle tool calls with object arguments', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -263,7 +263,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -285,7 +285,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle tool calls with null/undefined arguments', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -299,7 +299,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0]).toMatchObject({
         role: 'assistant',
@@ -317,11 +317,11 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should return undefined for tool_calls when no tool calls present', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'assistant', content: [{ type: 'text', text: 'Just text, no tools.' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0]).toEqual({
         role: 'assistant',
@@ -332,7 +332,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle multiple tool calls', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -352,7 +352,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0]).toMatchObject({
         tool_calls: [
@@ -363,7 +363,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should convert embedded tool-result parts to separate tool messages', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -384,7 +384,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(2)
       expect(result[0]).toMatchObject({
@@ -402,9 +402,9 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle empty content array', () => {
-      const prompt: LanguageModelV2Prompt = [{ role: 'assistant', content: [] }]
+      const prompt: LanguageModelV3Prompt = [{ role: 'assistant', content: [] }]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -419,7 +419,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
 
   describe('Tool messages', () => {
     it('should convert tool result with text output', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -433,7 +433,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -447,7 +447,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should convert tool result with json output', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -461,7 +461,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -475,7 +475,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should convert tool result with error-text output', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -489,7 +489,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -503,7 +503,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should convert tool result with error-json output', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -520,7 +520,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -534,7 +534,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should convert tool result with content output (array of parts)', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -547,7 +547,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
                 value: [
                   { type: 'text', text: 'Part 1' },
                   { type: 'text', text: 'Part 2' },
-                  { type: 'media', data: 'base64data', mediaType: 'image/png' },
+                  { type: 'image-data', data: 'base64data', mediaType: 'image/png' },
                   { type: 'text', text: 'Part 3' },
                 ],
               },
@@ -556,7 +556,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -570,7 +570,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle content output with only non-text parts', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -580,14 +580,14 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
               toolName: 'image-gen',
               output: {
                 type: 'content',
-                value: [{ type: 'media', data: 'base64data', mediaType: 'image/png' }],
+                value: [{ type: 'image-data', data: 'base64data', mediaType: 'image/png' }],
               },
             },
           ],
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -601,7 +601,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle multiple tool results in one message', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -627,7 +627,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -655,7 +655,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should skip non-tool-result parts in tool messages', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -669,7 +669,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
@@ -679,9 +679,9 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle empty tool content array', () => {
-      const prompt: LanguageModelV2Prompt = [{ role: 'tool', content: [] }]
+      const prompt: LanguageModelV3Prompt = [{ role: 'tool', content: [] }]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([])
     })
@@ -689,7 +689,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
 
   describe('Message ID generation', () => {
     it('should generate unique IDs with correct prefixes', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'Hi!' }] },
         {
@@ -705,7 +705,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0].id).toBe('user-0')
       expect(result[1].id).toBe('assistant-1')
@@ -713,31 +713,31 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should continue ID sequence across message types', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'user', content: [{ type: 'text', text: 'A' }] },
         { role: 'user', content: [{ type: 'text', text: 'B' }] },
         { role: 'assistant', content: [{ type: 'text', text: 'C' }] },
         { role: 'user', content: [{ type: 'text', text: 'D' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result.map((m) => m.id)).toEqual(['user-0', 'user-1', 'assistant-2', 'user-3'])
     })
 
     it('should not increment ID for skipped system messages', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'System' },
         { role: 'user', content: [{ type: 'text', text: 'User' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0].id).toBe('user-0')
     })
 
     it('should increment ID for embedded tool results in assistant messages', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -758,7 +758,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         { role: 'user', content: [{ type: 'text', text: 'Next' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0].id).toBe('assistant-0')
       expect(result[1].id).toBe('tool-1')
@@ -768,15 +768,15 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
 
   describe('Edge cases', () => {
     it('should handle empty prompt array', () => {
-      const prompt: LanguageModelV2Prompt = []
+      const prompt: LanguageModelV3Prompt = []
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([])
     })
 
     it('should handle mixed message types in realistic conversation', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
         { role: 'user', content: [{ type: 'text', text: "What's the weather in Paris?" }] },
         {
@@ -809,7 +809,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         { role: 'user', content: [{ type: 'text', text: 'Thanks!' }] },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(5)
       expect(result[0]).toMatchObject({ role: 'user', id: 'user-0' })
@@ -824,14 +824,14 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle assistant message with only reasoning content', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [{ type: 'reasoning', text: 'Thinking about the problem...' }],
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -844,9 +844,9 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle user message with single empty text part', () => {
-      const prompt: LanguageModelV2Prompt = [{ role: 'user', content: [{ type: 'text', text: '' }] }]
+      const prompt: LanguageModelV3Prompt = [{ role: 'user', content: [{ type: 'text', text: '' }] }]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -858,7 +858,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle unknown output type in tool result (default case)', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -872,7 +872,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toEqual([
         {
@@ -886,7 +886,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle embedded tool result with unknown output type', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -900,7 +900,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(2)
       expect(result[1]).toMatchObject({
@@ -910,7 +910,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle multiple embedded tool results in assistant message', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -942,7 +942,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result).toHaveLength(3)
       expect(result[0]).toMatchObject({
@@ -965,7 +965,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
     })
 
     it('should handle content output with empty text parts filtered out', () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'tool',
           content: [
@@ -986,7 +986,7 @@ describe('convertLanguageModelV2PromptToChatAgentResponse', () => {
         },
       ]
 
-      const result = convertLanguageModelV2PromptToChatAgentResponse(prompt)
+      const result = convertLanguageModelV3PromptToChatAgentResponse(prompt)
 
       expect(result[0]).toMatchObject({
         content: 'Non-empty',

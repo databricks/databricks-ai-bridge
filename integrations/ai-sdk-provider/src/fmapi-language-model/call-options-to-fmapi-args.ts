@@ -1,4 +1,4 @@
-import type { LanguageModelV2CallOptions, LanguageModelV2CallWarning } from '@ai-sdk/provider'
+import type { LanguageModelV3CallOptions, SharedV3Warning } from '@ai-sdk/provider'
 
 /**
  * Response body parameters for the Databricks FMAPI (Chat Completions) API.
@@ -32,7 +32,7 @@ export type DatabricksFmapiProviderOptions = {
 }
 
 /**
- * Converts AI SDK LanguageModelV2CallOptions to Databricks FMAPI body parameters.
+ * Converts AI SDK LanguageModelV3CallOptions to Databricks FMAPI body parameters.
  *
  * Inspired by the getArgs method in:
  * https://github.com/vercel/ai/blob/main/packages/openai/src/chat/openai-chat-language-model.ts#L71
@@ -40,11 +40,11 @@ export type DatabricksFmapiProviderOptions = {
  * Complies with the API described in:
  * https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#chat-request
  */
-export function callOptionsToFmapiArgs(options: LanguageModelV2CallOptions): {
+export function callOptionsToFmapiArgs(options: LanguageModelV3CallOptions): {
   args: FmapiBodyArgs
-  warnings: LanguageModelV2CallWarning[]
+  warnings: SharedV3Warning[]
 } {
-  const warnings: LanguageModelV2CallWarning[] = []
+  const warnings: SharedV3Warning[] = []
 
   const databricksOptions = options.providerOptions?.databricks as
     | DatabricksFmapiProviderOptions
@@ -53,24 +53,24 @@ export function callOptionsToFmapiArgs(options: LanguageModelV2CallOptions): {
   // Generate warnings for unsupported options
   if (options.presencePenalty != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'presencePenalty',
+      type: 'unsupported',
+      feature: 'presencePenalty',
       details: 'presencePenalty is not supported by the Databricks FMAPI',
     })
   }
 
   if (options.frequencyPenalty != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'frequencyPenalty',
+      type: 'unsupported',
+      feature: 'frequencyPenalty',
       details: 'frequencyPenalty is not supported by the Databricks FMAPI',
     })
   }
 
   if (options.seed != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'seed',
+      type: 'unsupported',
+      feature: 'seed',
       details: 'seed is not supported by the Databricks FMAPI',
     })
   }

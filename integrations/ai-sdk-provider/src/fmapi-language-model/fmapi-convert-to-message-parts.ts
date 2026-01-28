@@ -1,12 +1,12 @@
-import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import type { FmapiChunk, FmapiContentItem, FmapiResponse, FmapiToolCall } from './fmapi-schema'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 
 export const convertFmapiChunkToMessagePart = (
   chunk: FmapiChunk,
   toolCallIdsByIndex?: Map<number, string>
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
   if (chunk.choices.length === 0) return parts
   const choice = chunk.choices[0]
 
@@ -51,8 +51,8 @@ export const convertFmapiChunkToMessagePart = (
 
 export const convertFmapiResponseToMessagePart = (
   response: FmapiResponse
-): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
   if (response.choices.length === 0) return parts
   const choice = response.choices[0]
 
@@ -77,7 +77,7 @@ export const convertFmapiResponseToMessagePart = (
   return parts
 }
 
-const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV2Content => {
+const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV3Content => {
   return {
     type: 'tool-call',
     toolCallId: toolCall.id,
@@ -94,8 +94,8 @@ const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV2Conte
 const mapContentItemsToStreamParts = (
   items: FmapiContentItem[],
   id: string
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
   for (const item of items) {
     switch (item.type) {
       case 'text':
@@ -115,8 +115,8 @@ const mapContentItemsToStreamParts = (
   return parts
 }
 
-const mapContentItemsToProviderContent = (items: FmapiContentItem[]): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+const mapContentItemsToProviderContent = (items: FmapiContentItem[]): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
   for (const item of items) {
     switch (item.type) {
       case 'text':

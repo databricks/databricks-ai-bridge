@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { DatabricksFmapiLanguageModel } from '../src/fmapi-language-model/fmapi-language-model'
 import {
   FMAPI_BASIC_TEXT_OUTPUT,
@@ -111,7 +111,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     try {
@@ -154,7 +154,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'What is the weather in San Francisco?' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -231,7 +231,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -302,7 +302,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'Call a tool' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -317,7 +317,7 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(finishPart).toBeDefined()
     expect(finishPart).toMatchObject({
       type: 'finish',
-      finishReason: 'tool-calls',
+      finishReason: { raw: 'tool_calls', unified: 'tool-calls' },
     })
   })
 
@@ -353,7 +353,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       })
 
       // Verify finish reason
-      expect(result.finishReason).toBe('tool-calls')
+      expect(result.finishReason).toEqual({ raw: 'tool_calls', unified: 'tool-calls' })
 
       // Verify tool calls are returned
       expect(result.content).toHaveLength(1)
@@ -371,9 +371,8 @@ describe('DatabricksFmapiLanguageModel', () => {
 
       // Verify usage
       expect(result.usage).toEqual({
-        inputTokens: 50,
-        outputTokens: 25,
-        totalTokens: 75,
+        inputTokens: { total: 50, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 25, text: 0, reasoning: 0 },
       })
     })
 
@@ -392,7 +391,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       })
 
       // Verify finish reason
-      expect(result.finishReason).toBe('tool-calls')
+      expect(result.finishReason).toEqual({ raw: 'tool_calls', unified: 'tool-calls' })
 
       // Verify both tool calls are returned
       expect(result.content).toHaveLength(2)
@@ -421,9 +420,8 @@ describe('DatabricksFmapiLanguageModel', () => {
 
       // Verify usage
       expect(result.usage).toEqual({
-        inputTokens: 60,
-        outputTokens: 40,
-        totalTokens: 100,
+        inputTokens: { total: 60, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 40, text: 0, reasoning: 0 },
       })
     })
   })

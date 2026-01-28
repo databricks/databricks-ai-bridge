@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2Prompt } from '@ai-sdk/provider'
+import type { LanguageModelV3Prompt } from '@ai-sdk/provider'
 import { convertToResponsesInput } from '../src/responses-agent-language-model/responses-convert-to-input'
 import {
   convertResponsesAgentChunkToMessagePart,
@@ -15,7 +15,7 @@ import { MCP_APPROVAL_REQUEST_TYPE, MCP_APPROVAL_RESPONSE_TYPE } from '../src/mc
 describe('convertToResponsesInput', () => {
   describe('system message modes', () => {
     it('converts system message with mode "system"', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -29,7 +29,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts system message with mode "developer"', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -43,7 +43,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('removes system message with mode "remove" and adds warning', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -63,7 +63,7 @@ describe('convertToResponsesInput', () => {
 
   describe('user messages', () => {
     it('converts user message with text parts', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           content: [
@@ -91,7 +91,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('throws error for unsupported user content types', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
@@ -116,7 +116,7 @@ describe('convertToResponsesInput', () => {
 
   describe('assistant messages', () => {
     it('converts assistant text message', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [{ type: 'text', text: 'Hello! How can I help you?' }],
@@ -139,7 +139,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant text message with itemId from provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -170,7 +170,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -202,7 +202,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call with custom toolName from provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -240,7 +240,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call with tool result', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -290,7 +290,7 @@ describe('convertToResponsesInput', () => {
 
   describe('MCP approval request handling', () => {
     it('converts MCP approval request from tool-call', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -329,7 +329,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with approval response (approved)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -385,7 +385,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with approval response (denied)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -441,7 +441,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with tool execution output (approved and executed)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -499,7 +499,7 @@ describe('convertToResponsesInput', () => {
 
   describe('MCP approval response handling', () => {
     it('converts MCP approval response from tool-result with provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -539,7 +539,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval response with denial', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -581,7 +581,7 @@ describe('convertToResponsesInput', () => {
 
   describe('reasoning content handling', () => {
     it('converts reasoning content with itemId', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -612,7 +612,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('skips reasoning content without itemId', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -636,7 +636,7 @@ describe('convertToResponsesInput', () => {
 
   describe('tool results with different output types', () => {
     it('converts tool result with text output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -674,7 +674,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with json output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -712,7 +712,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with error-text output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -750,7 +750,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with error-json output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -790,7 +790,7 @@ describe('convertToResponsesInput', () => {
 
   describe('complex conversation flows', () => {
     it('converts a full conversation with multiple message types', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
         { role: 'user', content: [{ type: 'text', text: 'What is 2+2?' }] },
         {
