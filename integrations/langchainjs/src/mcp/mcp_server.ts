@@ -166,35 +166,17 @@ export class DatabricksMCPServer extends BaseMCPServer {
   }
 
   /**
-   * Initialize authentication and get the Bearer token.
-   */
-  async initializeAuth(): Promise<string> {
-    await this.sdkConfig.ensureResolved();
-
-    const headers = new Headers();
-    await this.sdkConfig.authenticate(headers);
-    const authHeader = headers.get("Authorization");
-
-    if (!authHeader?.startsWith("Bearer ")) {
-      throw new Error("Invalid authentication token format. Expected Bearer token.");
-    }
-    return authHeader;
-  }
-
-  /**
    * Convert to connection dictionary using headers-based authentication.
    * This resolves the URL and adds the Bearer token directly to headers.
    * Use this when connecting to servers that don't support OAuth discovery.
    */
   override async toConnectionConfig(): Promise<StreamableHTTPConnection> {
     const resolvedUrl = await this.resolveUrl();
-    const authHeader = await this.initializeAuth();
 
     const config = this.buildBaseConfig(resolvedUrl);
-    config.headers = {
-      ...config.headers,
-      Authorization: authHeader,
-    };
+
+    // Attach the auth provider to the config
+    config.authProvider = this.authProvider;
 
     return config;
   }
