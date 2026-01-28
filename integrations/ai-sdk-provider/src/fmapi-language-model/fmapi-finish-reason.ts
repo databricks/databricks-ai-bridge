@@ -1,19 +1,34 @@
-import { LanguageModelV2FinishReason } from '@ai-sdk/provider'
+import { LanguageModelV3FinishReason } from '@ai-sdk/provider'
 
 export function mapFmapiFinishReason(
   finishReason: string | null | undefined
-): LanguageModelV2FinishReason {
+): LanguageModelV3FinishReason {
   switch (finishReason) {
     case 'stop':
-      return 'stop'
+      return {
+        raw: finishReason,
+        unified: 'stop',
+      }
     case 'length':
-      return 'length'
+      return {
+        raw: finishReason,
+        unified: 'length',
+      }
     case 'content_filter':
-      return 'content-filter'
+      return {
+        raw: finishReason,
+        unified: 'content-filter',
+      }
     case 'function_call':
     case 'tool_calls':
-      return 'tool-calls'
+      return {
+        raw: finishReason,
+        unified: 'tool-calls',
+      }
     default:
-      return 'other'
+      return {
+        raw: finishReason ?? undefined,
+        unified: 'other',
+      }
   }
 }

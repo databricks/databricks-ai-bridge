@@ -1,13 +1,13 @@
-import type { LanguageModelV2Prompt, LanguageModelV2ToolResultPart } from '@ai-sdk/provider'
+import type { LanguageModelV3Prompt, LanguageModelV3ToolResultPart } from '@ai-sdk/provider'
 import type { ChatAgentResponse } from './chat-agent-schema'
 
 type ChatAgentMessage = ChatAgentResponse['messages'][number]
-type LanguageModelV2UserMessage = Extract<LanguageModelV2Prompt[number], { role: 'user' }>
-type LanguageModelV2AssistantMessage = Extract<LanguageModelV2Prompt[number], { role: 'assistant' }>
-type LanguageModelV2ToolMessage = Extract<LanguageModelV2Prompt[number], { role: 'tool' }>
+type LanguageModelV3UserMessage = Extract<LanguageModelV3Prompt[number], { role: 'user' }>
+type LanguageModelV3AssistantMessage = Extract<LanguageModelV3Prompt[number], { role: 'assistant' }>
+type LanguageModelV3ToolMessage = Extract<LanguageModelV3Prompt[number], { role: 'tool' }>
 
-export const convertLanguageModelV2PromptToChatAgentResponse = (
-  prompt: LanguageModelV2Prompt
+export const convertLanguageModelV3PromptToChatAgentResponse = (
+  prompt: LanguageModelV3Prompt
 ): ChatAgentResponse['messages'] => {
   const messages: ChatAgentResponse['messages'] = []
   let messageIndex = 0
@@ -45,7 +45,7 @@ export const convertLanguageModelV2PromptToChatAgentResponse = (
 }
 
 const convertUserMessage = (
-  msg: LanguageModelV2UserMessage,
+  msg: LanguageModelV3UserMessage,
   messageIndex: number
 ): ChatAgentMessage => {
   const text = (msg.content ?? [])
@@ -61,7 +61,7 @@ const convertUserMessage = (
 }
 
 const convertAssistantMessage = (
-  msg: LanguageModelV2AssistantMessage,
+  msg: LanguageModelV3AssistantMessage,
   startIndex: number
 ): ChatAgentMessage[] => {
   const messages: ChatAgentMessage[] = []
@@ -109,7 +109,7 @@ const convertAssistantMessage = (
 }
 
 const convertToolMessage = (
-  msg: LanguageModelV2ToolMessage,
+  msg: LanguageModelV3ToolMessage,
   startIndex: number
 ): ChatAgentMessage[] => {
   const messages: ChatAgentMessage[] = []
@@ -130,7 +130,7 @@ const convertToolMessage = (
   return messages
 }
 
-const convertToolResultOutput = (output: LanguageModelV2ToolResultPart['output']): string => {
+const convertToolResultOutput = (output: LanguageModelV3ToolResultPart['output']): string => {
   switch (output.type) {
     case 'text':
     case 'error-text':

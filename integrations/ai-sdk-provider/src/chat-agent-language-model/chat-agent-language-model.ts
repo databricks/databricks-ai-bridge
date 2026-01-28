@@ -1,8 +1,8 @@
 import type {
-  LanguageModelV2,
-  LanguageModelV2CallOptions,
-  LanguageModelV2FinishReason,
-  LanguageModelV2StreamPart,
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3FinishReason,
+  LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -19,11 +19,11 @@ import {
   convertChatAgentChunkToMessagePart,
   convertChatAgentResponseToMessagePart,
 } from './chat-agent-convert-to-message-parts'
-import { convertLanguageModelV2PromptToChatAgentResponse } from './chat-agent-convert-to-input'
+import { convertLanguageModelV3PromptToChatAgentResponse } from './chat-agent-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 
-export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
-  readonly specificationVersion = 'v2'
+export class DatabricksChatAgentLanguageModel implements LanguageModelV3 {
+  readonly specificationVersion = 'v3'
 
   readonly modelId: string
 
@@ -41,8 +41,8 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
   readonly supportedUrls: Record<string, RegExp[]> = {}
 
   async doGenerate(
-    options: Parameters<LanguageModelV2['doGenerate']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
+    options: Parameters<LanguageModelV3['doGenerate']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doGenerate']>>> {
     const networkArgs = this.getArgs({
       config: this.config,
       options,
@@ -62,19 +62,18 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
 
     return {
       content: convertChatAgentResponseToMessagePart(response),
-      finishReason: 'stop',
+      finishReason: { raw: undefined, unified: 'stop' },
       usage: {
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
+        inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
       },
       warnings: [],
     }
   }
 
   async doStream(
-    options: Parameters<LanguageModelV2['doStream']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
+    options: Parameters<LanguageModelV3['doStream']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doStream']>>> {
     const networkArgs = this.getArgs({
       config: this.config,
       options,
@@ -92,14 +91,14 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
       successfulResponseHandler: createEventSourceResponseHandler(chatAgentChunkSchema),
     })
 
-    let finishReason: LanguageModelV2FinishReason = 'unknown'
+    let finishReason: LanguageModelV3FinishReason = { raw: undefined, unified: 'other' }
 
     return {
       stream: response
         .pipeThrough(
           new TransformStream<
             ParseResult<z.infer<typeof chatAgentChunkSchema>>,
-            LanguageModelV2StreamPart
+            LanguageModelV3StreamPart
           >({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings: [] })
@@ -112,7 +111,7 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
 
               // // handle failed chunk parsing / validation:
               if (!chunk.success) {
-                finishReason = 'error'
+                finishReason = { raw: undefined, unified: 'error' }
                 controller.enqueue({ type: 'error', error: chunk.error })
                 return
               }
@@ -128,9 +127,8 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
                 type: 'finish',
                 finishReason,
                 usage: {
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  totalTokens: 0,
+                  inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 0, text: 0, reasoning: 0 },
                 },
               })
             },
@@ -148,7 +146,7 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
     stream,
     modelId,
   }: {
-    options: LanguageModelV2CallOptions
+    options: LanguageModelV3CallOptions
     config: DatabricksLanguageModelConfig
     stream: boolean
     modelId: string
@@ -157,7 +155,7 @@ export class DatabricksChatAgentLanguageModel implements LanguageModelV2 {
       body: {
         model: modelId,
         stream,
-        messages: convertLanguageModelV2PromptToChatAgentResponse(options.prompt),
+        messages: convertLanguageModelV3PromptToChatAgentResponse(options.prompt),
       },
       url: config.url({
         path: '/completions',

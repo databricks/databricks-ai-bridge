@@ -1,8 +1,8 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
-export type DatabricksStreamPartTransformer<Out extends LanguageModelV2StreamPart> = (
-  parts: LanguageModelV2StreamPart[],
-  last: LanguageModelV2StreamPart | null
+export type DatabricksStreamPartTransformer<Out extends LanguageModelV3StreamPart> = (
+  parts: LanguageModelV3StreamPart[],
+  last: LanguageModelV3StreamPart | null
 ) => {
   out: Out[]
 }
@@ -37,8 +37,8 @@ export function composeDatabricksStreamPartTransformers<
   // The generic `OutElement<Last<T>>` is the element type of the **last**
   // transformer, so the returned function has the correct inferred type.
   return (
-    initialParts: LanguageModelV2StreamPart[],
-    last: LanguageModelV2StreamPart | null = null
+    initialParts: LanguageModelV3StreamPart[],
+    last: LanguageModelV3StreamPart | null = null
   ) => {
     // ‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑-
     // Runtime state that moves through the pipeline
@@ -48,7 +48,7 @@ export function composeDatabricksStreamPartTransformers<
     // Execute each transformer in order, threading the two values.
     for (const fn of transformers) {
       const result = fn(currentParts, last)
-      currentParts = result.out as LanguageModelV2StreamPart[]
+      currentParts = result.out as LanguageModelV3StreamPart[]
     }
 
     // `OutElement<Last<T>>` is exactly the element type that the *last*

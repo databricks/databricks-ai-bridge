@@ -1,8 +1,8 @@
 import {
   UnsupportedFunctionalityError,
-  type LanguageModelV2CallWarning,
-  type LanguageModelV2Prompt,
-  type LanguageModelV2ToolResultPart,
+  type SharedV3Warning,
+  type LanguageModelV3Prompt,
+  type LanguageModelV3ToolResultPart,
 } from '@ai-sdk/provider'
 import { parseProviderOptions } from '@ai-sdk/provider-utils'
 import { z } from 'zod/v4'
@@ -17,14 +17,14 @@ export async function convertToResponsesInput({
   prompt,
   systemMessageMode,
 }: {
-  prompt: LanguageModelV2Prompt
+  prompt: LanguageModelV3Prompt
   systemMessageMode: 'system' | 'developer' | 'remove'
 }): Promise<{
   input: ResponsesInput
-  warnings: Array<LanguageModelV2CallWarning>
+  warnings: Array<SharedV3Warning>
 }> {
   const input: ResponsesInput = []
-  const warnings: Array<LanguageModelV2CallWarning> = []
+  const warnings: Array<SharedV3Warning> = []
 
   // Map tool call results to a map by tool call id so we can insert them into the input in the correct order,
   // right after the tool call that produced them.
@@ -38,7 +38,7 @@ export async function convertToResponsesInput({
         }
         return reduction
       },
-      {} as Record<string, LanguageModelV2ToolResultPart>
+      {} as Record<string, LanguageModelV3ToolResultPart>
     )
 
   for (const { role, content } of prompt) {
@@ -224,13 +224,17 @@ const ProviderOptionsSchema = z.object({
 export type ProviderOptions = z.infer<typeof ProviderOptionsSchema>
 
 const convertToolResultOutputToString = (
-  output: LanguageModelV2ToolResultPart['output']
+  output: LanguageModelV3ToolResultPart['output']
 ): string => {
   switch (output.type) {
     case 'text':
     case 'error-text':
       return output.value
-    default:
+    case 'execution-denied':
+      return output.reason ?? 'Execution denied'
+    case 'json':
+    case 'error-json':
+    case 'content':
       return JSON.stringify(output.value)
   }
 }

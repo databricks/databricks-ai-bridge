@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2Message } from '@ai-sdk/provider'
+import type { LanguageModelV3Message } from '@ai-sdk/provider'
 import { convertPromptToFmapiMessages } from '../src/fmapi-language-model/fmapi-convert-to-input'
 import {
   convertFmapiChunkToMessagePart,
@@ -15,7 +15,7 @@ import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 describe('convertPromptToFmapiMessages', () => {
   describe('system messages', () => {
     it('should keep system message role with text content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'system',
           content: 'You are a helpful assistant.',
@@ -32,7 +32,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle empty system message', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'system',
           content: '',
@@ -49,7 +49,7 @@ describe('convertPromptToFmapiMessages', () => {
 
   describe('user messages', () => {
     it('should convert user message with text parts', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [{ type: 'text', text: 'Hello, world!' }],
@@ -64,7 +64,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert user message with multiple text parts', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -84,7 +84,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert user message with file/image part using URL', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -106,7 +106,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert user message with file/image part using string URL', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -128,7 +128,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert user message with file/image part using http URL', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -150,7 +150,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should ignore file part with base64 data (non-URL)', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -171,7 +171,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should ignore file part with Uint8Array data', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -191,7 +191,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should ignore non-image file types', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -211,7 +211,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle empty user content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [],
@@ -225,7 +225,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle mixed text and image content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'user',
           content: [
@@ -251,7 +251,7 @@ describe('convertPromptToFmapiMessages', () => {
 
   describe('assistant messages', () => {
     it('should convert assistant message with text', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [{ type: 'text', text: 'Hello! How can I help you today?' }],
@@ -268,7 +268,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert assistant message with reasoning', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [
@@ -298,7 +298,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert assistant message with tool-call to OpenAI format', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [
@@ -332,7 +332,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert assistant message with tool-call using provider options for actual tool name', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [
@@ -368,7 +368,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert assistant message with file/image using URL', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [
@@ -390,7 +390,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle empty assistant content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [],
@@ -404,7 +404,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert assistant message with mixed content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
           content: [
@@ -443,7 +443,7 @@ describe('convertPromptToFmapiMessages', () => {
 
   describe('tool messages', () => {
     it('should convert tool message with tool-result parts to OpenAI format', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [
@@ -470,7 +470,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should convert tool message with multiple tool-result parts to separate messages', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [
@@ -509,7 +509,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle tool-result with error-text output', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [
@@ -534,7 +534,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle tool-result with error-json output', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [
@@ -559,7 +559,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle tool-result with content output', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [
@@ -586,7 +586,7 @@ describe('convertPromptToFmapiMessages', () => {
     })
 
     it('should handle empty tool message content', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'tool',
           content: [],
@@ -602,7 +602,7 @@ describe('convertPromptToFmapiMessages', () => {
 
   describe('multiple messages', () => {
     it('should convert a full conversation', async () => {
-      const prompt: LanguageModelV2Message[] = [
+      const prompt: LanguageModelV3Message[] = [
         {
           role: 'system',
           content: 'You are a helpful weather assistant.',

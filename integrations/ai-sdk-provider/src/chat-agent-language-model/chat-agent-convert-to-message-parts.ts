@@ -1,11 +1,11 @@
-import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import type { ChatAgentChunk, ChatAgentResponse } from './chat-agent-schema'
 
 export const convertChatAgentChunkToMessagePart = (
   chunk: ChatAgentChunk
-): LanguageModelV2StreamPart[] => {
-  const parts = [] as LanguageModelV2StreamPart[]
+): LanguageModelV3StreamPart[] => {
+  const parts = [] as LanguageModelV3StreamPart[]
   if (chunk.delta.role === 'assistant') {
     if (chunk.delta.content) {
       parts.push({
@@ -35,8 +35,8 @@ export const convertChatAgentChunkToMessagePart = (
 
 export const convertChatAgentResponseToMessagePart = (
   response: ChatAgentResponse
-): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
   for (const message of response.messages) {
     if (message.role === 'assistant') {
       parts.push({
