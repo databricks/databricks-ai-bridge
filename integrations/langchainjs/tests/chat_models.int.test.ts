@@ -14,17 +14,17 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { AIMessageChunk, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { ChatDatabricks } from "../src/chat_models.js";
 
-// Endpoint configurations to test
-const endpointConfigs: { name: string; useResponsesApi: boolean; endpoint: string }[] = [
+// Model configurations to test
+const modelConfigs: { name: string; useResponsesApi: boolean; model: string }[] = [
   {
     name: "chat-completions",
     useResponsesApi: false,
-    endpoint: "databricks-claude-sonnet-4-5",
+    model: "databricks-claude-sonnet-4-5",
   },
   {
     name: "responses",
     useResponsesApi: true,
-    endpoint: "databricks-gpt-5-2",
+    model: "databricks-gpt-5-2",
   },
 ];
 
@@ -35,12 +35,12 @@ const hasCredentials =
   (process.env.CLIENT_ID && process.env.CLIENT_SECRET);
 
 describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
-  describe.each(endpointConfigs)("$name endpoint", ({ useResponsesApi, endpoint }) => {
-    let model: ChatDatabricks;
+  describe.each(modelConfigs)("$name endpoint", ({ useResponsesApi, model }) => {
+    let chatModel: ChatDatabricks;
 
     beforeAll(() => {
-      model = new ChatDatabricks({
-        endpoint,
+      chatModel = new ChatDatabricks({
+        model,
         useResponsesApi,
         maxTokens: 100,
       });
@@ -48,14 +48,14 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
 
     describe("Basic Chat Completion", () => {
       it("completes a simple message", async () => {
-        const response = await model.invoke([new HumanMessage("Say hello in exactly 3 words")]);
+        const response = await chatModel.invoke([new HumanMessage("Say hello in exactly 3 words")]);
 
         expect(response.content).toBeTruthy();
         expect(typeof response.content).toBe("string");
       });
 
       it("handles system message", async () => {
-        const response = await model.invoke([
+        const response = await chatModel.invoke([
           new SystemMessage("You are a pirate. Always respond like a pirate."),
           new HumanMessage("How are you?"),
         ]);
@@ -66,7 +66,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       });
 
       it("handles multi-turn conversation", async () => {
-        const response = await model.invoke([
+        const response = await chatModel.invoke([
           new HumanMessage("My name is Alice"),
           new HumanMessage("What is my name?"),
         ]);
@@ -80,7 +80,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       it("streams response chunks", async () => {
         const chunks: string[] = [];
 
-        const stream = await model.stream([new HumanMessage("Count from 1 to 5")]);
+        const stream = await chatModel.stream([new HumanMessage("Count from 1 to 5")]);
 
         for await (const chunk of stream) {
           if (chunk.content) {
@@ -97,7 +97,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
         const controller = new AbortController();
         const chunks: string[] = [];
 
-        const stream = await model.stream([new HumanMessage("Write a very long story")], {
+        const stream = await chatModel.stream([new HumanMessage("Write a very long story")], {
           signal: controller.signal,
         });
 
@@ -120,7 +120,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
 
     describe("Tool Calling", () => {
       it("calls a tool when appropriate", async () => {
-        const modelWithTools = model.bindTools([
+        const modelWithTools = chatModel.bindTools([
           {
             type: "function",
             function: {
@@ -150,7 +150,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       });
 
       it("handles tool response in conversation", async () => {
-        const modelWithTools = model.bindTools([
+        const modelWithTools = chatModel.bindTools([
           {
             type: "function",
             function: {
@@ -183,7 +183,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       });
 
       it("streams with tool calls", async () => {
-        const modelWithTools = model.bindTools([
+        const modelWithTools = chatModel.bindTools([
           {
             type: "function",
             function: {
@@ -219,7 +219,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     describe("Parameters", () => {
       it("respects temperature parameter", async () => {
         const coldModel = new ChatDatabricks({
-          endpoint,
+          model,
           useResponsesApi,
           temperature: 0,
           maxTokens: 50,
@@ -236,7 +236,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
 
       it("respects maxTokens parameter", async () => {
         const shortModel = new ChatDatabricks({
-          endpoint,
+          model,
           useResponsesApi,
           maxTokens: 16,
         });
@@ -254,7 +254,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
         // See https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api-request
         .skipIf(useResponsesApi)("respects stop sequences", async () => {
         const modelWithStop = new ChatDatabricks({
-          endpoint,
+          model,
           useResponsesApi,
           maxTokens: 100,
           stop: ["5"],
@@ -270,9 +270,9 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
     });
 
     describe("Error Handling", () => {
-      it("throws on invalid endpoint", async () => {
+      it("throws on invalid model", async () => {
         const badModel = new ChatDatabricks({
-          endpoint: "nonexistent-endpoint-12345",
+          model: "nonexistent-model-12345",
           useResponsesApi,
         });
 
@@ -282,7 +282,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
 
     describe("UTF-8 Encoding", () => {
       it("handles unicode content correctly", async () => {
-        const response = await model.invoke([
+        const response = await chatModel.invoke([
           new HumanMessage(
             "Translate 'hello' to Japanese, Chinese, and Korean. Just give the translations."
           ),
@@ -294,7 +294,7 @@ describe.skipIf(!hasCredentials)("ChatDatabricks Integration Tests", () => {
       });
 
       it("handles emoji in input and output", async () => {
-        const response = await model.invoke([new HumanMessage("Reply with only: 👋🌍")]);
+        const response = await chatModel.invoke([new HumanMessage("Reply with only: 👋🌍")]);
 
         const content = response.content as string;
         expect(content).toBeTruthy();

@@ -30,7 +30,7 @@ npm install @databricks/langchainjs
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
 });
 
 const response = await model.invoke("Hello, how are you?");
@@ -47,7 +47,7 @@ OpenAI-compatible chat completions for Foundation Models.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
   useResponsesApi: false, // can be omitted
 });
 ```
@@ -58,7 +58,7 @@ Rich output with reasoning, citations, and function calls.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "databricks-gpt-5-2",
+  model: "databricks-gpt-5-2",
   useResponsesApi: true,
 });
 ```
@@ -76,7 +76,7 @@ ChatDatabricks uses the [Databricks SDK](https://github.com/databricks/databrick
 ```typescript
 // Credentials are automatically detected
 const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
+  model: "your-model",
 });
 ```
 
@@ -101,7 +101,7 @@ You can also pass credentials directly via the `auth` field:
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
+  model: "your-model",
   auth: {
     host: "https://your-workspace.databricks.com",
     token: "dapi...",
@@ -183,7 +183,7 @@ import { createAgent } from "langchain";
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
 });
 
 const agent = createAgent({
@@ -220,7 +220,7 @@ const client = new MultiServerMCPClient({ mcpServers });
 const tools = await client.getTools();
 
 // Use with ChatDatabricks
-const model = new ChatDatabricks({ endpoint: "databricks-claude-sonnet-4-5" });
+const model = new ChatDatabricks({ model: "databricks-claude-sonnet-4-5" });
 const modelWithTools = model.bindTools(tools);
 
 const response = await modelWithTools.invoke("Query the sales table");
@@ -320,7 +320,7 @@ const externalServer = new MCPServer({
 ```typescript
 const model = new ChatDatabricks({
   // Required
-  endpoint: "your-endpoint-name",
+  model: "your-model-name",
 
   // Use Responses API instead of Chat Completions (optional)
   useResponsesApi: true,

@@ -18,9 +18,9 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 const EXAMPLE_CONFIG = {
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
   // For an example that uses the Responses API:
-  // endpoint: "databricks-gpt-5-2",
+  // model: "databricks-gpt-5-2",
   // useResponsesApi: true,
 } as const;
 

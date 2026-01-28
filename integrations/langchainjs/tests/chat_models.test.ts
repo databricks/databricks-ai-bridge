@@ -9,16 +9,16 @@ describe("ChatDatabricks", () => {
     it("creates model with auth object", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const model = new ChatDatabricks({
-        endpoint: "test-endpoint",
+      const llm = new ChatDatabricks({
+        model: "test-model",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
         },
       });
 
-      expect(model.endpoint).toBe("test-endpoint");
-      expect(model.useResponsesApi).toBeUndefined();
+      expect(llm.model).toBe("test-model");
+      expect(llm.useResponsesApi).toBeUndefined();
     });
 
     it("supports useResponsesApi flag", async () => {
@@ -30,13 +30,13 @@ describe("ChatDatabricks", () => {
       };
 
       const chatCompletionsModel = new ChatDatabricks({
-        endpoint: "test-endpoint",
+        model: "test-model",
         useResponsesApi: false,
         auth,
       });
 
       const responsesModel = new ChatDatabricks({
-        endpoint: "test-responses",
+        model: "test-responses",
         useResponsesApi: true,
         auth,
       });
@@ -48,8 +48,8 @@ describe("ChatDatabricks", () => {
     it("accepts model parameters", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const model = new ChatDatabricks({
-        endpoint: "test-endpoint",
+      const llm = new ChatDatabricks({
+        model: "test-model",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
@@ -59,30 +59,30 @@ describe("ChatDatabricks", () => {
         stop: ["\n\n"],
       });
 
-      expect(model.temperature).toBe(0.7);
-      expect(model.maxTokens).toBe(1000);
-      expect(model.stop).toEqual(["\n\n"]);
+      expect(llm.temperature).toBe(0.7);
+      expect(llm.maxTokens).toBe(1000);
+      expect(llm.stop).toEqual(["\n\n"]);
     });
 
     it("returns correct llm type", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const model = new ChatDatabricks({
-        endpoint: "test-endpoint",
+      const llm = new ChatDatabricks({
+        model: "test-model",
         auth: {
           host: "https://test.databricks.com",
           token: "test-token",
         },
       });
 
-      expect(model._llmType()).toBe("chat-databricks");
+      expect(llm._llmType()).toBe("chat-databricks");
     });
 
     it("returns identifying params", async () => {
       const { ChatDatabricks } = await import("../src/chat_models.js");
 
-      const model = new ChatDatabricks({
-        endpoint: "test-endpoint",
+      const llm = new ChatDatabricks({
+        model: "test-model",
         useResponsesApi: true,
         auth: {
           host: "https://test.databricks.com",
@@ -92,9 +92,9 @@ describe("ChatDatabricks", () => {
         maxTokens: 500,
       });
 
-      const params = model.identifyingParams;
+      const params = llm.identifyingParams;
 
-      expect(params.endpoint).toBe("test-endpoint");
+      expect(params.model).toBe("test-model");
       expect(params.useResponsesApi).toBe(true);
       expect(params.temperature).toBe(0.5);
       expect(params.maxTokens).toBe(500);

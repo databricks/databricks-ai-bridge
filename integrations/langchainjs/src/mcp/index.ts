@@ -26,7 +26,7 @@
  * const tools = await client.getTools();
  *
  * // Bind to chat model
- * const model = new ChatDatabricks({ endpoint: "my-endpoint" });
+ * const llm = new ChatDatabricks({ model: "my-model" });
  * const modelWithTools = model.bindTools(tools);
  *
  * // Clean up when done

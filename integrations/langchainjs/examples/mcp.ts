@@ -95,7 +95,7 @@ async function main() {
     console.log("\n--- Using Tools with ChatDatabricks ---\n");
 
     const model = new ChatDatabricks({
-      endpoint: "databricks-claude-sonnet-4-5",
+      model: "databricks-claude-sonnet-4-5",
       maxTokens: 1024,
     });
 
@@ -106,6 +106,7 @@ async function main() {
     // Example conversation with tool use
     const messages: BaseMessage[] = [
       new HumanMessage("What tools do you have available? List them briefly."),
+      new HumanMessage("After listing the tools, call the python_exec tool with the argument 'print('Hello, world!')'"),
     ];
 
     console.log("Sending message to model...\n");

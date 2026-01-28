@@ -34,49 +34,49 @@ describe("MCPServer", () => {
     expect(server.sseReadTimeout).toBe(60);
   });
 
-  it("converts to connection config with http transport", () => {
+  it("converts to connection config with http transport", async () => {
     const server = new MCPServer({
       name: "test-server",
       url: "https://example.com/mcp",
     });
 
-    const config = server.toConnectionConfig();
+    const config = await server.toConnectionConfig();
 
     expect(config.transport).toBe("http");
     expect(config.url).toBe("https://example.com/mcp");
   });
 
-  it("converts timeout to milliseconds in connection config", () => {
+  it("converts timeout to milliseconds in connection config", async () => {
     const server = new MCPServer({
       name: "test-server",
       url: "https://example.com/mcp",
       timeout: 30,
     });
 
-    const config = server.toConnectionConfig();
+    const config = await server.toConnectionConfig();
 
     expect(config.defaultToolTimeout).toBe(30000); // 30 seconds in ms
   });
 
-  it("includes headers in connection config", () => {
+  it("includes headers in connection config", async () => {
     const server = new MCPServer({
       name: "test-server",
       url: "https://example.com/mcp",
       headers: { Authorization: "Bearer token123" },
     });
 
-    const config = server.toConnectionConfig();
+    const config = await server.toConnectionConfig();
 
     expect(config.headers).toEqual({ Authorization: "Bearer token123" });
   });
 
-  it("excludes name from connection config", () => {
+  it("excludes name from connection config", async () => {
     const server = new MCPServer({
       name: "test-server",
       url: "https://example.com/mcp",
     });
 
-    const config = server.toConnectionConfig();
+    const config = await server.toConnectionConfig();
 
     expect(config).not.toHaveProperty("name");
   });
@@ -92,18 +92,22 @@ describe("DatabricksMCPServer", () => {
     expect(server.name).toBe("databricks-server");
   });
 
-  it("includes authProvider in connection config", () => {
+  it("toConnectionConfig resolves URL and adds auth header", async () => {
     const server = new DatabricksMCPServer({
       name: "databricks-server",
       path: "/api/2.0/mcp/sql",
+      auth: {
+        host: "https://test.databricks.com",
+        token: "test-token",
+      },
     });
 
-    const config = server.toConnectionConfig();
+    const config = await server.toConnectionConfig();
 
-    expect(config).toHaveProperty("authProvider");
     expect(config.transport).toBe("http");
-    // URL is resolved lazily, so it's empty in toConnectionConfig()
-    // Use toConnectionConfigWithHeaders() for the resolved URL
+    expect(config.url).toBe("https://test.databricks.com/api/2.0/mcp/sql");
+    expect(config.headers).toHaveProperty("Authorization");
+    expect(config.headers?.Authorization).toMatch(/^Bearer /);
   });
 
   describe("fromUCFunction", () => {
