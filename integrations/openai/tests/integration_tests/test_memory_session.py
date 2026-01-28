@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from typing import Any, cast
 
 import pytest
 
@@ -119,18 +120,18 @@ def test_memory_session_crud_operations(cleanup_tables):
     asyncio.run(session.clear_session())
 
     # Test get_items on empty session
-    items = asyncio.run(session.get_items())
+    items = cast(list[Any], asyncio.run(session.get_items()))
     assert items == [], f"Expected empty list, got {items}"
 
     # Test add_items
-    test_items = [
+    test_items: list[Any] = [
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": "I'm doing well, thank you!"},
     ]
     asyncio.run(session.add_items(test_items))
 
     # Test get_items returns what we added
-    items = asyncio.run(session.get_items())
+    items = cast(list[Any], asyncio.run(session.get_items()))
     assert len(items) == 2, f"Expected 2 items, got {len(items)}"
     assert items[0]["role"] == "user"
     assert items[0]["content"] == "Hello, how are you?"
@@ -138,23 +139,23 @@ def test_memory_session_crud_operations(cleanup_tables):
     assert items[1]["content"] == "I'm doing well, thank you!"
 
     # Test get_items with limit - should return latest N items in chronological order
-    items = asyncio.run(session.get_items(limit=1))
+    items = cast(list[Any], asyncio.run(session.get_items(limit=1)))
     assert len(items) == 1, f"Expected 1 item with limit, got {len(items)}"
     assert items[0]["role"] == "assistant"  # Latest item
 
     # Test pop_item - removes and returns the last item
-    popped = asyncio.run(session.pop_item())
+    popped = cast(Any, asyncio.run(session.pop_item()))
     assert popped is not None
     assert popped["role"] == "assistant"  # Should be the last item
 
     # Verify only 1 item remains
-    items = asyncio.run(session.get_items())
+    items = cast(list[Any], asyncio.run(session.get_items()))
     assert len(items) == 1, f"Expected 1 item after pop, got {len(items)}"
     assert items[0]["role"] == "user"
 
     # Test clear_session
     asyncio.run(session.clear_session())
-    items = asyncio.run(session.get_items())
+    items = cast(list[Any], asyncio.run(session.get_items()))
     assert items == [], f"Expected empty after clear, got {items}"
 
 
@@ -183,12 +184,14 @@ def test_memory_session_multiple_sessions_isolated(cleanup_tables):
     )
 
     # Add different items to each session
-    asyncio.run(session_1.add_items([{"role": "user", "content": "Session 1 message"}]))
-    asyncio.run(session_2.add_items([{"role": "user", "content": "Session 2 message"}]))
+    items_1_data: list[Any] = [{"role": "user", "content": "Session 1 message"}]
+    items_2_data: list[Any] = [{"role": "user", "content": "Session 2 message"}]
+    asyncio.run(session_1.add_items(items_1_data))
+    asyncio.run(session_2.add_items(items_2_data))
 
     # Verify isolation
-    items_1 = asyncio.run(session_1.get_items())
-    items_2 = asyncio.run(session_2.get_items())
+    items_1 = cast(list[Any], asyncio.run(session_1.get_items()))
+    items_2 = cast(list[Any], asyncio.run(session_2.get_items()))
 
     assert len(items_1) == 1
     assert len(items_2) == 1
@@ -197,8 +200,8 @@ def test_memory_session_multiple_sessions_isolated(cleanup_tables):
 
     # Clear one session shouldn't affect the other
     asyncio.run(session_1.clear_session())
-    items_1 = asyncio.run(session_1.get_items())
-    items_2 = asyncio.run(session_2.get_items())
+    items_1 = cast(list[Any], asyncio.run(session_1.get_items()))
+    items_2 = cast(list[Any], asyncio.run(session_2.get_items()))
     assert len(items_1) == 0
     assert len(items_2) == 1
 
@@ -240,7 +243,7 @@ def test_memory_session_add_empty_items_noop(cleanup_tables):
     asyncio.run(session.add_items([]))
 
     # Session should still be empty
-    items = asyncio.run(session.get_items())
+    items = cast(list[Any], asyncio.run(session.get_items()))
     assert items == []
 
 
@@ -280,18 +283,18 @@ async def test_async_memory_session_crud_operations(cleanup_tables):
     await session.clear_session()
 
     # Test get_items on empty session
-    items = await session.get_items()
+    items = cast(list[Any], await session.get_items())
     assert items == [], f"Expected empty list, got {items}"
 
     # Test add_items
-    test_items = [
+    test_items: list[Any] = [
         {"role": "user", "content": "Hello, how are you?"},
         {"role": "assistant", "content": "I'm doing well, thank you!"},
     ]
     await session.add_items(test_items)
 
     # Test get_items returns what we added
-    items = await session.get_items()
+    items = cast(list[Any], await session.get_items())
     assert len(items) == 2, f"Expected 2 items, got {len(items)}"
     assert items[0]["role"] == "user"
     assert items[0]["content"] == "Hello, how are you?"
@@ -299,23 +302,23 @@ async def test_async_memory_session_crud_operations(cleanup_tables):
     assert items[1]["content"] == "I'm doing well, thank you!"
 
     # Test get_items with limit - should return latest N items in chronological order
-    items = await session.get_items(limit=1)
+    items = cast(list[Any], await session.get_items(limit=1))
     assert len(items) == 1, f"Expected 1 item with limit, got {len(items)}"
     assert items[0]["role"] == "assistant"  # Latest item
 
     # Test pop_item - removes and returns the last item
-    popped = await session.pop_item()
+    popped = cast(Any, await session.pop_item())
     assert popped is not None
     assert popped["role"] == "assistant"  # Should be the last item
 
     # Verify only 1 item remains
-    items = await session.get_items()
+    items = cast(list[Any], await session.get_items())
     assert len(items) == 1, f"Expected 1 item after pop, got {len(items)}"
     assert items[0]["role"] == "user"
 
     # Test clear_session
     await session.clear_session()
-    items = await session.get_items()
+    items = cast(list[Any], await session.get_items())
     assert items == [], f"Expected empty after clear, got {items}"
 
 
@@ -345,12 +348,14 @@ async def test_async_memory_session_multiple_sessions_isolated(cleanup_tables):
     )
 
     # Add different items to each session
-    await session_1.add_items([{"role": "user", "content": "Async Session 1 message"}])
-    await session_2.add_items([{"role": "user", "content": "Async Session 2 message"}])
+    items_1_data: list[Any] = [{"role": "user", "content": "Async Session 1 message"}]
+    items_2_data: list[Any] = [{"role": "user", "content": "Async Session 2 message"}]
+    await session_1.add_items(items_1_data)
+    await session_2.add_items(items_2_data)
 
     # Verify isolation
-    items_1 = await session_1.get_items()
-    items_2 = await session_2.get_items()
+    items_1 = cast(list[Any], await session_1.get_items())
+    items_2 = cast(list[Any], await session_2.get_items())
 
     assert len(items_1) == 1
     assert len(items_2) == 1
@@ -359,8 +364,8 @@ async def test_async_memory_session_multiple_sessions_isolated(cleanup_tables):
 
     # Clear one session shouldn't affect the other
     await session_1.clear_session()
-    items_1 = await session_1.get_items()
-    items_2 = await session_2.get_items()
+    items_1 = cast(list[Any], await session_1.get_items())
+    items_2 = cast(list[Any], await session_2.get_items())
     assert len(items_1) == 0
     assert len(items_2) == 1
 
@@ -404,5 +409,5 @@ async def test_async_memory_session_add_empty_items_noop(cleanup_tables):
     await session.add_items([])
 
     # Session should still be empty
-    items = await session.get_items()
+    items = cast(list[Any], await session.get_items())
     assert items == []
