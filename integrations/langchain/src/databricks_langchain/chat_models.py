@@ -22,7 +22,7 @@ from typing import (
 )
 
 from databricks import sdk
-from langchain_core.callbacks import CallbackManagerForLLMRun, AsyncCallbackManagerForLLMRun
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.base import LanguageModelInput
 from langchain_core.messages import (
@@ -55,13 +55,13 @@ from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from openai import OpenAI, AsyncOpenAI, Stream, AsyncStream
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import override
 
-from databricks_langchain.utils import get_openai_client, get_async_openai_client
+from databricks_langchain.utils import get_async_openai_client, get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -815,7 +815,9 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            stream: AsyncStream[ChatCompletionChunk] = await self.async_client.chat.completions.create(**data)
+            stream: AsyncStream[
+                ChatCompletionChunk
+            ] = await self.async_client.chat.completions.create(**data)
             async for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
                 if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
