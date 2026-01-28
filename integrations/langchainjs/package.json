@@ -48,7 +48,8 @@
     "prepublishOnly": "npm run build && npm run test && npm run lint && npm run format:check",
     "example": "tsx examples/basic.ts",
     "example:tools": "tsx examples/tools.ts",
-    "example:agent": "tsx examples/agent.ts"
+    "example:agent": "tsx examples/agent.ts",
+    "example:mcp": "tsx examples/mcp.ts"
   },
   "dependencies": {
     "@ai-sdk/provider": "^2.0.0",
@@ -56,6 +57,7 @@
     "@databricks/ai-sdk-provider": "^0.2.3",
     "@databricks/sdk-experimental": "^0.15.0",
     "@langchain/core": "^1.1.8",
+    "@langchain/mcp-adapters": "^1.1.1",
     "ai": "^5.0.118",
     "zod": "^4.3.5"
   },

@@ -11,6 +11,7 @@ This package provides a `ChatDatabricks` class that integrates with the LangChai
 - Supports tool/function calling
 - Multiple endpoint APIs: Chat Completions, and Responses
 - Automatic authentication via Databricks SDK
+- MCP (Model Context Protocol) integration for dynamic tool loading
 
 ## Requirements
 
@@ -29,7 +30,7 @@ npm install @databricks/langchainjs
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
 });
 
 const response = await model.invoke("Hello, how are you?");
@@ -46,7 +47,7 @@ OpenAI-compatible chat completions for Foundation Models.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
   useResponsesApi: false, // can be omitted
 });
 ```
@@ -57,7 +58,7 @@ Rich output with reasoning, citations, and function calls.
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "databricks-gpt-5-2",
+  model: "databricks-gpt-5-2",
   useResponsesApi: true,
 });
 ```
@@ -75,7 +76,7 @@ ChatDatabricks uses the [Databricks SDK](https://github.com/databricks/databrick
 ```typescript
 // Credentials are automatically detected
 const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
+  model: "your-model",
 });
 ```
 
@@ -100,7 +101,7 @@ You can also pass credentials directly via the `auth` field:
 
 ```typescript
 const model = new ChatDatabricks({
-  endpoint: "your-endpoint",
+  model: "your-model",
   auth: {
     host: "https://your-workspace.databricks.com",
     token: "dapi...",
@@ -182,7 +183,7 @@ import { createAgent } from "langchain";
 import { ChatDatabricks } from "@databricks/langchainjs";
 
 const model = new ChatDatabricks({
-  endpoint: "databricks-claude-sonnet-4-5",
+  model: "databricks-claude-sonnet-4-5",
 });
 
 const agent = createAgent({
@@ -193,12 +194,129 @@ const agent = createAgent({
 const result = await agent.invoke("What's the weather in Paris?");
 ```
 
+## MCP (Model Context Protocol) Integration
+
+Connect to MCP servers to dynamically load tools from Databricks services and external APIs.
+
+### Connecting to Databricks MCP Servers
+
+```typescript
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { ChatDatabricks, buildMCPServerConfig, DatabricksMCPServer } from "@databricks/langchainjs";
+
+// Create MCP server for Databricks SQL (host resolved from DATABRICKS_HOST env var)
+const sqlServer = new DatabricksMCPServer({
+  name: "dbsql",
+  path: "/api/2.0/mcp/sql",
+});
+
+// Build config and create client
+const mcpServers = await buildMCPServerConfig([sqlServer]);
+const client = new MultiServerMCPClient({ mcpServers });
+const tools = await client.getTools();
+
+// Use with ChatDatabricks
+const model = new ChatDatabricks({ model: "databricks-claude-sonnet-4-5" });
+const modelWithTools = model.bindTools(tools);
+
+const response = await modelWithTools.invoke("Query the sales table");
+
+// Clean up when done
+await client.close();
+```
+
+### Factory Methods for Databricks Services
+
+```typescript
+// Unity Catalog Functions
+const ucServer = DatabricksMCPServer.fromUCFunction(
+  "catalog",
+  "schema",
+  "function_name" // optional - omit to expose all functions in schema
+);
+
+// Vector Search
+const vectorServer = DatabricksMCPServer.fromVectorSearch(
+  "catalog",
+  "schema",
+  "index_name" // optional
+);
+
+// Genie Space
+const genieServer = DatabricksMCPServer.fromGenieSpace("space_id");
+```
+
+### Multiple MCP Servers
+
+```typescript
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { buildMCPServerConfig } from "@databricks/langchainjs";
+
+const mcpServers = await buildMCPServerConfig([sqlServer, ucServer, vectorServer]);
+const client = new MultiServerMCPClient({
+  mcpServers,
+  throwOnLoadError: false, // Continue if some servers fail
+  prefixToolNameWithServerName: true, // Avoid tool name conflicts
+});
+
+const tools = await client.getTools();
+console.log(`Loaded ${tools.length} tools`);
+```
+
+### Explicit Authentication per Server
+
+Each `DatabricksMCPServer` can use different credentials via `auth`:
+
+```typescript
+// Server using service principal (M2M OAuth)
+const server1 = new DatabricksMCPServer({
+  name: "workspace-1",
+  path: "/api/2.0/mcp/sql",
+  auth: {
+    host: "https://workspace-1.databricks.com",
+    clientId: process.env.SP_CLIENT_ID,
+    clientSecret: process.env.SP_CLIENT_SECRET,
+  },
+});
+
+// Server using personal access token
+const server2 = new DatabricksMCPServer({
+  name: "workspace-2",
+  path: "/api/2.0/mcp/sql",
+  auth: {
+    host: "https://workspace-2.databricks.com",
+    token: process.env.DATABRICKS_TOKEN_WS2,
+  },
+});
+
+// Server using default auth chain (env vars, CLI config, etc.)
+const server3 = new DatabricksMCPServer({
+  name: "default-workspace",
+  path: "/api/2.0/mcp/sql",
+});
+```
+
+### Generic MCP Servers
+
+For non-Databricks MCP servers, use `MCPServer`:
+
+```typescript
+import { MCPServer } from "@databricks/langchainjs";
+
+const externalServer = new MCPServer({
+  name: "external-api",
+  url: "https://api.example.com/mcp",
+  headers: { "X-API-Key": process.env.API_KEY },
+  timeout: 30, // seconds
+});
+```
+
 ## Configuration Options
 
 ```typescript
 const model = new ChatDatabricks({
   // Required
-  endpoint: "your-endpoint-name",
+  model: "your-model-name",
 
   // Use Responses API instead of Chat Completions (optional)
   useResponsesApi: true,
@@ -259,6 +377,9 @@ npm run example
 
 # Run the tools example
 npm run example:tools
+
+# Run the MCP example
+npm run example:mcp
 ```
 
 ## Development
