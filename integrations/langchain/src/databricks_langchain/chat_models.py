@@ -623,9 +623,7 @@ class ChatDatabricks(BaseChatModel):
 
         return ChatResult(generations=generations, llm_output=llm_output)
 
-    def _extract_usage_from_chunk(
-        self, chunk: Any, stream_usage: bool
-    ) -> Optional[Dict[str, int]]:
+    def _extract_usage_from_chunk(self, chunk: Any, stream_usage: bool) -> Optional[Dict[str, int]]:
         """Extract usage information from a chunk if available.
 
         Args:
