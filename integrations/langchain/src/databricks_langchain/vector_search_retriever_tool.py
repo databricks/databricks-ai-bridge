@@ -130,14 +130,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         return mcp_input
 
     def _parse_mcp_response(self, mcp_response: Any) -> List[Document]:
-        """Parse MCP tool response into LangChain Documents.
-
-        LangChain MCP adapters return content blocks in the format:
-        [{'type': 'text', 'text': '<JSON string>', 'id': '...'}]
-
-        We need to extract the JSON string from the 'text' field.
-        """
-        # Handle LangChain MCP adapter content block format
+        """Parse MCP tool response into LangChain Documents."""
         if isinstance(mcp_response, list) and mcp_response:
             first_item = mcp_response[0]
             if isinstance(first_item, dict) and first_item.get("type") == "text":
