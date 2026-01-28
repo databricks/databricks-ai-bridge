@@ -427,6 +427,103 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
         assert result.result == "Genie query for result timed out after 2 iterations of 5 seconds"
 
 
+def test_parse_query_result_preserves_float_precision():
+    """
+    Ensure large and small float values are not converted to scientific notation.
+    """
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "id", "type_name": "INT"},
+                    {"name": "large_float", "type_name": "FLOAT"},
+                    {"name": "small_float", "type_name": "DOUBLE"},
+                    {"name": "decimal_val", "type_name": "DECIMAL"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1", "123456789012.45", "7800000000.0", "0.000000123456"],
+                ["2", "9876543210987.65", "1400000000.0", "0.000000987654"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False, return_pandas=False)
+
+    # Verify large numbers are NOT in scientific notation
+    assert "123456789012.45" in result
+    assert "9876543210987.65" in result
+    assert "7800000000" in result
+    assert "1400000000" in result
+
+    # Verify small numbers are NOT in scientific notation
+    assert "0.000000123456" in result
+    assert "0.000000987654" in result
+
+    # Verify scientific notation is NOT present
+    assert "e+" not in result.lower()
+    assert "e-" not in result.lower()
+
+
+def test_parse_query_result_returns_floats_for_pandas():
+    """
+    Ensure return_pandas=True still returns proper float types for computation.
+    """
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "id", "type_name": "INT"},
+                    {"name": "value", "type_name": "FLOAT"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1", "123456789012.45"],
+                ["2", "0.000000123456"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=False, return_pandas=True)
+
+    assert isinstance(result, pd.DataFrame)
+    assert result["value"].dtype == "float64"
+    assert result["value"].iloc[0] == pytest.approx(123456789012.45, rel=1e-6)
+    assert result["value"].iloc[1] == pytest.approx(0.000000123456, rel=1e-6)
+
+
+def test_parse_query_result_preserves_float_precision_with_truncate():
+    """
+    Ensure truncate_results=True path also avoids scientific notation.
+    """
+    resp = {
+        "manifest": {
+            "schema": {
+                "columns": [
+                    {"name": "id", "type_name": "INT"},
+                    {"name": "large_float", "type_name": "FLOAT"},
+                    {"name": "small_float", "type_name": "DOUBLE"},
+                ]
+            }
+        },
+        "result": {
+            "data_array": [
+                ["1", "123456789012.45", "0.000000123456"],
+                ["2", "9876543210987.65", "0.000000987654"],
+            ]
+        },
+    }
+    result = _parse_query_result(resp, truncate_results=True, return_pandas=False)
+
+    # Verify values are NOT in scientific notation
+    assert "123456789012.45" in result
+    assert "0.000000123456" in result
+    assert "e+" not in result.lower()
+    assert "e-" not in result.lower()
+
+
 def test_parse_query_result_with_timestamp_formats():
     resp = {
         "manifest": {"schema": {"columns": [{"name": "created_at", "type_name": "TIMESTAMP"}]}},
