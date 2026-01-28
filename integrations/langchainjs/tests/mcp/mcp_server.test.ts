@@ -2,7 +2,25 @@
  * Unit tests for MCPServer and DatabricksMCPServer
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// Use vi.hoisted to ensure the mock is properly hoisted
+const { mockAuthenticate } = vi.hoisted(() => {
+  const mockAuthenticate = vi.fn((headers: Headers) => {
+    headers.set("Authorization", "Bearer mock-token");
+    return Promise.resolve();
+  });
+  return { mockAuthenticate };
+});
+
+vi.mock("@databricks/sdk-experimental", () => ({
+  Config: vi.fn(() => ({
+    ensureResolved: vi.fn().mockResolvedValue(undefined),
+    getHost: vi.fn().mockResolvedValue("https://test.databricks.com"),
+    authenticate: mockAuthenticate,
+  })),
+}));
+
 import { MCPServer, DatabricksMCPServer } from "../../src/mcp/mcp_server.js";
 
 describe("MCPServer", () => {
@@ -92,22 +110,19 @@ describe("DatabricksMCPServer", () => {
     expect(server.name).toBe("databricks-server");
   });
 
-  it("toConnectionConfig resolves URL and adds auth header", async () => {
+  it("toConnectionConfig resolves URL and includes authProvider", async () => {
     const server = new DatabricksMCPServer({
       name: "databricks-server",
       path: "/api/2.0/mcp/sql",
-      auth: {
-        host: "https://test.databricks.com",
-        token: "test-token",
-      },
     });
 
     const config = await server.toConnectionConfig();
 
     expect(config.transport).toBe("http");
+    // URL comes from mocked getHost()
     expect(config.url).toBe("https://test.databricks.com/api/2.0/mcp/sql");
-    expect(config.headers).toHaveProperty("Authorization");
-    expect(config.headers?.Authorization).toMatch(/^Bearer /);
+    // Auth is provided via authProvider, not headers
+    expect(config.authProvider).toBeDefined();
   });
 
   describe("fromUCFunction", () => {

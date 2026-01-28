@@ -3,20 +3,26 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildMCPServerConfig } from "../../src/mcp/databricks_mcp_client.js";
-import { MCPServer, DatabricksMCPServer } from "../../src/mcp/mcp_server.js";
 
-// Mock the Databricks SDK Config
+// Use vi.hoisted to ensure the mock is properly hoisted
+const { mockAuthenticate } = vi.hoisted(() => {
+  const mockAuthenticate = vi.fn((headers: Headers) => {
+    headers.set("Authorization", "Bearer test-token");
+    return Promise.resolve();
+  });
+  return { mockAuthenticate };
+});
+
 vi.mock("@databricks/sdk-experimental", () => ({
-  Config: vi.fn().mockImplementation(() => ({
+  Config: vi.fn(() => ({
     ensureResolved: vi.fn().mockResolvedValue(undefined),
     getHost: vi.fn().mockResolvedValue("https://test-workspace.databricks.com"),
-    authenticate: vi.fn().mockImplementation((headers: Headers) => {
-      headers.set("Authorization", "Bearer test-token");
-      return Promise.resolve();
-    }),
+    authenticate: mockAuthenticate,
   })),
 }));
+
+import { buildMCPServerConfig } from "../../src/mcp/databricks_mcp_client.js";
+import { MCPServer, DatabricksMCPServer } from "../../src/mcp/mcp_server.js";
 
 describe("buildMCPServerConfig", () => {
   beforeEach(() => {
@@ -37,7 +43,7 @@ describe("buildMCPServerConfig", () => {
     expect(config.server2.url).toBe("https://server2.com/mcp");
   });
 
-  it("builds config from DatabricksMCPServer instances with resolved URL and auth", async () => {
+  it("builds config from DatabricksMCPServer instances with resolved URL and authProvider", async () => {
     const server = new DatabricksMCPServer({
       name: "databricks",
       path: "/api/2.0/mcp/sql",
@@ -48,7 +54,8 @@ describe("buildMCPServerConfig", () => {
     expect(Object.keys(config)).toEqual(["databricks"]);
     expect(config.databricks.url).toBe("https://test-workspace.databricks.com/api/2.0/mcp/sql");
     expect(config.databricks.transport).toBe("http");
-    expect(config.databricks.headers?.Authorization).toBe("Bearer test-token");
+    // Auth is provided via authProvider, not headers
+    expect(config.databricks.authProvider).toBeDefined();
   });
 
   it("builds config from mixed server types", async () => {
@@ -62,8 +69,10 @@ describe("buildMCPServerConfig", () => {
     expect(Object.keys(config)).toEqual(["external", "databricks"]);
     expect(config.external.url).toBe("https://external.com/mcp");
     expect(config.external.headers).toBeUndefined();
+    expect(config.external.authProvider).toBeUndefined();
     expect(config.databricks.url).toBe("https://test-workspace.databricks.com/api/2.0/mcp/sql");
-    expect(config.databricks.headers?.Authorization).toBe("Bearer test-token");
+    // DatabricksMCPServer uses authProvider instead of headers
+    expect(config.databricks.authProvider).toBeDefined();
   });
 
   it("includes headers from MCPServer config", async () => {
