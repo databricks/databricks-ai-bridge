@@ -311,29 +311,24 @@ class ChatDatabricks(BaseChatModel):
         )
         self.model = value
 
-    @cached_property
-    def client(self) -> OpenAI:
-        # Always use OpenAI client (supports both chat completions and responses API)
-        # Prepare kwargs for the SDK call
+    def _get_client_kwargs(self) -> Dict[str, Any]:
+        """Prepare kwargs for OpenAI client initialization."""
         openai_kwargs = {}
         if self.timeout is not None:
             openai_kwargs["timeout"] = self.timeout
         if self.max_retries is not None:
             openai_kwargs["max_retries"] = self.max_retries
+        return openai_kwargs
 
-        return get_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
+    @cached_property
+    def client(self) -> OpenAI:
+        # Always use OpenAI client (supports both chat completions and responses API)
+        return get_openai_client(workspace_client=self.workspace_client, **self._get_client_kwargs())
 
     @cached_property
     def async_client(self) -> AsyncOpenAI:
         # Async OpenAI client using AsyncDatabricksOpenAI from databricks-openai
-        # Prepare kwargs for the SDK call
-        openai_kwargs = {}
-        if self.timeout is not None:
-            openai_kwargs["timeout"] = self.timeout
-        if self.max_retries is not None:
-            openai_kwargs["max_retries"] = self.max_retries
-
-        return get_async_openai_client(workspace_client=self.workspace_client, **openai_kwargs)
+        return get_async_openai_client(workspace_client=self.workspace_client, **self._get_client_kwargs())
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
