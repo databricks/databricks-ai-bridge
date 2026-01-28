@@ -106,7 +106,9 @@ async function main() {
     // Example conversation with tool use
     const messages: BaseMessage[] = [
       new HumanMessage("What tools do you have available? List them briefly."),
-      new HumanMessage("After listing the tools, call the python_exec tool with the argument 'print('Hello, world!')'"),
+      new HumanMessage(
+        "After listing the tools, call the python_exec tool with the argument 'print('Hello, world!')'"
+      ),
     ];
 
     console.log("Sending message to model...\n");

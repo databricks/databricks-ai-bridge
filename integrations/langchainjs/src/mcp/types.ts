@@ -74,4 +74,3 @@ export interface DatabricksMCPServerConfig extends BaseMCPServerConfig {
    */
   auth?: DatabricksConfigOptions;
 }
-

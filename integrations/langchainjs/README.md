@@ -202,11 +202,7 @@ Connect to MCP servers to dynamically load tools from Databricks services and ex
 
 ```typescript
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-import {
-  ChatDatabricks,
-  buildMCPServerConfig,
-  DatabricksMCPServer,
-} from "@databricks/langchainjs";
+import { ChatDatabricks, buildMCPServerConfig, DatabricksMCPServer } from "@databricks/langchainjs";
 
 // Create MCP server for Databricks SQL (host resolved from DATABRICKS_HOST env var)
 const sqlServer = new DatabricksMCPServer({
