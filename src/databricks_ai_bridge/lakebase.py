@@ -97,33 +97,87 @@ class _LakebasePoolBase:
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
         self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
-        self.instance_name: str = instance_name
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
 
-        # Resolve host from the Lakebase name
-        try:
-            instance = self.workspace_client.database.get_database_instance(instance_name)
-        except Exception as exc:
-            raise ValueError(
-                f"Unable to resolve Lakebase instance '{instance_name}'. "
-                "Ensure the instance name is correct."
-            ) from exc
+        # If input is hostname (e.g., from Databricks Apps valueFrom resolution)
+        # resolve to lakebase name
+        if self._is_hostname(instance_name):
+            # Input is a hostname - resolve to instance name
+            self.instance_name, self.host = self._resolve_from_hostname(instance_name)
+        else:
+            # Input is an instance name
+            self.instance_name = instance_name
+            try:
+                instance = self.workspace_client.database.get_database_instance(instance_name)
+            except Exception as exc:
+                raise ValueError(
+                    f"Unable to resolve Lakebase instance '{instance_name}'. "
+                    "Ensure the instance name is correct."
+                ) from exc
 
-        resolved_host = getattr(instance, "read_write_dns", None) or getattr(
-            instance, "read_only_dns", None
-        )
-
-        if not resolved_host:
-            raise ValueError(
-                f"Lakebase host not found for instance '{instance_name}'. "
-                "Ensure the instance is running and in AVAILABLE state."
+            resolved_host = getattr(instance, "read_write_dns", None) or getattr(
+                instance, "read_only_dns", None
             )
 
-        self.host: str = resolved_host
+            if not resolved_host:
+                raise ValueError(
+                    f"Lakebase host not found for instance '{instance_name}'. "
+                    "Ensure the instance is running and in AVAILABLE state."
+                )
+
+            self.host = resolved_host
+
         self.username: str = self._infer_username()
 
         self._cached_token: str | None = None
         self._cache_ts: float | None = None
+
+    @staticmethod
+    def _is_hostname(value: str) -> bool:
+        """Check if the value looks like a Lakebase hostname rather than an instance name."""
+        # Hostname pattern: instance-{uuid}.database.{env}.cloud.databricks.com
+        # or similar patterns containing ".database." and ending with a domain
+        return ".database." in value and (value.endswith(".com") or value.endswith(".net"))
+
+    def _resolve_from_hostname(self, hostname: str) -> tuple[str, str]:
+        """
+        Resolve instance name from a hostname by listing database instances.
+
+        Args:
+            hostname: The database hostname (e.g., from Databricks Apps valueFrom: "database")
+
+        Returns:
+            Tuple of (instance_name, host)
+
+        Raises:
+            ValueError: If no matching instance is found
+        """
+        try:
+            instances = list(self.workspace_client.database.list_database_instances())
+        except Exception as exc:
+            raise ValueError(
+                f"Unable to list database instances to resolve hostname '{hostname}'. "
+                "Ensure you have access to database instances."
+            ) from exc
+
+        # Find the instance that matches this hostname
+        for instance in instances:
+            rw_dns = getattr(instance, "read_write_dns", None)
+            ro_dns = getattr(instance, "read_only_dns", None)
+
+            if hostname in (rw_dns, ro_dns):
+                instance_name = getattr(instance, "name", None)
+                if not instance_name:
+                    raise ValueError(
+                        f"Found matching instance for hostname '{hostname}' "
+                        "but instance name is not available."
+                    )
+                return instance_name, hostname
+
+        raise ValueError(
+            f"Unable to find database instance matching hostname '{hostname}'. "
+            "Ensure the hostname is correct and the instance exists."
+        )
 
     def _get_cached_token(self) -> str | None:
         """Check if the cached token is still valid."""
