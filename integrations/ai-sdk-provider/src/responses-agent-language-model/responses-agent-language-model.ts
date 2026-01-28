@@ -28,6 +28,7 @@ import { convertToResponsesInput } from './responses-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 import { prepareResponsesTools } from './responses-prepare-tools'
 import { callOptionsToResponsesArgs } from './call-options-to-responses-args'
+import { MCP_APPROVAL_REQUEST_TYPE } from '../mcp'
 
 function mapResponsesFinishReason({
   finishReason,
@@ -222,6 +223,38 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
             },
 
             flush(controller) {
+              // Find all tool calls that don't have matching tool results
+              // and re-emit them with providerExecuted: true so the AI SDK
+              // doesn't expect a client-side result for them.
+              // Skip MCP approval requests since they intentionally pause for user approval.
+              const toolCalls = allParts.filter(
+                (p): p is Extract<LanguageModelV2StreamPart, { type: 'tool-call' }> =>
+                  p.type === 'tool-call'
+              )
+              const toolResults = allParts.filter(
+                (p): p is Extract<LanguageModelV2StreamPart, { type: 'tool-result' }> =>
+                  p.type === 'tool-result'
+              )
+
+              for (const toolCall of toolCalls) {
+                // Skip MCP approval requests - they intentionally wait for user approval
+                const isMcpApprovalRequest =
+                  toolCall.providerMetadata?.databricks?.type === MCP_APPROVAL_REQUEST_TYPE
+                if (isMcpApprovalRequest) {
+                  continue
+                }
+
+                const hasResult = toolResults.some((r) => r.toolCallId === toolCall.toolCallId)
+                if (!hasResult) {
+                  // Re-emit the tool call with providerExecuted: true
+                  // This tells the AI SDK not to expect a client-side result
+                  controller.enqueue({
+                    ...toolCall,
+                    providerExecuted: true,
+                  })
+                }
+              }
+
               controller.enqueue({
                 type: 'finish',
                 finishReason,
@@ -330,9 +363,13 @@ export function shouldDedupeOutputItemDone(
     },
     { texts: [], current: '' }
   )
-  reconstructuredTexts.push(current)
+  // Only push current if it has content (avoid pushing empty strings)
+  if (current.length > 0) {
+    reconstructuredTexts.push(current)
+  }
 
   // 3. Check if the .done text contains all reconstructed text blocks in order
+  // If there are no text-deltas to compare against, don't dedupe - this is new content
   if (reconstructuredTexts.length === 0) {
     return false
   }
