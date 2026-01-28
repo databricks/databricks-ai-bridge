@@ -44,15 +44,22 @@ from tests.utils.vector_search import (
 )
 
 
-def _create_mcp_response_json(texts: List[str] = None) -> str:
-    """Create a mock MCP response in JSON format."""
+def _create_mcp_response(texts: List[str] = None) -> List[Dict[str, Any]]:
+    """Create a mock MCP response in LangChain MCP adapter content block format.
+
+    The langchain-mcp-adapters library returns content blocks like:
+    [{'type': 'text', 'text': '<JSON string>', 'id': 'lc_...'}]
+
+    This matches the actual response format observed during integration testing.
+    """
     texts = texts or INPUT_TEXTS
-    return json.dumps(
-        [
-            {"id": str(uuid.uuid4()), "text": text, "score": 0.85 - (i * 0.1)}
-            for i, text in enumerate(texts)
-        ]
-    )
+    # The actual search results as JSON string (what the MCP server returns)
+    search_results = [
+        {"id": str(uuid.uuid4()), "text": text, "score": 0.85 - (i * 0.1)}
+        for i, text in enumerate(texts)
+    ]
+    # Wrapped in LangChain MCP adapter content block format
+    return [{"type": "text", "text": json.dumps(search_results), "id": f"lc_{uuid.uuid4()}"}]
 
 
 def assert_mcp_tool_called_with(mock_tool, expected_args: Dict[str, Any]):
@@ -69,10 +76,11 @@ def assert_mcp_tool_called_with(mock_tool, expected_args: Dict[str, Any]):
 @pytest.fixture
 def mock_mcp_infrastructure():
     """Mock MCP infrastructure for tests that need it."""
-    # Create mock MCP tool that returns JSON response
+    # Create mock MCP tool that returns content block format
+    # (matching what langchain-mcp-adapters actually returns)
     # MCP tools are async-only, so we mock ainvoke
     mock_tool = MagicMock()
-    mock_tool.ainvoke = AsyncMock(return_value=_create_mcp_response_json())
+    mock_tool.ainvoke = AsyncMock(return_value=_create_mcp_response())
 
     # Create mock MCP client
     mock_client_instance = MagicMock()

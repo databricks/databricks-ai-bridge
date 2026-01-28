@@ -129,8 +129,21 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         mcp_input["query"] = query
         return mcp_input
 
-    def _parse_mcp_response(self, mcp_response: str) -> List[Document]:
-        """Parse MCP tool response into LangChain Documents."""
+    def _parse_mcp_response(self, mcp_response: Any) -> List[Document]:
+        """Parse MCP tool response into LangChain Documents.
+
+        LangChain MCP adapters return content blocks in the format:
+        [{'type': 'text', 'text': '<JSON string>', 'id': '...'}]
+
+        We need to extract the JSON string from the 'text' field.
+        """
+        # Handle LangChain MCP adapter content block format
+        if isinstance(mcp_response, list) and mcp_response:
+            first_item = mcp_response[0]
+            if isinstance(first_item, dict) and first_item.get("type") == "text":
+                # Extract the actual JSON string from the content block
+                mcp_response = first_item.get("text", "")
+
         dicts = self._parse_mcp_response_to_dicts(mcp_response, strict=True)
         return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in dicts]
 
@@ -146,14 +159,6 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             mcp_input = self._build_mcp_input(query, filters, **kwargs)
             # MCP tools only support async invocation
             result = asyncio.run(mcp_tool.ainvoke(mcp_input))
-
-            # DEBUG: Print what we get from MCP
-            print(f"DEBUG MCP result type: {type(result)}")
-            print(f"DEBUG MCP result repr: {repr(result)[:500]}")
-            if isinstance(result, list) and result:
-                print(f"DEBUG First item type: {type(result[0])}")
-                print(f"DEBUG First item: {result[0]}")
-
             return self._parse_mcp_response(result)
         except Exception as e:
             self._handle_mcp_execution_error(e)
