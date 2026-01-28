@@ -75,24 +75,3 @@ export interface DatabricksMCPServerConfig extends BaseMCPServerConfig {
   auth?: DatabricksConfigOptions;
 }
 
-/**
- * Options for DatabricksMultiServerMCPClient
- */
-export interface DatabricksMCPClientOptions {
-  /**
-   * Throw error if any tool fails to load.
-   * @default true
-   */
-  throwOnLoadError?: boolean;
-
-  /**
-   * Prefix tool names with server name to avoid conflicts.
-   * @default false
-   */
-  prefixToolNameWithServerName?: boolean;
-
-  /**
-   * Additional prefix for all tool names.
-   */
-  additionalToolNamePrefix?: string;
-}

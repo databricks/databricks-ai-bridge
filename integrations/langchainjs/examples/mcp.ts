@@ -1,5 +1,5 @@
 /**
- * MCP (Model Context Protocol) example demonstrating DatabricksMultiServerMCPClient
+ * MCP (Model Context Protocol) example demonstrating Databricks MCP integration
  *
  * This example shows how to:
  * - Connect to MCP servers (both Databricks and external)
@@ -18,13 +18,9 @@ import "dotenv/config";
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import {
-  ChatDatabricks,
-  DatabricksMultiServerMCPClient,
-  DatabricksMCPServer,
-} from "../src/index.js";
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { ChatDatabricks, buildMCPServerConfig, DatabricksMCPServer } from "../src/index.js";
 import { HumanMessage, ToolMessage, BaseMessage } from "@langchain/core/messages";
-import { ServerInstance } from "../src/mcp/databricks_mcp_client.js";
 
 async function main() {
   console.log("=== MCP Integration Example ===\n");
@@ -33,7 +29,7 @@ async function main() {
   console.log("--- Creating MCP Server Configurations ---\n");
 
   // Databricks SQL MCP server - provides SQL query capabilities
-  // Host is resolved lazily from DATABRICKS_HOST env var
+  // Host is resolved via Databricks SDK config
   const dbsqlMCP = new DatabricksMCPServer({
     name: "dbsql-mcp",
     path: "/api/2.0/mcp/sql",
@@ -57,32 +53,33 @@ async function main() {
   // );
 
   // Configure which servers to use
-  // Uncomment servers as needed based on your setup
-  const mcpServers: ServerInstance[] = [
+  const servers = [
     dbsqlMCP,
     ucFunctionServer,
     // vectorSearchServer,
     // genieSpaceServer,
   ];
 
-  console.log(`Created MCP servers: ${mcpServers.map((s) => s.name).join(", ")}`);
+  console.log(`Created MCP servers: ${servers.map((s) => s.name).join(", ")}`);
 
   console.log("\n--- Creating MCP Client ---\n");
 
-  // Create multi-server MCP client
-  const mcpClient = new DatabricksMultiServerMCPClient(mcpServers, {
+  // Build config and create multi-server MCP client
+  const mcpServers = await buildMCPServerConfig(servers);
+  const client = new MultiServerMCPClient({
+    mcpServers,
     throwOnLoadError: false, // Continue if some servers fail to load
     prefixToolNameWithServerName: false,
   });
 
-  console.log(`MCP client created with servers: ${mcpClient.getServerNames().join(", ")}`);
+  console.log(`MCP client created with servers: ${Object.keys(mcpServers).join(", ")}`);
 
   try {
     // Load tools from MCP servers
     console.log("\n--- Loading Tools ---\n");
     console.log("Loading tools from MCP servers...");
 
-    const tools = await mcpClient.getTools();
+    const tools = await client.getTools();
     console.log(`Loaded ${tools.length} tools:`);
     for (const tool of tools) {
       console.log(`  - ${tool.name}: ${tool.description || "(no description)"}`);
@@ -188,7 +185,7 @@ async function main() {
   } finally {
     // Always close the MCP client to clean up connections
     console.log("\n--- Cleanup ---\n");
-    await mcpClient.close();
+    await client.close();
     console.log("MCP client closed");
   }
 

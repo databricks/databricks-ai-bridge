@@ -6,31 +6,35 @@
  *
  * @example
  * ```typescript
+ * import { MultiServerMCPClient } from "@langchain/mcp-adapters";
  * import {
  *   ChatDatabricks,
- *   DatabricksMultiServerMCPClient,
+ *   buildMCPServerConfig,
  *   DatabricksMCPServer,
  * } from "@databricks/langchainjs";
  *
- * // Create MCP client with Databricks authentication
- * const mcpClient = new DatabricksMultiServerMCPClient([
+ * // Build config with Databricks authentication
+ * const mcpServers = await buildMCPServerConfig([
  *   new DatabricksMCPServer({
  *     name: "my-mcp-server",
  *     path: "/api/2.0/mcp/sql",
  *   }),
  * ]);
  *
- * // Get tools and bind to chat model
- * const tools = await mcpClient.getTools();
+ * // Create client and get tools
+ * const client = new MultiServerMCPClient({ mcpServers });
+ * const tools = await client.getTools();
+ *
+ * // Bind to chat model
  * const model = new ChatDatabricks({ endpoint: "my-endpoint" });
  * const modelWithTools = model.bindTools(tools);
  *
  * // Clean up when done
- * await mcpClient.close();
+ * await client.close();
  * ```
  */
 
 export * from "./types.js";
 export { MCPServer, DatabricksMCPServer } from "./mcp_server.js";
-export { DatabricksMultiServerMCPClient } from "./databricks_mcp_client.js";
+export { buildMCPServerConfig, type ServerInstance } from "./databricks_mcp_client.js";
 export { DatabricksOAuthClientProvider } from "./databricks_oauth_provider.js";

@@ -201,9 +201,10 @@ Connect to MCP servers to dynamically load tools from Databricks services and ex
 ### Connecting to Databricks MCP Servers
 
 ```typescript
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import {
   ChatDatabricks,
-  DatabricksMultiServerMCPClient,
+  buildMCPServerConfig,
   DatabricksMCPServer,
 } from "@databricks/langchainjs";
 
@@ -213,8 +214,9 @@ const sqlServer = new DatabricksMCPServer({
   path: "/api/2.0/mcp/sql",
 });
 
-// Load tools from MCP servers
-const client = new DatabricksMultiServerMCPClient([sqlServer]);
+// Build config and create client
+const mcpServers = await buildMCPServerConfig([sqlServer]);
+const client = new MultiServerMCPClient({ mcpServers });
 const tools = await client.getTools();
 
 // Use with ChatDatabricks
@@ -251,13 +253,18 @@ const genieServer = DatabricksMCPServer.fromGenieSpace("space_id");
 ### Multiple MCP Servers
 
 ```typescript
-const client = new DatabricksMultiServerMCPClient([sqlServer, ucServer, vectorServer], {
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { buildMCPServerConfig } from "@databricks/langchainjs";
+
+const mcpServers = await buildMCPServerConfig([sqlServer, ucServer, vectorServer]);
+const client = new MultiServerMCPClient({
+  mcpServers,
   throwOnLoadError: false, // Continue if some servers fail
   prefixToolNameWithServerName: true, // Avoid tool name conflicts
 });
 
 const tools = await client.getTools();
-console.log(`Loaded ${tools.length} tools from ${client.getServerNames().length} servers`);
+console.log(`Loaded ${tools.length} tools`);
 ```
 
 ### Explicit Authentication per Server

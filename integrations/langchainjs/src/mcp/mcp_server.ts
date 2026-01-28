@@ -38,7 +38,7 @@ abstract class BaseMCPServer {
    * Convert to connection dictionary for MultiServerMCPClient.
    * Returns the format expected by @langchain/mcp-adapters.
    */
-  abstract toConnectionConfig(): StreamableHTTPConnection;
+  abstract toConnectionConfig(): Promise<StreamableHTTPConnection>;
 
   /**
    * Build base connection config with common properties.
@@ -88,7 +88,7 @@ export class MCPServer extends BaseMCPServer {
     this.url = config.url;
   }
 
-  override toConnectionConfig(): StreamableHTTPConnection {
+  override async toConnectionConfig(): Promise<StreamableHTTPConnection> {
     return this.buildBaseConfig(this.url);
   }
 }
@@ -182,22 +182,11 @@ export class DatabricksMCPServer extends BaseMCPServer {
   }
 
   /**
-   * Convert to connection dictionary, including Databricks OAuth provider.
-   * Note: URL is empty here as it's resolved lazily in toConnectionConfigWithHeaders().
-   */
-  override toConnectionConfig(): StreamableHTTPConnection {
-    return {
-      ...this.buildBaseConfig(""),
-      authProvider: this.authProvider,
-    };
-  }
-
-  /**
    * Convert to connection dictionary using headers-based authentication.
    * This resolves the URL and adds the Bearer token directly to headers.
    * Use this when connecting to servers that don't support OAuth discovery.
    */
-  async toConnectionConfigWithHeaders(): Promise<StreamableHTTPConnection> {
+  override async toConnectionConfig(): Promise<StreamableHTTPConnection> {
     const resolvedUrl = await this.resolveUrl();
     const authHeader = await this.initializeAuth();
 
