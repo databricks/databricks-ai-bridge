@@ -1,19 +1,19 @@
 import type {
-  LanguageModelV2Message,
-  LanguageModelV2ToolResultPart,
-  LanguageModelV2ToolCallPart,
+  LanguageModelV3Message,
+  LanguageModelV3ToolResultPart,
+  LanguageModelV3ToolCallPart,
 } from '@ai-sdk/provider'
 import { parseProviderOptions } from '@ai-sdk/provider-utils'
 import { z } from 'zod/v4'
 import type { FmapiInputMessage, FmapiContentItem } from './fmapi-schema'
 
-type LanguageModelV2SystemMessage = Extract<LanguageModelV2Message, { role: 'system' }>
-type LanguageModelV2UserMessage = Extract<LanguageModelV2Message, { role: 'user' }>
-type LanguageModelV2AssistantMessage = Extract<LanguageModelV2Message, { role: 'assistant' }>
-type LanguageModelV2ToolMessage = Extract<LanguageModelV2Message, { role: 'tool' }>
+type LanguageModelV3SystemMessage = Extract<LanguageModelV3Message, { role: 'system' }>
+type LanguageModelV3UserMessage = Extract<LanguageModelV3Message, { role: 'user' }>
+type LanguageModelV3AssistantMessage = Extract<LanguageModelV3Message, { role: 'assistant' }>
+type LanguageModelV3ToolMessage = Extract<LanguageModelV3Message, { role: 'tool' }>
 
 export const convertPromptToFmapiMessages = async (
-  prompt: LanguageModelV2Message[]
+  prompt: LanguageModelV3Message[]
 ): Promise<{ messages: Array<FmapiInputMessage> }> => {
   const messages: Array<FmapiInputMessage> = []
 
@@ -38,14 +38,14 @@ export const convertPromptToFmapiMessages = async (
   return { messages }
 }
 
-const convertSystemMessage = (message: LanguageModelV2SystemMessage): FmapiInputMessage => {
+const convertSystemMessage = (message: LanguageModelV3SystemMessage): FmapiInputMessage => {
   return {
     role: 'system',
     content: [{ type: 'text', text: message.content }],
   }
 }
 
-const convertUserMessage = (message: LanguageModelV2UserMessage): FmapiInputMessage => {
+const convertUserMessage = (message: LanguageModelV3UserMessage): FmapiInputMessage => {
   const content: FmapiContentItem[] = []
 
   for (const part of message.content) {
@@ -66,7 +66,7 @@ const convertUserMessage = (message: LanguageModelV2UserMessage): FmapiInputMess
 }
 
 const convertAssistantMessage = async (
-  message: LanguageModelV2AssistantMessage
+  message: LanguageModelV3AssistantMessage
 ): Promise<FmapiInputMessage> => {
   const contentItems: FmapiContentItem[] = []
   const toolCalls: Array<{
@@ -117,7 +117,7 @@ const convertAssistantMessage = async (
   }
 }
 
-const convertToolMessages = (message: LanguageModelV2ToolMessage): FmapiInputMessage[] => {
+const convertToolMessages = (message: LanguageModelV3ToolMessage): FmapiInputMessage[] => {
   const messages: FmapiInputMessage[] = []
 
   for (const part of message.content) {
@@ -144,7 +144,7 @@ const toHttpUrlString = (data: URL | string | Uint8Array): string | null => {
 }
 
 const convertToolResultOutputToContentValue = (
-  output: LanguageModelV2ToolResultPart['output']
+  output: LanguageModelV3ToolResultPart['output']
 ): unknown => {
   switch (output.type) {
     case 'text':
@@ -164,7 +164,7 @@ const ProviderOptionsSchema = z.object({
   toolName: z.string().nullish(),
 })
 
-const getToolNameFromPart = async (part: LanguageModelV2ToolCallPart): Promise<string> => {
+const getToolNameFromPart = async (part: LanguageModelV3ToolCallPart): Promise<string> => {
   const providerOptions = await parseProviderOptions({
     provider: 'databricks',
     providerOptions: part.providerOptions,

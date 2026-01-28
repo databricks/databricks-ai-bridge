@@ -1,10 +1,12 @@
 import type {
-  LanguageModelV2,
-  LanguageModelV2CallOptions,
-  LanguageModelV2FinishReason,
-  LanguageModelV2FunctionTool,
-  LanguageModelV2StreamPart,
-  LanguageModelV2ToolChoice,
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3FinishReason,
+  LanguageModelV3FunctionTool,
+  LanguageModelV3ProviderTool,
+  LanguageModelV3StreamPart,
+  LanguageModelV3ToolChoice,
+  LanguageModelV3Usage,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -27,8 +29,8 @@ import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import { mapFmapiFinishReason } from './fmapi-finish-reason'
 import { callOptionsToFmapiArgs } from './call-options-to-fmapi-args'
 
-export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
-  readonly specificationVersion = 'v2'
+export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
+  readonly specificationVersion = 'v3'
 
   readonly modelId: string
 
@@ -46,8 +48,8 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
   readonly supportedUrls: Record<string, RegExp[]> = {}
 
   async doGenerate(
-    options: Parameters<LanguageModelV2['doGenerate']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
+    options: Parameters<LanguageModelV3['doGenerate']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doGenerate']>>> {
     const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
@@ -73,17 +75,25 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
       content: convertFmapiResponseToMessagePart(response),
       finishReason,
       usage: {
-        inputTokens: response.usage?.prompt_tokens ?? 0,
-        outputTokens: response.usage?.completion_tokens ?? 0,
-        totalTokens: response.usage?.total_tokens ?? 0,
+        inputTokens: {
+          total: response.usage?.prompt_tokens ?? 0,
+          noCache: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        outputTokens: {
+          total: response.usage?.completion_tokens ?? 0,
+          text: 0,
+          reasoning: 0,
+        },
       },
       warnings,
     }
   }
 
   async doStream(
-    options: Parameters<LanguageModelV2['doStream']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
+    options: Parameters<LanguageModelV3['doStream']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doStream']>>> {
     const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
@@ -102,9 +112,23 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
       abortSignal: options.abortSignal,
     })
 
-    let finishReason: LanguageModelV2FinishReason = 'unknown'
-    let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
-
+    let finishReason: LanguageModelV3FinishReason = {
+      raw: undefined,
+      unified: 'other',
+    }
+    let usage: LanguageModelV3Usage = {
+      inputTokens: {
+        total: 0,
+        noCache: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      outputTokens: {
+        total: 0,
+        text: 0,
+        reasoning: 0,
+      },
+    }
     // Track tool call IDs by index for streaming (OpenAI only sends ID in first chunk)
     const toolCallIdsByIndex = new Map<number, string>()
     // Track tool call names by ID
@@ -117,7 +141,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
         .pipeThrough(
           new TransformStream<
             ParseResult<z.infer<typeof fmapiChunkSchema>>,
-            LanguageModelV2StreamPart
+            LanguageModelV3StreamPart
           >({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings })
@@ -130,7 +154,10 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
 
               // handle failed chunk parsing / validation:
               if (!chunk.success) {
-                finishReason = 'error'
+                finishReason = {
+                  raw: undefined,
+                  unified: 'error',
+                }
                 controller.enqueue({ type: 'error', error: chunk.error })
                 return
               }
@@ -142,9 +169,17 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
               // Track usage from chunk
               if (chunk.value.usage) {
                 usage = {
-                  inputTokens: chunk.value.usage.prompt_tokens ?? 0,
-                  outputTokens: chunk.value.usage.completion_tokens ?? 0,
-                  totalTokens: chunk.value.usage.total_tokens ?? 0,
+                  inputTokens: {
+                    total: chunk.value.usage.prompt_tokens ?? 0,
+                    noCache: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
+                  outputTokens: {
+                    total: chunk.value.usage.completion_tokens ?? 0,
+                    text: 0,
+                    reasoning: 0,
+                  },
                 }
               }
 
@@ -206,7 +241,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
     stream,
     modelId,
   }: {
-    options: LanguageModelV2CallOptions
+    options: LanguageModelV3CallOptions
     config: DatabricksLanguageModelConfig
     stream: boolean
     modelId: string
@@ -249,11 +284,11 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV2 {
  * Convert AI SDK tool to OpenAI format
  */
 function convertToolToOpenAIFormat(
-  tool: LanguageModelV2FunctionTool | { type: 'provider-defined'; id: string }
+  tool: LanguageModelV3FunctionTool | LanguageModelV3ProviderTool
 ):
   | { type: 'function'; function: { name: string; description?: string; parameters?: unknown } }
   | undefined {
-  if (tool.type === 'provider-defined' || tool.name === DATABRICKS_TOOL_CALL_ID) {
+  if (tool.type === 'provider' || tool.name === DATABRICKS_TOOL_CALL_ID) {
     // Skip provider-defined tools as they're not supported in OpenAI format
     // or tools that are orchestrated by Databricks' agents
     return undefined
@@ -272,7 +307,7 @@ function convertToolToOpenAIFormat(
  * Convert AI SDK tool choice to OpenAI format
  */
 function convertToolChoiceToOpenAIFormat(
-  toolChoice: LanguageModelV2ToolChoice
+  toolChoice: LanguageModelV3ToolChoice
 ): 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } } {
   if (toolChoice.type === 'auto') {
     return 'auto'

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { DatabricksChatAgentLanguageModel } from '../src/chat-agent-language-model/chat-agent-language-model'
 import {
   CHAT_AGENT_BASIC_TEXT_OUTPUT,
@@ -108,7 +108,7 @@ describe('DatabricksChatAgentLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     try {
@@ -151,7 +151,7 @@ describe('DatabricksChatAgentLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'What is the weather?' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -207,7 +207,7 @@ describe('DatabricksChatAgentLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition

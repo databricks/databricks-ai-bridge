@@ -1,9 +1,9 @@
 import type {
-  LanguageModelV2,
-  LanguageModelV2CallOptions,
-  LanguageModelV2FinishReason,
-  LanguageModelV2StreamPart,
-  LanguageModelV2Usage,
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3FinishReason,
+  LanguageModelV3StreamPart,
+  LanguageModelV3Usage,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -36,22 +36,27 @@ function mapResponsesFinishReason({
 }: {
   finishReason: string | null | undefined
   hasToolCalls: boolean
-}): LanguageModelV2FinishReason {
+}): LanguageModelV3FinishReason {
+  let unified: LanguageModelV3FinishReason['unified']
   switch (finishReason) {
     case undefined:
     case null:
-      return hasToolCalls ? 'tool-calls' : 'stop'
+      unified = hasToolCalls ? 'tool-calls' : 'stop'
+      break
     case 'max_output_tokens':
-      return 'length'
+      unified = 'length'
+      break
     case 'content_filter':
-      return 'content-filter'
+      unified = 'content-filter'
+      break
     default:
-      return hasToolCalls ? 'tool-calls' : 'other'
+      unified = hasToolCalls ? 'tool-calls' : 'other'
   }
+  return { raw: finishReason ?? undefined, unified }
 }
 
-export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
-  readonly specificationVersion = 'v2'
+export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
+  readonly specificationVersion = 'v3'
 
   readonly modelId: string
 
@@ -69,8 +74,8 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
   readonly supportedUrls: Record<string, RegExp[]> = {}
 
   async doGenerate(
-    options: Parameters<LanguageModelV2['doGenerate']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
+    options: Parameters<LanguageModelV3['doGenerate']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doGenerate']>>> {
     const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
@@ -98,17 +103,21 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         hasToolCalls,
       }),
       usage: {
-        inputTokens: response.usage?.input_tokens ?? 0,
-        outputTokens: response.usage?.output_tokens ?? 0,
-        totalTokens: response.usage?.total_tokens ?? 0,
+        inputTokens: {
+          total: response.usage?.input_tokens ?? 0,
+          noCache: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        outputTokens: { total: response.usage?.output_tokens ?? 0, text: 0, reasoning: 0 },
       },
       warnings,
     }
   }
 
   async doStream(
-    options: Parameters<LanguageModelV2['doStream']>[0]
-  ): Promise<Awaited<ReturnType<LanguageModelV2['doStream']>>> {
+    options: Parameters<LanguageModelV3['doStream']>[0]
+  ): Promise<Awaited<ReturnType<LanguageModelV3['doStream']>>> {
     const { warnings, ...networkArgs } = await this.getArgs({
       config: this.config,
       options,
@@ -127,21 +136,32 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
       abortSignal: options.abortSignal,
     })
 
-    let finishReason: LanguageModelV2FinishReason = 'unknown'
-    const usage: LanguageModelV2Usage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
+    let finishReason: LanguageModelV3FinishReason = {
+      raw: undefined,
+      unified: 'stop',
+    }
+    const usage: LanguageModelV3Usage = {
+      inputTokens: {
+        total: 0,
+        noCache: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      outputTokens: {
+        total: 0,
+        text: 0,
+        reasoning: 0,
+      },
     }
 
-    const allParts: LanguageModelV2StreamPart[] = []
+    const allParts: LanguageModelV3StreamPart[] = []
 
     return {
       stream: response
         .pipeThrough(
           new TransformStream<
             ParseResult<z.infer<typeof responsesAgentChunkSchema>>,
-            LanguageModelV2StreamPart
+            LanguageModelV3StreamPart
           >({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings })
@@ -154,7 +174,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
 
               // handle failed chunk parsing / validation:
               if (!chunk.success) {
-                finishReason = 'error'
+                finishReason = { raw: undefined, unified: 'error' }
                 controller.enqueue({ type: 'error', error: chunk.error })
                 return
               }
@@ -165,9 +185,8 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
                   finishReason: chunk.value.response.incomplete_details?.reason,
                   hasToolCalls,
                 })
-                usage.inputTokens = chunk.value.response.usage.input_tokens
-                usage.outputTokens = chunk.value.response.usage.output_tokens
-                usage.totalTokens = chunk.value.response.usage.total_tokens
+                usage.inputTokens.total = chunk.value.response.usage.input_tokens
+                usage.outputTokens.total = chunk.value.response.usage.output_tokens
                 return
               }
 
@@ -197,18 +216,20 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
                   const toolCallFromPreviousMessages = options.prompt
                     .flatMap((message) => {
                       if (typeof message.content === 'string') return []
-                      return message.content
+                      return message.content.filter(
+                        (p): p is typeof p & { type: 'tool-call' } => p.type === 'tool-call'
+                      )
                     })
-                    .find((p) => p.type === 'tool-call' && p.toolCallId === part.toolCallId)
+                    .find((p) => p.toolCallId === part.toolCallId)
                   if (!toolCallFromPreviousMessages) {
                     throw new Error('No matching tool call found in previous message')
                   }
-                  if (toolCallFromPreviousMessages.type === 'tool-call') {
-                    controller.enqueue({
-                      ...toolCallFromPreviousMessages,
-                      input: JSON.stringify(toolCallFromPreviousMessages.input),
-                    })
-                  }
+                  controller.enqueue({
+                    type: 'tool-call',
+                    toolCallId: toolCallFromPreviousMessages.toolCallId,
+                    toolName: toolCallFromPreviousMessages.toolName,
+                    input: JSON.stringify(toolCallFromPreviousMessages.input),
+                  })
                 }
               }
               // Dedupe logic for messages sent via response.output_item.done
@@ -275,7 +296,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
     stream,
     modelId,
   }: {
-    options: LanguageModelV2CallOptions
+    options: LanguageModelV3CallOptions
     config: DatabricksLanguageModelConfig
     stream: boolean
     modelId: string
@@ -314,8 +335,8 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
 }
 
 export function shouldDedupeOutputItemDone(
-  incomingParts: LanguageModelV2StreamPart[],
-  previousParts: LanguageModelV2StreamPart[]
+  incomingParts: LanguageModelV3StreamPart[],
+  previousParts: LanguageModelV3StreamPart[]
 ): boolean {
   // Determine if the incoming parts contain a text-delta that is a response.output_item.done
   const doneTextDelta = incomingParts.find(

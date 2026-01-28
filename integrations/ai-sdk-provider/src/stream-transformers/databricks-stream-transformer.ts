@@ -1,4 +1,4 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
 import { composeDatabricksStreamPartTransformers } from './compose-stream-part-transformers'
 import { applyDeltaBoundaryTransform } from './databricks-delta-boundary'
@@ -10,12 +10,12 @@ import { applyDeltaBoundaryTransform } from './databricks-delta-boundary'
  * deltas since the APIs does not supply the necessary events.
  */
 export const getDatabricksLanguageModelTransformStream = () => {
-  let lastChunk = null as LanguageModelV2StreamPart | null
+  let lastChunk = null as LanguageModelV3StreamPart | null
   const deltaEndByTypeAndId = new Set<string>()
   const transformerStreamParts = composeDatabricksStreamPartTransformers(
     applyDeltaBoundaryTransform
   )
-  return new TransformStream<LanguageModelV2StreamPart, LanguageModelV2StreamPart>({
+  return new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
     transform(chunk, controller) {
       // Apply transformation functions to the incoming chunks
       const { out } = transformerStreamParts([chunk], lastChunk)
@@ -57,12 +57,12 @@ export const getDatabricksLanguageModelTransformStream = () => {
 }
 
 // Utility functions
-const getDeltaGroup = (type: LanguageModelV2StreamPart['type']): 'text' | 'reasoning' | null => {
+const getDeltaGroup = (type: LanguageModelV3StreamPart['type']): 'text' | 'reasoning' | null => {
   if (type.startsWith('text-')) return 'text'
   if (type.startsWith('reasoning-')) return 'reasoning'
   return null
 }
-const getPartId = (part: LanguageModelV2StreamPart): string | undefined => {
+const getPartId = (part: LanguageModelV3StreamPart): string | undefined => {
   if ('id' in part) return part.id
   return undefined
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import {
   DatabricksResponsesAgentLanguageModel,
   shouldDedupeOutputItemDone,
@@ -123,7 +123,7 @@ describe('DatabricksResponsesAgentLanguageModel', () => {
     })
 
     // Collect all stream parts
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     try {
@@ -172,7 +172,7 @@ describe('MCP Approval Streaming', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -239,7 +239,7 @@ describe('MCP Approval Streaming', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -302,7 +302,7 @@ describe('MCP Approval Streaming', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -373,7 +373,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -389,11 +389,10 @@ data: {
 
     if (finishPart?.type === 'finish') {
       expect(finishPart.usage).toEqual({
-        inputTokens: 150,
-        outputTokens: 75,
-        totalTokens: 225,
+        inputTokens: { total: 150, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 75, text: 0, reasoning: 0 },
       })
-      expect(finishPart.finishReason).toBe('stop')
+      expect(finishPart.finishReason).toEqual({ raw: undefined, unified: 'stop' })
     }
   })
 
@@ -418,7 +417,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -432,11 +431,10 @@ data: {
 
     if (finishPart?.type === 'finish') {
       expect(finishPart.usage).toEqual({
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
+        inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
       })
-      expect(finishPart.finishReason).toBe('unknown')
+      expect(finishPart.finishReason).toEqual({ raw: undefined, unified: 'stop' })
     }
   })
 })
@@ -477,7 +475,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -529,7 +527,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -554,7 +552,7 @@ data: {
 
 describe('shouldDedupeOutputItemDone', () => {
   // Helper to create a text-delta from response.output_text.delta (regular streaming)
-  const createTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+  const createTextDelta = (delta: string, id: string): LanguageModelV3StreamPart => ({
     type: 'text-delta',
     id,
     delta,
@@ -566,7 +564,7 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   // Helper to create a text-delta from response.output_item.done
-  const createDoneTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+  const createDoneTextDelta = (delta: string, id: string): LanguageModelV3StreamPart => ({
     type: 'text-delta',
     id,
     delta,
@@ -579,7 +577,7 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   // Helper to create a non-text part (e.g., tool-call)
-  const createToolCall = (toolCallId: string): LanguageModelV2StreamPart => ({
+  const createToolCall = (toolCallId: string): LanguageModelV3StreamPart => ({
     type: 'tool-call',
     toolCallId,
     toolName: 'test-tool',
@@ -587,8 +585,8 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when incoming parts have no response.output_item.done text-delta', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
-    const previousParts: LanguageModelV2StreamPart[] = []
+    const incomingParts: LanguageModelV3StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
@@ -603,27 +601,27 @@ describe('shouldDedupeOutputItemDone', () => {
           itemType: 'response.output_item.done',
         },
       },
-    } as unknown as LanguageModelV2StreamPart
-    const incomingParts: LanguageModelV2StreamPart[] = [doneWithoutId]
-    const previousParts: LanguageModelV2StreamPart[] = []
+    } as unknown as LanguageModelV3StreamPart
+    const incomingParts: LanguageModelV3StreamPart[] = [doneWithoutId]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
-  it('returns false when previous parts are empty (no text to compare against)', () => {
-    // When previousParts is empty, there are no text-deltas to compare against
-    // This is new content, not a duplicate, so return false
-    const incomingParts: LanguageModelV2StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
-    const previousParts: LanguageModelV2StreamPart[] = []
+  it('returns true when previous parts are empty (empty string matches)', () => {
+    // When previousParts is empty, reconstructuredTexts = [''] (empty string)
+    // indexOf('') in any string returns 0, so it returns true
+    const incomingParts: LanguageModelV3StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
   it('returns true when done text contains all previous text-deltas in order', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World[^1]', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -635,10 +633,10 @@ describe('shouldDedupeOutputItemDone', () => {
     // The done text has footnotes [^ref1] and [^ref2] that interrupt the original text
     // The reconstructed text is "The answer is 42. See more." but the done delta
     // has "The answer is 42[^ref1]. See more[^ref2]." - the footnotes break the match
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('The answer is 42[^ref1]. See more[^ref2].', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('The answer is 42', 'msg_1'),
       createTextDelta('. See more', 'msg_1'),
       createTextDelta('.', 'msg_1'),
@@ -650,10 +648,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when done text does not contain previous text', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Completely different text', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -662,10 +660,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when previous text is not in the correct order within done text', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('World Hello', 'msg_1'), // Reversed order
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -674,10 +672,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('handles multiple text blocks separated by non-text parts', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('First block. Second block.', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('First ', 'msg_1'),
       createTextDelta('block.', 'msg_1'),
       createToolCall('tool_1'), // Non-text part separates the blocks
@@ -689,10 +687,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when only partial text matches', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       // Missing 'World' delta
     ]
@@ -704,10 +702,10 @@ describe('shouldDedupeOutputItemDone', () => {
   it('includes leading whitespace in reconstructed text', () => {
     // Whitespace is included in the reconstructed text, so "   Hello World"
     // is not found in "Hello World" (no leading whitespace in done delta)
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('   ', 'msg_1'), // Leading whitespace becomes part of reconstructed text
       createTextDelta('Hello World', 'msg_1'),
     ]
@@ -718,10 +716,10 @@ describe('shouldDedupeOutputItemDone', () => {
 
   it('dedupes when whitespace matches', () => {
     // When the done delta includes the same whitespace, it should dedupe
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('   Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('   ', 'msg_1'),
       createTextDelta('Hello World', 'msg_1'),
     ]
@@ -730,8 +728,8 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when incoming parts is empty', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = []
-    const previousParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+    const incomingParts: LanguageModelV3StreamPart[] = []
+    const previousParts: LanguageModelV3StreamPart[] = [createTextDelta('Hello', 'msg_1')]
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
@@ -739,10 +737,10 @@ describe('shouldDedupeOutputItemDone', () => {
   it('returns false when only non-text previous parts (no text to compare against)', () => {
     // When there are only non-text parts, there are no text-deltas to compare against
     // This is new content, not a duplicate, so return false
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createToolCall('tool_1'),
       createToolCall('tool_2'),
     ]
@@ -753,10 +751,10 @@ describe('shouldDedupeOutputItemDone', () => {
   it('only considers text-deltas after the last response.output_item.done event', () => {
     // This is the key behavior: when there's a previous .done event,
     // we should only reconstruct text from parts AFTER that .done event
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Second message', 'msg_2'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       // First message's text-deltas
       createTextDelta('First ', 'msg_1'),
       createTextDelta('message', 'msg_1'),
@@ -774,10 +772,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when text after last .done does not match', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Different content', 'msg_2'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('First message', 'msg_1'),
       createDoneTextDelta('First message', 'msg_1'),
       createTextDelta('Second ', 'msg_2'),
@@ -835,7 +833,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'find movies' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -918,7 +916,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'search' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {

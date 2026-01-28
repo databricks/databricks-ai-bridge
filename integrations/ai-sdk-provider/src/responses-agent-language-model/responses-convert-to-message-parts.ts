@@ -1,4 +1,4 @@
-import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { JSONValue, LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { randomUUID } from 'node:crypto'
 import { type ResponsesAgentChunk, type ResponsesAgentResponse } from './responses-agent-schema'
 import { DATABRICKS_TOOL_CALL_ID } from '../tools'
@@ -10,8 +10,8 @@ import {
 
 export const convertResponsesAgentChunkToMessagePart = (
   chunk: ResponsesAgentChunk
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
 
   if ('error' in chunk) {
     parts.push({
@@ -52,15 +52,16 @@ export const convertResponsesAgentChunkToMessagePart = (
       parts.push({
         type: 'tool-result',
         toolCallId: chunk.call_id,
-        result: chunk.output,
+        result: chunk.output as NonNullable<JSONValue>,
         toolName: DATABRICKS_TOOL_CALL_ID,
       })
       break
 
-    case 'response.output_item.done':
-      parts.push(...convertOutputItemDone(chunk.item))
+    case 'response.output_item.done': {
+      const test = convertOutputItemDone(chunk.item)
+      parts.push(...test)
       break
-
+    }
     case 'response.output_text.annotation.added':
       parts.push({
         type: 'source',
@@ -92,7 +93,7 @@ type OutputItemDoneItem = Extract<
   { type: 'response.output_item.done' }
 >['item']
 
-const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamPart[] => {
+const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV3StreamPart[] => {
   switch (item.type) {
     case 'message': {
       const firstContent = item.content[0]
@@ -133,7 +134,7 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         {
           type: 'tool-result',
           toolCallId: item.call_id,
-          result: item.output,
+          result: item.output as NonNullable<JSONValue>,
           toolName: DATABRICKS_TOOL_CALL_ID,
         },
       ]
@@ -205,8 +206,8 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
 
 export const convertResponsesAgentResponseToMessagePart = (
   response: ResponsesAgentResponse
-): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
 
   for (const output of response.output) {
     switch (output.type) {
@@ -261,7 +262,7 @@ export const convertResponsesAgentResponseToMessagePart = (
       case 'function_call_output':
         parts.push({
           type: 'tool-result',
-          result: output.output,
+          result: output.output as NonNullable<JSONValue>,
           toolCallId: output.call_id,
           toolName: DATABRICKS_TOOL_CALL_ID,
         })

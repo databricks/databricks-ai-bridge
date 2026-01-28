@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2FunctionTool, LanguageModelV2ToolChoice } from '@ai-sdk/provider'
+import type { LanguageModelV3FunctionTool, LanguageModelV3ProviderTool, LanguageModelV3ToolChoice } from '@ai-sdk/provider'
 import { prepareResponsesTools } from '../src/responses-agent-language-model/responses-prepare-tools'
 import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 describe('prepareResponsesTools', () => {
   describe('tools conversion', () => {
     it('should convert function tools to responses format', () => {
-      const tools: LanguageModelV2FunctionTool[] = [
+      const tools: LanguageModelV3FunctionTool[] = [
         {
           type: 'function',
           name: 'get_weather',
@@ -39,7 +39,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should convert multiple tools', () => {
-      const tools: LanguageModelV2FunctionTool[] = [
+      const tools: LanguageModelV3FunctionTool[] = [
         {
           type: 'function',
           name: 'tool_a',
@@ -62,7 +62,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should handle tools without description', () => {
-      const tools: LanguageModelV2FunctionTool[] = [
+      const tools: LanguageModelV3FunctionTool[] = [
         {
           type: 'function',
           name: 'simple_tool',
@@ -98,15 +98,17 @@ describe('prepareResponsesTools', () => {
 
   describe('provider-defined tools filtering', () => {
     it('should filter out provider-defined tools', () => {
-      const tools: Array<LanguageModelV2FunctionTool | { type: 'provider-defined'; id: string }> = [
+      const tools: Array<LanguageModelV3FunctionTool | LanguageModelV3ProviderTool> = [
         {
           type: 'function',
           name: 'user_tool',
           inputSchema: { type: 'object' },
         },
         {
-          type: 'provider-defined',
-          id: 'provider-tool-1',
+          type: 'provider',
+          id: 'provider.tool-1',
+          name: 'provider-tool-1',
+          args: {},
         },
       ]
 
@@ -117,7 +119,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should filter out Databricks tool call ID', () => {
-      const tools: LanguageModelV2FunctionTool[] = [
+      const tools: LanguageModelV3FunctionTool[] = [
         {
           type: 'function',
           name: 'user_tool',
@@ -137,10 +139,12 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should return undefined if all tools are filtered out', () => {
-      const tools: Array<LanguageModelV2FunctionTool | { type: 'provider-defined'; id: string }> = [
+      const tools: Array<LanguageModelV3FunctionTool | LanguageModelV3ProviderTool> = [
         {
-          type: 'provider-defined',
-          id: 'provider-tool-1',
+          type: 'provider',
+          id: 'provider.tool-1',
+          name: 'provider-tool-1',
+          args: {},
         },
         {
           type: 'function',
@@ -157,14 +161,14 @@ describe('prepareResponsesTools', () => {
   })
 
   describe('tool choice conversion', () => {
-    const sampleTool: LanguageModelV2FunctionTool = {
+    const sampleTool: LanguageModelV3FunctionTool = {
       type: 'function',
       name: 'sample_tool',
       inputSchema: { type: 'object' },
     }
 
     it('should convert "auto" tool choice', () => {
-      const toolChoice: LanguageModelV2ToolChoice = { type: 'auto' }
+      const toolChoice: LanguageModelV3ToolChoice = { type: 'auto' }
 
       const result = prepareResponsesTools({ tools: [sampleTool], toolChoice })
 
@@ -172,7 +176,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should convert "none" tool choice', () => {
-      const toolChoice: LanguageModelV2ToolChoice = { type: 'none' }
+      const toolChoice: LanguageModelV3ToolChoice = { type: 'none' }
 
       const result = prepareResponsesTools({ tools: [sampleTool], toolChoice })
 
@@ -180,7 +184,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should convert "required" tool choice', () => {
-      const toolChoice: LanguageModelV2ToolChoice = { type: 'required' }
+      const toolChoice: LanguageModelV3ToolChoice = { type: 'required' }
 
       const result = prepareResponsesTools({ tools: [sampleTool], toolChoice })
 
@@ -188,7 +192,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should convert specific tool choice', () => {
-      const toolChoice: LanguageModelV2ToolChoice = {
+      const toolChoice: LanguageModelV3ToolChoice = {
         type: 'tool',
         toolName: 'specific_tool',
       }
@@ -208,7 +212,7 @@ describe('prepareResponsesTools', () => {
     })
 
     it('should not include tool choice when tools are empty', () => {
-      const toolChoice: LanguageModelV2ToolChoice = { type: 'auto' }
+      const toolChoice: LanguageModelV3ToolChoice = { type: 'auto' }
 
       const result = prepareResponsesTools({ tools: [], toolChoice })
 

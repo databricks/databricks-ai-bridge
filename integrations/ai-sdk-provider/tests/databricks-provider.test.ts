@@ -80,7 +80,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksChatAgentLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('responses method exists and returns DatabricksResponsesAgentLanguageModel', () => {
@@ -88,7 +88,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksResponsesAgentLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('chatCompletions method exists and returns DatabricksFmapiLanguageModel', () => {
@@ -96,7 +96,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksFmapiLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('models have correct provider name with default', () => {
