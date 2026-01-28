@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-28
+
+### Changed
+
+- **BREAKING**: Upgraded to AI SDK v3 (`@ai-sdk/provider@3.0.5`, `@ai-sdk/provider-utils@4.0.10`)
+- Usage structure changed from `{ inputTokens: number, outputTokens: number }` to `{ inputTokens: { total, noCache, cacheRead, cacheWrite }, outputTokens: { total, text, reasoning } }`
+- FinishReason changed from string to `{ raw: unknown, unified: string }`
+- Warning format changed from `{ type: 'unsupported-setting', setting }` to `{ type: 'unsupported', feature }`
+- Provider specification version updated to `'v3'`
+
 ## [0.2.3] - 2026-01-26
 
 ### Added
