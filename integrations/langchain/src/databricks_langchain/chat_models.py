@@ -323,12 +323,16 @@ class ChatDatabricks(BaseChatModel):
     @cached_property
     def client(self) -> OpenAI:
         # Always use OpenAI client (supports both chat completions and responses API)
-        return get_openai_client(workspace_client=self.workspace_client, **self._get_client_kwargs())
+        return get_openai_client(
+            workspace_client=self.workspace_client, **self._get_client_kwargs()
+        )
 
     @cached_property
     def async_client(self) -> AsyncOpenAI:
         # Async OpenAI client using AsyncDatabricksOpenAI from databricks-openai
-        return get_async_openai_client(workspace_client=self.workspace_client, **self._get_client_kwargs())
+        return get_async_openai_client(
+            workspace_client=self.workspace_client, **self._get_client_kwargs()
+        )
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
@@ -783,7 +787,9 @@ class ChatDatabricks(BaseChatModel):
 
         if self.use_responses_api:
             prev_chunk = None
-            stream: AsyncStream[ResponseStreamEvent] = await self.async_client.responses.create(**data)
+            stream: AsyncStream[ResponseStreamEvent] = await self.async_client.responses.create(
+                **data
+            )
             async for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
                 prev_chunk = chunk
