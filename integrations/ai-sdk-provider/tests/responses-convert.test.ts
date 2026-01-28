@@ -286,6 +286,57 @@ describe('convertToResponsesInput', () => {
       ])
       expect(warnings).toHaveLength(0)
     })
+
+    it('includes tool results with any output value', async () => {
+      // All tool results should be included - we no longer filter synthetic results
+      // because we use providerExecuted: true instead of synthetic results
+      const prompt: LanguageModelV2Prompt = [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_123',
+              toolName: 'some-tool',
+              input: { query: 'test' },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_123',
+              toolName: 'some-tool',
+              output: { type: 'text', value: '' },
+            },
+          ],
+        },
+      ]
+
+      const { input, warnings } = await convertToResponsesInput({
+        prompt,
+        systemMessageMode: 'system',
+      })
+
+      // Should have both function_call AND function_call_output
+      expect(input).toEqual([
+        {
+          type: 'function_call',
+          call_id: 'call_123',
+          name: 'some-tool',
+          arguments: '{"query":"test"}',
+          id: undefined,
+        },
+        {
+          type: 'function_call_output',
+          call_id: 'call_123',
+          output: '',
+        },
+      ])
+      expect(warnings).toHaveLength(0)
+    })
   })
 
   describe('MCP approval request handling', () => {

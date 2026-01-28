@@ -610,13 +610,13 @@ describe('shouldDedupeOutputItemDone', () => {
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
-  it('returns true when previous parts are empty (empty string matches)', () => {
-    // When previousParts is empty, reconstructuredTexts = [''] (empty string)
-    // indexOf('') in any string returns 0, so it returns true
+  it('returns false when previous parts are empty (no text to compare against)', () => {
+    // When previousParts is empty, there are no text-deltas to compare against
+    // This is new content, not a duplicate, so return false
     const incomingParts: LanguageModelV2StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
     const previousParts: LanguageModelV2StreamPart[] = []
 
-    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
   it('returns true when done text contains all previous text-deltas in order', () => {
@@ -736,10 +736,9 @@ describe('shouldDedupeOutputItemDone', () => {
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
-  it('returns true when only non-text previous parts (empty string matches)', () => {
-    // When there are only non-text parts, currentText stays '', and
-    // reconstructuredTexts = [''] (empty string is pushed at end of loop)
-    // indexOf('') in any string returns 0, so it returns true
+  it('returns false when only non-text previous parts (no text to compare against)', () => {
+    // When there are only non-text parts, there are no text-deltas to compare against
+    // This is new content, not a duplicate, so return false
     const incomingParts: LanguageModelV2StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
@@ -748,7 +747,7 @@ describe('shouldDedupeOutputItemDone', () => {
       createToolCall('tool_2'),
     ]
 
-    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
   it('only considers text-deltas after the last response.output_item.done event', () => {
@@ -787,5 +786,159 @@ describe('shouldDedupeOutputItemDone', () => {
 
     // Should return false because "Different content" doesn't match "Second message"
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+})
+
+describe('Missing Tool Results', () => {
+  it('emits correction tool-call with providerExecuted for tool calls without results', async () => {
+    // When a function_call has no corresponding function_call_output,
+    // the flush callback should re-emit the tool-call with providerExecuted: true
+    const sseContent = `
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call",
+    "id": "fc_1",
+    "call_id": "tool_call_123",
+    "name": "agent-netflix-titles",
+    "arguments": "{\\"query\\": \\"test\\"}"
+  }
+}
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "message",
+    "id": "msg_result",
+    "role": "assistant",
+    "content": [{ "type": "output_text", "text": "| title | year |" }]
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_123",
+    "status": "completed",
+    "usage": { "input_tokens": 100, "output_tokens": 50, "total_tokens": 150 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'find movies' }] }],
+    })
+
+    const parts: LanguageModelV2StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should have two tool-call parts: the original and the correction with providerExecuted: true
+    const toolCallParts = parts.filter((p) => p.type === 'tool-call')
+    expect(toolCallParts).toHaveLength(2)
+
+    // First tool-call is the original (without providerExecuted)
+    const originalToolCall = toolCallParts[0]
+    expect(originalToolCall.type).toBe('tool-call')
+    if (originalToolCall.type === 'tool-call') {
+      expect(originalToolCall.toolCallId).toBe('tool_call_123')
+      expect(originalToolCall.providerExecuted).toBeUndefined()
+    }
+
+    // Second tool-call is the correction emitted in flush (with providerExecuted: true)
+    // This tells the AI SDK not to expect a client-side result for this tool call
+    const correctionToolCall = toolCallParts[1]
+    expect(correctionToolCall.type).toBe('tool-call')
+    if (correctionToolCall.type === 'tool-call') {
+      expect(correctionToolCall.toolCallId).toBe('tool_call_123')
+      expect(correctionToolCall.providerExecuted).toBe(true)
+    }
+
+    // Should NOT have a tool-result part (we don't emit synthetic results)
+    const toolResultPart = parts.find((p) => p.type === 'tool-result')
+    expect(toolResultPart).toBeUndefined()
+
+    // Finish part should come after the correction tool-call
+    const finishIndex = parts.findIndex((p) => p.type === 'finish')
+    const lastToolCallIndex = parts.findLastIndex((p) => p.type === 'tool-call')
+    expect(finishIndex).toBeGreaterThan(lastToolCallIndex)
+  })
+
+  it('does not emit correction tool-call when result already exists', async () => {
+    // When function_call_output is present, should not emit a correction tool-call
+    const sseContent = `
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call",
+    "id": "fc_1",
+    "call_id": "tool_call_456",
+    "name": "search",
+    "arguments": "{\\"q\\": \\"test\\"}"
+  }
+}
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call_output",
+    "call_id": "tool_call_456",
+    "output": "search results here"
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_123",
+    "status": "completed",
+    "usage": { "input_tokens": 50, "output_tokens": 25, "total_tokens": 75 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'search' }] }],
+    })
+
+    const parts: LanguageModelV2StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should have exactly one tool-call (no correction needed since result exists)
+    const toolCallParts = parts.filter((p) => p.type === 'tool-call')
+    expect(toolCallParts.length).toBe(1)
+    if (toolCallParts[0]?.type === 'tool-call') {
+      expect(toolCallParts[0].providerExecuted).toBeUndefined()
+    }
+
+    // Should have exactly one tool-result (the real one)
+    const toolResultParts = parts.filter((p) => p.type === 'tool-result')
+    expect(toolResultParts.length).toBe(1)
+    if (toolResultParts[0]?.type === 'tool-result') {
+      expect(toolResultParts[0].result).toBe('search results here')
+    }
   })
 })
