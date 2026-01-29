@@ -33,6 +33,7 @@ tests = [
     "pytest>=9.0.0",
     "pytest-asyncio>=1.3.0",
     "pytest-timeout>=2.3.1",
+    "pytest-cov>=4.1.0",
 ]
 
 [build-system]
@@ -60,6 +61,13 @@ filterwarnings = [
     "default::Warning:databricks_openai",
     "default::Warning:tests",
 ]
+
+[tool.coverage.run]
+source = ["databricks_openai"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ty.environment]
 root = ["./src", "./tests"]

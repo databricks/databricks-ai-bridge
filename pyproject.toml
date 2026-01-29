@@ -37,6 +37,7 @@ tests = [
   "mlflow>=3.0.0",
   "pytest>=9.0.0",
   "pytest-asyncio>=1.3.0",
+  "pytest-cov>=4.1.0",
 ]
 doc = [
   "docutils>=0.21.2",
@@ -105,6 +106,13 @@ filterwarnings = [
     "default::Warning:databricks_ai_bridge",
     "default::Warning:tests",
 ]
+
+[tool.coverage.run]
+source = ["databricks_ai_bridge"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ty.environment]
 root = ["./src", "./tests"]
