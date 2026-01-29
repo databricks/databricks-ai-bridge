@@ -52,16 +52,14 @@ export const convertResponsesAgentChunkToMessagePart = (
       parts.push({
         type: 'tool-result',
         toolCallId: chunk.call_id,
-        result: chunk.output as NonNullable<JSONValue>,
+        result: chunk.output != null ? (chunk.output as NonNullable<JSONValue>) : {},
         toolName: DATABRICKS_TOOL_CALL_ID,
       })
       break
 
-    case 'response.output_item.done': {
-      const test = convertOutputItemDone(chunk.item)
-      parts.push(...test)
+    case 'response.output_item.done':
+      parts.push(...convertOutputItemDone(chunk.item))
       break
-    }
     case 'response.output_text.annotation.added':
       parts.push({
         type: 'source',
@@ -134,7 +132,7 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV3StreamP
         {
           type: 'tool-result',
           toolCallId: item.call_id,
-          result: item.output as NonNullable<JSONValue>,
+          result: item.output != null ? (item.output as NonNullable<JSONValue>) : {},
           toolName: DATABRICKS_TOOL_CALL_ID,
         },
       ]

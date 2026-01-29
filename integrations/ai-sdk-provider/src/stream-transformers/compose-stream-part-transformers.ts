@@ -12,9 +12,11 @@ export type DatabricksStreamPartTransformer<Out extends LanguageModelV3StreamPar
    ----------------------------------------------------------------- */
 
 /** Extract the element type (`Out`) from a concrete transformer. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Required for conditional type inference
 type OutElement<TFn> = TFn extends (parts: any, last: any) => { out: (infer O)[] } ? O : never
 
 /** Return the last element of a tuple type. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Standard TypeScript tuple manipulation pattern
 type Last<T extends any[]> = T extends [...any[], infer L] ? L : never
 
 /**
@@ -31,9 +33,10 @@ type Last<T extends any[]> = T extends [...any[], infer L] ? L : never
  *   3️⃣ …repeat until the last transformer runs.
  *   4️⃣ Return the `out`/`last` of that final transformer.
  */
-export function composeDatabricksStreamPartTransformers<
-  T extends DatabricksStreamPartTransformer<any>[],
->(...transformers: T): DatabricksStreamPartTransformer<OutElement<Last<T>>> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Transformers have varying Out types
+export function composeDatabricksStreamPartTransformers<T extends DatabricksStreamPartTransformer<any>[]>(
+  ...transformers: T
+): DatabricksStreamPartTransformer<OutElement<Last<T>>> {
   // The generic `OutElement<Last<T>>` is the element type of the **last**
   // transformer, so the returned function has the correct inferred type.
   return (

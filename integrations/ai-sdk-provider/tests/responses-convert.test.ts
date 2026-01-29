@@ -290,7 +290,7 @@ describe('convertToResponsesInput', () => {
     it('includes tool results with any output value', async () => {
       // All tool results should be included - we no longer filter synthetic results
       // because we use providerExecuted: true instead of synthetic results
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [

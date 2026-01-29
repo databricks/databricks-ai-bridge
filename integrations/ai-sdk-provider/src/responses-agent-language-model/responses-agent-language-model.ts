@@ -249,11 +249,11 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
               // doesn't expect a client-side result for them.
               // Skip MCP approval requests since they intentionally pause for user approval.
               const toolCalls = allParts.filter(
-                (p): p is Extract<LanguageModelV2StreamPart, { type: 'tool-call' }> =>
+                (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-call' }> =>
                   p.type === 'tool-call'
               )
               const toolResults = allParts.filter(
-                (p): p is Extract<LanguageModelV2StreamPart, { type: 'tool-result' }> =>
+                (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-result' }> =>
                   p.type === 'tool-result'
               )
 
