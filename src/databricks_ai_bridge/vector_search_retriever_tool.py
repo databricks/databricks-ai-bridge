@@ -1,7 +1,8 @@
+import json
 import logging
 import re
 from functools import wraps
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import mlflow
 from databricks.sdk import WorkspaceClient
@@ -298,3 +299,131 @@ class VectorSearchRetrieverToolMixin(BaseModel):
             )
             return tool_name[-64:]
         return tool_name
+
+    def _normalize_filters(
+        self, filters: Optional[Union[Dict[str, Any], List["FilterItem"]]]
+    ) -> Dict[str, Any]:
+        """Normalize filters to dict format."""
+        if filters is None:
+            return {}
+        if isinstance(filters, dict):
+            return filters
+        return {item.model_dump()["key"]: item.model_dump()["value"] for item in filters}
+
+    def _parse_index_name(self) -> Tuple[str, str, str]:
+        """Parse index_name into (catalog, schema, index) tuple."""
+        parts = self.index_name.split(".")
+        if len(parts) != 3:
+            raise ValueError(
+                f"Invalid index name format: {self.index_name}. Expected 'catalog.schema.index'"
+            )
+        return parts[0], parts[1], parts[2]
+
+    def _handle_mcp_creation_error(self, error: Exception) -> None:
+        """Raise standardized error for MCP initialization failures."""
+        raise RuntimeError(
+            f"Failed to initialize MCP tool for index {self.index_name}. "
+            f"Ensure the index exists and is configured for Databricks-managed embeddings. "
+            f"Error: {error}"
+        ) from error
+
+    def _validate_mcp_tools(self, tools: list) -> None:
+        """Validate that exactly one MCP tool was returned."""
+        if not tools:
+            raise ValueError(f"No MCP tools found for index {self.index_name}")
+        if len(tools) != 1:
+            raise ValueError(
+                f"Expected exactly 1 MCP tool for index {self.index_name}, but got {len(tools)}"
+            )
+
+    def _handle_mcp_execution_error(self, error: Exception) -> None:
+        """Log and raise standardized error for MCP execution failures."""
+        _logger.error(f"MCP vector search failed: {error}", exc_info=True)
+        raise RuntimeError(
+            f"Vector search via MCP failed for index {self.index_name}. Error: {error}"
+        ) from error
+
+    def _build_mcp_params(
+        self,
+        filters: Optional[Union[Dict[str, Any], List["FilterItem"]]] = None,
+        query: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Build common MCP parameters dict."""
+        kwargs = {**(self.model_extra or {}), **kwargs}
+        params: Dict[str, Any] = {}
+
+        if query is not None:
+            params["query"] = query
+
+        num_results = kwargs.pop("num_results", kwargs.pop("k", self.num_results))
+        if num_results:
+            params["num_results"] = num_results
+
+        query_type = kwargs.pop("query_type", self.query_type)
+        if query_type:
+            params["query_type"] = query_type
+
+        combined_filters = {**self._normalize_filters(filters), **(self.filters or {})}
+        if combined_filters:
+            try:
+                params["filters"] = json.dumps(combined_filters)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Filters must be JSON serializable: {e}") from e
+
+        if self.columns:
+            params["columns"] = ",".join(self.columns)
+
+        if "score_threshold" in kwargs:
+            params["score_threshold"] = float(kwargs.pop("score_threshold"))
+
+        params["include_score"] = "true" if self.include_score else "false"
+
+        reranker = kwargs.pop("reranker", self.reranker)
+        if reranker and hasattr(reranker, "columns_to_rerank"):
+            params["columns_to_rerank"] = ",".join(reranker.columns_to_rerank)
+
+        if kwargs:
+            _logger.warning(
+                f"Ignoring unsupported kwargs for MCP vector search: {list(kwargs.keys())}"
+            )
+
+        return params
+
+    def _parse_mcp_response_to_dicts(
+        self, mcp_response: str, text_column: Optional[str] = None, strict: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Parse MCP JSON response to list of dicts with page_content/metadata structure."""
+        text_col = text_column or getattr(self, "text_column", None) or "text"
+
+        try:
+            parsed = json.loads(mcp_response)
+        except json.JSONDecodeError as e:
+            if strict:
+                _logger.error(f"Failed to parse MCP response as JSON: {mcp_response[:200]}...")
+                raise ValueError(
+                    f"Unable to parse MCP response. Expected JSON format. Error: {e}"
+                ) from e
+            return [{"page_content": mcp_response, "metadata": {}}]
+
+        if not isinstance(parsed, list):
+            if strict:
+                response_preview = str(parsed)[:500]
+                _logger.error(
+                    f"MCP response is not a list: {type(parsed).__name__}. Content: {response_preview}"
+                )
+                raise ValueError(
+                    f"Expected JSON array, got {type(parsed).__name__}: {response_preview}"
+                )
+            return [{"page_content": str(parsed), "metadata": {}}]
+
+        results = []
+        for item in parsed:
+            if isinstance(item, dict):
+                page_content = item.get(text_col, str(item))
+                metadata = {k: v for k, v in item.items() if k != text_col}
+                results.append({"page_content": page_content, "metadata": metadata})
+            else:
+                results.append({"page_content": str(item), "metadata": {}})
+
+        return results
