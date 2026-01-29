@@ -355,7 +355,7 @@ def test_get_tool_name_truncates_long_names():
 def test_validate_mcp_tools_empty_list():
     """Test that empty tools list raises ValueError."""
     tool = DummyVectorSearchRetrieverTool(index_name=index_name)
-    with pytest.raises(ValueError, match="Expected exactly 1 MCP tool"):
+    with pytest.raises(ValueError, match="No MCP tools found for index"):
         tool._validate_mcp_tools([])
 
 

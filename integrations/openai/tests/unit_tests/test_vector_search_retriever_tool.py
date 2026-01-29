@@ -45,7 +45,8 @@ def mock_openai_client():
     mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3, 0.4])]
     mock_client.embeddings.create.return_value = mock_response
     with patch("openai.OpenAI", return_value=mock_client):
-        yield mock_client
+        with patch("databricks_openai.DatabricksOpenAI", return_value=mock_client):
+            yield mock_client
 
 
 @pytest.fixture
