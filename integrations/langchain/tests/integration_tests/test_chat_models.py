@@ -219,6 +219,61 @@ async def test_chat_databricks_abatch(model):
     assert all(isinstance(response, AIMessage) for response in responses)
 
 
+@pytest.mark.asyncio
+@pytest.mark.st_endpoints
+@pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
+async def test_chat_databricks_responses_api_ainvoke(endpoint):
+    """Test async ChatDatabricks with responses API."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    chat = ChatDatabricks(
+        model=endpoint,
+        workspace_client=workspace_client,
+        use_responses_api=True,
+        temperature=0,
+        max_tokens=500,
+    )
+
+    response = await chat.ainvoke("What is the 100th fibonacci number?")
+    assert isinstance(response, AIMessage)
+    assert response.content is not None
+    assert len(response.content) > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.st_endpoints
+@pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
+async def test_chat_databricks_responses_api_astream(endpoint):
+    """Test async ChatDatabricks streaming with responses API."""
+    from databricks.sdk import WorkspaceClient
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    chat = ChatDatabricks(
+        model=endpoint,
+        workspace_client=workspace_client,
+        use_responses_api=True,
+        temperature=0,
+        max_tokens=500,
+    )
+
+    chunks = []
+    async for chunk in chat.astream("What is the 100th fibonacci number?"):
+        chunks.append(chunk)
+
+    assert len(chunks) > 0
+    # Responses API can return both AIMessageChunk and ToolMessageChunk
+    assert any(isinstance(chunk, AIMessageChunk) for chunk in chunks)
+
+
 @pytest.mark.foundation_models
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 @pytest.mark.parametrize("tool_choice", [None, "auto", "required", "any", "none"])
