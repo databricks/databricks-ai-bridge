@@ -9,8 +9,7 @@ import {
 } from "@langchain/core/tools";
 import { isOpenAITool } from "@langchain/core/language_models/base";
 import { BindToolsInput } from "@langchain/core/language_models/chat_models";
-import { tool, jsonSchema, type ToolSet, TextStreamPart, TypedToolCall } from "ai";
-import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from "@databricks/ai-sdk-provider";
+import { tool, jsonSchema, type ToolSet } from "ai";
 import { ZodType } from "zod/v4";
 
 /**
@@ -41,10 +40,7 @@ function convertSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
  * is created using the tool() helper function.
  */
 export function convertToAISDKToolSet(tools: BindToolsInput[]): ToolSet {
-  const toolSet: ToolSet = {
-    // Include the Databricks tool to allow for tools executed by the model to be called
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
-  };
+  const toolSet: ToolSet = {};
 
   for (const toolInput of tools) {
     // OpenAI format: { type: "function", function: { name, description, parameters } }
@@ -120,16 +116,3 @@ export function convertToAISDKToolSet(tools: BindToolsInput[]): ToolSet {
   return toolSet;
 }
 
-export const getToolNameFromAiSDKTool = (
-  toolStreamPart:
-    | Extract<TextStreamPart<ToolSet>, { type: "tool-call" | "tool-input-start" }>
-    | TypedToolCall<ToolSet>
-): string => {
-  if (
-    toolStreamPart.toolName === DATABRICKS_TOOL_CALL_ID &&
-    toolStreamPart.providerMetadata?.databricks?.toolName
-  ) {
-    return toolStreamPart.providerMetadata.databricks.toolName as string;
-  }
-  return toolStreamPart.toolName;
-};

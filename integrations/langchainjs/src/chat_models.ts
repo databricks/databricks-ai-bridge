@@ -13,11 +13,9 @@ import {
   BaseChatModelCallOptions,
   BindToolsInput,
 } from "@langchain/core/language_models/chat_models";
-import { BaseMessage, AIMessageChunk } from "@langchain/core/messages";
+import { BaseMessage } from "@langchain/core/messages";
 import { ChatResult, ChatGenerationChunk } from "@langchain/core/outputs";
 import { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
-import { Runnable } from "@langchain/core/runnables";
-import { BaseLanguageModelInput } from "@langchain/core/language_models/base";
 import type { LanguageModel } from "ai";
 import { generateText, streamText } from "ai";
 import { createDatabricksProvider, type DatabricksProvider } from "@databricks/ai-sdk-provider";
@@ -352,7 +350,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   bindTools(
     tools: BindToolsInput[],
     kwargs?: Partial<ChatDatabricksCallOptions>
-  ): Runnable<BaseLanguageModelInput, AIMessageChunk, ChatDatabricksCallOptions> {
+  ): InstanceType<typeof ChatDatabricks> {
     // Create a new instance with bound tools
     const bound = new ChatDatabricks({
       model: this.model,
@@ -367,11 +365,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     bound.boundTools = tools;
     bound.boundToolChoice = kwargs?.toolChoice;
 
-    return bound satisfies Runnable<
-      BaseLanguageModelInput,
-      AIMessageChunk,
-      ChatDatabricksCallOptions
-    >;
+    return bound;
   }
 
   /**
