@@ -9,6 +9,12 @@ export type DatabricksLanguageModelConfig = {
   headers: () => Record<string, string | undefined>
   url: (options: { path: string }) => string
   fetch?: FetchFunction
+  /**
+   * When true, marks all tool calls as dynamic and provider-executed.
+   * This indicates that tool execution is handled remotely by Databricks agents.
+   * Defaults to true.
+   */
+  useRemoteToolCalling?: boolean
 }
 
 export interface DatabricksProvider extends ProviderV3 {
@@ -42,6 +48,13 @@ export interface DatabricksProviderSettings {
    * Optional function to format the URL
    */
   formatUrl?: (options: { baseUrl?: string; path: string }) => string
+
+  /**
+   * When true, marks all tool calls as dynamic and provider-executed.
+   * This indicates that tool execution is handled remotely by Databricks agents.
+   * Defaults to true.
+   */
+  useRemoteToolCalling?: boolean
 }
 
 export const createDatabricksProvider = (
@@ -69,6 +82,7 @@ export const createDatabricksProvider = (
       headers: getHeaders,
       fetch,
       provider,
+      useRemoteToolCalling: settings.useRemoteToolCalling,
     })
 
   const createFmapi = (modelId: string): LanguageModelV3 =>
@@ -77,6 +91,7 @@ export const createDatabricksProvider = (
       headers: getHeaders,
       fetch,
       provider,
+      useRemoteToolCalling: settings.useRemoteToolCalling,
     })
 
   const notImplemented = (name: string) => {

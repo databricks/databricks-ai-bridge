@@ -1,6 +1,9 @@
 import type { LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import type { FmapiChunk, FmapiContentItem, FmapiResponse, FmapiToolCall } from './fmapi-schema'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
+
+export type FmapiConvertOptions = {
+  useRemoteToolCalling: boolean
+}
 
 export const convertFmapiChunkToMessagePart = (
   chunk: FmapiChunk,
@@ -50,7 +53,8 @@ export const convertFmapiChunkToMessagePart = (
 }
 
 export const convertFmapiResponseToMessagePart = (
-  response: FmapiResponse
+  response: FmapiResponse,
+  options: FmapiConvertOptions = { useRemoteToolCalling: true }
 ): LanguageModelV3Content[] => {
   const parts: LanguageModelV3Content[] = []
   if (response.choices.length === 0) return parts
@@ -59,7 +63,7 @@ export const convertFmapiResponseToMessagePart = (
   // Handle OpenAI-format tool_calls first
   if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
     for (const toolCall of choice.message.tool_calls) {
-      parts.push(convertToolCallToContent(toolCall))
+      parts.push(convertToolCallToContent(toolCall, options))
     }
     // If there's also text content, include it
     if (typeof choice.message.content === 'string' && choice.message.content) {
@@ -77,17 +81,19 @@ export const convertFmapiResponseToMessagePart = (
   return parts
 }
 
-const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV3Content => {
+const convertToolCallToContent = (
+  toolCall: FmapiToolCall,
+  options: FmapiConvertOptions
+): LanguageModelV3Content => {
   return {
     type: 'tool-call',
     toolCallId: toolCall.id,
-    toolName: DATABRICKS_TOOL_CALL_ID,
+    toolName: toolCall.function.name,
     input: toolCall.function.arguments,
-    providerMetadata: {
-      databricks: {
-        toolName: toolCall.function.name,
-      },
-    },
+    ...(options.useRemoteToolCalling && {
+      dynamic: true,
+      providerExecuted: true,
+    }),
   }
 }
 

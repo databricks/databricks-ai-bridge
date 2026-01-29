@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { LanguageModelV3FunctionTool, LanguageModelV3ProviderTool, LanguageModelV3ToolChoice } from '@ai-sdk/provider'
 import { prepareResponsesTools } from '../src/responses-agent-language-model/responses-prepare-tools'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 describe('prepareResponsesTools', () => {
   describe('tools conversion', () => {
@@ -118,27 +117,7 @@ describe('prepareResponsesTools', () => {
       expect(result.tools![0].name).toBe('user_tool')
     })
 
-    it('should filter out Databricks tool call ID', () => {
-      const tools: LanguageModelV3FunctionTool[] = [
-        {
-          type: 'function',
-          name: 'user_tool',
-          inputSchema: { type: 'object' },
-        },
-        {
-          type: 'function',
-          name: DATABRICKS_TOOL_CALL_ID,
-          inputSchema: { type: 'object' },
-        },
-      ]
-
-      const result = prepareResponsesTools({ tools })
-
-      expect(result.tools).toHaveLength(1)
-      expect(result.tools![0].name).toBe('user_tool')
-    })
-
-    it('should return undefined if all tools are filtered out', () => {
+    it('should return undefined if all tools are provider-defined', () => {
       const tools: Array<LanguageModelV3FunctionTool | LanguageModelV3ProviderTool> = [
         {
           type: 'provider',
@@ -147,9 +126,10 @@ describe('prepareResponsesTools', () => {
           args: {},
         },
         {
-          type: 'function',
-          name: DATABRICKS_TOOL_CALL_ID,
-          inputSchema: { type: 'object' },
+          type: 'provider',
+          id: 'provider.tool-2',
+          name: 'provider-tool-2',
+          args: {},
         },
       ]
 

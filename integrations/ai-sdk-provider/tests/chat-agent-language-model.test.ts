@@ -189,7 +189,7 @@ describe('DatabricksChatAgentLanguageModel', () => {
     expect(toolResultPart).toMatchObject({
       type: 'tool-result',
       toolCallId: 'call_abc123',
-      toolName: 'databricks-tool-call',
+      toolName: 'get_weather',
     })
   })
 

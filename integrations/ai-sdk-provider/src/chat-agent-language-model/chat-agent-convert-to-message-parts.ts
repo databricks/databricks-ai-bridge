@@ -1,5 +1,4 @@
 import type { LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import type { ChatAgentChunk, ChatAgentResponse } from './chat-agent-schema'
 
 export const convertChatAgentChunkToMessagePart = (
@@ -20,6 +19,8 @@ export const convertChatAgentChunkToMessagePart = (
         toolCallId: toolCall.id,
         input: toolCall.function.arguments,
         toolName: toolCall.function.name,
+        dynamic: true,
+        providerExecuted: true,
       })
     })
   } else if (chunk.delta.role === 'tool') {
@@ -27,7 +28,7 @@ export const convertChatAgentChunkToMessagePart = (
       type: 'tool-result',
       toolCallId: chunk.delta.tool_call_id,
       result: chunk.delta.content,
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: chunk.delta.name ?? 'unknown',
     })
   }
   return parts
@@ -49,6 +50,8 @@ export const convertChatAgentResponseToMessagePart = (
           toolCallId: part.id,
           input: part.function.arguments,
           toolName: part.function.name,
+          dynamic: true,
+          providerExecuted: true,
         })
       }
     } else if (message.role === 'tool') {
@@ -56,7 +59,7 @@ export const convertChatAgentResponseToMessagePart = (
         type: 'tool-result',
         toolCallId: message.tool_call_id,
         result: message.content,
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: message.name ?? 'unknown',
       })
     }
   }

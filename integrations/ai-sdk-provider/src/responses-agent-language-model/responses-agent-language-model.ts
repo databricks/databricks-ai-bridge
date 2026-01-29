@@ -155,6 +155,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     }
 
     const allParts: LanguageModelV3StreamPart[] = []
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
+    // Track tool call IDs to tool names for looking up tool names in function_call_output events
+    const toolNamesByCallId = new Map<string, string>()
 
     return {
       stream: response
@@ -190,7 +193,18 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 return
               }
 
-              const parts = convertResponsesAgentChunkToMessagePart(chunk.value)
+              // Track tool call IDs to names from response.output_item.done function_call events
+              if (
+                chunk.value.type === 'response.output_item.done' &&
+                chunk.value.item.type === 'function_call'
+              ) {
+                toolNamesByCallId.set(chunk.value.item.call_id, chunk.value.item.name)
+              }
+
+              const parts = convertResponsesAgentChunkToMessagePart(chunk.value, {
+                useRemoteToolCalling,
+                toolNamesByCallId,
+              })
 
               allParts.push(...parts)
               /**
@@ -244,35 +258,39 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
             },
 
             flush(controller) {
-              // Find all tool calls that don't have matching tool results
-              // and re-emit them with providerExecuted: true so the AI SDK
-              // doesn't expect a client-side result for them.
+              // When useRemoteToolCalling=false, find all tool calls that don't have
+              // matching tool results and re-emit them with providerExecuted: true
+              // so the AI SDK doesn't expect a client-side result for them.
+              // When useRemoteToolCalling=true, tool calls already have providerExecuted: true.
               // Skip MCP approval requests since they intentionally pause for user approval.
-              const toolCalls = allParts.filter(
-                (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-call' }> =>
-                  p.type === 'tool-call'
-              )
-              const toolResults = allParts.filter(
-                (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-result' }> =>
-                  p.type === 'tool-result'
-              )
+              if (!useRemoteToolCalling) {
+                const toolCalls = allParts.filter(
+                  (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-call' }> =>
+                    p.type === 'tool-call'
+                )
+                const toolResults = allParts.filter(
+                  (p): p is Extract<LanguageModelV3StreamPart, { type: 'tool-result' }> =>
+                    p.type === 'tool-result'
+                )
 
-              for (const toolCall of toolCalls) {
-                // Skip MCP approval requests - they intentionally wait for user approval
-                const isMcpApprovalRequest =
-                  toolCall.providerMetadata?.databricks?.type === MCP_APPROVAL_REQUEST_TYPE
-                if (isMcpApprovalRequest) {
-                  continue
-                }
+                for (const toolCall of toolCalls) {
+                  // Skip MCP approval requests - they intentionally wait for user approval
+                  const isMcpApprovalRequest =
+                    toolCall.providerMetadata?.databricks?.type === MCP_APPROVAL_REQUEST_TYPE
+                  if (isMcpApprovalRequest) {
+                    continue
+                  }
 
-                const hasResult = toolResults.some((r) => r.toolCallId === toolCall.toolCallId)
-                if (!hasResult) {
-                  // Re-emit the tool call with providerExecuted: true
-                  // This tells the AI SDK not to expect a client-side result
-                  controller.enqueue({
-                    ...toolCall,
-                    providerExecuted: true,
-                  })
+                  const hasResult = toolResults.some((r) => r.toolCallId === toolCall.toolCallId)
+                  if (!hasResult) {
+                    // Re-emit the tool call with providerExecuted: true and dynamic: true
+                    // This tells the AI SDK not to expect a client-side result
+                    controller.enqueue({
+                      ...toolCall,
+                      providerExecuted: true,
+                      dynamic: true,
+                    })
+                  }
                 }
               }
 

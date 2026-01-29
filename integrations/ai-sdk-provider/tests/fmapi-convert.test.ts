@@ -6,7 +6,9 @@ import {
   convertFmapiResponseToMessagePart,
 } from '../src/fmapi-language-model/fmapi-convert-to-message-parts'
 import type { FmapiChunk, FmapiResponse } from '../src/fmapi-language-model/fmapi-schema'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
+
+// Note: With useRemoteToolCalling=true (the default), tool calls now use actual tool names
+// and include dynamic: true flag.
 
 // ============================================================================
 // Tests for convertPromptToFmapiMessages (fmapi-convert-to-input.ts)
@@ -331,7 +333,7 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message.tool_calls![0].function.arguments).toBe('{"location":"San Francisco"}')
     })
 
-    it('should convert assistant message with tool-call using provider options for actual tool name', async () => {
+    it('should convert assistant message with tool-call using provider options for item ID', async () => {
       const prompt: LanguageModelV3Message[] = [
         {
           role: 'assistant',
@@ -339,11 +341,11 @@ describe('convertPromptToFmapiMessages', () => {
             {
               type: 'tool-call',
               toolCallId: 'call-456',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'execute_query',
               input: { query: 'test' },
               providerOptions: {
                 databricks: {
-                  toolName: 'execute_query',
+                  itemId: 'item-123',
                 },
               },
             },
@@ -362,7 +364,7 @@ describe('convertPromptToFmapiMessages', () => {
       expect(message.tool_calls).toHaveLength(1)
       expect(message.tool_calls![0].id).toBe('call-456')
       expect(message.tool_calls![0].type).toBe('function')
-      // Should use the actual tool name from provider options, not DATABRICKS_TOOL_CALL_ID
+      // Should use the actual tool name
       expect(message.tool_calls![0].function.name).toBe('execute_query')
       expect(message.tool_calls![0].function.arguments).toBe('{"query":"test"}')
     })
@@ -1242,13 +1244,9 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-weather-1',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_weather',
         input: '{"location":"Tokyo"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_weather',
-          },
-        },
+        dynamic: true,
       })
     })
 
@@ -1291,24 +1289,16 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-1',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'tool_a',
         input: '{"a":1}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'tool_a',
-          },
-        },
+        dynamic: true,
       })
       expect(result[1]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-2',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'tool_b',
         input: '{"b":2}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'tool_b',
-          },
-        },
+        dynamic: true,
       })
     })
 
@@ -1343,12 +1333,8 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-helper',
-        toolName: DATABRICKS_TOOL_CALL_ID,
-        providerMetadata: {
-          databricks: {
-            toolName: 'helper',
-          },
-        },
+        toolName: 'helper',
+        dynamic: true,
       })
       expect(result[1]).toMatchObject({
         type: 'text',
@@ -1387,13 +1373,9 @@ describe('convertFmapiResponseToMessagePart', () => {
       expect(result[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call-complex',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'process_data',
         input: '{"items":[1,2,3],"config":{"nested":true,"values":["a","b"]}}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'process_data',
-          },
-        },
+        dynamic: true,
       })
     })
 
@@ -1420,6 +1402,45 @@ describe('convertFmapiResponseToMessagePart', () => {
         type: 'text',
         text: 'Just a regular response',
       })
+    })
+
+    it('should not include dynamic/providerExecuted when useRemoteToolCalling=false', () => {
+      const response: FmapiResponse = {
+        id: 'resp-local-tool',
+        created: Date.now(),
+        model: 'test-model',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call-local-1',
+                  type: 'function',
+                  function: {
+                    name: 'local_tool',
+                    arguments: '{"arg":"value"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+
+      const result = convertFmapiResponseToMessagePart(response, { useRemoteToolCalling: false })
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({
+        type: 'tool-call',
+        toolCallId: 'call-local-1',
+        toolName: 'local_tool',
+        input: '{"arg":"value"}',
+      })
+      // Should NOT have dynamic or providerExecuted
+      expect(result[0]).not.toHaveProperty('dynamic')
+      expect(result[0]).not.toHaveProperty('providerExecuted')
     })
   })
 })

@@ -3,7 +3,6 @@ import type {
   LanguageModelV3ProviderTool,
   LanguageModelV3ToolChoice,
 } from '@ai-sdk/provider'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 
 export type ResponsesTool = {
   type: 'function'
@@ -38,8 +37,8 @@ export function prepareResponsesTools({
   const responsesTools: Array<ResponsesTool> = []
 
   for (const tool of tools) {
-    if (tool.type === 'provider' || tool.name === DATABRICKS_TOOL_CALL_ID) {
-      // Skip provider-defined tools and Databricks-orchestrated tools
+    if (tool.type === 'provider') {
+      // Skip provider-defined tools
       continue
     }
 

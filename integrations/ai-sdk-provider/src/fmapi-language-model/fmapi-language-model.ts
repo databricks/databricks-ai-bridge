@@ -22,10 +22,10 @@ import { fmapiChunkSchema, fmapiResponseSchema } from './fmapi-schema'
 import {
   convertFmapiChunkToMessagePart,
   convertFmapiResponseToMessagePart,
+  type FmapiConvertOptions,
 } from './fmapi-convert-to-message-parts'
 import { convertPromptToFmapiMessages } from './fmapi-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
 import { mapFmapiFinishReason } from './fmapi-finish-reason'
 import { callOptionsToFmapiArgs } from './call-options-to-fmapi-args'
 
@@ -71,8 +71,9 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
     const choice = response.choices[0]
     const finishReason = mapFmapiFinishReason(choice?.finish_reason)
 
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
     return {
-      content: convertFmapiResponseToMessagePart(response),
+      content: convertFmapiResponseToMessagePart(response, { useRemoteToolCalling }),
       finishReason,
       usage: {
         inputTokens: {
@@ -135,6 +136,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
     const toolCallNamesById = new Map<string, string>()
     // Track accumulated tool call inputs by ID
     const toolCallInputsById = new Map<string, string>()
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
 
     return {
       stream: response
@@ -205,18 +207,16 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
                   // Emit tool-input-end to signal streaming is complete
                   controller.enqueue({ type: 'tool-input-end', id: toolCallId })
 
-                  // Emit a complete tool-call with DATABRICKS_TOOL_CALL_ID
-                  // and actual tool name in provider metadata
+                  // Emit a complete tool-call with actual tool name
                   controller.enqueue({
                     type: 'tool-call',
                     toolCallId,
-                    toolName: DATABRICKS_TOOL_CALL_ID,
+                    toolName,
                     input: inputText,
-                    providerMetadata: {
-                      databricks: {
-                        toolName,
-                      },
-                    },
+                    ...(useRemoteToolCalling && {
+                      dynamic: true,
+                      providerExecuted: true,
+                    }),
                   })
                 }
               }
@@ -288,9 +288,8 @@ function convertToolToOpenAIFormat(
 ):
   | { type: 'function'; function: { name: string; description?: string; parameters?: unknown } }
   | undefined {
-  if (tool.type === 'provider' || tool.name === DATABRICKS_TOOL_CALL_ID) {
+  if (tool.type === 'provider') {
     // Skip provider-defined tools as they're not supported in OpenAI format
-    // or tools that are orchestrated by Databricks' agents
     return undefined
   }
   return {

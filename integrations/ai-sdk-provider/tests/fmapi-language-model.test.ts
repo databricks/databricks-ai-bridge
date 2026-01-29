@@ -8,7 +8,6 @@ import {
   FMAPI_RESPONSE_WITH_TOOL_CALLS,
   FMAPI_RESPONSE_WITH_PARALLEL_TOOL_CALLS,
 } from './__fixtures__/fmapi-fixtures'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 /**
  * Removes trailing commas from JSON strings (JavaScript JSON.parse doesn't allow them)
@@ -205,13 +204,9 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(toolCallPart).toMatchObject({
       type: 'tool-call',
       toolCallId: 'call_abc123',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'get_weather',
       input: '{"location":"San Francisco"}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'get_weather',
-        },
-      },
+      dynamic: true,
     })
   })
 
@@ -268,23 +263,15 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(toolCalls.length).toBe(2)
     expect(toolCalls[0]).toMatchObject({
       toolCallId: 'call_tool_a',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'tool_a',
       input: '{"x":1}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'tool_a',
-        },
-      },
+      dynamic: true,
     })
     expect(toolCalls[1]).toMatchObject({
       toolCallId: 'call_tool_b',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'tool_b',
       input: '{"y":2}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'tool_b',
-        },
-      },
+      dynamic: true,
     })
   })
 
@@ -360,13 +347,9 @@ describe('DatabricksFmapiLanguageModel', () => {
       expect(result.content[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_weather_123',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_weather',
         input: '{"location":"New York","unit":"celsius"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_weather',
-          },
-        },
+        dynamic: true,
       })
 
       // Verify usage
@@ -398,24 +381,16 @@ describe('DatabricksFmapiLanguageModel', () => {
       expect(result.content[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_tool_1',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_weather',
         input: '{"location":"Paris"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_weather',
-          },
-        },
+        dynamic: true,
       })
       expect(result.content[1]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_tool_2',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_time',
         input: '{"timezone":"Europe/Paris"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_time',
-          },
-        },
+        dynamic: true,
       })
 
       // Verify usage

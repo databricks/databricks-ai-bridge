@@ -202,10 +202,12 @@ describe('MCP Approval Streaming', () => {
         (part as any).providerMetadata?.databricks?.type === 'mcp_approval_request'
     )
     expect(mcpRequestPart).toBeDefined()
+    // Verify toolName is the actual tool name (not databricks-tool-call)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect((mcpRequestPart as any).toolName).toBe('test_mcp_tool')
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect((mcpRequestPart as any).providerMetadata.databricks).toMatchObject({
       type: 'mcp_approval_request',
-      toolName: 'test_mcp_tool',
       serverLabel: 'test-server',
     })
   })
@@ -789,8 +791,9 @@ describe('shouldDedupeOutputItemDone', () => {
 
 describe('Missing Tool Results', () => {
   it('emits correction tool-call with providerExecuted for tool calls without results', async () => {
-    // When a function_call has no corresponding function_call_output,
-    // the flush callback should re-emit the tool-call with providerExecuted: true
+    // When useRemoteToolCalling=true (default), tool calls are already emitted with
+    // dynamic: true, so no correction is needed.
+    // This test verifies that behavior with useRemoteToolCalling=false.
     const sseContent = `
 data: {
   "type": "response.output_item.done",
@@ -827,6 +830,7 @@ data: {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: false, // Test with useRemoteToolCalling=false
     })
 
     const result = await model.doStream({
@@ -846,11 +850,12 @@ data: {
     const toolCallParts = parts.filter((p) => p.type === 'tool-call')
     expect(toolCallParts).toHaveLength(2)
 
-    // First tool-call is the original (without providerExecuted)
+    // First tool-call is the original (without providerExecuted since useRemoteToolCalling=false)
     const originalToolCall = toolCallParts[0]
     expect(originalToolCall.type).toBe('tool-call')
     if (originalToolCall.type === 'tool-call') {
       expect(originalToolCall.toolCallId).toBe('tool_call_123')
+      expect(originalToolCall.toolName).toBe('agent-netflix-titles')
       expect(originalToolCall.providerExecuted).toBeUndefined()
     }
 
@@ -875,6 +880,7 @@ data: {
 
   it('does not emit correction tool-call when result already exists', async () => {
     // When function_call_output is present, should not emit a correction tool-call
+    // Test with useRemoteToolCalling=false to verify the flush logic
     const sseContent = `
 data: {
   "type": "response.output_item.done",
@@ -910,6 +916,7 @@ data: {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: false, // Test with useRemoteToolCalling=false
     })
 
     const result = await model.doStream({
@@ -929,6 +936,7 @@ data: {
     const toolCallParts = parts.filter((p) => p.type === 'tool-call')
     expect(toolCallParts.length).toBe(1)
     if (toolCallParts[0]?.type === 'tool-call') {
+      expect(toolCallParts[0].toolName).toBe('search')
       expect(toolCallParts[0].providerExecuted).toBeUndefined()
     }
 

@@ -171,6 +171,6 @@ const getToolNameFromPart = async (part: LanguageModelV3ToolCallPart): Promise<s
     schema: ProviderOptionsSchema,
   })
   // Use the actual tool name from provider metadata if available,
-  // otherwise fall back to part.toolName (which may be DATABRICKS_TOOL_CALL_ID)
+  // otherwise fall back to part.toolName
   return providerOptions?.toolName ?? part.toolName
 }

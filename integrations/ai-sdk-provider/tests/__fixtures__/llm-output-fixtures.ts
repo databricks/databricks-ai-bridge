@@ -611,11 +611,12 @@ data: {
     {
       type: 'tool-call',
       toolCallId: 'toolu_bdrk_01LW5hc2yFFgzaebQ43jp6v6',
-      toolName: 'databricks-tool-call',
+      toolName: 'system__ai__python_exec',
       input: '{"code": "# Calculate 4*3\nresult = 4 * 3\nprint(result)"}',
+      dynamic: true,
+      providerExecuted: true,
       providerMetadata: {
         databricks: {
-          toolName: 'system__ai__python_exec',
           itemId: '__fake_id__tool_call__',
         },
       },
@@ -625,7 +626,7 @@ data: {
       toolCallId: 'toolu_bdrk_01LW5hc2yFFgzaebQ43jp6v6',
       result:
         '{"type":"text","text":"{"is_truncated":false,"columns":["output"],"rows":[["12\n"]]}","annotations":null,"meta":null}',
-      toolName: 'databricks-tool-call',
+      toolName: 'system__ai__python_exec',
     },
     // Second text message: "The result of 4*3 in Python is 12."
     { type: 'text-start', id: '__fake_id__text_2__' },

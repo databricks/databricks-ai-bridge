@@ -93,29 +93,21 @@ Creates a Databricks provider instance.
 - `chatCompletions(modelId: string)`: Create a Chat Completions model
 - `chatAgent(modelId: string)`: Create a Chat Agent model
 
-### Tool Constants
+### Dynamic Tool Calling
 
-```typescript
-import { DATABRICKS_TOOL_DEFINITION, DATABRICKS_TOOL_CALL_ID } from '@databricks/ai-sdk-provider'
-```
+When working with Databricks agents (like Responses agents or Agents on Apps), the agent decides which tools to call at runtime - you don't know ahead of time what tools will be invoked.
 
-#### Why are these needed?
+This provider handles this automatically by marking all tool calls as `dynamic: true`. This means:
 
-When using AI SDK functions like `streamText` or `generateText`, you must declare which tools are allowed upfront in the `tools` parameter. This works well when you control which tools are available. However, when working with Databricks agents (like Responses agents or Agents on Apps), the agent decides which tools to call at runtime - you don't know ahead of time what tools will be invoked.
-
-To bridge this gap, this provider uses a special "catch-all" tool pattern:
-
-- **`DATABRICKS_TOOL_DEFINITION`**: A universal tool definition that accepts any input/output schema. This allows the provider to handle any tool that Databricks agents orchestrate, regardless of its actual schema.
-
-- **`DATABRICKS_TOOL_CALL_ID`**: The constant ID (`'databricks-tool-call'`) used to label all tool calls and tool results under a single identifier. The actual tool name from Databricks is preserved in `providerMetadata.databricks.toolName` so it can be displayed correctly in the UI and passed back to the model.
-
-This pattern enables dynamic tool orchestration by Databricks while maintaining compatibility with the AI SDK's tool interface.
+- **No pre-registration required**: You don't need to declare tools upfront in the `tools` parameter
+- **Actual tool names**: Tool calls use the real tool name from Databricks, not a placeholder
+- **Provider-executed**: The AI SDK knows these tools are handled remotely by Databricks
 
 #### Example: Server-side streaming with tools
 
 ```typescript
 import { streamText } from 'ai'
-import { createDatabricksProvider, DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
+import { createDatabricksProvider } from '@databricks/ai-sdk-provider'
 
 const provider = createDatabricksProvider({
   baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
@@ -127,18 +119,11 @@ const model = provider.responses('my-agent-endpoint')
 const result = streamText({
   model,
   messages: convertToModelMessages(uiMessages),
-  tools: {
-    // Register the catch-all tool to handle any tool the agent calls
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
-  },
+  // No need to pre-register tools - they're handled dynamically
 })
 ```
 
-When the agent makes a tool call, you'll receive it with:
-- `toolName: 'databricks-tool-call'` (the constant ID)
-- `providerMetadata.databricks.toolName: 'actual_tool_name'` (the real tool name)
-
-This allows your UI to display the actual tool name while the AI SDK routes all tool calls through the single registered tool definition.
+When the agent makes a tool call, you'll receive it with the actual tool name directly in `toolName`.
 
 ### MCP Utilities
 
@@ -173,28 +158,22 @@ console.log(result.text)
 
 ### With Tool Calling
 
-When your Databricks agent can call tools, register the catch-all tool definition:
+When your Databricks agent calls tools, the tool calls are handled automatically:
 
 ```typescript
-import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
-
 const model = provider.responses('my-agent-with-tools')
 
 const result = await generateText({
   model,
   prompt: 'Search for information about AI',
-  tools: {
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
-  },
+  // No need to pre-register tools - they're handled dynamically
 })
 
 // Access tool calls from the result
 for (const part of result.content) {
   if (part.type === 'tool-call') {
-    // part.toolName === 'databricks-tool-call' (the constant ID)
-    // part.providerMetadata.databricks.toolName contains the actual tool name
-    const actualToolName = part.providerMetadata?.databricks?.toolName
-    console.log(`Agent called tool: ${actualToolName}`)
+    // part.toolName contains the actual tool name
+    console.log(`Agent called tool: ${part.toolName}`)
   }
 }
 ```
