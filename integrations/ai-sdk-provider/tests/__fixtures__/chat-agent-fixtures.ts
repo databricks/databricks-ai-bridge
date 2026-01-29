@@ -1,4 +1,4 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
 /**
  * Chat Agent output fixtures for testing.
@@ -7,7 +7,7 @@ import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 type LLMOutputFixtures = {
   in: string
-  out: Array<LanguageModelV2StreamPart>
+  out: Array<LanguageModelV3StreamPart>
 }
 
 /**
@@ -157,11 +157,13 @@ data: {
       toolCallId: 'call_abc123',
       toolName: 'get_weather',
       input: '{"location": "San Francisco", "unit": "celsius"}',
+      dynamic: true,
+      providerExecuted: true,
     },
     {
       type: 'tool-result',
       toolCallId: 'call_abc123',
-      toolName: 'databricks-tool-call',
+      toolName: 'get_weather',
       result: '{"temperature": 18, "condition": "partly cloudy"}',
     },
     { type: 'text-start', id: 'msg_003' },
@@ -228,12 +230,16 @@ data: {
       toolCallId: 'call_weather_123',
       toolName: 'get_weather',
       input: '{"location": "Tokyo"}',
+      dynamic: true,
+      providerExecuted: true,
     },
     {
       type: 'tool-call',
       toolCallId: 'call_time_456',
       toolName: 'get_current_time',
       input: '{"timezone": "Asia/Tokyo"}',
+      dynamic: true,
+      providerExecuted: true,
     },
   ],
 }

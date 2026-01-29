@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2Prompt } from '@ai-sdk/provider'
+import type { LanguageModelV3Prompt } from '@ai-sdk/provider'
 import { convertToResponsesInput } from '../src/responses-agent-language-model/responses-convert-to-input'
 import {
   convertResponsesAgentChunkToMessagePart,
   convertResponsesAgentResponseToMessagePart,
 } from '../src/responses-agent-language-model/responses-convert-to-message-parts'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 import { MCP_APPROVAL_REQUEST_TYPE, MCP_APPROVAL_RESPONSE_TYPE } from '../src/mcp'
+
+// Helper to create options for conversion functions
+const defaultChunkOptions = { useRemoteToolCalling: true, toolNamesByCallId: new Map<string, string>() }
+const defaultResponseOptions = { useRemoteToolCalling: true }
 
 // ============================================================================
 // Tests for convertToResponsesInput
@@ -15,7 +18,7 @@ import { MCP_APPROVAL_REQUEST_TYPE, MCP_APPROVAL_RESPONSE_TYPE } from '../src/mc
 describe('convertToResponsesInput', () => {
   describe('system message modes', () => {
     it('converts system message with mode "system"', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -29,7 +32,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts system message with mode "developer"', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -43,7 +46,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('removes system message with mode "remove" and adds warning', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
       ]
 
@@ -63,7 +66,7 @@ describe('convertToResponsesInput', () => {
 
   describe('user messages', () => {
     it('converts user message with text parts', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           content: [
@@ -91,7 +94,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('throws error for unsupported user content types', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'user',
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
@@ -116,7 +119,7 @@ describe('convertToResponsesInput', () => {
 
   describe('assistant messages', () => {
     it('converts assistant text message', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [{ type: 'text', text: 'Hello! How can I help you?' }],
@@ -139,7 +142,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant text message with itemId from provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -170,7 +173,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -202,18 +205,17 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call with custom toolName from provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
             {
               type: 'tool-call',
               toolCallId: 'call_123',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'system__ai__python_exec',
               input: { code: 'print(1)' },
               providerOptions: {
                 databricks: {
-                  toolName: 'system__ai__python_exec',
                   itemId: 'item_456',
                 },
               },
@@ -240,7 +242,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts assistant tool-call with tool result', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -289,8 +291,8 @@ describe('convertToResponsesInput', () => {
 
     it('includes tool results with any output value', async () => {
       // All tool results should be included - we no longer filter synthetic results
-      // because we use providerExecuted: true instead of synthetic results
-      const prompt: LanguageModelV2Prompt = [
+      // because we use dynamic: true instead of synthetic results
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -341,19 +343,18 @@ describe('convertToResponsesInput', () => {
 
   describe('MCP approval request handling', () => {
     it('converts MCP approval request from tool-call', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
             {
               type: 'tool-call',
               toolCallId: 'mcp_req_123',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'filesystem_read',
               input: { action: 'read_file', path: '/etc/hosts' },
               providerOptions: {
                 databricks: {
                   type: MCP_APPROVAL_REQUEST_TYPE,
-                  toolName: 'filesystem_read',
                   serverLabel: 'fs-server',
                 },
               },
@@ -380,19 +381,18 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with approval response (approved)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
             {
               type: 'tool-call',
               toolCallId: 'mcp_req_123',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'filesystem_read',
               input: { action: 'read_file' },
               providerOptions: {
                 databricks: {
                   type: MCP_APPROVAL_REQUEST_TYPE,
-                  toolName: 'filesystem_read',
                   serverLabel: 'fs-server',
                 },
               },
@@ -436,19 +436,18 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with approval response (denied)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
             {
               type: 'tool-call',
               toolCallId: 'mcp_req_123',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'filesystem_delete',
               input: { action: 'delete_file' },
               providerOptions: {
                 databricks: {
                   type: MCP_APPROVAL_REQUEST_TYPE,
-                  toolName: 'filesystem_delete',
                   serverLabel: 'fs-server',
                 },
               },
@@ -492,19 +491,18 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval request with tool execution output (approved and executed)', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
             {
               type: 'tool-call',
               toolCallId: 'mcp_req_123',
-              toolName: DATABRICKS_TOOL_CALL_ID,
+              toolName: 'filesystem_read',
               input: { action: 'read_file' },
               providerOptions: {
                 databricks: {
                   type: MCP_APPROVAL_REQUEST_TYPE,
-                  toolName: 'filesystem_read',
                   serverLabel: 'fs-server',
                 },
               },
@@ -550,7 +548,7 @@ describe('convertToResponsesInput', () => {
 
   describe('MCP approval response handling', () => {
     it('converts MCP approval response from tool-result with provider options', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -590,7 +588,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts MCP approval response with denial', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -632,7 +630,7 @@ describe('convertToResponsesInput', () => {
 
   describe('reasoning content handling', () => {
     it('converts reasoning content with itemId', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -663,7 +661,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('skips reasoning content without itemId', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -687,7 +685,7 @@ describe('convertToResponsesInput', () => {
 
   describe('tool results with different output types', () => {
     it('converts tool result with text output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -725,7 +723,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with json output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -763,7 +761,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with error-text output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -801,7 +799,7 @@ describe('convertToResponsesInput', () => {
     })
 
     it('converts tool result with error-json output', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
           content: [
@@ -841,7 +839,7 @@ describe('convertToResponsesInput', () => {
 
   describe('complex conversation flows', () => {
     it('converts a full conversation with multiple message types', async () => {
-      const prompt: LanguageModelV2Prompt = [
+      const prompt: LanguageModelV3Prompt = [
         { role: 'system', content: 'You are a helpful assistant.' },
         { role: 'user', content: [{ type: 'text', text: 'What is 2+2?' }] },
         {
@@ -997,14 +995,19 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
         output: '{"result": 42}',
       }
 
-      const parts = convertResponsesAgentChunkToMessagePart(chunk)
+      // Set up tool name mapping
+      const toolNamesByCallId = new Map([['call_123', 'calculator']])
+      const parts = convertResponsesAgentChunkToMessagePart(chunk, {
+        useRemoteToolCalling: true,
+        toolNamesByCallId,
+      })
 
       expect(parts).toEqual([
         {
           type: 'tool-result',
           toolCallId: 'call_123',
           result: '{"result": 42}',
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: 'calculator',
         },
       ])
     })
@@ -1063,17 +1066,18 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, defaultChunkOptions)
 
         expect(parts).toEqual([
           {
             type: 'tool-call',
             toolCallId: 'call_456',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'python_exec',
             input: '{"code": "print(1)"}',
+            dynamic: true,
+            providerExecuted: true,
             providerMetadata: {
               databricks: {
-                toolName: 'python_exec',
                 itemId: 'item_789',
               },
             },
@@ -1094,14 +1098,19 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        // Set up tool name mapping
+        const toolNamesByCallId = new Map([['call_456', 'python_exec']])
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, {
+          useRemoteToolCalling: true,
+          toolNamesByCallId,
+        })
 
         expect(parts).toEqual([
           {
             type: 'tool-result',
             toolCallId: 'call_456',
             result: 'Output: 1',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'python_exec',
           },
         ])
       })
@@ -1155,18 +1164,19 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, defaultChunkOptions)
 
         expect(parts).toEqual([
           {
             type: 'tool-call',
             toolCallId: 'mcp_req_123',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'filesystem_read',
             input: '{"path": "/etc/hosts"}',
+            dynamic: true,
+            providerExecuted: true,
             providerMetadata: {
               databricks: {
                 type: MCP_APPROVAL_REQUEST_TYPE,
-                toolName: 'filesystem_read',
                 itemId: 'mcp_req_123',
                 serverLabel: 'fs-server',
               },
@@ -1190,13 +1200,18 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        // Set up tool name mapping for the approval request
+        const toolNamesByCallId = new Map([['mcp_req_123', 'filesystem_read']])
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, {
+          useRemoteToolCalling: true,
+          toolNamesByCallId,
+        })
 
         expect(parts).toEqual([
           {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'filesystem_read',
             result: { __approvalStatus__: true },
             providerMetadata: {
               databricks: {
@@ -1221,13 +1236,18 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        // Set up tool name mapping for the approval request
+        const toolNamesByCallId = new Map([['mcp_req_123', 'filesystem_read']])
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, {
+          useRemoteToolCalling: true,
+          toolNamesByCallId,
+        })
 
         expect(parts).toEqual([
           {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'filesystem_read',
             result: { __approvalStatus__: false },
             providerMetadata: {
               databricks: {
@@ -1251,13 +1271,14 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
           },
         }
 
-        const parts = convertResponsesAgentChunkToMessagePart(chunk)
+        // Without tool name mapping, falls back to 'mcp_approval'
+        const parts = convertResponsesAgentChunkToMessagePart(chunk, defaultChunkOptions)
 
         expect(parts).toEqual([
           {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
-            toolName: DATABRICKS_TOOL_CALL_ID,
+            toolName: 'mcp_approval',
             result: { __approvalStatus__: true },
             providerMetadata: {
               databricks: {
@@ -1421,16 +1442,18 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
       expect(parts).toEqual([
         {
           type: 'tool-call',
           toolCallId: 'call_456',
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: 'calculator',
           input: '{"a": 1, "b": 2}',
+          dynamic: true,
+          providerExecuted: true,
           providerMetadata: {
-            databricks: { toolName: 'calculator', itemId: 'item_789' },
+            databricks: { itemId: 'item_789' },
           },
         },
       ])
@@ -1512,9 +1535,17 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
 
   describe('function_call_output output', () => {
     it('converts function call output', () => {
+      // Response with both function_call and function_call_output so the name can be looked up
       const response = {
         id: 'resp_123',
         output: [
+          {
+            type: 'function_call' as const,
+            call_id: 'call_456',
+            name: 'calculator',
+            arguments: '{"a": 1}',
+            id: 'item_123',
+          },
           {
             type: 'function_call_output' as const,
             call_id: 'call_456',
@@ -1523,16 +1554,14 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
-      expect(parts).toEqual([
-        {
-          type: 'tool-result',
-          result: 'Result: 42',
-          toolCallId: 'call_456',
-          toolName: DATABRICKS_TOOL_CALL_ID,
-        },
-      ])
+      expect(parts[1]).toEqual({
+        type: 'tool-result',
+        result: 'Result: 42',
+        toolCallId: 'call_456',
+        toolName: 'calculator',
+      })
     })
   })
 
@@ -1551,18 +1580,17 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
       expect(parts).toEqual([
         {
           type: 'tool-call',
           toolCallId: 'mcp_req_123',
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: 'filesystem_read',
           input: '{"path": "/etc/hosts"}',
           providerMetadata: {
             databricks: {
               type: MCP_APPROVAL_REQUEST_TYPE,
-              toolName: 'filesystem_read',
               itemId: 'mcp_req_123',
               serverLabel: 'fs-server',
             },
@@ -1574,9 +1602,17 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
 
   describe('mcp_approval_response output', () => {
     it('converts MCP approval response (approved)', () => {
+      // Response with mcp_approval_request first so the name can be looked up
       const response = {
         id: 'resp_123',
         output: [
+          {
+            type: 'mcp_approval_request' as const,
+            id: 'mcp_req_123',
+            name: 'filesystem_read',
+            arguments: '{"path": "/etc/hosts"}',
+            server_label: 'fs-server',
+          },
           {
             type: 'mcp_approval_response' as const,
             id: 'mcp_resp_123',
@@ -1587,28 +1623,34 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
-      expect(parts).toEqual([
-        {
-          type: 'tool-result',
-          toolCallId: 'mcp_req_123',
-          toolName: DATABRICKS_TOOL_CALL_ID,
-          result: { __approvalStatus__: true },
-          providerMetadata: {
-            databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              itemId: 'mcp_resp_123',
-            },
+      expect(parts[1]).toEqual({
+        type: 'tool-result',
+        toolCallId: 'mcp_req_123',
+        toolName: 'filesystem_read',
+        result: { __approvalStatus__: true },
+        providerMetadata: {
+          databricks: {
+            type: MCP_APPROVAL_RESPONSE_TYPE,
+            itemId: 'mcp_resp_123',
           },
         },
-      ])
+      })
     })
 
     it('converts MCP approval response (denied)', () => {
+      // Response with mcp_approval_request first so the name can be looked up
       const response = {
         id: 'resp_123',
         output: [
+          {
+            type: 'mcp_approval_request' as const,
+            id: 'mcp_req_123',
+            name: 'filesystem_read',
+            arguments: '{"path": "/etc/hosts"}',
+            server_label: 'fs-server',
+          },
           {
             type: 'mcp_approval_response' as const,
             id: 'mcp_resp_123',
@@ -1619,25 +1661,24 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
-      expect(parts).toEqual([
-        {
-          type: 'tool-result',
-          toolCallId: 'mcp_req_123',
-          toolName: DATABRICKS_TOOL_CALL_ID,
-          result: { __approvalStatus__: false },
-          providerMetadata: {
-            databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              itemId: 'mcp_resp_123',
-            },
+      expect(parts[1]).toEqual({
+        type: 'tool-result',
+        toolCallId: 'mcp_req_123',
+        toolName: 'filesystem_read',
+        result: { __approvalStatus__: false },
+        providerMetadata: {
+          databricks: {
+            type: MCP_APPROVAL_RESPONSE_TYPE,
+            itemId: 'mcp_resp_123',
           },
         },
-      ])
+      })
     })
 
     it('handles MCP approval response without id', () => {
+      // Without a matching mcp_approval_request, falls back to 'mcp_approval'
       const response = {
         id: 'resp_123',
         output: [
@@ -1650,13 +1691,13 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
       expect(parts).toEqual([
         {
           type: 'tool-result',
           toolCallId: 'mcp_req_123',
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: 'mcp_approval',
           result: { __approvalStatus__: true },
           providerMetadata: {
             databricks: {
@@ -1696,7 +1737,7 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
         ],
       }
 
-      const parts = convertResponsesAgentResponseToMessagePart(response)
+      const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
       expect(parts).toHaveLength(2)
       expect(parts[0]).toEqual({
@@ -1709,10 +1750,12 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
       expect(parts[1]).toEqual({
         type: 'tool-call',
         toolCallId: 'call_456',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'search',
         input: '{"query": "test"}',
+        dynamic: true,
+        providerExecuted: true,
         providerMetadata: {
-          databricks: { toolName: 'search', itemId: 'item_789' },
+          databricks: { itemId: 'item_789' },
         },
       })
     })

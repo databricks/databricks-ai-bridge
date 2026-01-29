@@ -1,4 +1,4 @@
-import type { LanguageModelV2CallOptions, LanguageModelV2CallWarning } from '@ai-sdk/provider'
+import type { LanguageModelV3CallOptions, SharedV3Warning } from '@ai-sdk/provider'
 
 /**
  * Response body parameters for the Databricks Responses API.
@@ -33,7 +33,7 @@ export type DatabricksProviderOptions = {
 }
 
 /**
- * Converts AI SDK LanguageModelV2CallOptions to Databricks Responses API body parameters.
+ * Converts AI SDK LanguageModelV3CallOptions to Databricks Responses API body parameters.
  *
  * Inspired by the getArgs method in:
  * https://github.com/vercel/ai/blob/main/packages/openai/src/responses/openai-responses-language-model.ts#L118
@@ -41,11 +41,11 @@ export type DatabricksProviderOptions = {
  * Complies with the API described in:
  * https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#responses-api-request
  */
-export function callOptionsToResponsesArgs(options: LanguageModelV2CallOptions): {
+export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions): {
   args: ResponsesBodyArgs
-  warnings: LanguageModelV2CallWarning[]
+  warnings: SharedV3Warning[]
 } {
-  const warnings: LanguageModelV2CallWarning[] = []
+  const warnings: SharedV3Warning[] = []
 
   // Extract Databricks-specific provider options
   const databricksOptions = options.providerOptions?.databricks as
@@ -55,40 +55,40 @@ export function callOptionsToResponsesArgs(options: LanguageModelV2CallOptions):
   // Generate warnings for unsupported options
   if (options.topK != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'topK',
+      type: 'unsupported',
+      feature: 'topK',
       details: 'topK is not supported by the Databricks Responses API',
     })
   }
 
   if (options.presencePenalty != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'presencePenalty',
+      type: 'unsupported',
+      feature: 'presencePenalty',
       details: 'presencePenalty is not supported by the Databricks Responses API',
     })
   }
 
   if (options.frequencyPenalty != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'frequencyPenalty',
+      type: 'unsupported',
+      feature: 'frequencyPenalty',
       details: 'frequencyPenalty is not supported by the Databricks Responses API',
     })
   }
 
   if (options.seed != null) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'seed',
+      type: 'unsupported',
+      feature: 'seed',
       details: 'seed is not supported by the Databricks Responses API',
     })
   }
 
   if (options.stopSequences != null && options.stopSequences.length > 0) {
     warnings.push({
-      type: 'unsupported-setting',
-      setting: 'stopSequences',
+      type: 'unsupported',
+      feature: 'stopSequences',
       details: 'stopSequences is not supported by the Databricks Responses API',
     })
   }

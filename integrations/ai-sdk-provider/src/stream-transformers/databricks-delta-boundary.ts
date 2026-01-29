@@ -1,4 +1,4 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import type { DatabricksStreamPartTransformer } from './compose-stream-part-transformers'
 
 type DeltaType = 'text' | 'reasoning'
@@ -7,9 +7,9 @@ type DeltaType = 'text' | 'reasoning'
  * Injects start/end deltas for sequential streams.
  */
 export const applyDeltaBoundaryTransform: DatabricksStreamPartTransformer<
-  LanguageModelV2StreamPart
+  LanguageModelV3StreamPart
 > = (parts, last) => {
-  const out: LanguageModelV2StreamPart[] = []
+  const out: LanguageModelV3StreamPart[] = []
 
   const lastDeltaType = maybeGetDeltaType(last)
   for (const incoming of parts) {
@@ -49,11 +49,11 @@ export const applyDeltaBoundaryTransform: DatabricksStreamPartTransformer<
   return { out }
 }
 
-type DeltaPart = Extract<LanguageModelV2StreamPart, { type: `${DeltaType}-${string}` }>
-const isDeltaIsh = (part?: LanguageModelV2StreamPart | null): part is DeltaPart =>
+type DeltaPart = Extract<LanguageModelV3StreamPart, { type: `${DeltaType}-${string}` }>
+const isDeltaIsh = (part?: LanguageModelV3StreamPart | null): part is DeltaPart =>
   part?.type.startsWith('text-') || part?.type.startsWith('reasoning-') || false
 
-const maybeGetDeltaType = (part: LanguageModelV2StreamPart | null) => {
+const maybeGetDeltaType = (part: LanguageModelV3StreamPart | null) => {
   if (!isDeltaIsh(part)) return null
   if (part.type.startsWith('text-')) return 'text'
   if (part.type.startsWith('reasoning-')) return 'reasoning'
@@ -67,11 +67,11 @@ const getDeltaType = (part: DeltaPart) => {
 }
 
 const isDeltaPart = (
-  part: LanguageModelV2StreamPart | null
-): part is Extract<LanguageModelV2StreamPart, { type: `${DeltaType}-delta` }> =>
+  part: LanguageModelV3StreamPart | null
+): part is Extract<LanguageModelV3StreamPart, { type: `${DeltaType}-delta` }> =>
   part?.type === 'text-delta' || part?.type === 'reasoning-delta'
 
-const getPartId = (part: LanguageModelV2StreamPart | null): string | undefined => {
+const getPartId = (part: LanguageModelV3StreamPart | null): string | undefined => {
   if (part && 'id' in part) return part.id
   return undefined
 }

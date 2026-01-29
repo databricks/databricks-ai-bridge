@@ -86,6 +86,7 @@ Creates a Databricks provider instance.
 - `settings.provider` (string, optional): Provider name (defaults to "databricks")
 - `settings.fetch` (function, optional): Custom fetch implementation
 - `settings.formatUrl` (function, optional): Optional function to format the URL
+- `settings.useRemoteToolCalling` (boolean, optional): Enable remote tool calling mode (defaults to `false`). See [Remote Tool Calling](#remote-tool-calling) below.
 
 **Returns:** `DatabricksProvider` with three model creation methods:
 
@@ -93,33 +94,71 @@ Creates a Databricks provider instance.
 - `chatCompletions(modelId: string)`: Create a Chat Completions model
 - `chatAgent(modelId: string)`: Create a Chat Agent model
 
-### Tool Constants
+### Remote Tool Calling
+
+The `useRemoteToolCalling` option controls how tool calls from Databricks agents are handled. When enabled, tool calls are marked as `dynamic: true` and `providerExecuted: true`, which tells the AI SDK that:
+
+1. **Dynamic**: The tools are not pre-registered - the agent decides which tools to call at runtime
+2. **Provider-executed**: The tools are executed remotely by Databricks, not by your application
+
+#### When to use `useRemoteToolCalling: true`
+
+Enable this option when your Databricks agent handles tool execution internally:
+
+- **Databricks Agents with built-in tools**: Agents that use tools like Python execution, SQL queries, or other Databricks-managed tools
+- **Agents on Apps**: When deploying agents that manage their own tool execution
+- **MCP (Model Context Protocol) integrations**: When tools are executed via MCP servers managed by Databricks
 
 ```typescript
-import { DATABRICKS_TOOL_DEFINITION, DATABRICKS_TOOL_CALL_ID } from '@databricks/ai-sdk-provider'
+const provider = createDatabricksProvider({
+  baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
+  headers: { Authorization: `Bearer ${token}` },
+  useRemoteToolCalling: true, // Enable for Databricks-managed tool execution
+})
 ```
 
-#### Why are these needed?
+#### When NOT to use `useRemoteToolCalling`
 
-When using AI SDK functions like `streamText` or `generateText`, you must declare which tools are allowed upfront in the `tools` parameter. This works well when you control which tools are available. However, when working with Databricks agents (like Responses agents or Agents on Apps), the agent decides which tools to call at runtime - you don't know ahead of time what tools will be invoked.
+Keep this option disabled (the default) when:
 
-To bridge this gap, this provider uses a special "catch-all" tool pattern:
+- **You define and execute tools locally**: Your application registers tools with the AI SDK and handles their execution
+- **Standard chat completions**: You're using the Chat Completions endpoint without agent features
+- **Hybrid scenarios**: You want to intercept tool calls and handle some locally
 
-- **`DATABRICKS_TOOL_DEFINITION`**: A universal tool definition that accepts any input/output schema. This allows the provider to handle any tool that Databricks agents orchestrate, regardless of its actual schema.
+```typescript
+// Default behavior - you handle tool execution
+const provider = createDatabricksProvider({
+  baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
+  headers: { Authorization: `Bearer ${token}` },
+  // useRemoteToolCalling defaults to false
+})
 
-- **`DATABRICKS_TOOL_CALL_ID`**: The constant ID (`'databricks-tool-call'`) used to label all tool calls and tool results under a single identifier. The actual tool name from Databricks is preserved in `providerMetadata.databricks.toolName` so it can be displayed correctly in the UI and passed back to the model.
+const result = await generateText({
+  model: provider.chatCompletions('my-model'),
+  prompt: 'What is the weather?',
+  tools: {
+    getWeather: {
+      description: 'Get weather for a location',
+      parameters: z.object({ location: z.string() }),
+      execute: async ({ location }) => {
+        // Your local tool execution
+        return fetchWeather(location)
+      },
+    },
+  },
+})
+```
 
-This pattern enables dynamic tool orchestration by Databricks while maintaining compatibility with the AI SDK's tool interface.
-
-#### Example: Server-side streaming with tools
+#### Example: Remote tool calling with Databricks agents
 
 ```typescript
 import { streamText } from 'ai'
-import { createDatabricksProvider, DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
+import { createDatabricksProvider } from '@databricks/ai-sdk-provider'
 
 const provider = createDatabricksProvider({
   baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
   headers: { Authorization: `Bearer ${token}` },
+  useRemoteToolCalling: true,
 })
 
 const model = provider.responses('my-agent-endpoint')
@@ -127,18 +166,17 @@ const model = provider.responses('my-agent-endpoint')
 const result = streamText({
   model,
   messages: convertToModelMessages(uiMessages),
-  tools: {
-    // Register the catch-all tool to handle any tool the agent calls
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
-  },
+  // No need to pre-register tools - they're handled by Databricks
 })
+
+// Tool calls will have the actual tool name from Databricks
+for await (const part of result.fullStream) {
+  if (part.type === 'tool-call') {
+    console.log(`Agent called: ${part.toolName}`)
+    // Tool is executed remotely - result will come from Databricks
+  }
+}
 ```
-
-When the agent makes a tool call, you'll receive it with:
-- `toolName: 'databricks-tool-call'` (the constant ID)
-- `providerMetadata.databricks.toolName: 'actual_tool_name'` (the real tool name)
-
-This allows your UI to display the actual tool name while the AI SDK routes all tool calls through the single registered tool definition.
 
 ### MCP Utilities
 
@@ -169,34 +207,6 @@ const result = await generateText({
 })
 
 console.log(result.text)
-```
-
-### With Tool Calling
-
-When your Databricks agent can call tools, register the catch-all tool definition:
-
-```typescript
-import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '@databricks/ai-sdk-provider'
-
-const model = provider.responses('my-agent-with-tools')
-
-const result = await generateText({
-  model,
-  prompt: 'Search for information about AI',
-  tools: {
-    [DATABRICKS_TOOL_CALL_ID]: DATABRICKS_TOOL_DEFINITION,
-  },
-})
-
-// Access tool calls from the result
-for (const part of result.content) {
-  if (part.type === 'tool-call') {
-    // part.toolName === 'databricks-tool-call' (the constant ID)
-    // part.providerMetadata.databricks.toolName contains the actual tool name
-    const actualToolName = part.providerMetadata?.databricks?.toolName
-    console.log(`Agent called tool: ${actualToolName}`)
-  }
-}
 ```
 
 ## Links

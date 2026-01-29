@@ -1,4 +1,4 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
 /**
  * MCP Approval Request/Response Fixtures
@@ -160,12 +160,11 @@ data: {
     {
       type: 'tool-call',
       toolCallId: '__fake_mcp_request_id__',
-      toolName: 'databricks-tool-call',
+      toolName: 'test_mcp_tool',
       input: '{"action": "test", "param": "value"}',
       providerMetadata: {
         databricks: {
           type: 'mcp_approval_request',
-          toolName: 'test_mcp_tool',
           itemId: '__fake_mcp_request_id__',
           serverLabel: 'test-server',
         },
@@ -302,7 +301,7 @@ data: {
     {
       type: 'tool-result',
       toolCallId: '__fake_mcp_request_id__',
-      toolName: 'databricks-tool-call',
+      toolName: 'mcp_approval',
       result: { __approvalStatus__: true },
       providerMetadata: {
         databricks: {
@@ -451,7 +450,7 @@ data: {
     {
       type: 'tool-result',
       toolCallId: '__fake_mcp_request_id__',
-      toolName: 'databricks-tool-call',
+      toolName: 'mcp_approval',
       result: { __approvalStatus__: false },
       providerMetadata: {
         databricks: {
@@ -474,5 +473,5 @@ data: {
 
 type LLMOutputFixtures = {
   in: string
-  out: Array<LanguageModelV2StreamPart>
+  out: Array<LanguageModelV3StreamPart>
 }

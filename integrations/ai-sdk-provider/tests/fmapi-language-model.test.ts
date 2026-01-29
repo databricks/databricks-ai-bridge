@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { DatabricksFmapiLanguageModel } from '../src/fmapi-language-model/fmapi-language-model'
 import {
   FMAPI_BASIC_TEXT_OUTPUT,
@@ -8,7 +8,6 @@ import {
   FMAPI_RESPONSE_WITH_TOOL_CALLS,
   FMAPI_RESPONSE_WITH_PARALLEL_TOOL_CALLS,
 } from './__fixtures__/fmapi-fixtures'
-import { DATABRICKS_TOOL_CALL_ID } from '../src/tools'
 
 /**
  * Removes trailing commas from JSON strings (JavaScript JSON.parse doesn't allow them)
@@ -111,7 +110,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     try {
@@ -148,13 +147,14 @@ describe('DatabricksFmapiLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     const result = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'What is the weather in San Francisco?' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -205,13 +205,9 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(toolCallPart).toMatchObject({
       type: 'tool-call',
       toolCallId: 'call_abc123',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'get_weather',
       input: '{"location":"San Francisco"}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'get_weather',
-        },
-      },
+      dynamic: true,
     })
   })
 
@@ -223,6 +219,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     const result = await model.doStream({
@@ -231,7 +228,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -268,23 +265,15 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(toolCalls.length).toBe(2)
     expect(toolCalls[0]).toMatchObject({
       toolCallId: 'call_tool_a',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'tool_a',
       input: '{"x":1}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'tool_a',
-        },
-      },
+      dynamic: true,
     })
     expect(toolCalls[1]).toMatchObject({
       toolCallId: 'call_tool_b',
-      toolName: DATABRICKS_TOOL_CALL_ID,
+      toolName: 'tool_b',
       input: '{"y":2}',
-      providerMetadata: {
-        databricks: {
-          toolName: 'tool_b',
-        },
-      },
+      dynamic: true,
     })
   })
 
@@ -302,7 +291,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'Call a tool' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -317,7 +306,7 @@ describe('DatabricksFmapiLanguageModel', () => {
     expect(finishPart).toBeDefined()
     expect(finishPart).toMatchObject({
       type: 'finish',
-      finishReason: 'tool-calls',
+      finishReason: { raw: 'tool_calls', unified: 'tool-calls' },
     })
   })
 
@@ -346,6 +335,7 @@ describe('DatabricksFmapiLanguageModel', () => {
         headers: () => ({ Authorization: 'Bearer test-token' }),
         url: () => 'http://test.example.com/api',
         fetch: mockFetch,
+        useRemoteToolCalling: true,
       })
 
       const result = await model.doGenerate({
@@ -353,27 +343,22 @@ describe('DatabricksFmapiLanguageModel', () => {
       })
 
       // Verify finish reason
-      expect(result.finishReason).toBe('tool-calls')
+      expect(result.finishReason).toEqual({ raw: 'tool_calls', unified: 'tool-calls' })
 
       // Verify tool calls are returned
       expect(result.content).toHaveLength(1)
       expect(result.content[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_weather_123',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_weather',
         input: '{"location":"New York","unit":"celsius"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_weather',
-          },
-        },
+        dynamic: true,
       })
 
       // Verify usage
       expect(result.usage).toEqual({
-        inputTokens: 50,
-        outputTokens: 25,
-        totalTokens: 75,
+        inputTokens: { total: 50, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 25, text: 0, reasoning: 0 },
       })
     })
 
@@ -385,6 +370,7 @@ describe('DatabricksFmapiLanguageModel', () => {
         headers: () => ({ Authorization: 'Bearer test-token' }),
         url: () => 'http://test.example.com/api',
         fetch: mockFetch,
+        useRemoteToolCalling: true,
       })
 
       const result = await model.doGenerate({
@@ -392,38 +378,29 @@ describe('DatabricksFmapiLanguageModel', () => {
       })
 
       // Verify finish reason
-      expect(result.finishReason).toBe('tool-calls')
+      expect(result.finishReason).toEqual({ raw: 'tool_calls', unified: 'tool-calls' })
 
       // Verify both tool calls are returned
       expect(result.content).toHaveLength(2)
       expect(result.content[0]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_tool_1',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_weather',
         input: '{"location":"Paris"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_weather',
-          },
-        },
+        dynamic: true,
       })
       expect(result.content[1]).toMatchObject({
         type: 'tool-call',
         toolCallId: 'call_tool_2',
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        toolName: 'get_time',
         input: '{"timezone":"Europe/Paris"}',
-        providerMetadata: {
-          databricks: {
-            toolName: 'get_time',
-          },
-        },
+        dynamic: true,
       })
 
       // Verify usage
       expect(result.usage).toEqual({
-        inputTokens: 60,
-        outputTokens: 40,
-        totalTokens: 100,
+        inputTokens: { total: 60, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 40, text: 0, reasoning: 0 },
       })
     })
   })
