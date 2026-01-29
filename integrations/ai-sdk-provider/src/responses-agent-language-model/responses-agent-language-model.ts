@@ -155,7 +155,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     }
 
     const allParts: LanguageModelV3StreamPart[] = []
-    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? false
     // Track tool call IDs to tool names for looking up tool names in function_call_output events
     const toolNamesByCallId = new Map<string, string>()
 

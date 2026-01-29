@@ -86,6 +86,7 @@ Creates a Databricks provider instance.
 - `settings.provider` (string, optional): Provider name (defaults to "databricks")
 - `settings.fetch` (function, optional): Custom fetch implementation
 - `settings.formatUrl` (function, optional): Optional function to format the URL
+- `settings.useRemoteToolCalling` (boolean, optional): Enable remote tool calling mode (defaults to `false`). See [Remote Tool Calling](#remote-tool-calling) below.
 
 **Returns:** `DatabricksProvider` with three model creation methods:
 
@@ -93,17 +94,62 @@ Creates a Databricks provider instance.
 - `chatCompletions(modelId: string)`: Create a Chat Completions model
 - `chatAgent(modelId: string)`: Create a Chat Agent model
 
-### Dynamic Tool Calling
+### Remote Tool Calling
 
-When working with Databricks agents (like Responses agents or Agents on Apps), the agent decides which tools to call at runtime - you don't know ahead of time what tools will be invoked.
+The `useRemoteToolCalling` option controls how tool calls from Databricks agents are handled. When enabled, tool calls are marked as `dynamic: true` and `providerExecuted: true`, which tells the AI SDK that:
 
-This provider handles this automatically by marking all tool calls as `dynamic: true`. This means:
+1. **Dynamic**: The tools are not pre-registered - the agent decides which tools to call at runtime
+2. **Provider-executed**: The tools are executed remotely by Databricks, not by your application
 
-- **No pre-registration required**: You don't need to declare tools upfront in the `tools` parameter
-- **Actual tool names**: Tool calls use the real tool name from Databricks, not a placeholder
-- **Provider-executed**: The AI SDK knows these tools are handled remotely by Databricks
+#### When to use `useRemoteToolCalling: true`
 
-#### Example: Server-side streaming with tools
+Enable this option when your Databricks agent handles tool execution internally:
+
+- **Databricks Agents with built-in tools**: Agents that use tools like Python execution, SQL queries, or other Databricks-managed tools
+- **Agents on Apps**: When deploying agents that manage their own tool execution
+- **MCP (Model Context Protocol) integrations**: When tools are executed via MCP servers managed by Databricks
+
+```typescript
+const provider = createDatabricksProvider({
+  baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
+  headers: { Authorization: `Bearer ${token}` },
+  useRemoteToolCalling: true, // Enable for Databricks-managed tool execution
+})
+```
+
+#### When NOT to use `useRemoteToolCalling`
+
+Keep this option disabled (the default) when:
+
+- **You define and execute tools locally**: Your application registers tools with the AI SDK and handles their execution
+- **Standard chat completions**: You're using the Chat Completions endpoint without agent features
+- **Hybrid scenarios**: You want to intercept tool calls and handle some locally
+
+```typescript
+// Default behavior - you handle tool execution
+const provider = createDatabricksProvider({
+  baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
+  headers: { Authorization: `Bearer ${token}` },
+  // useRemoteToolCalling defaults to false
+})
+
+const result = await generateText({
+  model: provider.chatCompletions('my-model'),
+  prompt: 'What is the weather?',
+  tools: {
+    getWeather: {
+      description: 'Get weather for a location',
+      parameters: z.object({ location: z.string() }),
+      execute: async ({ location }) => {
+        // Your local tool execution
+        return fetchWeather(location)
+      },
+    },
+  },
+})
+```
+
+#### Example: Remote tool calling with Databricks agents
 
 ```typescript
 import { streamText } from 'ai'
@@ -112,6 +158,7 @@ import { createDatabricksProvider } from '@databricks/ai-sdk-provider'
 const provider = createDatabricksProvider({
   baseURL: 'https://your-workspace.databricks.com/serving-endpoints',
   headers: { Authorization: `Bearer ${token}` },
+  useRemoteToolCalling: true,
 })
 
 const model = provider.responses('my-agent-endpoint')
@@ -119,11 +166,17 @@ const model = provider.responses('my-agent-endpoint')
 const result = streamText({
   model,
   messages: convertToModelMessages(uiMessages),
-  // No need to pre-register tools - they're handled dynamically
+  // No need to pre-register tools - they're handled by Databricks
 })
-```
 
-When the agent makes a tool call, you'll receive it with the actual tool name directly in `toolName`.
+// Tool calls will have the actual tool name from Databricks
+for await (const part of result.fullStream) {
+  if (part.type === 'tool-call') {
+    console.log(`Agent called: ${part.toolName}`)
+    // Tool is executed remotely - result will come from Databricks
+  }
+}
+```
 
 ### MCP Utilities
 
@@ -154,28 +207,6 @@ const result = await generateText({
 })
 
 console.log(result.text)
-```
-
-### With Tool Calling
-
-When your Databricks agent calls tools, the tool calls are handled automatically:
-
-```typescript
-const model = provider.responses('my-agent-with-tools')
-
-const result = await generateText({
-  model,
-  prompt: 'Search for information about AI',
-  // No need to pre-register tools - they're handled dynamically
-})
-
-// Access tool calls from the result
-for (const part of result.content) {
-  if (part.type === 'tool-call') {
-    // part.toolName contains the actual tool name
-    console.log(`Agent called tool: ${part.toolName}`)
-  }
-}
 ```
 
 ## Links

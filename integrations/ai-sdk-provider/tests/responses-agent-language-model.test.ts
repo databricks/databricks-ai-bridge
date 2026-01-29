@@ -114,6 +114,7 @@ describe('DatabricksResponsesAgentLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     // Call doStream

@@ -1238,7 +1238,7 @@ describe('convertFmapiResponseToMessagePart', () => {
         ],
       }
 
-      const result = convertFmapiResponseToMessagePart(response)
+      const result = convertFmapiResponseToMessagePart(response, { useRemoteToolCalling: true })
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({
@@ -1283,7 +1283,7 @@ describe('convertFmapiResponseToMessagePart', () => {
         ],
       }
 
-      const result = convertFmapiResponseToMessagePart(response)
+      const result = convertFmapiResponseToMessagePart(response, { useRemoteToolCalling: true })
 
       expect(result).toHaveLength(2)
       expect(result[0]).toMatchObject({
@@ -1327,7 +1327,7 @@ describe('convertFmapiResponseToMessagePart', () => {
         ],
       }
 
-      const result = convertFmapiResponseToMessagePart(response)
+      const result = convertFmapiResponseToMessagePart(response, { useRemoteToolCalling: true })
 
       expect(result).toHaveLength(2)
       expect(result[0]).toMatchObject({
@@ -1367,7 +1367,7 @@ describe('convertFmapiResponseToMessagePart', () => {
         ],
       }
 
-      const result = convertFmapiResponseToMessagePart(response)
+      const result = convertFmapiResponseToMessagePart(response, { useRemoteToolCalling: true })
 
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({

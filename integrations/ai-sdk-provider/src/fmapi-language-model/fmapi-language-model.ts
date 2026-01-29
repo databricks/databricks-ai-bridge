@@ -71,7 +71,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
     const choice = response.choices[0]
     const finishReason = mapFmapiFinishReason(choice?.finish_reason)
 
-    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? false
     return {
       content: convertFmapiResponseToMessagePart(response, { useRemoteToolCalling }),
       finishReason,
@@ -136,7 +136,7 @@ export class DatabricksFmapiLanguageModel implements LanguageModelV3 {
     const toolCallNamesById = new Map<string, string>()
     // Track accumulated tool call inputs by ID
     const toolCallInputsById = new Map<string, string>()
-    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? true
+    const useRemoteToolCalling = this.config.useRemoteToolCalling ?? false
 
     return {
       stream: response

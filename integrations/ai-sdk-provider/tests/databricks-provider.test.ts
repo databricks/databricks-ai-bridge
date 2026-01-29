@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { DATABRICKS_TOOL_DEFINITION } from '../src/tools'
 import {
   createDatabricksProvider,
   type DatabricksProvider,
@@ -385,16 +384,6 @@ describe('createDatabricksProvider', () => {
       } catch (e) {
         expect((e as Error).message).toContain('LanguageModel')
       }
-    })
-  })
-
-  describe('Re-exports from tools', () => {
-    it('DATABRICKS_TOOL_DEFINITION is exported and has correct structure', () => {
-      expect(DATABRICKS_TOOL_DEFINITION).toBeDefined()
-      expect(DATABRICKS_TOOL_DEFINITION.name).toBe('databricks-tool-call')
-      expect(DATABRICKS_TOOL_DEFINITION.description).toBe('Databricks tool call')
-      expect(DATABRICKS_TOOL_DEFINITION.inputSchema).toBeDefined()
-      expect(DATABRICKS_TOOL_DEFINITION.outputSchema).toBeDefined()
     })
   })
 

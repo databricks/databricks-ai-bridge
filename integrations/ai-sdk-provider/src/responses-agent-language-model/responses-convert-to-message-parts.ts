@@ -14,7 +14,7 @@ export type ConvertChunkOptions = {
 
 export const convertResponsesAgentChunkToMessagePart = (
   chunk: ResponsesAgentChunk,
-  options: ConvertChunkOptions = { useRemoteToolCalling: true }
+  options: ConvertChunkOptions = { useRemoteToolCalling: false }
 ): LanguageModelV3StreamPart[] => {
   const parts: LanguageModelV3StreamPart[] = []
 
@@ -180,6 +180,10 @@ const convertOutputItemDone = (
           toolCallId: item.id,
           toolName: item.name,
           input: item.arguments,
+          ...(options.useRemoteToolCalling && {
+            dynamic: true,
+            providerExecuted: true,
+          }),
           providerMetadata: {
             databricks: {
               type: MCP_APPROVAL_REQUEST_TYPE,
@@ -218,7 +222,7 @@ export type ConvertResponseOptions = {
 
 export const convertResponsesAgentResponseToMessagePart = (
   response: ResponsesAgentResponse,
-  options: ConvertResponseOptions = { useRemoteToolCalling: true }
+  options: ConvertResponseOptions = { useRemoteToolCalling: false }
 ): LanguageModelV3Content[] => {
   const parts: LanguageModelV3Content[] = []
 

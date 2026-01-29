@@ -147,6 +147,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     const result = await model.doStream({
@@ -218,6 +219,7 @@ describe('DatabricksFmapiLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     const result = await model.doStream({
@@ -333,6 +335,7 @@ describe('DatabricksFmapiLanguageModel', () => {
         headers: () => ({ Authorization: 'Bearer test-token' }),
         url: () => 'http://test.example.com/api',
         fetch: mockFetch,
+        useRemoteToolCalling: true,
       })
 
       const result = await model.doGenerate({
@@ -367,6 +370,7 @@ describe('DatabricksFmapiLanguageModel', () => {
         headers: () => ({ Authorization: 'Bearer test-token' }),
         url: () => 'http://test.example.com/api',
         fetch: mockFetch,
+        useRemoteToolCalling: true,
       })
 
       const result = await model.doGenerate({

@@ -54,7 +54,7 @@ export const convertFmapiChunkToMessagePart = (
 
 export const convertFmapiResponseToMessagePart = (
   response: FmapiResponse,
-  options: FmapiConvertOptions = { useRemoteToolCalling: true }
+  options: FmapiConvertOptions = { useRemoteToolCalling: false }
 ): LanguageModelV3Content[] => {
   const parts: LanguageModelV3Content[] = []
   if (response.choices.length === 0) return parts

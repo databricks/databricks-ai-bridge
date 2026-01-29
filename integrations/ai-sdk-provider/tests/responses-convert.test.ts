@@ -1172,6 +1172,8 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
             toolCallId: 'mcp_req_123',
             toolName: 'filesystem_read',
             input: '{"path": "/etc/hosts"}',
+            dynamic: true,
+            providerExecuted: true,
             providerMetadata: {
               databricks: {
                 type: MCP_APPROVAL_REQUEST_TYPE,
