@@ -226,16 +226,6 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         self._mcp_tool_execute = tools[0].execute
         return self._mcp_tool_execute
 
-    def _build_mcp_meta(
-        self, filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None, **kwargs: Any
-    ) -> Dict[str, Any]:
-        """Build metadata dict for MCP tool invocation."""
-        return self._build_mcp_params(filters, **kwargs)
-
-    def _parse_mcp_response(self, mcp_response: str) -> List[Dict]:
-        """Parse MCP JSON response and normalize to page_content/metadata format."""
-        return self._parse_mcp_response_to_dicts(mcp_response, strict=True)
-
     def _execute_mcp_path(
         self,
         query: str,
@@ -244,9 +234,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
     ) -> List[Dict]:
         try:
             mcp_execute = self._create_or_get_mcp_toolkit()
-            meta = self._build_mcp_meta(filters, **kwargs)
+            meta = self._build_mcp_params(filters, **kwargs)
             mcp_response = mcp_execute(query=query, _meta=meta)
-            return self._parse_mcp_response(mcp_response)
+            return self._parse_mcp_response_to_dicts(mcp_response, strict=True)
         except Exception as e:
             self._handle_mcp_execution_error(e)
 
@@ -257,13 +247,9 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
         openai_client: OpenAI = None,
         **kwargs: Any,
     ) -> List[Dict]:
-        from openai import OpenAI
+        from databricks_openai import DatabricksOpenAI
 
-        oai_client = openai_client or OpenAI()
-        if not oai_client.api_key:
-            raise ValueError(
-                "OpenAI API key is required to generate embeddings for retrieval queries."
-            )
+        oai_client = openai_client or DatabricksOpenAI(workspace_client=self.workspace_client)
 
         signature = inspect.signature(self._index.similarity_search)
         kwargs = {**kwargs, **(self.model_extra or {})}
@@ -331,8 +317,8 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             query: The query text to use for the retrieval.
             filters: Optional filters to refine vector search results.
             openai_client: The OpenAI client object used to generate embeddings for retrieval queries.
-                           Only used for self-managed embeddings. If not provided, the default OpenAI
-                           client in the current environment will be used.
+                           Only used for self-managed embeddings. If not provided, a DatabricksOpenAI
+                           client will be created using the workspace_client for authentication.
             **kwargs: Additional search parameters (e.g., num_results, query_type, score_threshold, reranker).
                       For Databricks-managed embeddings, these are passed as MCP metadata.
                       For self-managed embeddings, these are passed to similarity_search().

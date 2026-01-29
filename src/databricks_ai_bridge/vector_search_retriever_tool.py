@@ -328,9 +328,13 @@ class VectorSearchRetrieverToolMixin(BaseModel):
         ) from error
 
     def _validate_mcp_tools(self, tools: list) -> None:
-        """Validate that MCP tools were returned."""
+        """Validate that exactly one MCP tool was returned."""
         if not tools:
             raise ValueError(f"No MCP tools found for index {self.index_name}")
+        if len(tools) != 1:
+            raise ValueError(
+                f"Expected exactly 1 MCP tool for index {self.index_name}, but got {len(tools)}"
+            )
 
     def _handle_mcp_execution_error(self, error: Exception) -> None:
         """Log and raise standardized error for MCP execution failures."""
@@ -342,11 +346,15 @@ class VectorSearchRetrieverToolMixin(BaseModel):
     def _build_mcp_params(
         self,
         filters: Optional[Union[Dict[str, Any], List["FilterItem"]]] = None,
+        query: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Build common MCP parameters dict (excludes query)."""
+        """Build common MCP parameters dict."""
         kwargs = {**(self.model_extra or {}), **kwargs}
         params: Dict[str, Any] = {}
+
+        if query is not None:
+            params["query"] = query
 
         num_results = kwargs.pop("num_results", kwargs.pop("k", self.num_results))
         if num_results:

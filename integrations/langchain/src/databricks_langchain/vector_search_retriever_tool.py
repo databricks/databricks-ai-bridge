@@ -118,17 +118,6 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         self._mcp_tool = tools[0]
         return self._mcp_tool
 
-    def _build_mcp_input(
-        self,
-        query: str,
-        filters: Optional[Union[Dict[str, Any], List[FilterItem]]] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """Build input for MCP tool invocation."""
-        mcp_input = self._build_mcp_params(filters, **kwargs)
-        mcp_input["query"] = query
-        return mcp_input
-
     def _parse_mcp_response(self, mcp_response: Any) -> List[Document]:
         """Parse MCP tool response into LangChain Documents."""
         if isinstance(mcp_response, list) and mcp_response:
@@ -149,7 +138,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
         """Execute vector search via LangChain MCP infrastructure."""
         try:
             mcp_tool = self._create_or_get_mcp_tool()
-            mcp_input = self._build_mcp_input(query, filters, **kwargs)
+            mcp_input = self._build_mcp_params(filters, query=query, **kwargs)
             # MCP tools only support async invocation
             result = asyncio.run(mcp_tool.ainvoke(mcp_input))
             return self._parse_mcp_response(result)

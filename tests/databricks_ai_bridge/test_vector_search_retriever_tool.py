@@ -318,3 +318,141 @@ def test_cannot_use_both_dynamic_filter_and_predefined_filters():
             filters={"status": "active", "category": "electronics"},
             dynamic_filter=True,
         )
+
+
+# =============================================================================
+# Tests for _get_tool_name
+# =============================================================================
+
+
+def test_get_tool_name_replaces_dots():
+    """Test that dots in index name are replaced with underscores."""
+    tool = DummyVectorSearchRetrieverTool(index_name="catalog.schema.my_index")
+    assert tool._get_tool_name() == "catalog__schema__my_index"
+
+
+def test_get_tool_name_uses_custom_name():
+    """Test that custom tool_name is used when provided."""
+    tool = DummyVectorSearchRetrieverTool(index_name=index_name, tool_name="custom_tool")
+    assert tool._get_tool_name() == "custom_tool"
+
+
+def test_get_tool_name_truncates_long_names():
+    """Test that long tool names are truncated to 64 characters."""
+    long_index = (
+        "catalog.schema.really_really_really_long_tool_name_that_should_be_truncated_to_64_chars"
+    )
+    tool = DummyVectorSearchRetrieverTool(index_name=long_index)
+    result = tool._get_tool_name()
+    assert len(result) <= 64
+
+
+# =============================================================================
+# Tests for _validate_mcp_tools
+# =============================================================================
+
+
+def test_validate_mcp_tools_empty_list():
+    """Test that empty tools list raises ValueError."""
+    tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+    with pytest.raises(ValueError, match="Expected exactly 1 MCP tool"):
+        tool._validate_mcp_tools([])
+
+
+def test_validate_mcp_tools_multiple_tools():
+    """Test that multiple tools raises ValueError."""
+    tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+    with pytest.raises(ValueError, match="Expected exactly 1 MCP tool"):
+        tool._validate_mcp_tools([MagicMock(), MagicMock()])
+
+
+def test_validate_mcp_tools_single_tool():
+    """Test that single tool passes validation."""
+    tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+    # Should not raise
+    tool._validate_mcp_tools([MagicMock()])
+
+
+# =============================================================================
+# Tests for _get_filter_param_description
+# =============================================================================
+
+
+def test_get_filter_param_description_includes_column_metadata():
+    """Test that _get_filter_param_description includes column metadata when available."""
+    from unittest.mock import Mock, patch
+
+    mock_column1 = Mock()
+    mock_column1.name = "category"
+    mock_column1.type_name.name = "STRING"
+
+    mock_column2 = Mock()
+    mock_column2.name = "price"
+    mock_column2.type_name.name = "FLOAT"
+
+    mock_column3 = Mock()
+    mock_column3.name = "__internal_column"  # Should be excluded
+    mock_column3.type_name.name = "STRING"
+
+    mock_table_info = Mock()
+    mock_table_info.columns = [mock_column1, mock_column2, mock_column3]
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = Mock()
+        mock_ws_client.tables.get.return_value = mock_table_info
+        mock_ws_client_class.return_value = mock_ws_client
+
+        tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+        description = tool._get_filter_param_description()
+
+        # Should include available columns in description
+        assert "Available columns for filtering: category (STRING), price (FLOAT)" in description
+
+        # Should include comprehensive filter syntax
+        assert "Inclusion:" in description
+        assert "Exclusion:" in description
+        assert "Comparisons:" in description
+        assert "Pattern match:" in description
+        assert "OR logic:" in description
+
+
+def test_get_filter_param_description_fails_on_table_metadata_error():
+    """Test that _get_filter_param_description fails with clear error when table metadata cannot be retrieved."""
+    from unittest.mock import patch
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_ws_client.tables.get.side_effect = Exception("Permission denied")
+        mock_ws_client_class.return_value = mock_ws_client
+
+        tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+
+        with pytest.raises(
+            ValueError,
+            match="Failed to retrieve table metadata for index.*Permission denied",
+        ):
+            tool._get_filter_param_description()
+
+
+def test_get_filter_param_description_fails_on_empty_columns():
+    """Test that _get_filter_param_description fails when table has no valid columns."""
+    from unittest.mock import patch
+
+    with patch("databricks.sdk.WorkspaceClient") as mock_ws_client_class:
+        mock_ws_client = MagicMock()
+        mock_table = MagicMock()
+        mock_column = MagicMock()
+        mock_column.name = "__internal_column"
+        mock_column.type_name = MagicMock()
+        mock_column.type_name.name = "STRING"
+        mock_table.columns = [mock_column]
+        mock_ws_client.tables.get.return_value = mock_table
+        mock_ws_client_class.return_value = mock_ws_client
+
+        tool = DummyVectorSearchRetrieverTool(index_name=index_name)
+
+        with pytest.raises(
+            ValueError,
+            match="No valid columns found in table metadata for index",
+        ):
+            tool._get_filter_param_description()
