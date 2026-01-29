@@ -22,6 +22,7 @@ dev = [
 ]
 tests = [
   "pytest>=9.0.0",
+  "pytest-cov>=4.1.0",
 ]
 
 [build-system]
@@ -53,6 +54,13 @@ filterwarnings = [
     "default::Warning:databricks_dspy",
     "default::Warning:tests",
 ]
+
+[tool.coverage.run]
+source = ["databricks_dspy"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ty.environment]
 root = ["./src", "./tests"]
