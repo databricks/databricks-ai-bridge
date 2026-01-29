@@ -2,6 +2,7 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
+from databricks_openai import AsyncDatabricksOpenAI
 from openai import AsyncOpenAI, OpenAI
 
 
@@ -59,7 +60,6 @@ def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpen
             such as timeout and max_retries.
     """
     from databricks.sdk import WorkspaceClient
-    from databricks_openai import AsyncDatabricksOpenAI
 
     # If workspace_client is provided, use it directly
     if workspace_client is not None:
