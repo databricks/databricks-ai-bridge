@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-01-28
 
+### Added
+
+- Added `useRemoteToolCalling` option to provider settings for controlling how tool calls are handled
+  - When `true`: Tool calls are marked as `dynamic: true` and `providerExecuted: true`, indicating they are executed remotely by Databricks
+  - When `false` (default): Tool calls are passed through normally for local execution
+  - Useful for Databricks agents with built-in tools, Agents on Apps, and MCP integrations
+
 ### Changed
 
 - **BREAKING**: Upgraded to AI SDK v6 (`@ai-sdk/provider@3.0.5`, `@ai-sdk/provider-utils@4.0.10`)
@@ -16,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FinishReason changed from string to `{ raw: unknown, unified: string }`
 - Warning format changed from `{ type: 'unsupported-setting', setting }` to `{ type: 'unsupported', feature }`
 - Provider specification version updated to `'v3'`
+
+### Removed
+
+- **BREAKING**: Removed `DATABRICKS_TOOL_DEFINITION` export and `src/tools.ts`
+  - This workaround is no longer needed with the new `useRemoteToolCalling` option
+  - If you were using `DATABRICKS_TOOL_DEFINITION`, enable `useRemoteToolCalling: true` instead
 
 ## [0.2.3] - 2026-01-26
 
