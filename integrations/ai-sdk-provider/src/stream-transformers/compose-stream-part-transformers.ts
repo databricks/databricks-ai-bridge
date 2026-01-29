@@ -34,9 +34,9 @@ type Last<T extends any[]> = T extends [...any[], infer L] ? L : never
  *   4️⃣ Return the `out`/`last` of that final transformer.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Transformers have varying Out types
-export function composeDatabricksStreamPartTransformers<T extends DatabricksStreamPartTransformer<any>[]>(
-  ...transformers: T
-): DatabricksStreamPartTransformer<OutElement<Last<T>>> {
+export function composeDatabricksStreamPartTransformers<
+  T extends DatabricksStreamPartTransformer<any>[],
+>(...transformers: T): DatabricksStreamPartTransformer<OutElement<Last<T>>> {
   // The generic `OutElement<Last<T>>` is the element type of the **last**
   // transformer, so the returned function has the correct inferred type.
   return (
