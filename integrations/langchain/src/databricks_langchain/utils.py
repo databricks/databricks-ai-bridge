@@ -73,8 +73,7 @@ def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpen
     except ImportError as e:
         raise ImportError(
             "Failed to create the async OpenAI client. "
-            "Please run `pip install databricks-openai databricks-sdk` to install "
-            "required dependencies."
+            "Please run `pip install databricks-openai` to install required dependencies."
         ) from e
 
 

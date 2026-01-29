@@ -793,8 +793,9 @@ class ChatDatabricks(BaseChatModel):
 
         if self.use_responses_api:
             prev_chunk = None
-            stream: AsyncStream[ResponseStreamEvent] = await self.async_client.responses.create(
-                **data
+            stream = cast(
+                AsyncStream[ResponseStreamEvent],
+                await self.async_client.responses.create(**data),
             )
             async for chunk in stream:
                 chunk_message = _convert_responses_api_chunk_to_lc_chunk(chunk, prev_chunk)
@@ -811,9 +812,10 @@ class ChatDatabricks(BaseChatModel):
                 usage_chunk_emitted = True
         else:
             first_chunk_role = None
-            stream: AsyncStream[
-                ChatCompletionChunk
-            ] = await self.async_client.chat.completions.create(**data)
+            stream = cast(
+                AsyncStream[ChatCompletionChunk],
+                await self.async_client.chat.completions.create(**data),
+            )
             async for chunk in stream:
                 # Handle ChatAgent chunks that don't have choices but have delta
                 if hasattr(chunk, "choices") and chunk.choices is None and hasattr(chunk, "delta"):
