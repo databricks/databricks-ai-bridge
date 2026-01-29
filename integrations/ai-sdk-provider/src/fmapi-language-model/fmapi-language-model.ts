@@ -22,7 +22,6 @@ import { fmapiChunkSchema, fmapiResponseSchema } from './fmapi-schema'
 import {
   convertFmapiChunkToMessagePart,
   convertFmapiResponseToMessagePart,
-  type FmapiConvertOptions,
 } from './fmapi-convert-to-message-parts'
 import { convertPromptToFmapiMessages } from './fmapi-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
