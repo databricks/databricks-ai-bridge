@@ -348,7 +348,7 @@ class Genie:
         return resp
 
     @mlflow.trace()
-    def poll_for_result(self, conversation_id, message_id):
+    def _poll_for_result(self, conversation_id, message_id):
         if not self._poll_tool_name:
             raise ValueError(
                 f"Poll tool not available for Genie space {self.space_id}. "
@@ -449,6 +449,23 @@ class Genie:
             )
 
     @mlflow.trace()
+    def poll_for_result(self, conversation_id, message_id):
+        """
+        Poll for the result of a Genie query.
+
+        .. deprecated::
+            Use ask_question() instead, which handles polling automatically.
+            This method will be removed in a future version.
+        """
+        warnings.warn(
+            "poll_for_result() is deprecated. Use ask_question() instead, "
+            "which handles polling automatically.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._poll_for_result(conversation_id, message_id)
+
+    @mlflow.trace()
     def ask_question(self, question, conversation_id: Optional[str] = None, poll: bool = True):
         """
         Ask a question to Genie and return the response.
@@ -486,7 +503,7 @@ class Genie:
                     genie_response = json.loads(content_block.text)
                     status = genie_response.get("status", "")
                     if status and status not in TERMINAL_STATES:
-                        return self.poll_for_result(
+                        return self._poll_for_result(
                             response.conversation_id or genie_response.get("conversationId"),
                             response.message_id or genie_response.get("messageId"),
                         )
