@@ -186,6 +186,7 @@ export async function convertToResponsesInput({
 
             input.push({
               type: 'mcp_approval_response',
+              id: part.approvalId,
               approval_request_id: part.approvalId,
               approve: part.approved,
               ...(part.reason && { reason: part.reason }),

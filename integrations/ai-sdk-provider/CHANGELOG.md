@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-01-30
+
+### Fixed
+
+- Added missing `id` field to `mcp_approval_response` when converting tool approval responses to Responses API format
+
 ## [0.4.0] - 2026-01-30
 
 ### Changed
