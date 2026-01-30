@@ -19,6 +19,9 @@ export type ResponsesBodyArgs = {
       | { type: 'json_object' }
       | { type: 'json_schema'; json_schema: unknown }
   }
+  databricks_options?: {
+    return_trace?: boolean
+  }
 }
 
 /**
@@ -29,6 +32,9 @@ export type DatabricksProviderOptions = {
   metadata?: Record<string, string>
   reasoning?: {
     effort?: 'low' | 'medium' | 'high'
+  }
+  databricksOptions?: {
+    return_trace?: boolean
   }
 }
 
@@ -145,6 +151,10 @@ export function callOptionsToResponsesArgs(options: LanguageModelV2CallOptions):
 
   if (databricksOptions?.reasoning != null) {
     args.reasoning = databricksOptions.reasoning
+  }
+
+  if (databricksOptions?.databricksOptions != null) {
+    args.databricks_options = databricksOptions.databricksOptions
   }
 
   return { args, warnings }

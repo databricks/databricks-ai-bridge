@@ -101,6 +101,8 @@ export const responsesAgentResponseSchema = z.object({
       total_tokens: z.number(),
     })
     .optional(),
+  trace_id: z.string().optional(),
+  span_id: z.string().optional(),
 })
 
 /**
@@ -182,6 +184,8 @@ const responsesCompletedSchema = z.object({
       output_tokens: z.number(),
       total_tokens: z.number(),
     }),
+    trace_id: z.string().optional(),
+    span_id: z.string().optional(),
   }),
 })
 
