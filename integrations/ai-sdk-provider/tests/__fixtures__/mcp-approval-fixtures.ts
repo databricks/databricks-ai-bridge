@@ -4,6 +4,10 @@ import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
  * MCP Approval Request/Response Fixtures
  *
  * These fixtures simulate the SSE stream for MCP approval flows.
+ * With AI SDK v6, MCP approval is handled via:
+ * - tool-call with approvalRequestId in metadata
+ * - tool-approval-request part
+ * - tool-result with { approved: boolean } result
  */
 
 /**
@@ -156,19 +160,27 @@ data: {
       providerMetadata: { databricks: { itemId: '__fake_id__text_1__' } },
     },
     { type: 'text-end', id: '__fake_id__text_1__' },
-    // MCP approval request
+    // MCP approval request - now includes tool-call and tool-approval-request parts
     {
       type: 'tool-call',
       toolCallId: '__fake_mcp_request_id__',
       toolName: 'test_mcp_tool',
       input: '{"action": "test", "param": "value"}',
+      dynamic: true,
+      providerExecuted: true,
       providerMetadata: {
         databricks: {
-          type: 'mcp_approval_request',
           itemId: '__fake_mcp_request_id__',
           serverLabel: 'test-server',
+          approvalRequestId: '__fake_mcp_request_id__',
         },
       },
+    },
+    // AI SDK v6 tool-approval-request part
+    {
+      type: 'tool-approval-request',
+      approvalId: '__fake_mcp_request_id__',
+      toolCallId: '__fake_mcp_request_id__',
     },
   ],
 }
@@ -291,21 +303,23 @@ data: {
 `,
   out: [
     // Tool-call re-emitted from prompt (needed before tool-result)
+    // Marked as provider-executed so AI SDK doesn't try to validate the tool
     {
       type: 'tool-call',
       toolCallId: '__fake_mcp_request_id__',
       toolName: 'databricks-tool-call',
       input: '{"action":"test","param":"value"}',
+      providerExecuted: true,
+      dynamic: true,
     },
-    // MCP approval response (approved)
+    // MCP approval response (approved) - uses { approved: true } format
     {
       type: 'tool-result',
       toolCallId: '__fake_mcp_request_id__',
       toolName: 'mcp_approval',
-      result: { __approvalStatus__: true },
+      result: { approved: true },
       providerMetadata: {
         databricks: {
-          type: 'mcp_approval_response',
           itemId: '__fake_mcp_response_id__',
         },
       },
@@ -440,21 +454,23 @@ data: {
 `,
   out: [
     // Tool-call re-emitted from prompt (needed before tool-result)
+    // Marked as provider-executed so AI SDK doesn't try to validate the tool
     {
       type: 'tool-call',
       toolCallId: '__fake_mcp_request_id__',
       toolName: 'databricks-tool-call',
       input: '{"action":"test","param":"value"}',
+      providerExecuted: true,
+      dynamic: true,
     },
-    // MCP approval response (denied)
+    // MCP approval response (denied) - uses { approved: false } format
     {
       type: 'tool-result',
       toolCallId: '__fake_mcp_request_id__',
       toolName: 'mcp_approval',
-      result: { __approvalStatus__: false },
+      result: { approved: false },
       providerMetadata: {
         databricks: {
-          type: 'mcp_approval_response',
           itemId: '__fake_mcp_response_denied_id__',
         },
       },

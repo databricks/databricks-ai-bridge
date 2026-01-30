@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-30
+
+### Changed
+
+- MCP approval handling now uses AI SDK v6 native `tool-approval-request` and `tool-approval-response` types
+- Simplified MCP approval flow - approval status is determined from AI SDK state instead of custom tracking
+
+### Removed
+
+- Removed `extractDatabricksMetadata` function - access provider metadata directly via `part.callProviderMetadata?.databricks` instead
+- Removed `DatabricksToolMetadata` type export
+- Removed MCP utility exports (`MCP_APPROVAL_STATUS_KEY`, `MCP_APPROVAL_REQUEST_TYPE`, `MCP_APPROVAL_RESPONSE_TYPE`, `isMcpApprovalRequest`, `isMcpApprovalResponse`, `createApprovalStatusOutput`, `getMcpApprovalState`) - use AI SDK v6 native tool approval instead
+
 ## [0.3.0] - 2026-01-28
 
 ### Added

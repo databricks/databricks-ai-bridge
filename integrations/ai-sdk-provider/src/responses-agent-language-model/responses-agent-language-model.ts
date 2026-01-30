@@ -28,7 +28,6 @@ import { convertToResponsesInput } from './responses-convert-to-input'
 import { getDatabricksLanguageModelTransformStream } from '../stream-transformers/databricks-stream-transformer'
 import { prepareResponsesTools } from './responses-prepare-tools'
 import { callOptionsToResponsesArgs } from './call-options-to-responses-args'
-import { MCP_APPROVAL_REQUEST_TYPE } from '../mcp'
 
 function mapResponsesFinishReason({
   finishReason,
@@ -243,6 +242,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                     toolCallId: toolCallFromPreviousMessages.toolCallId,
                     toolName: toolCallFromPreviousMessages.toolName,
                     input: JSON.stringify(toolCallFromPreviousMessages.input),
+                    // Mark as provider-executed so AI SDK doesn't try to validate the tool
+                    providerExecuted: true,
+                    dynamic: true,
                   })
                 }
               }
@@ -276,7 +278,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 for (const toolCall of toolCalls) {
                   // Skip MCP approval requests - they intentionally wait for user approval
                   const isMcpApprovalRequest =
-                    toolCall.providerMetadata?.databricks?.type === MCP_APPROVAL_REQUEST_TYPE
+                    toolCall.providerMetadata?.databricks?.approvalRequestId != null
                   if (isMcpApprovalRequest) {
                     continue
                   }

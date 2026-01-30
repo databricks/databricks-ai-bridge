@@ -195,12 +195,12 @@ describe('MCP Approval Streaming', () => {
       expect(contentParts[i]).toMatchObject(MCP_APPROVAL_REQUEST_FIXTURE.out[i] as any)
     }
 
-    // Verify MCP approval request has correct metadata
+    // Verify MCP approval request has correct metadata (approvalRequestId, not type)
     const mcpRequestPart = contentParts.find(
       (part) =>
         part.type === 'tool-call' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_request'
+        (part as any).providerMetadata?.databricks?.approvalRequestId != null
     )
     expect(mcpRequestPart).toBeDefined()
     // Verify toolName is the actual tool name (not databricks-tool-call)
@@ -208,7 +208,7 @@ describe('MCP Approval Streaming', () => {
     expect((mcpRequestPart as any).toolName).toBe('test_mcp_tool')
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect((mcpRequestPart as any).providerMetadata.databricks).toMatchObject({
-      type: 'mcp_approval_request',
+      approvalRequestId: '__fake_mcp_request_id__',
       serverLabel: 'test-server',
     })
   })
@@ -269,11 +269,11 @@ describe('MCP Approval Streaming', () => {
       (part) =>
         part.type === 'tool-result' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_response'
+        (part as any).result?.approved != null
     )
     expect(mcpResponsePart).toBeDefined()
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    expect((mcpResponsePart as any).result).toEqual({ __approvalStatus__: true })
+    expect((mcpResponsePart as any).result).toEqual({ approved: true })
   })
 
   it('correctly converts MCP approval response (denied) stream', async () => {
@@ -332,12 +332,12 @@ describe('MCP Approval Streaming', () => {
       (part) =>
         part.type === 'tool-result' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_response'
+        (part as any).result?.approved != null
     )
     expect(mcpResponsePart).toBeDefined()
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect((mcpResponsePart as any).result).toEqual({
-      __approvalStatus__: false,
+      approved: false,
     })
   })
 })

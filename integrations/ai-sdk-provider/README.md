@@ -178,22 +178,6 @@ for await (const part of result.fullStream) {
 }
 ```
 
-### MCP Utilities
-
-```typescript
-import {
-  MCP_APPROVAL_STATUS_KEY,
-  MCP_APPROVAL_REQUEST_TYPE,
-  MCP_APPROVAL_RESPONSE_TYPE,
-  isMcpApprovalRequest,
-  isMcpApprovalResponse,
-  createApprovalStatusOutput,
-  getMcpApprovalState,
-} from '@databricks/ai-sdk-provider'
-```
-
-MCP (Model Context Protocol) approval utilities for handling approval workflows.
-
 ## Examples
 
 ### Responses Endpoint
