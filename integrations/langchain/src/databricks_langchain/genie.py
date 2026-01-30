@@ -65,6 +65,7 @@ def _query_genie_as_agent(
     query_sql = genie_response.query or ""
     query_result = genie_response.result if genie_response.result is not None else ""
     query_conversation_id = genie_response.conversation_id or ""
+    query_message_id = genie_response.message_id or ""
 
     # Create a list of AIMessage to return
     messages = []
@@ -83,6 +84,7 @@ def _query_genie_as_agent(
         return {
             "messages": messages,
             "conversation_id": query_conversation_id,
+            "message_id": query_message_id,
             "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
         }
     else:
@@ -90,7 +92,11 @@ def _query_genie_as_agent(
         messages.append(AIMessage(content=query_result, name="query_result"))
 
         # Return without DataFrame field
-        return {"messages": messages, "conversation_id": query_conversation_id}
+        return {
+            "messages": messages,
+            "conversation_id": query_conversation_id,
+            "message_id": query_message_id,
+        }
 
 
 @mlflow.trace(span_type="AGENT")
