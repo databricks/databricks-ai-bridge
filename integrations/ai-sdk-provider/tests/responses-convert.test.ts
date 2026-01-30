@@ -5,7 +5,6 @@ import {
   convertResponsesAgentChunkToMessagePart,
   convertResponsesAgentResponseToMessagePart,
 } from '../src/responses-agent-language-model/responses-convert-to-message-parts'
-import { MCP_APPROVAL_REQUEST_TYPE, MCP_APPROVAL_RESPONSE_TYPE } from '../src/mcp'
 
 // Helper to create options for conversion functions
 const defaultChunkOptions = { useRemoteToolCalling: true, toolNamesByCallId: new Map<string, string>() }
@@ -342,7 +341,7 @@ describe('convertToResponsesInput', () => {
   })
 
   describe('MCP approval request handling', () => {
-    it('converts MCP approval request from tool-call', async () => {
+    it('converts MCP approval request from tool-call with approvalRequestId', async () => {
       const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
@@ -354,7 +353,7 @@ describe('convertToResponsesInput', () => {
               input: { action: 'read_file', path: '/etc/hosts' },
               providerOptions: {
                 databricks: {
-                  type: MCP_APPROVAL_REQUEST_TYPE,
+                  approvalRequestId: 'mcp_req_123',
                   serverLabel: 'fs-server',
                 },
               },
@@ -370,7 +369,7 @@ describe('convertToResponsesInput', () => {
 
       expect(input).toEqual([
         {
-          type: MCP_APPROVAL_REQUEST_TYPE,
+          type: 'mcp_approval_request',
           id: 'mcp_req_123',
           name: 'filesystem_read',
           arguments: '{"action":"read_file","path":"/etc/hosts"}',
@@ -380,7 +379,7 @@ describe('convertToResponsesInput', () => {
       expect(warnings).toHaveLength(0)
     })
 
-    it('converts MCP approval request with approval response (approved)', async () => {
+    it('converts MCP approval request with tool-approval-response (approved)', async () => {
       const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
@@ -392,7 +391,7 @@ describe('convertToResponsesInput', () => {
               input: { action: 'read_file' },
               providerOptions: {
                 databricks: {
-                  type: MCP_APPROVAL_REQUEST_TYPE,
+                  approvalRequestId: 'mcp_req_123',
                   serverLabel: 'fs-server',
                 },
               },
@@ -403,10 +402,9 @@ describe('convertToResponsesInput', () => {
           role: 'tool',
           content: [
             {
-              type: 'tool-result',
-              toolCallId: 'mcp_req_123',
-              toolName: 'mcp_tool',
-              output: { type: 'json', value: { __approvalStatus__: true } },
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: true,
             },
           ],
         },
@@ -419,15 +417,14 @@ describe('convertToResponsesInput', () => {
 
       expect(input).toEqual([
         {
-          type: MCP_APPROVAL_REQUEST_TYPE,
+          type: 'mcp_approval_request',
           id: 'mcp_req_123',
           name: 'filesystem_read',
           arguments: '{"action":"read_file"}',
           server_label: 'fs-server',
         },
         {
-          type: MCP_APPROVAL_RESPONSE_TYPE,
-          id: 'mcp_req_123',
+          type: 'mcp_approval_response',
           approval_request_id: 'mcp_req_123',
           approve: true,
         },
@@ -435,7 +432,7 @@ describe('convertToResponsesInput', () => {
       expect(warnings).toHaveLength(0)
     })
 
-    it('converts MCP approval request with approval response (denied)', async () => {
+    it('converts MCP approval request with tool-approval-response (denied)', async () => {
       const prompt: LanguageModelV3Prompt = [
         {
           role: 'assistant',
@@ -447,7 +444,7 @@ describe('convertToResponsesInput', () => {
               input: { action: 'delete_file' },
               providerOptions: {
                 databricks: {
-                  type: MCP_APPROVAL_REQUEST_TYPE,
+                  approvalRequestId: 'mcp_req_123',
                   serverLabel: 'fs-server',
                 },
               },
@@ -458,10 +455,10 @@ describe('convertToResponsesInput', () => {
           role: 'tool',
           content: [
             {
-              type: 'tool-result',
-              toolCallId: 'mcp_req_123',
-              toolName: 'mcp_tool',
-              output: { type: 'json', value: { __approvalStatus__: false } },
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: false,
+              reason: 'User denied',
             },
           ],
         },
@@ -474,72 +471,17 @@ describe('convertToResponsesInput', () => {
 
       expect(input).toEqual([
         {
-          type: MCP_APPROVAL_REQUEST_TYPE,
+          type: 'mcp_approval_request',
           id: 'mcp_req_123',
           name: 'filesystem_delete',
           arguments: '{"action":"delete_file"}',
           server_label: 'fs-server',
         },
         {
-          type: MCP_APPROVAL_RESPONSE_TYPE,
-          id: 'mcp_req_123',
+          type: 'mcp_approval_response',
           approval_request_id: 'mcp_req_123',
           approve: false,
-        },
-      ])
-      expect(warnings).toHaveLength(0)
-    })
-
-    it('converts MCP approval request with tool execution output (approved and executed)', async () => {
-      const prompt: LanguageModelV3Prompt = [
-        {
-          role: 'assistant',
-          content: [
-            {
-              type: 'tool-call',
-              toolCallId: 'mcp_req_123',
-              toolName: 'filesystem_read',
-              input: { action: 'read_file' },
-              providerOptions: {
-                databricks: {
-                  type: MCP_APPROVAL_REQUEST_TYPE,
-                  serverLabel: 'fs-server',
-                },
-              },
-            },
-          ],
-        },
-        {
-          role: 'tool',
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: 'mcp_req_123',
-              toolName: 'read_file',
-              output: { type: 'text', value: 'file contents here' },
-            },
-          ],
-        },
-      ]
-
-      const { input, warnings } = await convertToResponsesInput({
-        prompt,
-        systemMessageMode: 'system',
-      })
-
-      // When tool result is actual output (not approval status), it becomes function_call_output
-      expect(input).toEqual([
-        {
-          type: MCP_APPROVAL_REQUEST_TYPE,
-          id: 'mcp_req_123',
-          name: 'filesystem_read',
-          arguments: '{"action":"read_file"}',
-          server_label: 'fs-server',
-        },
-        {
-          type: 'function_call_output',
-          call_id: 'mcp_req_123',
-          output: 'file contents here',
+          reason: 'User denied',
         },
       ])
       expect(warnings).toHaveLength(0)
@@ -547,24 +489,16 @@ describe('convertToResponsesInput', () => {
   })
 
   describe('MCP approval response handling', () => {
-    it('converts MCP approval response from tool-result with provider options', async () => {
+    it('converts tool-approval-response from tool role', async () => {
       const prompt: LanguageModelV3Prompt = [
         {
-          role: 'assistant',
+          role: 'tool',
           content: [
             {
-              type: 'tool-result',
-              toolCallId: 'mcp_req_123',
-              toolName: 'mcp_tool',
-              output: { type: 'json', value: { __approvalStatus__: true } },
-              providerOptions: {
-                databricks: {
-                  type: MCP_APPROVAL_RESPONSE_TYPE,
-                  approvalRequestId: 'mcp_req_original',
-                  approve: true,
-                  reason: 'User approved',
-                },
-              },
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: true,
+              reason: 'User approved',
             },
           ],
         },
@@ -577,9 +511,8 @@ describe('convertToResponsesInput', () => {
 
       expect(input).toEqual([
         {
-          type: MCP_APPROVAL_RESPONSE_TYPE,
-          id: 'mcp_req_original',
-          approval_request_id: 'mcp_req_original',
+          type: 'mcp_approval_response',
+          approval_request_id: 'mcp_req_123',
           approve: true,
           reason: 'User approved',
         },
@@ -587,24 +520,16 @@ describe('convertToResponsesInput', () => {
       expect(warnings).toHaveLength(0)
     })
 
-    it('converts MCP approval response with denial', async () => {
+    it('converts tool-approval-response with denial', async () => {
       const prompt: LanguageModelV3Prompt = [
         {
-          role: 'assistant',
+          role: 'tool',
           content: [
             {
-              type: 'tool-result',
-              toolCallId: 'mcp_req_123',
-              toolName: 'mcp_tool',
-              output: { type: 'json', value: { __approvalStatus__: false } },
-              providerOptions: {
-                databricks: {
-                  type: MCP_APPROVAL_RESPONSE_TYPE,
-                  approvalRequestId: 'mcp_req_original',
-                  approve: false,
-                  reason: 'Security concern',
-                },
-              },
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: false,
+              reason: 'Security concern',
             },
           ],
         },
@@ -617,11 +542,50 @@ describe('convertToResponsesInput', () => {
 
       expect(input).toEqual([
         {
-          type: MCP_APPROVAL_RESPONSE_TYPE,
-          id: 'mcp_req_original',
-          approval_request_id: 'mcp_req_original',
+          type: 'mcp_approval_response',
+          approval_request_id: 'mcp_req_123',
           approve: false,
           reason: 'Security concern',
+        },
+      ])
+      expect(warnings).toHaveLength(0)
+    })
+
+    it('deduplicates repeated tool-approval-response parts', async () => {
+      const prompt: LanguageModelV3Prompt = [
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: true,
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-approval-response',
+              approvalId: 'mcp_req_123',
+              approved: true,
+            },
+          ],
+        },
+      ]
+
+      const { input, warnings } = await convertToResponsesInput({
+        prompt,
+        systemMessageMode: 'system',
+      })
+
+      // Should only have one approval response despite two in input
+      expect(input).toEqual([
+        {
+          type: 'mcp_approval_response',
+          approval_request_id: 'mcp_req_123',
+          approve: true,
         },
       ])
       expect(warnings).toHaveLength(0)
@@ -1151,7 +1115,7 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
     })
 
     describe('mcp_approval_request type', () => {
-      it('converts MCP approval request to tool-call part with metadata', () => {
+      it('converts MCP approval request to tool-call and tool-approval-request parts', () => {
         const chunk = {
           type: 'response.output_item.done' as const,
           output_index: 1,
@@ -1176,11 +1140,16 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
             providerExecuted: true,
             providerMetadata: {
               databricks: {
-                type: MCP_APPROVAL_REQUEST_TYPE,
                 itemId: 'mcp_req_123',
                 serverLabel: 'fs-server',
+                approvalRequestId: 'mcp_req_123',
               },
             },
+          },
+          {
+            type: 'tool-approval-request',
+            approvalId: 'mcp_req_123',
+            toolCallId: 'mcp_req_123',
           },
         ])
       })
@@ -1212,10 +1181,9 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
             toolName: 'filesystem_read',
-            result: { __approvalStatus__: true },
+            result: { approved: true },
             providerMetadata: {
               databricks: {
-                type: MCP_APPROVAL_RESPONSE_TYPE,
                 itemId: 'mcp_resp_123',
               },
             },
@@ -1248,10 +1216,9 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
             toolName: 'filesystem_read',
-            result: { __approvalStatus__: false },
+            result: { approved: false },
             providerMetadata: {
               databricks: {
-                type: MCP_APPROVAL_RESPONSE_TYPE,
                 itemId: 'mcp_resp_123',
               },
             },
@@ -1279,10 +1246,10 @@ describe('convertResponsesAgentChunkToMessagePart', () => {
             type: 'tool-result',
             toolCallId: 'mcp_req_123',
             toolName: 'mcp_approval',
-            result: { __approvalStatus__: true },
+            result: { approved: true },
             providerMetadata: {
               databricks: {
-                type: MCP_APPROVAL_RESPONSE_TYPE,
+                itemId: 'mcp_req_123',
               },
             },
           },
@@ -1566,7 +1533,7 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
   })
 
   describe('mcp_approval_request output', () => {
-    it('converts MCP approval request', () => {
+    it('converts MCP approval request to tool-call and tool-approval-request', () => {
       const response = {
         id: 'resp_123',
         output: [
@@ -1588,13 +1555,20 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
           toolCallId: 'mcp_req_123',
           toolName: 'filesystem_read',
           input: '{"path": "/etc/hosts"}',
+          dynamic: true,
+          providerExecuted: true,
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_REQUEST_TYPE,
               itemId: 'mcp_req_123',
               serverLabel: 'fs-server',
+              approvalRequestId: 'mcp_req_123',
             },
           },
+        },
+        {
+          type: 'tool-approval-request',
+          approvalId: 'mcp_req_123',
+          toolCallId: 'mcp_req_123',
         },
       ])
     })
@@ -1625,14 +1599,14 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
 
       const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
-      expect(parts[1]).toEqual({
+      // parts[0] is the tool-call, parts[1] is the tool-approval-request, parts[2] is the tool-result
+      expect(parts[2]).toEqual({
         type: 'tool-result',
         toolCallId: 'mcp_req_123',
         toolName: 'filesystem_read',
-        result: { __approvalStatus__: true },
+        result: { approved: true },
         providerMetadata: {
           databricks: {
-            type: MCP_APPROVAL_RESPONSE_TYPE,
             itemId: 'mcp_resp_123',
           },
         },
@@ -1663,14 +1637,14 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
 
       const parts = convertResponsesAgentResponseToMessagePart(response, defaultResponseOptions)
 
-      expect(parts[1]).toEqual({
+      // parts[0] is the tool-call, parts[1] is the tool-approval-request, parts[2] is the tool-result
+      expect(parts[2]).toEqual({
         type: 'tool-result',
         toolCallId: 'mcp_req_123',
         toolName: 'filesystem_read',
-        result: { __approvalStatus__: false },
+        result: { approved: false },
         providerMetadata: {
           databricks: {
-            type: MCP_APPROVAL_RESPONSE_TYPE,
             itemId: 'mcp_resp_123',
           },
         },
@@ -1698,10 +1672,10 @@ describe('convertResponsesAgentResponseToMessagePart', () => {
           type: 'tool-result',
           toolCallId: 'mcp_req_123',
           toolName: 'mcp_approval',
-          result: { __approvalStatus__: true },
+          result: { approved: true },
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
+              itemId: 'mcp_req_123',
             },
           },
         },

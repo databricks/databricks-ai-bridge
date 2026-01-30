@@ -1,11 +1,6 @@
 import type { JSONValue, LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { randomUUID } from 'node:crypto'
 import { type ResponsesAgentChunk, type ResponsesAgentResponse } from './responses-agent-schema'
-import {
-  MCP_APPROVAL_REQUEST_TYPE,
-  MCP_APPROVAL_RESPONSE_TYPE,
-  createApprovalStatusOutput,
-} from '../mcp'
 
 export type ConvertChunkOptions = {
   useRemoteToolCalling: boolean
@@ -180,31 +175,35 @@ const convertOutputItemDone = (
           toolCallId: item.id,
           toolName: item.name,
           input: item.arguments,
-          ...(options.useRemoteToolCalling && {
-            dynamic: true,
-            providerExecuted: true,
-          }),
+          providerExecuted: true,
+          dynamic: true,
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_REQUEST_TYPE,
               itemId: item.id,
               serverLabel: item.server_label,
+              approvalRequestId: item.id,
             },
           },
+        },
+        {
+          type: 'tool-approval-request',
+          approvalId: item.id,
+          toolCallId: item.id,
         },
       ]
 
     case 'mcp_approval_response':
+      // MCP approval responses are handled via tool-approval-response in AI SDK v6
+      // We emit a tool-result for backwards compatibility
       return [
         {
           type: 'tool-result',
           toolCallId: item.approval_request_id,
           toolName: options.toolNamesByCallId?.get(item.approval_request_id) ?? 'mcp_approval',
-          result: createApprovalStatusOutput(item.approve),
+          result: { approved: item.approve },
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              ...(item.id != null && { itemId: item.id }),
+              itemId: item.id ?? item.approval_request_id,
             },
           },
         },
@@ -304,26 +303,34 @@ export const convertResponsesAgentResponseToMessagePart = (
           toolCallId: output.id,
           toolName: output.name,
           input: output.arguments,
+          providerExecuted: true,
+          dynamic: true,
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_REQUEST_TYPE,
               itemId: output.id,
               serverLabel: output.server_label,
+              approvalRequestId: output.id,
             },
           },
+        })
+        parts.push({
+          type: 'tool-approval-request',
+          approvalId: output.id,
+          toolCallId: output.id,
         })
         break
 
       case 'mcp_approval_response':
+        // MCP approval responses are handled via tool-approval-response in AI SDK v6
+        // We emit a tool-result for backwards compatibility
         parts.push({
           type: 'tool-result',
           toolCallId: output.approval_request_id,
           toolName: toolNamesByCallId.get(output.approval_request_id) ?? 'mcp_approval',
-          result: createApprovalStatusOutput(output.approve),
+          result: { approved: output.approve },
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              ...(output.id != null && { itemId: output.id }),
+              itemId: output.id ?? output.approval_request_id,
             },
           },
         })
