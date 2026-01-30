@@ -203,6 +203,65 @@ def test_databricks_store_warns_when_both_embeddings_and_endpoint_specified(monk
     assert store.index_config["embed"] is mock_embeddings
 
 
+def test_databricks_store_context_manager_auto_setup_true(monkeypatch):
+    """Test that context manager calls setup() when auto_setup=True (default)."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+
+    workspace = _create_mock_workspace()
+
+    mock_pg_store = MagicMock()
+    mock_pg_store.setup = MagicMock()
+
+    with patch(
+        "databricks_langchain.store.PostgresStore", return_value=mock_pg_store
+    ) as mock_pg_class:
+        store = DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+        )
+
+        # Verify auto_setup defaults to True
+        assert store._auto_setup is True
+
+        with store:
+            # setup() should have been called
+            mock_pg_store.setup.assert_called_once()
+
+
+def test_databricks_store_context_manager_auto_setup_false(monkeypatch):
+    """Test that context manager does NOT call setup() when auto_setup=False."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+
+    workspace = _create_mock_workspace()
+
+    mock_pg_store = MagicMock()
+    mock_pg_store.setup = MagicMock()
+
+    with patch(
+        "databricks_langchain.store.PostgresStore", return_value=mock_pg_store
+    ):
+        store = DatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            auto_setup=False,
+        )
+
+        # Verify auto_setup is False
+        assert store._auto_setup is False
+
+        with store:
+            # setup() should NOT have been called
+            mock_pg_store.setup.assert_not_called()
+
+
 # =============================================================================
 # AsyncDatabricksStore Tests
 # =============================================================================
@@ -287,11 +346,73 @@ async def test_async_databricks_store_context_manager(monkeypatch):
     async with AsyncDatabricksStore(
         instance_name="lakebase-instance",
         workspace_client=workspace,
+        auto_setup=False,  # Disable auto_setup to avoid mocking setup
     ) as store:
         assert test_pool._opened
         assert not test_pool._closed
 
     assert test_pool._closed
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_context_manager_auto_setup_true(monkeypatch):
+    """Test that async context manager calls setup() when auto_setup=True (default)."""
+    import asyncio
+
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    mock_pg_store = MagicMock()
+    future = asyncio.Future()
+    future.set_result(None)
+    mock_pg_store.setup = MagicMock(return_value=future)
+
+    with patch(
+        "databricks_langchain.store.AsyncPostgresStore", return_value=mock_pg_store
+    ):
+        store = AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+        )
+
+        # Verify auto_setup defaults to True
+        assert store._auto_setup is True
+
+        async with store:
+            # setup() should have been called
+            mock_pg_store.setup.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_context_manager_auto_setup_false(monkeypatch):
+    """Test that async context manager does NOT call setup() when auto_setup=False."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    mock_pg_store = MagicMock()
+    mock_pg_store.setup = MagicMock()
+
+    with patch(
+        "databricks_langchain.store.AsyncPostgresStore", return_value=mock_pg_store
+    ):
+        store = AsyncDatabricksStore(
+            instance_name="lakebase-instance",
+            workspace_client=workspace,
+            auto_setup=False,
+        )
+
+        # Verify auto_setup is False
+        assert store._auto_setup is False
+
+        async with store:
+            # setup() should NOT have been called
+            mock_pg_store.setup.assert_not_called()
 
 
 @pytest.mark.asyncio

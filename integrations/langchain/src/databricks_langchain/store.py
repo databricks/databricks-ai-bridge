@@ -39,6 +39,7 @@ class DatabricksStore(BaseStore):
         embedding_dims: int | None = None,
         embedding_fields: list[str] | None = None,
         embeddings: DatabricksEmbeddings | None = None,
+        auto_setup: bool = True,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize DatabricksStore with embedding support.
@@ -54,6 +55,8 @@ class DatabricksStore(BaseStore):
                 vectorizes the entire JSON value.
             embeddings: Optional pre-configured DatabricksEmbeddings instance. If provided,
                 takes precedence over embedding_endpoint.
+            auto_setup: If True (default), automatically call setup() when entering
+                the context manager. Set to False to skip automatic setup.
             **pool_kwargs: Additional keyword arguments passed to LakebasePool.
         """
         if not _store_imports_available:
@@ -67,6 +70,7 @@ class DatabricksStore(BaseStore):
             workspace_client=workspace_client,
             **pool_kwargs,
         )
+        self._auto_setup = auto_setup
 
         # Initialize embeddings and index configuration for semantic search
         self.embeddings: DatabricksEmbeddings | None = None
@@ -134,6 +138,16 @@ class DatabricksStore(BaseStore):
         """
         return self.batch(ops)
 
+    def __enter__(self):
+        """Enter context manager and optionally set up the store."""
+        if self._auto_setup:
+            self.setup()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager."""
+        return False
+
 
 class AsyncDatabricksStore(AsyncBatchedBaseStore):
     """Async version of DatabricksStore for working with long-term memory on Databricks.
@@ -154,6 +168,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         embedding_dims: int | None = None,
         embedding_fields: list[str] | None = None,
         embeddings: DatabricksEmbeddings | None = None,
+        auto_setup: bool = True,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize AsyncDatabricksStore with embedding support.
@@ -169,6 +184,8 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
                 vectorizes the entire JSON value.
             embeddings: Optional pre-configured DatabricksEmbeddings instance. If provided,
                 takes precedence over embedding_endpoint.
+            auto_setup: If True (default), automatically call setup() when entering
+                the context manager. Set to False to skip automatic setup.
             **pool_kwargs: Additional keyword arguments passed to AsyncLakebasePool.
         """
         if not _store_imports_available:
@@ -184,6 +201,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
             workspace_client=workspace_client,
             **pool_kwargs,
         )
+        self._auto_setup = auto_setup
 
         # Initialize embeddings and index configuration for semantic search
         self.embeddings: DatabricksEmbeddings | None = None
@@ -243,8 +261,10 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         return await self._with_store(lambda s: s.abatch(ops))
 
     async def __aenter__(self):
-        """Enter async context manager and open the connection pool."""
+        """Enter async context manager, open the connection pool, and optionally set up the store."""
         await self._lakebase.open()
+        if self._auto_setup:
+            await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
