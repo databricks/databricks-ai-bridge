@@ -77,6 +77,7 @@ export type ResponsesMcpApprovalRequest = {
 
 export type ResponsesMcpApprovalResponse = {
   type: 'mcp_approval_response'
+  id: string
   approval_request_id: string
   approve: boolean
   reason?: string

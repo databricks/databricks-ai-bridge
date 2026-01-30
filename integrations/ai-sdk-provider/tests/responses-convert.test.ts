@@ -425,6 +425,7 @@ describe('convertToResponsesInput', () => {
         },
         {
           type: 'mcp_approval_response',
+          id: 'mcp_req_123',
           approval_request_id: 'mcp_req_123',
           approve: true,
         },
@@ -479,6 +480,7 @@ describe('convertToResponsesInput', () => {
         },
         {
           type: 'mcp_approval_response',
+          id: 'mcp_req_123',
           approval_request_id: 'mcp_req_123',
           approve: false,
           reason: 'User denied',
@@ -512,6 +514,7 @@ describe('convertToResponsesInput', () => {
       expect(input).toEqual([
         {
           type: 'mcp_approval_response',
+          id: 'mcp_req_123',
           approval_request_id: 'mcp_req_123',
           approve: true,
           reason: 'User approved',
@@ -543,6 +546,7 @@ describe('convertToResponsesInput', () => {
       expect(input).toEqual([
         {
           type: 'mcp_approval_response',
+          id: 'mcp_req_123',
           approval_request_id: 'mcp_req_123',
           approve: false,
           reason: 'Security concern',
@@ -584,6 +588,7 @@ describe('convertToResponsesInput', () => {
       expect(input).toEqual([
         {
           type: 'mcp_approval_response',
+          id: 'mcp_req_123',
           approval_request_id: 'mcp_req_123',
           approve: true,
         },
