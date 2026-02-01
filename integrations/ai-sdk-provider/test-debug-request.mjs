@@ -17,7 +17,7 @@ function getToken(profile, host) {
 
 const PROFILE = 'dogfood'
 const HOST = 'https://e2-dogfood.staging.cloud.databricks.com'
-const ENDPOINT = 'agents_smurching-default-test_chat_app_agent'
+const ENDPOINT = 'agents_smurching-default-feb_2026_agent'
 
 async function inspectStreamingRequest() {
   console.log('\n🔍 Inspecting Streaming Request with return_trace=true\n')

@@ -95,6 +95,18 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const content = convertResponsesAgentResponseToMessagePart(response)
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
+    // Extract trace_id from both root level (legacy) and nested databricks_output structure
+    const traceId =
+      response.trace_id ?? response.databricks_output?.trace?.info?.trace_id ?? undefined
+    const spanId = response.span_id ?? undefined
+
+    // Create a normalized response body with trace_id at root level for easier access
+    const responseBody = {
+      ...response,
+      ...(traceId && { trace_id: traceId }),
+      ...(spanId && { span_id: spanId }),
+    }
+
     return {
       content,
       finishReason: mapResponsesFinishReason({
@@ -112,7 +124,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       },
       warnings,
       response: {
-        body: response,
+        body: responseBody,
       },
     }
   }
@@ -204,6 +216,17 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                   responseBody.span_id = chunk.value.response.span_id
                 }
                 return
+              }
+
+              // Extract trace info from response.output_item.done event
+              // The endpoint returns trace info in databricks_output.trace.info
+              if (chunk.value.type === 'response.output_item.done') {
+                const traceInfo = (chunk.value as any).databricks_output?.trace?.info
+                if (traceInfo?.trace_id) {
+                  responseBody.trace_id = traceInfo.trace_id
+                  // Store full trace info for advanced use cases
+                  responseBody.databricks_trace_info = traceInfo
+                }
               }
 
               // Track tool call IDs to names from response.output_item.done function_call events
