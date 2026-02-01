@@ -102,6 +102,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         totalTokens: response.usage?.total_tokens ?? 0,
       },
       warnings,
+      response: {
+        body: response,
+      },
     }
   }
 
@@ -135,6 +138,10 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
 
     const allParts: LanguageModelV2StreamPart[] = []
 
+    // Create a mutable object to capture trace_id and span_id from responses.completed event
+    // This object will be mutated as the stream is consumed
+    const responseBody: Record<string, unknown> = {}
+
     return {
       stream: response
         .pipeThrough(
@@ -167,6 +174,13 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
                 usage.inputTokens = chunk.value.response.usage.input_tokens
                 usage.outputTokens = chunk.value.response.usage.output_tokens
                 usage.totalTokens = chunk.value.response.usage.total_tokens
+                // Capture trace_id and span_id in the responseBody object
+                if (chunk.value.response.trace_id !== undefined) {
+                  responseBody.trace_id = chunk.value.response.trace_id
+                }
+                if (chunk.value.response.span_id !== undefined) {
+                  responseBody.span_id = chunk.value.response.span_id
+                }
                 return
               }
 
@@ -232,7 +246,10 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV2 {
         )
         .pipeThrough(getDatabricksLanguageModelTransformStream()),
       request: { body: networkArgs.body },
-      response: { headers: responseHeaders },
+      response: {
+        headers: responseHeaders,
+        body: responseBody,
+      },
     }
   }
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support for `providerOptions.databricks.databricksOptions.return_trace` to request trace IDs from Databricks Responses API endpoints
+- Response schemas now include optional `trace_id` and `span_id` fields in the response body
+- Trace IDs can be accessed via `rawResponse.trace_id` in callbacks and used for feedback submission to MLflow
+
 ## [0.2.3] - 2026-01-26
 
 ### Added
