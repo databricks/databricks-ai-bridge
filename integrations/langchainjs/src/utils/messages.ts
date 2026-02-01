@@ -18,7 +18,6 @@ import {
   type ModelMessage,
   type StreamTextResult,
 } from "ai";
-import { getToolNameFromAiSDKTool } from "./tools.js";
 
 type UserContent = Extract<ModelMessage, { role: "user" }>["content"];
 type AssistantContent = Extract<ModelMessage, { role: "assistant" }>["content"];
@@ -94,8 +93,9 @@ export function convertLangChainToModelMessages(messages: BaseMessage[]): ModelM
     }
 
     if (ToolMessage.isInstance(msg)) {
-      // Convert LangChain tool message content to LanguageModelV2ToolResultOutput
-      let output: ToolContent[number]["output"];
+      // Convert LangChain tool message content to LanguageModelV3ToolResultOutput
+      type ToolResultOutput = { type: "text"; value: string } | { type: "json"; value: JSONValue };
+      let output: ToolResultOutput;
       if (typeof msg.content === "string") {
         // Try to parse as JSON, otherwise use as text
         try {
@@ -135,7 +135,8 @@ export function convertLangChainToModelMessages(messages: BaseMessage[]): ModelM
  * Convert AI SDK generateText result to LangChain ChatResult
  */
 export function convertGenerateTextResultToChatResult(
-  result: GenerateTextResult<ToolSet, unknown>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  result: GenerateTextResult<ToolSet, any>
 ): ChatResult {
   const text = result.text;
 
@@ -143,7 +144,7 @@ export function convertGenerateTextResultToChatResult(
   const toolCalls =
     result.toolCalls?.map((tc) => ({
       id: tc.toolCallId,
-      name: getToolNameFromAiSDKTool(tc),
+      name: tc.toolName,
       args: tc.input as Record<string, unknown>, // AI SDK uses 'input', LangChain uses 'args'
       type: "tool_call" as const,
     })) ?? [];
@@ -182,7 +183,8 @@ export function convertGenerateTextResultToChatResult(
  * which provides normalized events across all providers.
  */
 export async function* convertStreamTextResultToChunks(
-  result: StreamTextResult<ToolSet, unknown>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  result: StreamTextResult<ToolSet, any>
 ): AsyncGenerator<ChatGenerationChunk> {
   // Track accumulated tool calls for streaming
   const partialToolCalls: Map<string, { toolName: string; input: string; index: number }> =
@@ -208,7 +210,7 @@ export async function* convertStreamTextResultToChunks(
         // Complete tool call from streamText
         // This is the authoritative source for tool calls - always use it
         // If we previously saw tool-input-start/delta, use the index we assigned
-        const toolName = getToolNameFromAiSDKTool(part);
+        const toolName = part.toolName;
         const existingPartial = partialToolCalls.get(part.toolCallId);
         const toolIndex = existingPartial?.index ?? nextToolCallIndex++;
         const argsString = typeof part.input === "string" ? part.input : JSON.stringify(part.input);

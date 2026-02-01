@@ -1,12 +1,15 @@
-import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import type { FmapiChunk, FmapiContentItem, FmapiResponse, FmapiToolCall } from './fmapi-schema'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
+
+export type FmapiConvertOptions = {
+  useRemoteToolCalling: boolean
+}
 
 export const convertFmapiChunkToMessagePart = (
   chunk: FmapiChunk,
   toolCallIdsByIndex?: Map<number, string>
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
   if (chunk.choices.length === 0) return parts
   const choice = chunk.choices[0]
 
@@ -50,16 +53,17 @@ export const convertFmapiChunkToMessagePart = (
 }
 
 export const convertFmapiResponseToMessagePart = (
-  response: FmapiResponse
-): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+  response: FmapiResponse,
+  options: FmapiConvertOptions = { useRemoteToolCalling: false }
+): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
   if (response.choices.length === 0) return parts
   const choice = response.choices[0]
 
   // Handle OpenAI-format tool_calls first
   if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
     for (const toolCall of choice.message.tool_calls) {
-      parts.push(convertToolCallToContent(toolCall))
+      parts.push(convertToolCallToContent(toolCall, options))
     }
     // If there's also text content, include it
     if (typeof choice.message.content === 'string' && choice.message.content) {
@@ -77,25 +81,27 @@ export const convertFmapiResponseToMessagePart = (
   return parts
 }
 
-const convertToolCallToContent = (toolCall: FmapiToolCall): LanguageModelV2Content => {
+const convertToolCallToContent = (
+  toolCall: FmapiToolCall,
+  options: FmapiConvertOptions
+): LanguageModelV3Content => {
   return {
     type: 'tool-call',
     toolCallId: toolCall.id,
-    toolName: DATABRICKS_TOOL_CALL_ID,
+    toolName: toolCall.function.name,
     input: toolCall.function.arguments,
-    providerMetadata: {
-      databricks: {
-        toolName: toolCall.function.name,
-      },
-    },
+    ...(options.useRemoteToolCalling && {
+      dynamic: true,
+      providerExecuted: true,
+    }),
   }
 }
 
 const mapContentItemsToStreamParts = (
   items: FmapiContentItem[],
   id: string
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
   for (const item of items) {
     switch (item.type) {
       case 'text':
@@ -115,8 +121,8 @@ const mapContentItemsToStreamParts = (
   return parts
 }
 
-const mapContentItemsToProviderContent = (items: FmapiContentItem[]): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+const mapContentItemsToProviderContent = (items: FmapiContentItem[]): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
   for (const item of items) {
     switch (item.type) {
       case 'text':

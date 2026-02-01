@@ -1,4 +1,4 @@
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
 /**
  * FMAPI output fixtures for testing.
@@ -7,7 +7,7 @@ import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 
 type LLMOutputFixtures = {
   in: string
-  out: Array<LanguageModelV2StreamPart>
+  out: Array<LanguageModelV3StreamPart>
 }
 
 /**

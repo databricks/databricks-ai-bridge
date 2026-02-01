@@ -1,17 +1,17 @@
-import type { LanguageModelV2Content, LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { JSONValue, LanguageModelV3Content, LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import { randomUUID } from 'node:crypto'
 import { type ResponsesAgentChunk, type ResponsesAgentResponse } from './responses-agent-schema'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
-import {
-  MCP_APPROVAL_REQUEST_TYPE,
-  MCP_APPROVAL_RESPONSE_TYPE,
-  createApprovalStatusOutput,
-} from '../mcp'
+
+export type ConvertChunkOptions = {
+  useRemoteToolCalling: boolean
+  toolNamesByCallId?: Map<string, string>
+}
 
 export const convertResponsesAgentChunkToMessagePart = (
-  chunk: ResponsesAgentChunk
-): LanguageModelV2StreamPart[] => {
-  const parts: LanguageModelV2StreamPart[] = []
+  chunk: ResponsesAgentChunk,
+  options: ConvertChunkOptions = { useRemoteToolCalling: false }
+): LanguageModelV3StreamPart[] => {
+  const parts: LanguageModelV3StreamPart[] = []
 
   if ('error' in chunk) {
     parts.push({
@@ -52,15 +52,14 @@ export const convertResponsesAgentChunkToMessagePart = (
       parts.push({
         type: 'tool-result',
         toolCallId: chunk.call_id,
-        result: chunk.output,
-        toolName: DATABRICKS_TOOL_CALL_ID,
+        result: chunk.output != null ? (chunk.output as NonNullable<JSONValue>) : {},
+        toolName: options.toolNamesByCallId?.get(chunk.call_id) ?? 'unknown',
       })
       break
 
     case 'response.output_item.done':
-      parts.push(...convertOutputItemDone(chunk.item))
+      parts.push(...convertOutputItemDone(chunk.item, options))
       break
-
     case 'response.output_text.annotation.added':
       parts.push({
         type: 'source',
@@ -92,7 +91,10 @@ type OutputItemDoneItem = Extract<
   { type: 'response.output_item.done' }
 >['item']
 
-const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamPart[] => {
+const convertOutputItemDone = (
+  item: OutputItemDoneItem,
+  options: ConvertChunkOptions
+): LanguageModelV3StreamPart[] => {
   switch (item.type) {
     case 'message': {
       const firstContent = item.content[0]
@@ -117,11 +119,14 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         {
           type: 'tool-call',
           toolCallId: item.call_id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: item.name,
           input: item.arguments,
+          ...(options.useRemoteToolCalling && {
+            dynamic: true,
+            providerExecuted: true,
+          }),
           providerMetadata: {
             databricks: {
-              toolName: item.name,
               itemId: item.id,
             },
           },
@@ -133,8 +138,8 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         {
           type: 'tool-result',
           toolCallId: item.call_id,
-          result: item.output,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          result: item.output != null ? (item.output as NonNullable<JSONValue>) : {},
+          toolName: options.toolNamesByCallId?.get(item.call_id) ?? 'unknown',
         },
       ]
 
@@ -168,30 +173,37 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
         {
           type: 'tool-call',
           toolCallId: item.id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: item.name,
           input: item.arguments,
+          providerExecuted: true,
+          dynamic: true,
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_REQUEST_TYPE,
-              toolName: item.name,
               itemId: item.id,
               serverLabel: item.server_label,
+              approvalRequestId: item.id,
             },
           },
+        },
+        {
+          type: 'tool-approval-request',
+          approvalId: item.id,
+          toolCallId: item.id,
         },
       ]
 
     case 'mcp_approval_response':
+      // MCP approval responses are handled via tool-approval-response in AI SDK v6
+      // We emit a tool-result for backwards compatibility
       return [
         {
           type: 'tool-result',
           toolCallId: item.approval_request_id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
-          result: createApprovalStatusOutput(item.approve),
+          toolName: options.toolNamesByCallId?.get(item.approval_request_id) ?? 'mcp_approval',
+          result: { approved: item.approve },
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              ...(item.id != null && { itemId: item.id }),
+              itemId: item.id ?? item.approval_request_id,
             },
           },
         },
@@ -203,10 +215,25 @@ const convertOutputItemDone = (item: OutputItemDoneItem): LanguageModelV2StreamP
   }
 }
 
+export type ConvertResponseOptions = {
+  useRemoteToolCalling: boolean
+}
+
 export const convertResponsesAgentResponseToMessagePart = (
-  response: ResponsesAgentResponse
-): LanguageModelV2Content[] => {
-  const parts: LanguageModelV2Content[] = []
+  response: ResponsesAgentResponse,
+  options: ConvertResponseOptions = { useRemoteToolCalling: false }
+): LanguageModelV3Content[] => {
+  const parts: LanguageModelV3Content[] = []
+
+  // Build a map of call_id -> tool_name from function_call outputs
+  const toolNamesByCallId = new Map<string, string>()
+  for (const output of response.output) {
+    if (output.type === 'function_call') {
+      toolNamesByCallId.set(output.call_id, output.name)
+    } else if (output.type === 'mcp_approval_request') {
+      toolNamesByCallId.set(output.id, output.name)
+    }
+  }
 
   for (const output of response.output) {
     switch (output.type) {
@@ -231,11 +258,14 @@ export const convertResponsesAgentResponseToMessagePart = (
         parts.push({
           type: 'tool-call',
           toolCallId: output.call_id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: output.name,
           input: output.arguments,
+          ...(options.useRemoteToolCalling && {
+            dynamic: true,
+            providerExecuted: true,
+          }),
           providerMetadata: {
             databricks: {
-              toolName: output.name,
               itemId: output.id,
             },
           },
@@ -261,9 +291,9 @@ export const convertResponsesAgentResponseToMessagePart = (
       case 'function_call_output':
         parts.push({
           type: 'tool-result',
-          result: output.output,
+          result: output.output as NonNullable<JSONValue>,
           toolCallId: output.call_id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: toolNamesByCallId.get(output.call_id) ?? 'unknown',
         })
         break
 
@@ -271,29 +301,36 @@ export const convertResponsesAgentResponseToMessagePart = (
         parts.push({
           type: 'tool-call',
           toolCallId: output.id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
+          toolName: output.name,
           input: output.arguments,
+          providerExecuted: true,
+          dynamic: true,
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_REQUEST_TYPE,
-              toolName: output.name,
               itemId: output.id,
               serverLabel: output.server_label,
+              approvalRequestId: output.id,
             },
           },
+        })
+        parts.push({
+          type: 'tool-approval-request',
+          approvalId: output.id,
+          toolCallId: output.id,
         })
         break
 
       case 'mcp_approval_response':
+        // MCP approval responses are handled via tool-approval-response in AI SDK v6
+        // We emit a tool-result for backwards compatibility
         parts.push({
           type: 'tool-result',
           toolCallId: output.approval_request_id,
-          toolName: DATABRICKS_TOOL_CALL_ID,
-          result: createApprovalStatusOutput(output.approve),
+          toolName: toolNamesByCallId.get(output.approval_request_id) ?? 'mcp_approval',
+          result: { approved: output.approve },
           providerMetadata: {
             databricks: {
-              type: MCP_APPROVAL_RESPONSE_TYPE,
-              ...(output.id != null && { itemId: output.id }),
+              itemId: output.id ?? output.approval_request_id,
             },
           },
         })

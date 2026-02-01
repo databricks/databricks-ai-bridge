@@ -1,5 +1,8 @@
-import type { LanguageModelV2FunctionTool, LanguageModelV2ToolChoice } from '@ai-sdk/provider'
-import { DATABRICKS_TOOL_CALL_ID } from '../tools'
+import type {
+  LanguageModelV3FunctionTool,
+  LanguageModelV3ProviderTool,
+  LanguageModelV3ToolChoice,
+} from '@ai-sdk/provider'
 
 export type ResponsesTool = {
   type: 'function'
@@ -20,8 +23,8 @@ export function prepareResponsesTools({
   tools,
   toolChoice,
 }: {
-  tools?: Array<LanguageModelV2FunctionTool | { type: 'provider-defined'; id: string }>
-  toolChoice?: LanguageModelV2ToolChoice
+  tools?: Array<LanguageModelV3FunctionTool | LanguageModelV3ProviderTool>
+  toolChoice?: LanguageModelV3ToolChoice
 }): {
   tools?: Array<ResponsesTool>
   toolChoice?: ResponsesToolChoice
@@ -34,8 +37,8 @@ export function prepareResponsesTools({
   const responsesTools: Array<ResponsesTool> = []
 
   for (const tool of tools) {
-    if (tool.type === 'provider-defined' || tool.name === DATABRICKS_TOOL_CALL_ID) {
-      // Skip provider-defined tools and Databricks-orchestrated tools
+    if (tool.type === 'provider') {
+      // Skip provider-defined tools
       continue
     }
 
@@ -62,7 +65,7 @@ export function prepareResponsesTools({
 }
 
 function convertResponsesToolChoice(
-  toolChoice: LanguageModelV2ToolChoice | undefined
+  toolChoice: LanguageModelV3ToolChoice | undefined
 ): ResponsesToolChoice | undefined {
   if (!toolChoice) {
     return undefined

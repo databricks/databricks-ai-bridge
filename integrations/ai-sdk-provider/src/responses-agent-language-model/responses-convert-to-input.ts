@@ -1,30 +1,34 @@
 import {
   UnsupportedFunctionalityError,
-  type LanguageModelV2CallWarning,
-  type LanguageModelV2Prompt,
-  type LanguageModelV2ToolResultPart,
+  type SharedV3Warning,
+  type LanguageModelV3Prompt,
+  type LanguageModelV3ToolResultPart,
 } from '@ai-sdk/provider'
 import { parseProviderOptions } from '@ai-sdk/provider-utils'
 import { z } from 'zod/v4'
 import type { ResponsesInput } from './responses-api-types'
-import {
-  MCP_APPROVAL_REQUEST_TYPE,
-  MCP_APPROVAL_RESPONSE_TYPE,
-  extractApprovalStatusFromToolResult,
-} from '../mcp'
 
 export async function convertToResponsesInput({
   prompt,
   systemMessageMode,
 }: {
-  prompt: LanguageModelV2Prompt
+  prompt: LanguageModelV3Prompt
   systemMessageMode: 'system' | 'developer' | 'remove'
 }): Promise<{
   input: ResponsesInput
-  warnings: Array<LanguageModelV2CallWarning>
+  warnings: Array<SharedV3Warning>
 }> {
   const input: ResponsesInput = []
-  const warnings: Array<LanguageModelV2CallWarning> = []
+  const warnings: Array<SharedV3Warning> = []
+
+  // Track processed approval IDs to avoid duplicates
+  const processedApprovalIds = new Set<string>()
+
+  // Track which approval IDs have a function_call_output (tool result)
+  // If we have a function_call_output for an MCP approval, we should NOT also send mcp_approval_response
+  // because the function_call_output already implies approval and sending both causes
+  // "each tool_use must have a single result" error
+  const approvalIdsWithToolResult = new Set<string>()
 
   // Map tool call results to a map by tool call id so we can insert them into the input in the correct order,
   // right after the tool call that produced them.
@@ -38,7 +42,7 @@ export async function convertToResponsesInput({
         }
         return reduction
       },
-      {} as Record<string, LanguageModelV2ToolResultPart>
+      {} as Record<string, LanguageModelV3ToolResultPart>
     )
 
   for (const { role, content } of prompt) {
@@ -103,45 +107,22 @@ export async function convertToResponsesInput({
             }
             case 'tool-call': {
               const toolName = providerOptions?.toolName ?? part.toolName
-              if (providerOptions?.type === MCP_APPROVAL_REQUEST_TYPE) {
-                // Special case for MCP approval request
+              const approvalRequestId = providerOptions?.approvalRequestId
+
+              // Check if this is an MCP approval request (has approvalRequestId in metadata)
+              if (approvalRequestId) {
                 const serverLabel = providerOptions?.serverLabel ?? ''
-                const argumentsString = JSON.stringify(part.input)
-                const id = part.toolCallId
                 input.push({
-                  type: MCP_APPROVAL_REQUEST_TYPE,
-                  id: id,
+                  type: 'mcp_approval_request',
+                  id: approvalRequestId,
                   name: toolName,
-                  arguments: argumentsString,
+                  arguments: JSON.stringify(part.input),
                   server_label: serverLabel,
                 })
-                const toolResult = toolCallResultsByToolCallId[part.toolCallId]
-                if (toolResult) {
-                  /**
-                   * The tool call result is either the approval status or the actual output from the tool call.
-                   * If it's the approval status, we need to add an approval response part.
-                   * If it's the tool call output, we don't include the approval response part but we do include the tool call output part.
-                   */
-                  const approvalStatus = extractApprovalStatusFromToolResult(toolResult.output)
-                  if (approvalStatus !== undefined) {
-                    // Tool call result is just the approval status (approve or deny)
-                    input.push({
-                      type: MCP_APPROVAL_RESPONSE_TYPE,
-                      id: toolResult.toolCallId,
-                      approval_request_id: toolResult.toolCallId,
-                      approve: approvalStatus,
-                    })
-                  } else {
-                    // Tool call result is the actual tool result (tool was approved and executed)
-                    input.push({
-                      type: 'function_call_output',
-                      call_id: toolResult.toolCallId,
-                      output: convertToolResultOutputToString(toolResult.output),
-                    })
-                  }
-                }
+                // Don't add tool result here - it will be handled via tool-approval-response
                 break
               }
+
               input.push({
                 type: 'function_call',
                 call_id: part.toolCallId,
@@ -161,25 +142,14 @@ export async function convertToResponsesInput({
             }
 
             case 'tool-result': {
-              if (providerOptions?.type === MCP_APPROVAL_RESPONSE_TYPE) {
-                // Special case for MCP approval response
-                const approvalRequestId = providerOptions?.approvalRequestId ?? part.toolCallId
-                const approve = providerOptions?.approve ?? false
-                const reason = providerOptions?.reason ?? ''
-                input.push({
-                  type: MCP_APPROVAL_RESPONSE_TYPE,
-                  id: approvalRequestId,
-                  approval_request_id: approvalRequestId,
-                  approve: approve,
-                  reason: reason,
-                })
-                break
-              }
               input.push({
                 type: 'function_call_output',
                 call_id: part.toolCallId,
                 output: convertToolResultOutputToString(part.output),
               })
+              // Track this tool call ID - if it matches an MCP approval request,
+              // we should NOT also generate an mcp_approval_response
+              approvalIdsWithToolResult.add(part.toolCallId)
               break
             }
 
@@ -197,8 +167,34 @@ export async function convertToResponsesInput({
         break
 
       case 'tool':
-        // Tool call results are already inserted into the input in the correct order,
-        // right after the tool call that produced them.
+        // Handle tool-approval-response parts (from AI SDK v6 native tool approval)
+        for (const part of content) {
+          if (part.type === 'tool-approval-response') {
+            // Skip if already processed
+            if (processedApprovalIds.has(part.approvalId)) {
+              continue
+            }
+            processedApprovalIds.add(part.approvalId)
+
+            // Skip if there's already a function_call_output for this approval ID
+            // The function_call_output implies the tool was approved and executed,
+            // so we don't need a separate mcp_approval_response (which would cause
+            // "each tool_use must have a single result" error)
+            if (approvalIdsWithToolResult.has(part.approvalId)) {
+              continue
+            }
+
+            input.push({
+              type: 'mcp_approval_response',
+              id: part.approvalId,
+              approval_request_id: part.approvalId,
+              approve: part.approved,
+              ...(part.reason && { reason: part.reason }),
+            })
+          }
+          // Note: tool-result parts are handled when processing the corresponding
+          // tool-call in the assistant message, so we skip them here.
+        }
         break
 
       default: {
@@ -213,24 +209,25 @@ export async function convertToResponsesInput({
 
 const ProviderOptionsSchema = z.object({
   itemId: z.string().nullish(),
-  toolName: z.string().nullish(), // for tool-call
-  type: z.enum(['mcp_approval_request', 'mcp_approval_response']).nullish(), // for mcp approval request and response
-  serverLabel: z.string().nullish(), // for mcp approval request
-  approvalRequestId: z.string().nullish(), // for mcp approval response
-  approve: z.boolean().nullish(), // for mcp approval response
-  reason: z.string().nullish(), // for mcp approval response
+  toolName: z.string().nullish(),
+  serverLabel: z.string().nullish(),
+  approvalRequestId: z.string().nullish(),
 })
 
 export type ProviderOptions = z.infer<typeof ProviderOptionsSchema>
 
 const convertToolResultOutputToString = (
-  output: LanguageModelV2ToolResultPart['output']
+  output: LanguageModelV3ToolResultPart['output']
 ): string => {
   switch (output.type) {
     case 'text':
     case 'error-text':
       return output.value
-    default:
+    case 'execution-denied':
+      return output.reason ?? 'Execution denied'
+    case 'json':
+    case 'error-json':
+    case 'content':
       return JSON.stringify(output.value)
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 import {
   DatabricksResponsesAgentLanguageModel,
   shouldDedupeOutputItemDone,
@@ -114,6 +114,7 @@ describe('DatabricksResponsesAgentLanguageModel', () => {
       headers: () => ({ Authorization: 'Bearer test-token' }),
       url: () => 'http://test.example.com/api',
       fetch: mockFetch,
+      useRemoteToolCalling: true,
     })
 
     // Call doStream
@@ -123,7 +124,7 @@ describe('DatabricksResponsesAgentLanguageModel', () => {
     })
 
     // Collect all stream parts
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     try {
@@ -172,7 +173,7 @@ describe('MCP Approval Streaming', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -194,18 +195,20 @@ describe('MCP Approval Streaming', () => {
       expect(contentParts[i]).toMatchObject(MCP_APPROVAL_REQUEST_FIXTURE.out[i] as any)
     }
 
-    // Verify MCP approval request has correct metadata
+    // Verify MCP approval request has correct metadata (approvalRequestId, not type)
     const mcpRequestPart = contentParts.find(
       (part) =>
         part.type === 'tool-call' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_request'
+        (part as any).providerMetadata?.databricks?.approvalRequestId != null
     )
     expect(mcpRequestPart).toBeDefined()
+    // Verify toolName is the actual tool name (not databricks-tool-call)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    expect((mcpRequestPart as any).toolName).toBe('test_mcp_tool')
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect((mcpRequestPart as any).providerMetadata.databricks).toMatchObject({
-      type: 'mcp_approval_request',
-      toolName: 'test_mcp_tool',
+      approvalRequestId: '__fake_mcp_request_id__',
       serverLabel: 'test-server',
     })
   })
@@ -239,7 +242,7 @@ describe('MCP Approval Streaming', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -266,11 +269,11 @@ describe('MCP Approval Streaming', () => {
       (part) =>
         part.type === 'tool-result' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_response'
+        (part as any).result?.approved != null
     )
     expect(mcpResponsePart).toBeDefined()
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    expect((mcpResponsePart as any).result).toEqual({ __approvalStatus__: true })
+    expect((mcpResponsePart as any).result).toEqual({ approved: true })
   })
 
   it('correctly converts MCP approval response (denied) stream', async () => {
@@ -302,7 +305,7 @@ describe('MCP Approval Streaming', () => {
       ],
     })
 
-    const streamParts: LanguageModelV2StreamPart[] = []
+    const streamParts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
 
     // eslint-disable-next-line no-constant-condition
@@ -329,12 +332,12 @@ describe('MCP Approval Streaming', () => {
       (part) =>
         part.type === 'tool-result' &&
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        (part as any).providerMetadata?.databricks?.type === 'mcp_approval_response'
+        (part as any).result?.approved != null
     )
     expect(mcpResponsePart).toBeDefined()
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     expect((mcpResponsePart as any).result).toEqual({
-      __approvalStatus__: false,
+      approved: false,
     })
   })
 })
@@ -373,7 +376,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -389,11 +392,10 @@ data: {
 
     if (finishPart?.type === 'finish') {
       expect(finishPart.usage).toEqual({
-        inputTokens: 150,
-        outputTokens: 75,
-        totalTokens: 225,
+        inputTokens: { total: 150, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 75, text: 0, reasoning: 0 },
       })
-      expect(finishPart.finishReason).toBe('stop')
+      expect(finishPart.finishReason).toEqual({ raw: undefined, unified: 'stop' })
     }
   })
 
@@ -418,7 +420,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -432,11 +434,10 @@ data: {
 
     if (finishPart?.type === 'finish') {
       expect(finishPart.usage).toEqual({
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
+        inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 0, text: 0, reasoning: 0 },
       })
-      expect(finishPart.finishReason).toBe('unknown')
+      expect(finishPart.finishReason).toEqual({ raw: undefined, unified: 'stop' })
     }
   })
 })
@@ -477,7 +478,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -529,7 +530,7 @@ data: {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    const parts: LanguageModelV2StreamPart[] = []
+    const parts: LanguageModelV3StreamPart[] = []
     const reader = result.stream.getReader()
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -554,7 +555,7 @@ data: {
 
 describe('shouldDedupeOutputItemDone', () => {
   // Helper to create a text-delta from response.output_text.delta (regular streaming)
-  const createTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+  const createTextDelta = (delta: string, id: string): LanguageModelV3StreamPart => ({
     type: 'text-delta',
     id,
     delta,
@@ -566,7 +567,7 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   // Helper to create a text-delta from response.output_item.done
-  const createDoneTextDelta = (delta: string, id: string): LanguageModelV2StreamPart => ({
+  const createDoneTextDelta = (delta: string, id: string): LanguageModelV3StreamPart => ({
     type: 'text-delta',
     id,
     delta,
@@ -579,7 +580,7 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   // Helper to create a non-text part (e.g., tool-call)
-  const createToolCall = (toolCallId: string): LanguageModelV2StreamPart => ({
+  const createToolCall = (toolCallId: string): LanguageModelV3StreamPart => ({
     type: 'tool-call',
     toolCallId,
     toolName: 'test-tool',
@@ -587,8 +588,8 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when incoming parts have no response.output_item.done text-delta', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
-    const previousParts: LanguageModelV2StreamPart[] = []
+    const incomingParts: LanguageModelV3StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
@@ -603,9 +604,9 @@ describe('shouldDedupeOutputItemDone', () => {
           itemType: 'response.output_item.done',
         },
       },
-    } as unknown as LanguageModelV2StreamPart
-    const incomingParts: LanguageModelV2StreamPart[] = [doneWithoutId]
-    const previousParts: LanguageModelV2StreamPart[] = []
+    } as unknown as LanguageModelV3StreamPart
+    const incomingParts: LanguageModelV3StreamPart[] = [doneWithoutId]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
@@ -613,17 +614,17 @@ describe('shouldDedupeOutputItemDone', () => {
   it('returns true when previous parts are empty (empty string matches)', () => {
     // When previousParts is empty, reconstructuredTexts = [''] (empty string)
     // indexOf('') in any string returns 0, so it returns true
-    const incomingParts: LanguageModelV2StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
-    const previousParts: LanguageModelV2StreamPart[] = []
+    const incomingParts: LanguageModelV3StreamPart[] = [createDoneTextDelta('Hello World', 'msg_1')]
+    const previousParts: LanguageModelV3StreamPart[] = []
 
-    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
   it('returns true when done text contains all previous text-deltas in order', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World[^1]', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -635,10 +636,10 @@ describe('shouldDedupeOutputItemDone', () => {
     // The done text has footnotes [^ref1] and [^ref2] that interrupt the original text
     // The reconstructed text is "The answer is 42. See more." but the done delta
     // has "The answer is 42[^ref1]. See more[^ref2]." - the footnotes break the match
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('The answer is 42[^ref1]. See more[^ref2].', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('The answer is 42', 'msg_1'),
       createTextDelta('. See more', 'msg_1'),
       createTextDelta('.', 'msg_1'),
@@ -650,10 +651,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when done text does not contain previous text', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Completely different text', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -662,10 +663,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when previous text is not in the correct order within done text', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('World Hello', 'msg_1'), // Reversed order
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello', 'msg_1'),
       createTextDelta('World', 'msg_1'),
     ]
@@ -674,10 +675,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('handles multiple text blocks separated by non-text parts', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('First block. Second block.', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('First ', 'msg_1'),
       createTextDelta('block.', 'msg_1'),
       createToolCall('tool_1'), // Non-text part separates the blocks
@@ -689,10 +690,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when only partial text matches', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('Hello ', 'msg_1'),
       // Missing 'World' delta
     ]
@@ -704,10 +705,10 @@ describe('shouldDedupeOutputItemDone', () => {
   it('includes leading whitespace in reconstructed text', () => {
     // Whitespace is included in the reconstructed text, so "   Hello World"
     // is not found in "Hello World" (no leading whitespace in done delta)
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('   ', 'msg_1'), // Leading whitespace becomes part of reconstructed text
       createTextDelta('Hello World', 'msg_1'),
     ]
@@ -718,10 +719,10 @@ describe('shouldDedupeOutputItemDone', () => {
 
   it('dedupes when whitespace matches', () => {
     // When the done delta includes the same whitespace, it should dedupe
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('   Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('   ', 'msg_1'),
       createTextDelta('Hello World', 'msg_1'),
     ]
@@ -730,34 +731,33 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when incoming parts is empty', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = []
-    const previousParts: LanguageModelV2StreamPart[] = [createTextDelta('Hello', 'msg_1')]
+    const incomingParts: LanguageModelV3StreamPart[] = []
+    const previousParts: LanguageModelV3StreamPart[] = [createTextDelta('Hello', 'msg_1')]
 
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
-  it('returns true when only non-text previous parts (empty string matches)', () => {
-    // When there are only non-text parts, currentText stays '', and
-    // reconstructuredTexts = [''] (empty string is pushed at end of loop)
-    // indexOf('') in any string returns 0, so it returns true
-    const incomingParts: LanguageModelV2StreamPart[] = [
+  it('returns false when only non-text previous parts (no text to compare against)', () => {
+    // When there are only non-text parts, there are no text-deltas to compare against
+    // This is new content, not a duplicate, so return false
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Hello World', 'msg_1'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createToolCall('tool_1'),
       createToolCall('tool_2'),
     ]
 
-    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(true)
+    expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
   })
 
   it('only considers text-deltas after the last response.output_item.done event', () => {
     // This is the key behavior: when there's a previous .done event,
     // we should only reconstruct text from parts AFTER that .done event
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Second message', 'msg_2'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       // First message's text-deltas
       createTextDelta('First ', 'msg_1'),
       createTextDelta('message', 'msg_1'),
@@ -775,10 +775,10 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 
   it('returns false when text after last .done does not match', () => {
-    const incomingParts: LanguageModelV2StreamPart[] = [
+    const incomingParts: LanguageModelV3StreamPart[] = [
       createDoneTextDelta('Different content', 'msg_2'),
     ]
-    const previousParts: LanguageModelV2StreamPart[] = [
+    const previousParts: LanguageModelV3StreamPart[] = [
       createTextDelta('First message', 'msg_1'),
       createDoneTextDelta('First message', 'msg_1'),
       createTextDelta('Second ', 'msg_2'),
@@ -787,5 +787,165 @@ describe('shouldDedupeOutputItemDone', () => {
 
     // Should return false because "Different content" doesn't match "Second message"
     expect(shouldDedupeOutputItemDone(incomingParts, previousParts)).toBe(false)
+  })
+})
+
+describe('Missing Tool Results', () => {
+  it('emits correction tool-call with providerExecuted for tool calls without results', async () => {
+    // When useRemoteToolCalling=true (default), tool calls are already emitted with
+    // dynamic: true, so no correction is needed.
+    // This test verifies that behavior with useRemoteToolCalling=false.
+    const sseContent = `
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call",
+    "id": "fc_1",
+    "call_id": "tool_call_123",
+    "name": "agent-netflix-titles",
+    "arguments": "{\\"query\\": \\"test\\"}"
+  }
+}
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "message",
+    "id": "msg_result",
+    "role": "assistant",
+    "content": [{ "type": "output_text", "text": "| title | year |" }]
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_123",
+    "status": "completed",
+    "usage": { "input_tokens": 100, "output_tokens": 50, "total_tokens": 150 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+      useRemoteToolCalling: false, // Test with useRemoteToolCalling=false
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'find movies' }] }],
+    })
+
+    const parts: LanguageModelV3StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should have two tool-call parts: the original and the correction with providerExecuted: true
+    const toolCallParts = parts.filter((p) => p.type === 'tool-call')
+    expect(toolCallParts).toHaveLength(2)
+
+    // First tool-call is the original (without providerExecuted since useRemoteToolCalling=false)
+    const originalToolCall = toolCallParts[0]
+    expect(originalToolCall.type).toBe('tool-call')
+    if (originalToolCall.type === 'tool-call') {
+      expect(originalToolCall.toolCallId).toBe('tool_call_123')
+      expect(originalToolCall.toolName).toBe('agent-netflix-titles')
+      expect(originalToolCall.providerExecuted).toBeUndefined()
+    }
+
+    // Second tool-call is the correction emitted in flush (with providerExecuted: true)
+    // This tells the AI SDK not to expect a client-side result for this tool call
+    const correctionToolCall = toolCallParts[1]
+    expect(correctionToolCall.type).toBe('tool-call')
+    if (correctionToolCall.type === 'tool-call') {
+      expect(correctionToolCall.toolCallId).toBe('tool_call_123')
+      expect(correctionToolCall.providerExecuted).toBe(true)
+    }
+
+    // Should NOT have a tool-result part (we don't emit synthetic results)
+    const toolResultPart = parts.find((p) => p.type === 'tool-result')
+    expect(toolResultPart).toBeUndefined()
+
+    // Finish part should come after the correction tool-call
+    const finishIndex = parts.findIndex((p) => p.type === 'finish')
+    const lastToolCallIndex = parts.findLastIndex((p) => p.type === 'tool-call')
+    expect(finishIndex).toBeGreaterThan(lastToolCallIndex)
+  })
+
+  it('does not emit correction tool-call when result already exists', async () => {
+    // When function_call_output is present, should not emit a correction tool-call
+    // Test with useRemoteToolCalling=false to verify the flush logic
+    const sseContent = `
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call",
+    "id": "fc_1",
+    "call_id": "tool_call_456",
+    "name": "search",
+    "arguments": "{\\"q\\": \\"test\\"}"
+  }
+}
+data: {
+  "type": "response.output_item.done",
+  "item": {
+    "type": "function_call_output",
+    "call_id": "tool_call_456",
+    "output": "search results here"
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_123",
+    "status": "completed",
+    "usage": { "input_tokens": 50, "output_tokens": 25, "total_tokens": 75 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+      useRemoteToolCalling: false, // Test with useRemoteToolCalling=false
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'search' }] }],
+    })
+
+    const parts: LanguageModelV3StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should have exactly one tool-call (no correction needed since result exists)
+    const toolCallParts = parts.filter((p) => p.type === 'tool-call')
+    expect(toolCallParts.length).toBe(1)
+    if (toolCallParts[0]?.type === 'tool-call') {
+      expect(toolCallParts[0].toolName).toBe('search')
+      expect(toolCallParts[0].providerExecuted).toBeUndefined()
+    }
+
+    // Should have exactly one tool-result (the real one)
+    const toolResultParts = parts.filter((p) => p.type === 'tool-result')
+    expect(toolResultParts.length).toBe(1)
+    if (toolResultParts[0]?.type === 'tool-result') {
+      expect(toolResultParts[0].result).toBe('search results here')
+    }
   })
 })

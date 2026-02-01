@@ -36,7 +36,7 @@ jobs:
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests --extra memory \
-            pytest tests/
+            pytest --cov --cov-report=term tests/
 
   langchain_test:
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
         working-directory: integrations/langchain
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests pytest tests/unit_tests
+            --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
   lakebase_memory_test:
     runs-on: ubuntu-latest
@@ -157,7 +157,7 @@ jobs:
         working-directory: integrations/openai
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests pytest tests/unit_tests
+            --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
   openai_cross_version_test:
     runs-on: ubuntu-latest
@@ -220,7 +220,7 @@ jobs:
       - name: Run tests
         working-directory: integrations/llamaindex
         run: |
-          uv run --resolution ${{ matrix.uv-resolution }} --exact --group tests pytest tests/unit_tests
+          uv run --resolution ${{ matrix.uv-resolution }} --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
   mcp_test:
     runs-on: ubuntu-latest
@@ -242,7 +242,7 @@ jobs:
         working-directory: databricks_mcp
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests pytest tests/unit_tests
+            --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
   dspy_test:
     runs-on: ubuntu-latest
@@ -264,4 +264,4 @@ jobs:
         working-directory: integrations/dspy
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests pytest tests/unit_tests
+            --exact --group tests pytest --cov --cov-report=term tests/unit_tests
