@@ -12,17 +12,20 @@ const responsesAgentMessageSchema = z.object({
       type: z.literal('output_text'),
       text: z.string(),
       logprobs: z.unknown().nullish(),
-      annotations: z.array(
-        z.discriminatedUnion('type', [
-          z.object({
-            type: z.literal('url_citation'),
-            start_index: z.number(),
-            end_index: z.number(),
-            url: z.string(),
-            title: z.string(),
-          }),
-        ])
-      ),
+      annotations: z
+        .array(
+          z.discriminatedUnion('type', [
+            z.object({
+              type: z.literal('url_citation'),
+              start_index: z.number(),
+              end_index: z.number(),
+              url: z.string(),
+              title: z.string(),
+            }),
+          ])
+        )
+        .optional()
+        .default([]),
     })
   ),
 })
