@@ -97,12 +97,26 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
     // Extract trace_id from both root level (legacy) and nested databricks_output structure
-    const traceId =
-      response.trace_id ?? response.databricks_output?.trace?.info?.trace_id ?? undefined
-    const spanId = response.span_id ?? undefined
+    let traceId: string | undefined = response.trace_id
+    if (!traceId && response.databricks_output) {
+      const databricksOutput = response.databricks_output as unknown
+      if (databricksOutput && typeof databricksOutput === 'object' && 'trace' in databricksOutput) {
+        const trace = (databricksOutput as { trace?: unknown }).trace
+        if (trace && typeof trace === 'object' && 'info' in trace) {
+          const info = (trace as { info?: unknown }).info
+          if (info && typeof info === 'object' && 'trace_id' in info) {
+            const nestedTraceId = (info as { trace_id?: unknown }).trace_id
+            if (typeof nestedTraceId === 'string') {
+              traceId = nestedTraceId
+            }
+          }
+        }
+      }
+    }
+    const spanId: string | undefined = response.span_id
 
     // Create a normalized response body with trace_id at root level for easier access
-    const responseBody = {
+    const responseBody: Record<string, unknown> = {
       ...response,
       ...(traceId && { trace_id: traceId }),
       ...(spanId && { span_id: spanId }),
@@ -222,12 +236,27 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
               // Extract trace info from response.output_item.done event
               // The endpoint returns trace info in databricks_output.trace.info
               if (chunk.value.type === 'response.output_item.done') {
-                const databricksOutput = (chunk.value as any).databricks_output
-                if (databricksOutput?.trace?.info?.trace_id) {
-                  // Normalize trace_id at root level for easier access
-                  responseBody.trace_id = databricksOutput.trace.info.trace_id
-                  // Store full databricks_output structure for complete trace data
-                  responseBody.databricks_output = databricksOutput
+                const databricksOutput: unknown = (
+                  chunk.value as { databricks_output?: unknown }
+                ).databricks_output
+                if (
+                  databricksOutput &&
+                  typeof databricksOutput === 'object' &&
+                  'trace' in databricksOutput
+                ) {
+                  const trace = (databricksOutput as { trace?: unknown }).trace
+                  if (trace && typeof trace === 'object' && 'info' in trace) {
+                    const info = (trace as { info?: unknown }).info
+                    if (info && typeof info === 'object' && 'trace_id' in info) {
+                      const traceId = (info as { trace_id?: unknown }).trace_id
+                      if (typeof traceId === 'string') {
+                        // Normalize trace_id at root level for easier access
+                        responseBody.trace_id = traceId
+                        // Store full databricks_output structure for complete trace data
+                        responseBody.databricks_output = databricksOutput
+                      }
+                    }
+                  }
                 }
               }
 
