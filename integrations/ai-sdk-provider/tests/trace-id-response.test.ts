@@ -119,9 +119,10 @@ describe('Trace ID in Response', () => {
     }
 
     // Verify trace_id and span_id are in response.body
-    expect(result.response?.body).toBeDefined()
-    expect((result.response?.body as any)?.trace_id).toBe(expectedTraceId)
-    expect((result.response?.body as any)?.span_id).toBe(expectedSpanId)
+    const responseBody = (result.response as any)?.body
+    expect(responseBody).toBeDefined()
+    expect(responseBody?.trace_id).toBe(expectedTraceId)
+    expect(responseBody?.span_id).toBe(expectedSpanId)
   })
 
   it('should include trace_id and span_id in non-streaming response body', async () => {
@@ -141,9 +142,10 @@ describe('Trace ID in Response', () => {
     })
 
     // Verify trace_id and span_id are in response.body
-    expect(result.response?.body).toBeDefined()
-    expect((result.response?.body as any)?.trace_id).toBe(expectedTraceId)
-    expect((result.response?.body as any)?.span_id).toBe(expectedSpanId)
+    const responseBody = (result.response as any)?.body
+    expect(responseBody).toBeDefined()
+    expect(responseBody?.trace_id).toBe(expectedTraceId)
+    expect(responseBody?.span_id).toBe(expectedSpanId)
   })
 
   it('should not fail when trace_id and span_id are not present', async () => {

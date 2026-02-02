@@ -4,6 +4,7 @@ import type {
   LanguageModelV3FinishReason,
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
+  SharedV3Headers,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -125,7 +126,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       warnings,
       response: {
         body: responseBody,
-      },
+      } as { headers?: SharedV3Headers; body?: unknown },
     }
   }
 
@@ -221,11 +222,12 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
               // Extract trace info from response.output_item.done event
               // The endpoint returns trace info in databricks_output.trace.info
               if (chunk.value.type === 'response.output_item.done') {
-                const traceInfo = (chunk.value as any).databricks_output?.trace?.info
-                if (traceInfo?.trace_id) {
-                  responseBody.trace_id = traceInfo.trace_id
-                  // Store full trace info for advanced use cases
-                  responseBody.databricks_trace_info = traceInfo
+                const databricksOutput = (chunk.value as any).databricks_output
+                if (databricksOutput?.trace?.info?.trace_id) {
+                  // Normalize trace_id at root level for easier access
+                  responseBody.trace_id = databricksOutput.trace.info.trace_id
+                  // Store full databricks_output structure for complete trace data
+                  responseBody.databricks_output = databricksOutput
                 }
               }
 
@@ -346,7 +348,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       response: {
         headers: responseHeaders,
         body: responseBody,
-      },
+      } as { headers?: SharedV3Headers; body?: unknown },
     }
   }
 
