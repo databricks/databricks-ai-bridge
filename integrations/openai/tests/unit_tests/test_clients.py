@@ -1,9 +1,10 @@
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from databricks.sdk import WorkspaceClient
-from openai import AsyncOpenAI, OpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 
 
 @pytest.fixture
@@ -540,3 +541,178 @@ class TestAsyncDatabricksOpenAIAppsRouting:
                 model="apps/my-agent",
                 input=[{"role": "user", "content": "Hello"}],
             )
+
+
+def _make_api_status_error(status_code: int, message: str) -> APIStatusError:
+    """Helper to create an APIStatusError with a properly configured request/response."""
+    request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
+    response = httpx.Response(status_code, json={"detail": message}, request=request)
+    return APIStatusError(message=message, response=response, body=None)
+
+
+class TestAppErrorWrapping:
+    def test_wrap_app_error_404_not_found(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        error = _make_api_status_error(404, "Not Found")
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "404" in str(wrapped)
+        assert "Not Found" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+        assert "/responses endpoint" in str(wrapped)
+
+    def test_wrap_app_error_405_method_not_allowed(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        error = _make_api_status_error(405, "Method Not Allowed")
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "405" in str(wrapped)
+        assert "Method Not Allowed" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+        assert "/responses endpoint" in str(wrapped)
+
+    def test_wrap_app_error_403_permission_denied(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        error = _make_api_status_error(403, "Forbidden")
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "403" in str(wrapped)
+        assert "Forbidden" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+        assert "CAN_QUERY" in str(wrapped)
+
+    def test_wrap_app_error_dns_resolution_failure(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
+        error = APIConnectionError(message="DNS resolution failure", request=request)
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "DNS resolution failure" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+        assert "stopped or unavailable" in str(wrapped)
+
+    def test_wrap_app_error_connection_error(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
+        error = APIConnectionError(message="Connection refused", request=request)
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "Connection refused" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+
+    def test_wrap_app_error_other_status_error(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        error = _make_api_status_error(500, "Internal Server Error")
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "500" in str(wrapped)
+        assert "Internal Server Error" in str(wrapped)
+
+    def test_wrap_app_error_dns_in_status_error(self):
+        from databricks_openai.utils.clients import _wrap_app_error
+
+        error = _make_api_status_error(503, "DNS resolution failure")
+
+        wrapped = _wrap_app_error(error, "my-app")
+        assert "503" in str(wrapped)
+        assert "DNS resolution failure" in str(wrapped)
+        assert "Hint:" in str(wrapped)
+        assert "stopped or unavailable" in str(wrapped)
+
+
+class TestDatabricksOpenAIAppsErrorHandling:
+    def test_responses_wraps_405_error(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        error = _make_api_status_error(405, "Method Not Allowed")
+
+        with patch.object(Responses, "create", side_effect=error):
+            with pytest.raises(ValueError, match=r"(?s)405.*Hint:"):
+                client.responses.create(
+                    model="apps/my-agent",
+                    input=[{"role": "user", "content": "Hello"}],
+                )
+
+    def test_responses_wraps_dns_error(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
+        error = APIConnectionError(message="DNS resolution failure", request=request)
+
+        with patch.object(Responses, "create", side_effect=error):
+            with pytest.raises(ValueError, match=r"(?s)DNS resolution failure.*Hint:"):
+                client.responses.create(
+                    model="apps/my-agent",
+                    input=[{"role": "user", "content": "Hello"}],
+                )
+
+    def test_responses_non_apps_model_does_not_wrap_errors(
+        self, mock_workspace_client_with_oauth
+    ):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        error = _make_api_status_error(500, "Internal Server Error")
+
+        with patch.object(Responses, "create", side_effect=error):
+            with pytest.raises(APIStatusError):
+                client.responses.create(
+                    model="databricks-claude-3-7-sonnet",
+                    input=[{"role": "user", "content": "Hello"}],
+                )
+
+
+class TestAsyncDatabricksOpenAIAppsErrorHandling:
+    @pytest.mark.asyncio
+    async def test_responses_wraps_405_error(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import AsyncResponses
+
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        error = _make_api_status_error(405, "Method Not Allowed")
+
+        with patch.object(AsyncResponses, "create", new_callable=AsyncMock) as mock_create:
+            mock_create.side_effect = error
+            with pytest.raises(ValueError, match=r"(?s)405.*Hint:"):
+                await client.responses.create(
+                    model="apps/my-agent",
+                    input=[{"role": "user", "content": "Hello"}],
+                )
+
+    @pytest.mark.asyncio
+    async def test_responses_wraps_dns_error(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import AsyncResponses
+
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
+        error = APIConnectionError(message="DNS resolution failure", request=request)
+
+        with patch.object(AsyncResponses, "create", new_callable=AsyncMock) as mock_create:
+            mock_create.side_effect = error
+            with pytest.raises(ValueError, match=r"(?s)DNS resolution failure.*Hint:"):
+                await client.responses.create(
+                    model="apps/my-agent",
+                    input=[{"role": "user", "content": "Hello"}],
+                )

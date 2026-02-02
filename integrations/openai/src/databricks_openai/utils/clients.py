@@ -2,7 +2,7 @@ from typing import Generator
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
-from openai import AsyncOpenAI, OpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
@@ -81,6 +81,47 @@ def _get_app_url(workspace_client: WorkspaceClient, app_name: str) -> str:
     return app.url
 
 
+def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
+    """Wrap OpenAI API errors with helpful hints for Databricks Apps."""
+    if isinstance(e, APIStatusError):
+        status_code = e.status_code
+        message = e.message
+        if status_code == 404 or status_code == 405:
+            hint = (
+                f"Hint: App '{app_name}' may not support the Responses API. "
+                f"Ensure the app implements the /responses endpoint."
+            )
+        elif status_code == 403:
+            hint = (
+                f"Hint: Ensure you have CAN_QUERY permission on app '{app_name}'."
+            )
+        elif "DNS" in message or "resolution" in message.lower():
+            hint = (
+                f"Hint: App '{app_name}' may be stopped or unavailable. "
+                f"Check the app status in the Databricks workspace."
+            )
+        else:
+            hint = None
+
+        error_msg = f"Error querying app '{app_name}': {status_code} - {message}"
+        if hint:
+            error_msg = f"{error_msg}\n{hint}"
+        return ValueError(error_msg)
+    elif isinstance(e, APIConnectionError):
+        message = str(e)
+        if "DNS" in message or "resolution" in message.lower():
+            hint = (
+                f"Hint: App '{app_name}' may be stopped or unavailable. "
+                f"Check the app status in the Databricks workspace."
+            )
+        else:
+            hint = (
+                f"Hint: App '{app_name}' may be starting up or unavailable."
+            )
+        return ValueError(f"Error connecting to app '{app_name}': {message}\n{hint}")
+    return ValueError(f"Error querying app '{app_name}': {e}")
+
+
 class DatabricksCompletions(Completions):
     """Completions that conditionally strips 'strict' from tools for non-GPT models."""
 
@@ -123,7 +164,10 @@ class DatabricksResponses(Responses):
         if isinstance(model, str) and model.startswith("apps/"):
             app_name = model[5:]  # Remove "apps/" prefix
             app_client = self._get_app_client(app_name)
-            return app_client.responses.create(**kwargs)
+            try:
+                return app_client.responses.create(**kwargs)
+            except (APIStatusError, APIConnectionError) as e:
+                raise _wrap_app_error(e, app_name) from e
 
         return super().create(**kwargs)
 
@@ -257,7 +301,10 @@ class AsyncDatabricksResponses(AsyncResponses):
         if isinstance(model, str) and model.startswith("apps/"):
             app_name = model[5:]  # Remove "apps/" prefix
             app_client = self._get_app_client(app_name)
-            return await app_client.responses.create(**kwargs)
+            try:
+                return await app_client.responses.create(**kwargs)
+            except (APIStatusError, APIConnectionError) as e:
+                raise _wrap_app_error(e, app_name) from e
 
         return await super().create(**kwargs)
 
