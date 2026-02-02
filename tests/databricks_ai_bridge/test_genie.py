@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 from mcp.types import CallToolResult, Tool
 
-from databricks_ai_bridge.genie import Genie, _count_tokens, _parse_query_result
+from databricks_ai_bridge.genie import (
+    Genie,
+    GenieResponse,
+    QueryAttachment,
+    _count_tokens,
+    _parse_query_result,
+)
 
 
 @pytest.fixture
@@ -84,12 +90,16 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == "Result"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "Result"
+        assert len(genie_result.query_attachments) == 0
+        assert genie_result.error_msg is None
         assert genie_result.message_id == "456"
+        assert genie_result.conversation_id == "123"
 
 
-def test_poll_for_result_joins_multiple_text_attachments(genie, mock_workspace_client):
-    """Multiple text attachments are joined with newlines."""
+def test_poll_for_result_multiple_text_attachments(genie, mock_workspace_client):
+    """Multiple text attachments are all included in text_attachments list."""
     mock_mcp_result = CallToolResult(
         content=[
             {
@@ -115,7 +125,11 @@ def test_poll_for_result_joins_multiple_text_attachments(genie, mock_workspace_c
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == "First message\nSecond message\nThird message"
+        assert len(genie_result.text_attachments) == 3
+        assert genie_result.text_attachments[0] == "First message"
+        assert genie_result.text_attachments[1] == "Second message"
+        assert genie_result.text_attachments[2] == "Third message"
+        assert genie_result.error_msg is None
 
 
 def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
@@ -150,9 +164,12 @@ def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == pd.DataFrame().to_markdown()
-        assert genie_result.query == "SELECT *"
-        assert genie_result.description == "Test query"
+        assert len(genie_result.query_attachments) == 1
+        assert genie_result.query_attachments[0].query == "SELECT *"
+        assert genie_result.query_attachments[0].description == "Test query"
+        assert genie_result.query_attachments[0].result == pd.DataFrame().to_markdown()
+        assert len(genie_result.text_attachments) == 0
+        assert genie_result.error_msg is None
 
 
 def test_poll_for_result_failed(genie, mock_workspace_client):
@@ -177,7 +194,9 @@ def test_poll_for_result_failed(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == "Message processing failed: Test error"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "Message processing failed: Test error"
+        assert genie_result.error_msg is None
 
 
 def test_poll_for_result_cancelled(genie, mock_workspace_client):
@@ -202,7 +221,9 @@ def test_poll_for_result_cancelled(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == "Message processing failed: Cancelled"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "Message processing failed: Cancelled"
+        assert genie_result.error_msg is None
 
 
 def test_poll_for_result_expired(genie, mock_workspace_client):
@@ -227,7 +248,9 @@ def test_poll_for_result_expired(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.poll_for_result("123", "456")
-        assert genie_result.result == "Message processing failed: Expired"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "Message processing failed: Expired"
+        assert genie_result.error_msg is None
 
 
 def test_poll_for_result_max_iterations(genie, mock_workspace_client):
@@ -258,8 +281,10 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
 
         with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
             result = genie.poll_for_result("123", "456")
-            assert "timed out" in result.result.lower()
-            assert "2 iterations of 0.1 seconds" in result.result
+            assert len(result.text_attachments) == 0
+            assert result.error_msg is not None
+            assert "timed out" in result.error_msg.lower()
+            assert "2 iterations of 0.1 seconds" in result.error_msg
 
 
 def test_ask_question(genie, mock_workspace_client):
@@ -284,8 +309,10 @@ def test_ask_question(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?")
-        assert genie_result.result == "Answer"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "Answer"
         assert genie_result.conversation_id == "123"
+        assert genie_result.error_msg is None
 
 
 def test_ask_question_continued_conversation(genie, mock_workspace_client):
@@ -310,8 +337,10 @@ def test_ask_question_continued_conversation(genie, mock_workspace_client):
 
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
         genie_result = genie.ask_question("What is the meaning of life?", "123")
-        assert genie_result.result == "42"
+        assert len(genie_result.text_attachments) == 1
+        assert genie_result.text_attachments[0] == "42"
         assert genie_result.conversation_id == "123"
+        assert genie_result.error_msg is None
 
 
 def test_ask_question_calls_mcp_without_conversation_id(genie, mock_workspace_client):
@@ -397,7 +426,9 @@ def test_ask_question_returns_message_id(genie, mock_workspace_client):
         result = genie.ask_question("What is the meaning of life?")
         assert result.message_id == "456"
         assert result.conversation_id == "123"
-        assert result.result == "Answer"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Answer"
+        assert result.error_msg is None
 
 
 def test_poll_for_result_returns_message_id(genie, mock_workspace_client):
@@ -424,7 +455,9 @@ def test_poll_for_result_returns_message_id(genie, mock_workspace_client):
         result = genie.poll_for_result("123", "456")
         assert result.message_id == "456"
         assert result.conversation_id == "123"
-        assert result.result == "Result"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Result"
+        assert result.error_msg is None
 
 
 def test_parse_query_result_empty():
@@ -808,7 +841,8 @@ def test_poll_query_results_max_iterations(genie, mock_workspace_client):
             with patch.object(genie._mcp_client, "call_tool", side_effect=mock_responses):
                 result = genie.poll_for_result("123", "456")
 
-            assert result.result == "Genie query timed out after 2 iterations of 0.5 seconds"
+            assert len(result.text_attachments) == 0
+            assert result.error_msg == "Genie query timed out after 2 iterations of 0.5 seconds"
 
 
 def test_parse_query_result_with_timestamp_formats():
@@ -1168,7 +1202,8 @@ def test_poll_for_result_cancelled_terminal_state(genie, mock_workspace_client):
                 ):
                     result = genie.poll_for_result("123", "456")
 
-                assert result.result == "Message processing failed: Query cancelled"
+                assert len(result.text_attachments) == 1
+                assert result.text_attachments[0] == "Message processing failed: Query cancelled"
                 mock_client.end_span.assert_called_once()
                 end_kwargs = mock_client.end_span.call_args[1]
                 assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
@@ -1232,7 +1267,8 @@ def test_poll_for_result_failed_terminal_state(genie, mock_workspace_client):
                 ):
                     result = genie.poll_for_result("123", "456")
 
-                assert result.result == "Message processing failed: some error"
+                assert len(result.text_attachments) == 1
+                assert result.text_attachments[0] == "Message processing failed: some error"
                 mock_client.end_span.assert_called_once()
                 end_kwargs = mock_client.end_span.call_args[1]
                 assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
@@ -1296,7 +1332,8 @@ def test_poll_for_result_query_result_expired_terminal_state(genie, mock_workspa
                 ):
                     result = genie.poll_for_result("123", "456")
 
-                assert result.result == "Message processing failed: Result expired"
+                assert len(result.text_attachments) == 1
+                assert result.text_attachments[0] == "Message processing failed: Result expired"
                 mock_client.end_span.assert_called_once()
                 end_kwargs = mock_client.end_span.call_args[1]
                 assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
@@ -1377,7 +1414,9 @@ def test_poll_for_result_timeout_includes_timeout_attribute(genie, mock_workspac
                     with patch.object(genie._mcp_client, "call_tool", side_effect=mock_responses):
                         result = genie.poll_for_result("123", "456")
 
-                    assert "timed out" in result.result
+                    assert len(result.text_attachments) == 0
+                    assert result.error_msg is not None
+                    assert "timed out" in result.error_msg
                     mock_client.end_span.assert_called_once()
                     end_kwargs = mock_client.end_span.call_args[1]
                     assert end_kwargs["attributes"]["final_state"] == "EXECUTING_QUERY"
@@ -1446,7 +1485,8 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             result = genie.poll_for_result("123", "456")
 
         # should still complete successfully despite tracing failures
-        assert result.result == "Success"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Success"
 
 
 def test_ask_question_auto_polls_on_executing_query_status(genie, mock_workspace_client):
@@ -1494,7 +1534,8 @@ def test_ask_question_auto_polls_on_executing_query_status(genie, mock_workspace
         ) as mock_call:
             result = genie.ask_question("Test")
             assert mock_call.call_count == 2  # query + poll
-            assert result.result == "Done"
+            assert len(result.text_attachments) == 1
+            assert result.text_attachments[0] == "Done"
 
 
 def test_ask_question_no_poll_on_completed_status(genie, mock_workspace_client):
@@ -1521,7 +1562,8 @@ def test_ask_question_no_poll_on_completed_status(genie, mock_workspace_client):
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
         result = genie.ask_question("Test")
         mock_call.assert_called_once()  # Only query, no poll
-        assert result.result == "Answer"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Answer"
 
 
 def test_ask_question_blocks_until_complete(genie, mock_workspace_client):
@@ -1587,7 +1629,8 @@ def test_ask_question_blocks_until_complete(genie, mock_workspace_client):
         with patch.object(genie._mcp_client, "call_tool", side_effect=responses) as mock_call:
             result = genie.ask_question("Test")
             assert mock_call.call_count == 3
-            assert result.result == "Final"
+            assert len(result.text_attachments) == 1
+            assert result.text_attachments[0] == "Final"
 
 
 def test_ask_question_uses_correct_ids_for_polling(genie, mock_workspace_client):
@@ -1663,7 +1706,8 @@ def test_ask_question_handles_missing_status(genie, mock_workspace_client):
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
         result = genie.ask_question("Test")
         mock_call.assert_called_once()
-        assert result.result == "Answer"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Answer"
 
 
 def test_ask_question_poll_false_returns_immediately(genie, mock_workspace_client):
@@ -1690,6 +1734,326 @@ def test_ask_question_poll_false_returns_immediately(genie, mock_workspace_clien
     with patch.object(genie._mcp_client, "call_tool", return_value=mock_result) as mock_call:
         result = genie.ask_question("Test", poll=False)
         mock_call.assert_called_once()  # Only query, no poll despite non-terminal status
-        assert result.result == "Processing"
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Processing"
         assert result.conversation_id == "123"
         assert result.message_id == "456"
+
+
+def test_multiple_query_attachments(genie, mock_workspace_client):
+    """Test that multiple query attachments are all parsed and included."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [
+                                {
+                                    "query": "SELECT * FROM table1",
+                                    "description": "First query description",
+                                    "statement_response": {
+                                        "status": {"state": "SUCCEEDED"},
+                                        "manifest": {
+                                            "schema": {
+                                                "columns": [{"name": "col1", "type_name": "INT"}]
+                                            }
+                                        },
+                                        "result": {
+                                            "data_array": [{"values": [{"string_value": "1"}]}]
+                                        },
+                                    },
+                                },
+                                {
+                                    "query": "SELECT * FROM table2",
+                                    "description": "Second query description",
+                                    "statement_response": {
+                                        "status": {"state": "SUCCEEDED"},
+                                        "manifest": {
+                                            "schema": {
+                                                "columns": [{"name": "col2", "type_name": "INT"}]
+                                            }
+                                        },
+                                        "result": {
+                                            "data_array": [{"values": [{"string_value": "2"}]}]
+                                        },
+                                    },
+                                },
+                            ],
+                            "textAttachments": ["Summary text"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+
+        assert len(result.query_attachments) == 2
+        assert result.query_attachments[0].query == "SELECT * FROM table1"
+        assert result.query_attachments[0].description == "First query description"
+        assert result.query_attachments[0].result is not None
+
+        assert result.query_attachments[1].query == "SELECT * FROM table2"
+        assert result.query_attachments[1].description == "Second query description"
+        assert result.query_attachments[1].result is not None
+
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Summary text"
+        assert result.error_msg is None
+
+
+def test_query_attachment_with_failed_statement(genie, mock_workspace_client):
+    """Test that query attachment without successful statement has None result."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [
+                                {
+                                    "query": "SELECT * FROM table1",
+                                    "description": "Query description",
+                                    "statement_response": {
+                                        "status": {"state": "FAILED"},
+                                    },
+                                }
+                            ],
+                            "textAttachments": ["Query failed"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+
+        # Query attachment exists but result is None
+        assert len(result.query_attachments) == 1
+        assert result.query_attachments[0].query == "SELECT * FROM table1"
+        assert result.query_attachments[0].description == "Query description"
+        assert result.query_attachments[0].result is None
+
+        # Text attachment has the error
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Query failed"
+
+
+def test_query_attachments_with_text_attachments(genie, mock_workspace_client):
+    """Test that both query and text attachments are properly parsed."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [
+                                {
+                                    "query": "SELECT * FROM table1",
+                                    "description": "Query description",
+                                    "statement_response": {
+                                        "status": {"state": "SUCCEEDED"},
+                                        "manifest": {
+                                            "schema": {
+                                                "columns": [{"name": "col1", "type_name": "INT"}]
+                                            }
+                                        },
+                                        "result": {
+                                            "data_array": [{"values": [{"string_value": "42"}]}]
+                                        },
+                                    },
+                                }
+                            ],
+                            "textAttachments": ["Additional summary text"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+
+        assert len(result.query_attachments) == 1
+        assert result.query_attachments[0].query == "SELECT * FROM table1"
+        assert "42" in result.query_attachments[0].result
+        assert len(result.text_attachments) == 1
+        assert result.text_attachments[0] == "Additional summary text"
+        assert result.error_msg is None
+
+
+# =============================================================================
+# Backward Compatibility Tests
+# These tests verify the deprecated fields (result, query, description) still work
+# =============================================================================
+
+
+def test_deprecated_result_field_with_text_attachments(genie, mock_workspace_client):
+    """Test that the deprecated result field joins multiple text attachments with newlines."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [],
+                            "textAttachments": [
+                                "First message",
+                                "Second message",
+                                "Third message",
+                            ],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+        # Legacy result field joins text attachments with newlines
+        with pytest.warns(DeprecationWarning, match="GenieResponse.result is deprecated"):
+            assert result.result == "First message\nSecond message\nThird message"
+
+
+def test_deprecated_fields_with_query_attachment(genie, mock_workspace_client):
+    """Test that deprecated query, description, and result fields work with query attachments."""
+    mock_mcp_result = CallToolResult(
+        content=[
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "content": {
+                            "queryAttachments": [
+                                {
+                                    "query": "SELECT * FROM table1",
+                                    "description": "First query description",
+                                    "statement_response": {
+                                        "status": {"state": "SUCCEEDED"},
+                                        "manifest": {
+                                            "schema": {
+                                                "columns": [{"name": "col1", "type_name": "INT"}]
+                                            }
+                                        },
+                                        "result": {
+                                            "data_array": [{"values": [{"string_value": "1"}]}]
+                                        },
+                                    },
+                                },
+                                {
+                                    "query": "SELECT * FROM table2",
+                                    "description": "Second query description",
+                                    "statement_response": {
+                                        "status": {"state": "SUCCEEDED"},
+                                        "manifest": {
+                                            "schema": {
+                                                "columns": [{"name": "col2", "type_name": "INT"}]
+                                            }
+                                        },
+                                        "result": {
+                                            "data_array": [{"values": [{"string_value": "2"}]}]
+                                        },
+                                    },
+                                },
+                            ],
+                            "textAttachments": ["Summary text"],
+                        },
+                        "conversationId": "123",
+                        "messageId": "456",
+                        "status": "COMPLETED",
+                    }
+                ),
+            }
+        ]
+    )
+
+    with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+        result = genie.poll_for_result("123", "456")
+
+        # Legacy fields use first query's data for backward compatibility
+        with pytest.warns(DeprecationWarning, match="GenieResponse.query is deprecated"):
+            assert result.query == "SELECT * FROM table1"
+        with pytest.warns(DeprecationWarning, match="GenieResponse.description is deprecated"):
+            assert result.description == "First query description"
+        # Legacy result contains the parsed query result (markdown table)
+        with pytest.warns(DeprecationWarning, match="GenieResponse.result is deprecated"):
+            assert "1" in result.result
+
+
+def test_deprecated_result_field_with_error(genie, mock_workspace_client):
+    """Test that deprecated result field is populated with error_msg for errors."""
+    with (
+        patch("databricks_ai_bridge.genie.MAX_ITERATIONS", 2),
+        patch("databricks_ai_bridge.genie.ITERATION_FREQUENCY", 0.1),
+        patch("time.sleep", return_value=None),
+    ):
+        mock_mcp_result = CallToolResult(
+            content=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "content": {
+                                "queryAttachments": [],
+                                "textAttachments": ["Query is still processing"],
+                            },
+                            "conversationId": "123",
+                            "messageId": "456",
+                            "status": "RUNNING",
+                        }
+                    ),
+                }
+            ]
+        )
+
+        with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
+            result = genie.poll_for_result("123", "456")
+            # Legacy result field should contain the timeout error
+            with pytest.warns(DeprecationWarning, match="GenieResponse.result is deprecated"):
+                assert "timed out" in result.result.lower()
+            with pytest.warns(DeprecationWarning, match="GenieResponse.result is deprecated"):
+                assert "2 iterations of 0.1 seconds" in result.result
+
+
+def test_deprecated_fields_emit_warnings():
+    """Test that accessing deprecated fields emits DeprecationWarning."""
+    response = GenieResponse(
+        _result="test result",
+        _query="SELECT 1",
+        _description="test description",
+        query_attachments=[QueryAttachment(query="SELECT 1", description="test", result="1")],
+        text_attachments=["text result"],
+        conversation_id="123",
+        message_id="456",
+    )
+
+    # Accessing deprecated fields should emit warnings
+    with pytest.warns(DeprecationWarning, match="GenieResponse.result is deprecated"):
+        assert response.result == "test result"
+    with pytest.warns(DeprecationWarning, match="GenieResponse.query is deprecated"):
+        assert response.query == "SELECT 1"
+    with pytest.warns(DeprecationWarning, match="GenieResponse.description is deprecated"):
+        assert response.description == "test description"

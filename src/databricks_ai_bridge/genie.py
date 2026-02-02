@@ -3,9 +3,9 @@ import json
 import logging
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import mlflow
 import pandas as pd
@@ -34,12 +34,49 @@ def _count_tokens(text):
 
 
 @dataclass
+class QueryAttachment:
+    query: str
+    description: str
+    result: Optional[Union[str, pd.DataFrame]] = None
+
+
+@dataclass
 class GenieResponse:
-    result: Union[str, pd.DataFrame]
-    query: Optional[str] = ""
-    description: Optional[str] = ""
+    query_attachments: List[QueryAttachment] = field(default_factory=list)
+    text_attachments: List[str] = field(default_factory=list)
+    error_msg: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
+    _result: Union[str, pd.DataFrame] = ""
+    _query: Optional[str] = ""
+    _description: Optional[str] = ""
+
+    @property
+    def result(self) -> Union[str, pd.DataFrame]:
+        warnings.warn(
+            "GenieResponse.result is deprecated. Use query_attachments and text_attachments instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._result
+
+    @property
+    def query(self) -> Optional[str]:
+        warnings.warn(
+            "GenieResponse.query is deprecated. Use query_attachments[].query instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._query
+
+    @property
+    def description(self) -> Optional[str]:
+        warnings.warn(
+            "GenieResponse.description is deprecated. Use query_attachments[].description instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._description
 
 
 @mlflow.trace(span_type="PARSER")
@@ -196,24 +233,16 @@ def _parse_genie_mcp_response(
         "status": "COMPLETED" | "EXECUTING_QUERY" | "FAILED" | ...
     }
 
-    Response formats and parsing priority:
-    1. Query with results (queryAttachments + successful statement_response):
-       - Extract SQL query and description from first queryAttachment
-       - Parse statement_response into DataFrame/markdown via _parse_query_result()
-
-    2. Query without results (queryAttachments but no successful statement_response):
-       - Fall back to textAttachments if present
-       - Otherwise stringify raw content
-
-    3. Text-only response (textAttachments only):
-       - Join all text attachments with newlines
-
-    4. Fallback (empty or malformed):
-       - Return stringified content dict
+    Response formats and parsing:
+    - All queryAttachments are parsed into QueryAttachment objects
+    - All textAttachments are parsed into TextAttachment objects
+    - Deprecated fields (result, query, description) are populated for backward compatibility
     """
     if not mcp_result.content or len(mcp_result.content) == 0:
+        error_msg = "No content returned from Genie"
         return GenieResponse(
-            result="No content returned from Genie",
+            _result=error_msg,
+            error_msg=error_msg,
             conversation_id=conversation_id,
             message_id=message_id,
         )
@@ -225,8 +254,10 @@ def _parse_genie_mcp_response(
     try:
         genie_response = json.loads(content_text)
     except json.JSONDecodeError:
+        error_msg = f"Failed to parse response: {content_text}"
         return GenieResponse(
-            result=f"Failed to parse response: {content_text}",
+            _result=error_msg,
+            error_msg=error_msg,
             conversation_id=conversation_id,
             message_id=message_id,
         )
@@ -236,13 +267,17 @@ def _parse_genie_mcp_response(
     msg_id = genie_response.get("messageId", message_id)
     query_str = ""
     description = ""
+    query_attachments = []
+    text_attachments = []
 
     try:
-        query_attachments = content.get("queryAttachments", [])
-        text_attachments = content.get("textAttachments", [])
+        raw_query_attachments = content.get("queryAttachments", [])
+        raw_text_attachments = content.get("textAttachments", [])
 
-        if query_attachments:
-            first_query = query_attachments[0]
+        # Build legacy fields for backward compatibility
+
+        if raw_query_attachments:
+            first_query = raw_query_attachments[0]
             query_str = first_query.get("query", "")
             description = first_query.get("description", "")
             statement_response = first_query.get("statement_response")
@@ -252,25 +287,52 @@ def _parse_genie_mcp_response(
                 and statement_response.get("status", {}).get("state") == "SUCCEEDED"
             ):
                 result = _parse_query_result(statement_response, truncate_results, return_pandas)
-            elif text_attachments:
-                result = "\n".join(text_attachments)
+            elif raw_text_attachments:
+                result = "\n".join(raw_text_attachments)
             else:
                 result = str(content)
-        elif text_attachments:
-            result = "\n".join(text_attachments)
+        elif raw_text_attachments:
+            result = "\n".join(raw_text_attachments)
         else:
             result = str(content)
 
-    except (KeyError, TypeError, AttributeError):
-        result = str(content)
+        # build query attachments
+        for qa in raw_query_attachments:
+            q = qa.get("query", "")
+            desc = qa.get("description", "")
+            statement_response = qa.get("statement_response")
 
-    return GenieResponse(
-        result=result,
-        query=query_str,
-        description=description,
-        conversation_id=conv_id,
-        message_id=msg_id,
-    )
+            qa_result = None
+            if (
+                statement_response
+                and statement_response.get("status", {}).get("state") == "SUCCEEDED"
+            ):
+                qa_result = _parse_query_result(statement_response, truncate_results, return_pandas)
+
+            query_attachments.append(QueryAttachment(query=q, description=desc, result=qa_result))
+
+        # build text attachments (already List[str])
+        text_attachments = list(raw_text_attachments)
+
+        return GenieResponse(
+            _result=result,
+            _query=query_str,
+            _description=description,
+            conversation_id=conv_id,
+            message_id=msg_id,
+            query_attachments=query_attachments,
+            text_attachments=text_attachments,
+        )
+
+    except (KeyError, TypeError, AttributeError):
+        error_msg = f"Failed to parse response: {str(content)}"
+        return GenieResponse(
+            _result=str(content),
+            text_attachments=[str(content)],
+            error_msg=error_msg,
+            conversation_id=conv_id,
+            message_id=msg_id,
+        )
 
 
 class Genie:
@@ -376,8 +438,10 @@ class Genie:
                     if not mcp_result.content or len(mcp_result.content) == 0:
                         # End any active span before returning
                         _end_current_span(client, parent_trace_id, current_span, last_status)
+                        error_msg = "No content returned from Genie poll"
                         return GenieResponse(
-                            result="No content returned from Genie poll",
+                            _result=error_msg,
+                            error_msg=error_msg,
                             conversation_id=conversation_id,
                             message_id=message_id,
                         )
@@ -442,8 +506,10 @@ class Genie:
 
             # Timeout - end any active span
             _end_current_span(client, parent_trace_id, current_span, last_status)
+            error_msg = f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds"
             return GenieResponse(
-                result=f"Genie query timed out after {MAX_ITERATIONS} iterations of {ITERATION_FREQUENCY} seconds",
+                _result=error_msg,
+                error_msg=error_msg,
                 conversation_id=conversation_id,
                 message_id=message_id,
             )

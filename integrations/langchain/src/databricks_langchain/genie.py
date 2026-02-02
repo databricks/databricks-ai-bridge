@@ -6,6 +6,13 @@ from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.genie import Genie
 
 
+def _extract_query_attachment_fields(query_attachments):
+    descriptions = [qa.description for qa in query_attachments if qa.description]
+    queries = [qa.query for qa in query_attachments if qa.query]
+    results = [qa.result for qa in query_attachments if qa.result is not None]
+    return descriptions, queries, results
+
+
 @mlflow.trace()
 def _concat_messages_array(messages):
     concatenated_message = "\n".join(
@@ -42,7 +49,7 @@ def _query_genie_as_agent(
     Returns:
         A dictionary containing the messages and conversation_id.
         If include_context is True, the dictionary will also contain the query_reasoning and query_sql fields.
-        If Genie returned a dataframe because it was told to do returns in Pandas format, the dictionary will also contain the dataframe field.
+        If Genie returned DataFrames (return_pandas=True), the dictionary will also contain a "dataframes" field with the list of DataFrames.
     """
     from langchain_core.messages import AIMessage
 
@@ -61,42 +68,45 @@ def _query_genie_as_agent(
     # Send the message and wait for a response, passing conversation_id if available
     genie_response = genie.ask_question(query, conversation_id=conversation_id)
 
-    query_reasoning = genie_response.description or ""
-    query_sql = genie_response.query or ""
-    query_result = genie_response.result if genie_response.result is not None else ""
     query_conversation_id = genie_response.conversation_id or ""
     query_message_id = genie_response.message_id or ""
+    query_attachments = genie_response.query_attachments
+    text_attachments = genie_response.text_attachments
+    error_msg = genie_response.error_msg
+
+    descriptions, queries, results = _extract_query_attachment_fields(query_attachments)
 
     # Create a list of AIMessage to return
     messages = []
 
     if include_context:
-        messages.append(AIMessage(content=query_reasoning, name="query_reasoning"))
-        messages.append(AIMessage(content=query_sql, name="query_sql"))
+        if descriptions:
+            messages.append(AIMessage(content="\n\n".join(descriptions), name="query_reasoning"))
+        if queries:
+            messages.append(AIMessage(content="\n\n".join(queries), name="query_sql"))
 
-    # Handle DataFrame vs string results
-    if isinstance(query_result, pd.DataFrame):  # if we asked for Pandas return
-        # Convert to markdown for message display
-        query_result_content = query_result.to_markdown(index=False)
-        messages.append(AIMessage(content=query_result_content, name="query_result"))
+    query_result_parts = []
+    if results:
+        query_result_parts.extend(
+            r.to_markdown(index=False) if isinstance(r, pd.DataFrame) else r for r in results
+        )
+    if text_attachments:
+        query_result_parts.extend(text_attachments)
+    if error_msg:
+        query_result_parts.append(error_msg)
+    if query_result_parts:
+        messages.append(AIMessage(content="\n\n".join(query_result_parts), name="query_result"))
 
-        # Return with DataFrame included
-        return {
-            "messages": messages,
-            "conversation_id": query_conversation_id,
-            "message_id": query_message_id,
-            "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
-        }
-    else:
-        # String result - just add to messages
-        messages.append(AIMessage(content=query_result, name="query_result"))
+    result = {
+        "messages": messages,
+        "conversation_id": query_conversation_id,
+        "message_id": query_message_id,
+    }
 
-        # Return without DataFrame field
-        return {
-            "messages": messages,
-            "conversation_id": query_conversation_id,
-            "message_id": query_message_id,
-        }
+    if results and isinstance(results[0], pd.DataFrame):
+        result["dataframes"] = results
+
+    return result
 
 
 @mlflow.trace(span_type="AGENT")

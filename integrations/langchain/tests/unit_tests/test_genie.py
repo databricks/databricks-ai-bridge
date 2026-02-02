@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from databricks.sdk.service.dashboards import GenieSpace
-from databricks_ai_bridge.genie import Genie, GenieResponse
+from databricks_ai_bridge.genie import Genie, GenieResponse, QueryAttachment
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
@@ -68,11 +68,16 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
     MockWorkspaceClient.genie.get_space.return_value = mock_space
     MockMCPClient.return_value = _mock_mcp_client()
 
-    # Create a proper GenieResponse instance with conversation_id
+    # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result="It is sunny.",
-        query="SELECT * FROM weather",
-        description="This is the reasoning for the query",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT weather_condition FROM weather_data WHERE date = TODAY()",
+                description="Retrieving today's weather condition from the weather_data table",
+                result="| weather_condition |\n|-------------------|\n| sunny             |",
+            )
+        ],
+        text_attachments=["Based on the data, today's weather is sunny."],
         conversation_id="conv-123",
         message_id="msg-123",
     )
@@ -84,25 +89,39 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         # Test with include_context=False (default)
         result = _query_genie_as_agent(input_data, genie, "Genie")
-        expected_message = {
-            "messages": [AIMessage(content="It is sunny.", name="query_result")],
-            "conversation_id": "conv-123",
-            "message_id": "msg-123",
-        }
-        assert result == expected_message
-
-        # Test with include_context=True
-        result = _query_genie_as_agent(input_data, genie, "Genie", include_context=True)
-        expected_messages = {
+        expected_result = {
             "messages": [
-                AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
-                AIMessage(content="SELECT * FROM weather", name="query_sql"),
-                AIMessage(content="It is sunny.", name="query_result"),
+                AIMessage(
+                    content="| weather_condition |\n|-------------------|\n| sunny             |\n\nBased on the data, today's weather is sunny.",
+                    name="query_result",
+                ),
             ],
             "conversation_id": "conv-123",
             "message_id": "msg-123",
         }
-        assert result == expected_messages
+        assert result == expected_result
+
+        # Test with include_context=True
+        result = _query_genie_as_agent(input_data, genie, "Genie", include_context=True)
+        expected_result_with_context = {
+            "messages": [
+                AIMessage(
+                    content="Retrieving today's weather condition from the weather_data table",
+                    name="query_reasoning",
+                ),
+                AIMessage(
+                    content="SELECT weather_condition FROM weather_data WHERE date = TODAY()",
+                    name="query_sql",
+                ),
+                AIMessage(
+                    content="| weather_condition |\n|-------------------|\n| sunny             |\n\nBased on the data, today's weather is sunny.",
+                    name="query_result",
+                ),
+            ],
+            "conversation_id": "conv-123",
+            "message_id": "msg-123",
+        }
+        assert result == expected_result_with_context
 
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
@@ -159,9 +178,14 @@ def test_query_genie_with_client(mock_workspace_client, MockMCPClient):
 
     # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result="It is sunny.",
-        query="SELECT weather FROM data",
-        description="Query reasoning",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT weather FROM data",
+                description="Query reasoning",
+                result="| weather |\n|---------|\n| sunny   |",
+            )
+        ],
+        text_attachments=["The current weather is sunny."],
         conversation_id="conv-456",
         message_id="msg-456",
     )
@@ -172,12 +196,17 @@ def test_query_genie_with_client(mock_workspace_client, MockMCPClient):
     # Mock the ask_question method to return our mock response
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
-        expected_message = {
-            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+        expected_result = {
+            "messages": [
+                AIMessage(
+                    content="| weather |\n|---------|\n| sunny   |\n\nThe current weather is sunny.",
+                    name="query_result",
+                ),
+            ],
             "conversation_id": "conv-456",
             "message_id": "msg-456",
         }
-        assert result == expected_message
+        assert result == expected_result
 
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
@@ -195,9 +224,14 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient, MockMCPCli
 
     # Create a proper GenieResponse instance
     mock_genie_response = GenieResponse(
-        result="It is sunny.",
-        query="SELECT * FROM weather",
-        description="This is the reasoning for the query",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM weather",
+                description="This is the reasoning for the query",
+                result="| condition |\n|-----------|\n| sunny     |",
+            )
+        ],
+        text_attachments=["Today's weather is sunny."],
         conversation_id="conv-789",
     )
 
@@ -213,14 +247,25 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient, MockMCPCli
         # Invoke the agent and verify include_context=True behavior
         result = agent.invoke(input_data)
 
-        # Should include reasoning, SQL, and result when include_context=True
-        expected_messages = [
-            AIMessage(content="This is the reasoning for the query", name="query_reasoning"),
-            AIMessage(content="SELECT * FROM weather", name="query_sql"),
-            AIMessage(content="It is sunny.", name="query_result"),
-        ]
-        assert result["messages"] == expected_messages
-        assert result["conversation_id"] == "conv-789"  # Add this
+        expected_result = {
+            "messages": [
+                AIMessage(
+                    content="This is the reasoning for the query",
+                    name="query_reasoning",
+                ),
+                AIMessage(
+                    content="SELECT * FROM weather",
+                    name="query_sql",
+                ),
+                AIMessage(
+                    content="| condition |\n|-----------|\n| sunny     |\n\nToday's weather is sunny.",
+                    name="query_result",
+                ),
+            ],
+            "conversation_id": "conv-789",
+            "message_id": "",
+        }
+        assert result == expected_result
 
     mock_client.genie.get_space.assert_called_once()
 
@@ -239,9 +284,14 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
     MockMCPClient.return_value = _mock_mcp_client()
 
     mock_genie_response = GenieResponse(
-        result="It is sunny.",
-        query="SELECT * FROM weather",
-        description="Query reasoning",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM weather",
+                description="Query reasoning",
+                result="| weather |\n|---------|\n| sunny   |",
+            )
+        ],
+        text_attachments=["It is sunny today."],
         conversation_id="conv-abc",
         message_id="msg-abc",
     )
@@ -274,7 +324,12 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
         expected_query = "First message | Assistant response | Second message"
         mock_ask.assert_called_with(expected_query, conversation_id=None)
         assert result == {
-            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "messages": [
+                AIMessage(
+                    content="| weather |\n|---------|\n| sunny   |\n\nIt is sunny today.",
+                    name="query_result",
+                ),
+            ],
             "conversation_id": "conv-abc",
             "message_id": "msg-abc",
         }
@@ -296,7 +351,12 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
         expected_query = "Second message"
         mock_ask.assert_called_with(expected_query, conversation_id=None)
         assert result == {
-            "messages": [AIMessage(content="It is sunny.", name="query_result")],
+            "messages": [
+                AIMessage(
+                    content="| weather |\n|---------|\n| sunny   |\n\nIt is sunny today.",
+                    name="query_result",
+                ),
+            ],
             "conversation_id": "conv-abc",
             "message_id": "msg-abc",
         }
@@ -316,9 +376,16 @@ def test_message_processor_functionality(MockWorkspaceClient, MockMCPClient):
             result = agent.invoke(input_data)
             expected_query = "Second message"
             mock_ask_agent.assert_called_once_with(expected_query, conversation_id=None)
-            assert result["messages"] == [AIMessage(content="It is sunny.", name="query_result")]
-            assert result["conversation_id"] == "conv-abc"
-            assert result["message_id"] == "msg-abc"
+            assert result == {
+                "messages": [
+                    AIMessage(
+                        content="| weather |\n|---------|\n| sunny   |\n\nIt is sunny today.",
+                        name="query_result",
+                    ),
+                ],
+                "conversation_id": "conv-abc",
+                "message_id": "msg-abc",
+            }
 
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
@@ -335,17 +402,27 @@ def test_conversation_continuity(MockWorkspaceClient, MockMCPClient):
 
     # First response creates a conversation
     mock_genie_response_1 = GenieResponse(
-        result="First response",
-        query="SELECT * FROM data",
-        description="Query reasoning",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT region, SUM(revenue) FROM sales GROUP BY region",
+                description="Aggregating revenue by region",
+                result="| region | revenue |\n|--------|--------|\n| NA     | 5000   |\n| EU     | 3000   |",
+            )
+        ],
+        text_attachments=["Here is the revenue breakdown by region."],
         conversation_id="conv-new-123",
     )
 
     # Second response continues the conversation
     mock_genie_response_2 = GenieResponse(
-        result="Follow-up response",
-        query="SELECT * FROM data WHERE region='NA'",
-        description="Follow-up query",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM sales WHERE region='NA'",
+                description="Filtering sales data for North America",
+                result="| product | revenue |\n|---------|--------|\n| Widget  | 3000   |\n| Gadget  | 2000   |",
+            )
+        ],
+        text_attachments=["Here are the NA sales details."],
         conversation_id="conv-new-123",
     )
 
@@ -393,31 +470,46 @@ def test_dataframe_return(MockWorkspaceClient, MockMCPClient):
     MockWorkspaceClient.genie.get_space.return_value = mock_space
     MockMCPClient.return_value = _mock_mcp_client()
 
-    # Create a DataFrame result
-    test_df = pd.DataFrame({"name": ["Alice", "Bob"], "age": [25, 30]})
+    # Create DataFrame results
+    test_df1 = pd.DataFrame({"name": ["Alice", "Bob"], "age": [25, 30]})
+    test_df2 = pd.DataFrame({"city": ["NYC", "LA"], "population": [8000000, 4000000]})
 
     mock_genie_response = GenieResponse(
-        result=test_df,  # DataFrame result
-        query="SELECT * FROM users",
-        description="Query reasoning",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM users",
+                description="Fetching user data",
+                result=test_df1,
+            ),
+            QueryAttachment(
+                query="SELECT * FROM cities",
+                description="Fetching city data",
+                result=test_df2,
+            ),
+        ],
+        text_attachments=["Here are the users and cities from the database."],
         conversation_id="conv-df-123",
     )
 
-    input_data = {"messages": [{"role": "user", "content": "Show me users"}]}
+    input_data = {"messages": [{"role": "user", "content": "Show me users and cities"}]}
     genie = Genie("space-id", MockWorkspaceClient, return_pandas=True)
 
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
 
-        # Should have dataframe field
-        assert "dataframe" in result
-        assert isinstance(result["dataframe"], pd.DataFrame)
-        assert result["dataframe"].equals(test_df)
+        # Should have dataframes field (plural, list)
+        assert "dataframes" in result
+        assert isinstance(result["dataframes"], list)
+        assert len(result["dataframes"]) == 2
+        assert result["dataframes"][0].equals(test_df1)
+        assert result["dataframes"][1].equals(test_df2)
 
-        # Message content should be markdown
+        # Message content should be markdown with all data + summary
         assert isinstance(result["messages"][0].content, str)
         assert "Alice" in result["messages"][0].content
         assert "Bob" in result["messages"][0].content
+        assert "NYC" in result["messages"][0].content
+        assert "Here are the users" in result["messages"][0].content
 
         # Should have conversation_id
         assert result["conversation_id"] == "conv-df-123"
@@ -425,8 +517,8 @@ def test_dataframe_return(MockWorkspaceClient, MockMCPClient):
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
-def test_string_return_no_dataframe_field(MockWorkspaceClient, MockMCPClient):
-    """Test that string results don't include dataframe field"""
+def test_string_return_no_dataframes_field(MockWorkspaceClient, MockMCPClient):
+    """Test that string results don't include dataframes field"""
     mock_space = GenieSpace(
         space_id="space-id",
         title="Sales Space",
@@ -436,9 +528,14 @@ def test_string_return_no_dataframe_field(MockWorkspaceClient, MockMCPClient):
     MockMCPClient.return_value = _mock_mcp_client()
 
     mock_genie_response = GenieResponse(
-        result="String result",  # String, not DataFrame
-        query="SELECT * FROM data",
-        description="Query reasoning",
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM data",
+                description="Query reasoning",
+                result="| col1 | col2 |\n|------|------|\n| a    | b    |",
+            )
+        ],
+        text_attachments=["Here is the data you requested."],
         conversation_id="conv-str-123",
     )
 
@@ -448,9 +545,130 @@ def test_string_return_no_dataframe_field(MockWorkspaceClient, MockMCPClient):
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
         result = _query_genie_as_agent(input_data, genie, "Genie")
 
-        # Should NOT have dataframe field
-        assert "dataframe" not in result
+        # Should NOT have dataframes field (string results, not DataFrames)
+        assert "dataframes" not in result
 
-        # Message content should be the string
-        assert result["messages"][0].content == "String result"
+        # Message content should contain the table and summary
+        assert "col1" in result["messages"][0].content
+        assert "Here is the data" in result["messages"][0].content
         assert result["conversation_id"] == "conv-str-123"
+
+
+@patch("databricks_ai_bridge.genie.DatabricksMCPClient")
+@patch("databricks.sdk.WorkspaceClient")
+def test_multiple_attachments_concatenated(MockWorkspaceClient, MockMCPClient):
+    """Test that multiple query and text attachments are concatenated into messages"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+    MockMCPClient.return_value = _mock_mcp_client()
+
+    # Create a GenieResponse with multiple attachments
+    # query_attachment.result = actual query data, text_attachments = Genie's summaries
+    mock_genie_response = GenieResponse(
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM sales",
+                description="Fetching sales data for Q1",
+                result="| quarter | revenue |\n|---------|--------|\n| Q1      | 1000   |",
+            ),
+            QueryAttachment(
+                query="SELECT * FROM expenses",
+                description="Fetching expense data for Q1",
+                result="| quarter | cost |\n|---------|------|\n| Q1      | 500  |",
+            ),
+        ],
+        text_attachments=[
+            "Based on the data, Q1 had $1000 in revenue.",
+            "Expenses for Q1 were $500, resulting in $500 profit.",
+        ],
+        conversation_id="conv-multi-123",
+        message_id="msg-multi-123",
+    )
+
+    input_data = {"messages": [{"role": "user", "content": "Show me Q1 financials"}]}
+    genie = Genie("space-id", MockWorkspaceClient)
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        # Test without include_context - only result
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+
+        # Result should be concatenated (1 message): results first, then summaries
+        assert len(result["messages"]) == 1
+        assert result["messages"][0].name == "query_result"
+        assert "revenue" in result["messages"][0].content
+        assert "cost" in result["messages"][0].content
+        assert "$1000 in revenue" in result["messages"][0].content
+        assert "$500 profit" in result["messages"][0].content
+
+        # Test with include_context - reasoning + sql + result
+        result_with_context = _query_genie_as_agent(
+            input_data, genie, "Genie", include_context=True
+        )
+
+        # Should have 3 messages: reasoning, sql, result
+        assert len(result_with_context["messages"]) == 3
+
+        # Reasoning should be concatenated
+        reasoning_msg = result_with_context["messages"][0]
+        assert reasoning_msg.name == "query_reasoning"
+        assert "Fetching sales data" in reasoning_msg.content
+        assert "Fetching expense data" in reasoning_msg.content
+
+        # SQL should be concatenated
+        sql_msg = result_with_context["messages"][1]
+        assert sql_msg.name == "query_sql"
+        assert "SELECT * FROM sales" in sql_msg.content
+        assert "SELECT * FROM expenses" in sql_msg.content
+
+        # Result should be concatenated
+        result_msg = result_with_context["messages"][2]
+        assert result_msg.name == "query_result"
+
+
+@patch("databricks_ai_bridge.genie.DatabricksMCPClient")
+@patch("databricks.sdk.WorkspaceClient")
+def test_text_only_response(MockWorkspaceClient, MockMCPClient):
+    """Test handling of text-only responses (no query attachments) - Genie couldn't run a query"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    MockWorkspaceClient.genie.get_space.return_value = mock_space
+    MockMCPClient.return_value = _mock_mcp_client()
+
+    # Create a GenieResponse with only text attachments (Genie couldn't find relevant data)
+    mock_genie_response = GenieResponse(
+        query_attachments=[],
+        text_attachments=[
+            "I cannot answer that question based on the available data in this space.",
+        ],
+        conversation_id="conv-text-123",
+        message_id="msg-text-123",
+    )
+
+    input_data = {"messages": [{"role": "user", "content": "What is the meaning of life?"}]}
+    genie = Genie("space-id", MockWorkspaceClient)
+
+    with patch.object(genie, "ask_question", return_value=mock_genie_response):
+        result = _query_genie_as_agent(input_data, genie, "Genie")
+
+        # Should have 1 result message with Genie's text response
+        assert len(result["messages"]) == 1
+        assert result["messages"][0].name == "query_result"
+        assert "cannot answer that question" in result["messages"][0].content
+
+        # No dataframes field (no query results)
+        assert "dataframes" not in result
+
+        # Test with include_context - should not have reasoning/sql since no query attachments
+        result_with_context = _query_genie_as_agent(
+            input_data, genie, "Genie", include_context=True
+        )
+        # Only result message (no reasoning or sql since query_attachments is empty)
+        assert len(result_with_context["messages"]) == 1
+        assert result_with_context["messages"][0].name == "query_result"
