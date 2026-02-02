@@ -92,9 +92,7 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
                 f"Ensure the app implements the /responses endpoint."
             )
         elif status_code == 403:
-            hint = (
-                f"Hint: Ensure you have CAN_QUERY permission on app '{app_name}'."
-            )
+            hint = f"Hint: Ensure you have CAN_QUERY permission on app '{app_name}'."
         elif "DNS" in message or "resolution" in message.lower():
             hint = (
                 f"Hint: App '{app_name}' may be stopped or unavailable. "
@@ -115,9 +113,7 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
                 f"Check the app status in the Databricks workspace."
             )
         else:
-            hint = (
-                f"Hint: App '{app_name}' may be starting up or unavailable."
-            )
+            hint = f"Hint: App '{app_name}' may be starting up or unavailable."
         return ValueError(f"Error connecting to app '{app_name}': {message}\n{hint}")
     return ValueError(f"Error querying app '{app_name}': {e}")
 
@@ -201,7 +197,7 @@ class DatabricksOpenAI(OpenAI):
     Example - Query a Databricks App directly by URL:
         >>> client = DatabricksOpenAI(
         ...     base_url="https://my-app.aws.databricksapps.com",
-        ...     workspace_client=WorkspaceClient()  # Must use OAuth
+        ...     workspace_client=WorkspaceClient(),  # Must use OAuth
         ... )
         >>> response = client.responses.create(
         ...     input=[{"role": "user", "content": "Hello"}],
@@ -338,7 +334,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
     Example - Query a Databricks App directly by URL:
         >>> client = AsyncDatabricksOpenAI(
         ...     base_url="https://my-app.aws.databricksapps.com",
-        ...     workspace_client=WorkspaceClient()  # Must use OAuth
+        ...     workspace_client=WorkspaceClient(),  # Must use OAuth
         ... )
         >>> response = await client.responses.create(
         ...     input=[{"role": "user", "content": "Hello"}],

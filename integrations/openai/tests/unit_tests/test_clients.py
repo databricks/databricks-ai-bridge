@@ -388,7 +388,9 @@ class TestDatabricksClientWithBaseUrl:
     ):
         from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 
-        client_cls = DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
         client = client_cls(
             workspace_client=mock_workspace_client_with_oauth,
             base_url="https://my-app.aws.databricksapps.com",
@@ -397,10 +399,14 @@ class TestDatabricksClientWithBaseUrl:
         mock_workspace_client_with_oauth.config.oauth_token.assert_called_once()
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_init_with_base_url_requires_oauth(self, client_cls_name, mock_workspace_client_no_oauth):
+    def test_init_with_base_url_requires_oauth(
+        self, client_cls_name, mock_workspace_client_no_oauth
+    ):
         from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 
-        client_cls = DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
         with pytest.raises(ValueError, match="OAuth authentication"):
             client_cls(
                 workspace_client=mock_workspace_client_no_oauth,
@@ -554,7 +560,9 @@ class TestDatabricksOpenAIAppsErrorHandling:
             ),
         ],
     )
-    def test_responses_wraps_app_errors(self, mock_workspace_client_with_oauth, error, expected_match):
+    def test_responses_wraps_app_errors(
+        self, mock_workspace_client_with_oauth, error, expected_match
+    ):
         from openai.resources.responses import Responses
 
         from databricks_openai import DatabricksOpenAI
@@ -575,7 +583,9 @@ class TestDatabricksOpenAIAppsErrorHandling:
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
-        with patch.object(Responses, "create", side_effect=_make_api_status_error(500, "Internal Server Error")):
+        with patch.object(
+            Responses, "create", side_effect=_make_api_status_error(500, "Internal Server Error")
+        ):
             with pytest.raises(APIStatusError):
                 client.responses.create(
                     model="databricks-claude-3-7-sonnet",
