@@ -9,7 +9,7 @@ from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
 
 # Prefix for routing requests to Databricks Apps
-_APPS_MODEL_PREFIX = "apps/"
+_APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
 
@@ -162,8 +162,8 @@ class DatabricksResponses(Responses):
     def create(self, **kwargs):
         model = kwargs.get("model", "")
 
-        if isinstance(model, str) and model.startswith(_APPS_MODEL_PREFIX):
-            app_name = model[len(_APPS_MODEL_PREFIX) :]
+        if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
+            app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
             app_client = self._get_app_client(app_name)
             try:
                 return app_client.responses.create(**kwargs)
@@ -191,7 +191,7 @@ class DatabricksOpenAI(OpenAI):
             WorkspaceClient will be created using standard Databricks authentication resolution.
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
-            required. Other base URLs do not require OAuth.
+            required.
 
     Example - Query a serving endpoint:
         >>> client = DatabricksOpenAI()
@@ -305,8 +305,8 @@ class AsyncDatabricksResponses(AsyncResponses):
     async def create(self, **kwargs):
         model = kwargs.get("model", "")
 
-        if isinstance(model, str) and model.startswith(_APPS_MODEL_PREFIX):
-            app_name = model[len(_APPS_MODEL_PREFIX) :]
+        if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
+            app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
             app_client = self._get_app_client(app_name)
             try:
                 return await app_client.responses.create(**kwargs)
@@ -334,7 +334,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             WorkspaceClient will be created using standard Databricks authentication resolution.
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
-            required. Other base URLs do not require OAuth.
+            required.
 
     Example - Query a serving endpoint:
         >>> client = AsyncDatabricksOpenAI()
