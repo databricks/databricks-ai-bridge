@@ -18,6 +18,33 @@ def mock_workspace_client():
     return mock_client
 
 
+@pytest.fixture
+def mock_workspace_client_with_oauth():
+    """Create a mock WorkspaceClient with OAuth support for testing."""
+    mock_client = MagicMock(spec=WorkspaceClient)
+    mock_client.config.host = "https://test.databricks.com"
+    mock_client.config.authenticate.return_value = {"Authorization": "Bearer oauth-token"}
+    mock_client.config.oauth_token.return_value = "oauth-token"
+
+    # Mock app lookup
+    mock_app = MagicMock()
+    mock_app.url = "https://my-app.aws.databricksapps.com"
+    mock_client.apps.get.return_value = mock_app
+
+    return mock_client
+
+
+@pytest.fixture
+def mock_workspace_client_no_oauth():
+    """Create a mock WorkspaceClient without OAuth support for testing."""
+    mock_client = MagicMock(spec=WorkspaceClient)
+    mock_client.config.host = "https://test.databricks.com"
+    mock_client.config.authenticate.return_value = {"Authorization": "Bearer pat-token"}
+    mock_client.config.oauth_token.side_effect = Exception("No OAuth token available")
+
+    return mock_client
+
+
 class TestDatabricksOpenAI:
     """Tests for DatabricksOpenAI client."""
 
@@ -309,3 +336,207 @@ class TestAsyncDatabricksOpenAIStrictStripping:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs["tools"][0]["function"]["strict"] is True
+
+
+class TestDatabricksAppsSupport:
+    """Tests for Databricks Apps support."""
+
+    def test_validate_oauth_for_apps_success(self, mock_workspace_client_with_oauth):
+        from databricks_openai.utils.clients import _validate_oauth_for_apps
+
+        _validate_oauth_for_apps(mock_workspace_client_with_oauth)
+        mock_workspace_client_with_oauth.config.oauth_token.assert_called_once()
+
+    def test_validate_oauth_for_apps_failure(self, mock_workspace_client_no_oauth):
+        from databricks_openai.utils.clients import _validate_oauth_for_apps
+
+        with pytest.raises(ValueError, match="OAuth authentication"):
+            _validate_oauth_for_apps(mock_workspace_client_no_oauth)
+
+    def test_get_app_url_success(self, mock_workspace_client_with_oauth):
+        from databricks_openai.utils.clients import _get_app_url
+
+        url = _get_app_url(mock_workspace_client_with_oauth, "my-app")
+        assert url == "https://my-app.aws.databricksapps.com"
+        mock_workspace_client_with_oauth.apps.get.assert_called_once_with(name="my-app")
+
+    def test_get_app_url_app_not_found(self, mock_workspace_client_with_oauth):
+        from databricks_openai.utils.clients import _get_app_url
+
+        mock_workspace_client_with_oauth.apps.get.side_effect = Exception("App not found")
+        with pytest.raises(ValueError, match="Failed to get Databricks App"):
+            _get_app_url(mock_workspace_client_with_oauth, "nonexistent-app")
+
+    def test_get_app_url_no_url(self, mock_workspace_client_with_oauth):
+        from databricks_openai.utils.clients import _get_app_url
+
+        mock_app = MagicMock()
+        mock_app.url = None
+        mock_workspace_client_with_oauth.apps.get.return_value = mock_app
+
+        with pytest.raises(ValueError, match="has no URL"):
+            _get_app_url(mock_workspace_client_with_oauth, "my-app")
+
+
+class TestDatabricksOpenAIWithBaseUrl:
+    """Tests for DatabricksOpenAI with base_url parameter."""
+
+    def test_init_with_base_url_validates_oauth(self, mock_workspace_client_with_oauth):
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(
+            workspace_client=mock_workspace_client_with_oauth,
+            base_url="https://my-app.aws.databricksapps.com",
+        )
+        assert "my-app.aws.databricksapps.com" in str(client.base_url)
+        mock_workspace_client_with_oauth.config.oauth_token.assert_called_once()
+
+    def test_init_with_base_url_requires_oauth(self, mock_workspace_client_no_oauth):
+        from databricks_openai import DatabricksOpenAI
+
+        with pytest.raises(ValueError, match="OAuth authentication"):
+            DatabricksOpenAI(
+                workspace_client=mock_workspace_client_no_oauth,
+                base_url="https://my-app.aws.databricksapps.com",
+            )
+
+    def test_init_without_base_url_uses_serving_endpoints(self, mock_workspace_client_with_oauth):
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+        assert "/serving-endpoints/" in str(client.base_url)
+        mock_workspace_client_with_oauth.config.oauth_token.assert_not_called()
+
+
+class TestDatabricksOpenAIAppsRouting:
+    """Tests for apps/ prefix routing in DatabricksOpenAI."""
+
+    def test_responses_create_routes_to_app(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        with patch.object(Responses, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.responses.create(
+                model="apps/my-agent",
+                input=[{"role": "user", "content": "Hello"}],
+            )
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs["model"] == "apps/my-agent"
+            mock_workspace_client_with_oauth.apps.get.assert_called_once_with(name="my-agent")
+
+    def test_responses_create_non_apps_model_uses_default(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        with patch.object(Responses, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.responses.create(
+                model="databricks-claude-3-7-sonnet",
+                input=[{"role": "user", "content": "Hello"}],
+            )
+            mock_create.assert_called_once()
+            mock_workspace_client_with_oauth.apps.get.assert_not_called()
+
+    def test_responses_caches_app_clients(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import Responses
+
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        with patch.object(Responses, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.responses.create(model="apps/my-agent", input=[{"role": "user", "content": "1"}])
+            client.responses.create(model="apps/my-agent", input=[{"role": "user", "content": "2"}])
+            # App should only be looked up once due to caching
+            assert mock_workspace_client_with_oauth.apps.get.call_count == 1
+
+    def test_responses_validates_oauth_for_apps_prefix(self, mock_workspace_client_no_oauth):
+        from databricks_openai import DatabricksOpenAI
+
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client_no_oauth)
+        with pytest.raises(ValueError, match="OAuth authentication"):
+            client.responses.create(
+                model="apps/my-agent",
+                input=[{"role": "user", "content": "Hello"}],
+            )
+
+
+class TestAsyncDatabricksOpenAIWithBaseUrl:
+    """Tests for AsyncDatabricksOpenAI with base_url parameter."""
+
+    def test_init_with_base_url_validates_oauth(self, mock_workspace_client_with_oauth):
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(
+            workspace_client=mock_workspace_client_with_oauth,
+            base_url="https://my-app.aws.databricksapps.com",
+        )
+        assert "my-app.aws.databricksapps.com" in str(client.base_url)
+        mock_workspace_client_with_oauth.config.oauth_token.assert_called_once()
+
+    def test_init_with_base_url_requires_oauth(self, mock_workspace_client_no_oauth):
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        with pytest.raises(ValueError, match="OAuth authentication"):
+            AsyncDatabricksOpenAI(
+                workspace_client=mock_workspace_client_no_oauth,
+                base_url="https://my-app.aws.databricksapps.com",
+            )
+
+
+class TestAsyncDatabricksOpenAIAppsRouting:
+    """Tests for apps/ prefix routing in AsyncDatabricksOpenAI."""
+
+    @pytest.mark.asyncio
+    async def test_responses_create_routes_to_app(self, mock_workspace_client_with_oauth):
+        from openai.resources.responses import AsyncResponses
+
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        with patch.object(AsyncResponses, "create", new_callable=AsyncMock) as mock_create:
+            await client.responses.create(
+                model="apps/my-agent",
+                input=[{"role": "user", "content": "Hello"}],
+            )
+            mock_create.assert_called_once()
+            mock_workspace_client_with_oauth.apps.get.assert_called_once_with(name="my-agent")
+
+    @pytest.mark.asyncio
+    async def test_responses_create_non_apps_model_uses_default(
+        self, mock_workspace_client_with_oauth
+    ):
+        from openai.resources.responses import AsyncResponses
+
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
+
+        with patch.object(AsyncResponses, "create", new_callable=AsyncMock) as mock_create:
+            await client.responses.create(
+                model="databricks-claude-3-7-sonnet",
+                input=[{"role": "user", "content": "Hello"}],
+            )
+            mock_create.assert_called_once()
+            mock_workspace_client_with_oauth.apps.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_responses_validates_oauth_for_apps_prefix(self, mock_workspace_client_no_oauth):
+        from databricks_openai import AsyncDatabricksOpenAI
+
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_no_oauth)
+        with pytest.raises(ValueError, match="OAuth authentication"):
+            await client.responses.create(
+                model="apps/my-agent",
+                input=[{"role": "user", "content": "Hello"}],
+            )
