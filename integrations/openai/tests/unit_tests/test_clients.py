@@ -420,6 +420,24 @@ class TestDatabricksClientWithBaseUrl:
         assert "/serving-endpoints/" in str(client.base_url)
         mock_workspace_client_with_oauth.config.oauth_token.assert_not_called()
 
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_init_with_non_databricksapps_base_url_does_not_require_oauth(
+        self, client_cls_name, mock_workspace_client_no_oauth
+    ):
+        from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
+
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        # Non-databricksapps URLs should not require OAuth
+        client = client_cls(
+            workspace_client=mock_workspace_client_no_oauth,
+            base_url="https://custom-endpoint.example.com/v1",
+        )
+        assert "custom-endpoint.example.com" in str(client.base_url)
+        # OAuth should not be validated for non-databricksapps URLs
+        mock_workspace_client_no_oauth.config.oauth_token.assert_not_called()
+
 
 class TestAppsRouting:
     """Tests for apps/ prefix routing in DatabricksOpenAI and AsyncDatabricksOpenAI."""

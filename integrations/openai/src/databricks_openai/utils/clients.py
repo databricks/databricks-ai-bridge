@@ -8,6 +8,11 @@ from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
 
+# Prefix for routing requests to Databricks Apps
+_APPS_MODEL_PREFIX = "apps/"
+# Domain pattern indicating a Databricks App URL
+_DATABRICKS_APPS_DOMAIN = "databricksapps"
+
 
 class BearerAuth(Auth):
     def __init__(self, get_headers_func):
@@ -157,8 +162,8 @@ class DatabricksResponses(Responses):
     def create(self, **kwargs):
         model = kwargs.get("model", "")
 
-        if isinstance(model, str) and model.startswith("apps/"):
-            app_name = model[5:]  # Remove "apps/" prefix
+        if isinstance(model, str) and model.startswith(_APPS_MODEL_PREFIX):
+            app_name = model[len(_APPS_MODEL_PREFIX) :]
             app_client = self._get_app_client(app_name)
             try:
                 return app_client.responses.create(**kwargs)
@@ -184,8 +189,9 @@ class DatabricksOpenAI(OpenAI):
         workspace_client: Databricks WorkspaceClient to use for authentication. Pass a custom
             WorkspaceClient to set up your own authentication method. If not provided, a default
             WorkspaceClient will be created using standard Databricks authentication resolution.
-        base_url: Optional base URL for direct App access. When provided, OAuth authentication
-            is required. Use this to query a Databricks App directly by its URL.
+        base_url: Optional base URL to override the default serving endpoints URL. When the URL
+            points to a Databricks App (contains "databricksapps"), OAuth authentication is
+            required. Other base URLs do not require OAuth.
 
     Example - Query a serving endpoint:
         >>> client = DatabricksOpenAI()
@@ -194,16 +200,20 @@ class DatabricksOpenAI(OpenAI):
         ...     messages=[{"role": "user", "content": "Hello!"}],
         ... )
 
-    Example - Query a Databricks App directly by URL:
+    Example - Query a Databricks App directly by URL (requires OAuth):
+        >>> # WorkspaceClient must be configured with OAuth authentication
+        >>> # See: https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html
         >>> client = DatabricksOpenAI(
         ...     base_url="https://my-app.aws.databricksapps.com",
-        ...     workspace_client=WorkspaceClient(),  # Must use OAuth
+        ...     workspace_client=WorkspaceClient(),
         ... )
         >>> response = client.responses.create(
         ...     input=[{"role": "user", "content": "Hello"}],
         ... )
 
-    Example - Query a Databricks App by name (apps/ prefix):
+    Example - Query a Databricks App by name (requires OAuth):
+        >>> # WorkspaceClient must be configured with OAuth authentication
+        >>> # See: https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html
         >>> client = DatabricksOpenAI()
         >>> response = client.responses.create(
         ...     model="apps/my-agent",  # Looks up app URL automatically
@@ -222,8 +232,9 @@ class DatabricksOpenAI(OpenAI):
         self._workspace_client = workspace_client
 
         if base_url is not None:
-            # Direct App URL - validate OAuth
-            _validate_oauth_for_apps(workspace_client)
+            # Only validate OAuth for Databricks App URLs
+            if _DATABRICKS_APPS_DOMAIN in base_url:
+                _validate_oauth_for_apps(workspace_client)
             target_base_url = base_url
         else:
             # Default: Serving endpoints
@@ -294,8 +305,8 @@ class AsyncDatabricksResponses(AsyncResponses):
     async def create(self, **kwargs):
         model = kwargs.get("model", "")
 
-        if isinstance(model, str) and model.startswith("apps/"):
-            app_name = model[5:]  # Remove "apps/" prefix
+        if isinstance(model, str) and model.startswith(_APPS_MODEL_PREFIX):
+            app_name = model[len(_APPS_MODEL_PREFIX) :]
             app_client = self._get_app_client(app_name)
             try:
                 return await app_client.responses.create(**kwargs)
@@ -321,8 +332,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         workspace_client: Databricks WorkspaceClient to use for authentication. Pass a custom
             WorkspaceClient to set up your own authentication method. If not provided, a default
             WorkspaceClient will be created using standard Databricks authentication resolution.
-        base_url: Optional base URL for direct App access. When provided, OAuth authentication
-            is required. Use this to query a Databricks App directly by its URL.
+        base_url: Optional base URL to override the default serving endpoints URL. When the URL
+            points to a Databricks App (contains "databricksapps"), OAuth authentication is
+            required. Other base URLs do not require OAuth.
 
     Example - Query a serving endpoint:
         >>> client = AsyncDatabricksOpenAI()
@@ -331,16 +343,20 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         ...     messages=[{"role": "user", "content": "Hello!"}],
         ... )
 
-    Example - Query a Databricks App directly by URL:
+    Example - Query a Databricks App directly by URL (requires OAuth):
+        >>> # WorkspaceClient must be configured with OAuth authentication
+        >>> # See: https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html
         >>> client = AsyncDatabricksOpenAI(
         ...     base_url="https://my-app.aws.databricksapps.com",
-        ...     workspace_client=WorkspaceClient(),  # Must use OAuth
+        ...     workspace_client=WorkspaceClient(),
         ... )
         >>> response = await client.responses.create(
         ...     input=[{"role": "user", "content": "Hello"}],
         ... )
 
-    Example - Query a Databricks App by name (apps/ prefix):
+    Example - Query a Databricks App by name (requires OAuth):
+        >>> # WorkspaceClient must be configured with OAuth authentication
+        >>> # See: https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html
         >>> client = AsyncDatabricksOpenAI()
         >>> response = await client.responses.create(
         ...     model="apps/my-agent",  # Looks up app URL automatically
@@ -359,8 +375,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         self._workspace_client = workspace_client
 
         if base_url is not None:
-            # Direct App URL - validate OAuth
-            _validate_oauth_for_apps(workspace_client)
+            # Only validate OAuth for Databricks App URLs
+            if _DATABRICKS_APPS_DOMAIN in base_url:
+                _validate_oauth_for_apps(workspace_client)
             target_base_url = base_url
         else:
             # Default: Serving endpoints

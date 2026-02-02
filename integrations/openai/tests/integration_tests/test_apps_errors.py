@@ -5,13 +5,15 @@ from databricks.sdk import WorkspaceClient
 
 from databricks_openai import DatabricksOpenAI
 
-DATABRICKS_CONFIG_PROFILE = "dogfood"
+
+def _get_config_profile():
+    return os.environ.get("DATABRICKS_CONFIG_PROFILE", "dogfood")
 
 
 class TestDatabricksAppsErrors:
     @pytest.fixture
     def client(self):
-        ws = WorkspaceClient(profile=DATABRICKS_CONFIG_PROFILE)
+        ws = WorkspaceClient(profile=_get_config_profile())
         return DatabricksOpenAI(workspace_client=ws)
 
     @pytest.mark.parametrize(
