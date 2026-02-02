@@ -790,6 +790,119 @@ describe('shouldDedupeOutputItemDone', () => {
   })
 })
 
+describe('Optional Annotations Field', () => {
+  it('handles response.output_item.done without annotations field', async () => {
+    // This test verifies that the annotations field is optional.
+    // Some backends (e.g., MLflow agents) don't include annotations in their responses.
+    const sseContent = `
+data: {
+  "type": "response.output_text.delta",
+  "item_id": "msg_123",
+  "delta": "Hello World"
+}
+data: {
+  "type": "response.output_item.done",
+  "output_index": 0,
+  "item": {
+    "type": "message",
+    "id": "msg_123",
+    "role": "assistant",
+    "content": [{ "type": "output_text", "text": "Hello World" }]
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_123",
+    "status": "completed",
+    "usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
+    })
+
+    const parts: LanguageModelV3StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should not throw an error and should have text content
+    const textParts = parts.filter((p) => p.type === 'text-delta')
+    expect(textParts.length).toBeGreaterThan(0)
+
+    // Verify we got a successful finish
+    const finishPart = parts.find((p) => p.type === 'finish')
+    expect(finishPart).toBeDefined()
+    if (finishPart?.type === 'finish') {
+      expect(finishPart.finishReason.unified).toBe('stop')
+    }
+  })
+
+  it('handles message with explicit empty annotations array', async () => {
+    // This test verifies that explicit empty annotations array still works
+    const sseContent = `
+data: {
+  "type": "response.output_item.done",
+  "output_index": 0,
+  "item": {
+    "type": "message",
+    "id": "msg_456",
+    "role": "assistant",
+    "content": [{ "type": "output_text", "text": "With annotations", "annotations": [] }]
+  }
+}
+data: {
+  "type": "responses.completed",
+  "response": {
+    "id": "resp_456",
+    "status": "completed",
+    "usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 }
+  }
+}
+    `
+
+    const mockFetch = createMockFetch(sseContent)
+    const model = new DatabricksResponsesAgentLanguageModel('test-model', {
+      provider: 'databricks',
+      headers: () => ({ Authorization: 'Bearer test-token' }),
+      url: () => 'http://test.example.com/api',
+      fetch: mockFetch,
+    })
+
+    const result = await model.doStream({
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
+    })
+
+    const parts: LanguageModelV3StreamPart[] = []
+    const reader = result.stream.getReader()
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+    }
+
+    // Should complete successfully
+    const finishPart = parts.find((p) => p.type === 'finish')
+    expect(finishPart).toBeDefined()
+  })
+})
+
 describe('Missing Tool Results', () => {
   it('emits correction tool-call with providerExecuted for tool calls without results', async () => {
     // When useRemoteToolCalling=true (default), tool calls are already emitted with
