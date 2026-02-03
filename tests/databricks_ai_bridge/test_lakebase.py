@@ -1065,19 +1065,21 @@ class TestExecuteGrantErrorHandling:
 
 def test_is_hostname_detects_database_hostname():
     """Test that _is_hostname correctly identifies database hostnames."""
-    from databricks_ai_bridge.lakebase import _LakebasePoolBase
+    from databricks_ai_bridge.lakebase import _is_hostname
 
-    # Should be detected as hostnames
-    assert _LakebasePoolBase._is_hostname(
+    # Should be detected as hostnames (pattern: *.database.<region>.*.databricks.com)
+    assert _is_hostname(
         "instance-f757b615-f2fd-4614-87cc-9ba35f2eeb61.database.staging.cloud.databricks.com"
     )
-    assert _LakebasePoolBase._is_hostname("instance-abc123.database.prod.cloud.databricks.com")
-    assert _LakebasePoolBase._is_hostname("my-db.database.example.net")
+    assert _is_hostname("instance-abc123.database.prod.cloud.databricks.com")
+    assert _is_hostname("my-instance.database.us-west-2.cloud.databricks.com")
 
     # Should NOT be detected as hostnames (regular instance names)
-    assert not _LakebasePoolBase._is_hostname("lakebase")
-    assert not _LakebasePoolBase._is_hostname("my-database-instance")
-    assert not _LakebasePoolBase._is_hostname("production_db")
+    assert not _is_hostname("lakebase")
+    assert not _is_hostname("my-database-instance")
+    assert not _is_hostname("production_db")
+    # Should not match non-databricks domains
+    assert not _is_hostname("my-db.database.example.net")
 
 
 def test_lakebase_pool_accepts_hostname(monkeypatch):
@@ -1157,3 +1159,56 @@ async def test_async_lakebase_pool_accepts_hostname(monkeypatch):
     # Should have resolved to the instance name
     assert pool.instance_name == "prod-lakebase"
     assert pool.host == hostname
+
+
+# =============================================================================
+# Integration Tests for Hostname Resolution
+# =============================================================================
+
+
+@pytest.mark.integration
+def test_lakebase_pool_hostname_resolution_integration():
+    """
+    Integration test: Verify hostname resolution works with real Databricks infrastructure.
+
+    This test requires:
+    - DATABRICKS_HOST and authentication configured
+    - Access to a Lakebase instance in the workspace
+
+    Run with: pytest -m integration tests/databricks_ai_bridge/test_lakebase.py
+    """
+    from databricks.sdk import WorkspaceClient
+
+    from databricks_ai_bridge.lakebase import _is_hostname, _resolve_instance_name_from_hostname
+
+    workspace_client = WorkspaceClient()
+
+    # List all database instances and pick the first one
+    instances = list(workspace_client.database.list_database_instances())
+    if not instances:
+        pytest.skip("No Lakebase instances available in the workspace")
+
+    # Get the first instance with a read_write_dns
+    test_instance = None
+    for instance in instances:
+        if getattr(instance, "read_write_dns", None):
+            test_instance = instance
+            break
+
+    if not test_instance:
+        pytest.skip("No Lakebase instance with read_write_dns found")
+
+    hostname = test_instance.read_write_dns
+    expected_name = test_instance.name
+
+    # Verify hostname detection
+    assert _is_hostname(hostname), f"Expected '{hostname}' to be detected as hostname"
+
+    # Verify resolution
+    resolved_name, resolved_host = _resolve_instance_name_from_hostname(
+        workspace_client, hostname
+    )
+    assert resolved_name == expected_name, (
+        f"Expected instance name '{expected_name}', got '{resolved_name}'"
+    )
+    assert resolved_host == hostname
