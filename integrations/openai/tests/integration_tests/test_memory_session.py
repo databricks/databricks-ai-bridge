@@ -244,7 +244,7 @@ async def test_memory_session_complex_message_data(cleanup_tables):
     )
 
     # Add complex item with nested data
-    complex_item: dict[str, Any] = {
+    complex_item = {
         "role": "assistant",
         "content": "Here's your result",
         "tool_calls": [
@@ -262,7 +262,7 @@ async def test_memory_session_complex_message_data(cleanup_tables):
             "usage": {"prompt_tokens": 10, "completion_tokens": 20},
         },
     }
-    await session.add_items([complex_item])
+    await session.add_items([complex_item])  # type: ignore[list-item]
 
     # Retrieve and verify
     items = cast(list[Any], await session.get_items())
