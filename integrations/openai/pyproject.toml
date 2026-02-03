@@ -20,6 +20,13 @@ dependencies = [
     "openai-agents>=0.5.0"
 ]
 
+[project.optional-dependencies]
+memory = [
+    "sqlalchemy>=2.0.0",
+    "greenlet>=3.0.0",
+    "databricks-ai-bridge[memory]>=0.13.0",
+]
+
 [dependency-groups]
 dev = [
     "typing_extensions>=4.15.0",
