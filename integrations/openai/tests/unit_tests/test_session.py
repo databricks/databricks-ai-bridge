@@ -179,15 +179,19 @@ class TestMemorySessionInit:
         self, mock_workspace_client, mock_engine, mock_event_listens_for
     ):
         """Test that initialization creates engine with correct connection URL."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ) as mock_create_engine, patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -207,19 +211,21 @@ class TestMemorySessionInit:
             assert url.port == 5432
             assert url.database == "databricks_postgres"
 
-    def test_init_uses_null_pool(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
+    def test_init_uses_null_pool(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test that initialization uses NullPool to avoid connection caching."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ) as mock_create_engine, patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession, NullPool
 
@@ -232,19 +238,21 @@ class TestMemorySessionInit:
             call_kwargs = mock_create_engine.call_args[1]
             assert call_kwargs["poolclass"] == NullPool
 
-    def test_init_sets_ssl_mode(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
+    def test_init_sets_ssl_mode(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test that initialization sets SSL mode to require."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ) as mock_create_engine, patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -259,15 +267,17 @@ class TestMemorySessionInit:
 
     def test_init_registers_do_connect_event(self, mock_workspace_client, mock_engine):
         """Test that initialization registers do_connect event for token injection."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for"
-        ) as mock_listens_for:
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch("databricks_openai.agents.session.event.listens_for") as mock_listens_for,
+        ):
             from databricks_openai.agents.session import MemorySession
 
             MemorySession(
@@ -283,19 +293,24 @@ class TestMemorySessionInit:
         self, mock_workspace_client, mock_engine, mock_event_listens_for
     ):
         """Test initialization with custom table names."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
-        ), patch(
-            "agents.extensions.memory.SQLAlchemySession.__init__",
-            return_value=None,
-        ) as mock_parent_init:
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+            patch(
+                "agents.extensions.memory.SQLAlchemySession.__init__",
+                return_value=None,
+            ) as mock_parent_init,
+        ):
             from databricks_openai.agents.session import MemorySession
 
             MemorySession(
@@ -315,19 +330,24 @@ class TestMemorySessionInit:
         self, mock_workspace_client, mock_engine, mock_event_listens_for
     ):
         """Test initialization with create_tables=False."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
-        ), patch(
-            "agents.extensions.memory.SQLAlchemySession.__init__",
-            return_value=None,
-        ) as mock_parent_init:
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+            patch(
+                "agents.extensions.memory.SQLAlchemySession.__init__",
+                return_value=None,
+            ) as mock_parent_init,
+        ):
             from databricks_openai.agents.session import MemorySession
 
             MemorySession(
@@ -348,15 +368,19 @@ class TestMemorySessionProperties:
         self, mock_workspace_client, mock_engine, mock_event_listens_for
     ):
         """Test instance_name property returns correct value."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -368,19 +392,21 @@ class TestMemorySessionProperties:
 
             assert session.instance_name == "test-instance"
 
-    def test_host_property(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
+    def test_host_property(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test host property returns resolved host."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -392,19 +418,21 @@ class TestMemorySessionProperties:
 
             assert session.host == "test-instance.lakebase.databricks.com"
 
-    def test_username_property(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
+    def test_username_property(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test username property returns inferred username."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -432,15 +460,19 @@ class TestMemorySessionTokenInjection:
 
             return decorator
 
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ), patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=capture_handler,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=capture_handler,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
@@ -466,15 +498,19 @@ class TestMemorySessionEngineKwargs:
         self, mock_workspace_client, mock_engine, mock_event_listens_for
     ):
         """Test that extra kwargs are passed to create_async_engine."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
-        ), patch(
-            "databricks_openai.agents.session.create_async_engine",
-            return_value=mock_engine,
-        ) as mock_create_engine, patch(
-            "databricks_openai.agents.session.event.listens_for",
-            side_effect=mock_event_listens_for,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "databricks_openai.agents.session.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "databricks_openai.agents.session.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
         ):
             from databricks_openai.agents.session import MemorySession
 
