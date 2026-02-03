@@ -150,10 +150,6 @@ jobs:
         run: |
           # Only testing initialization since functionality can change
           pytest integrations/langchain/tests/unit_tests/test_vector_search_retriever_tool.py::test_init
-          # Skip test_genie.py for v0.4.0 and v0.5.0 due to mock compatibility issues with MCP changes
-          if [[ "${{ matrix.version.name }}" == "v0.2.0" || "${{ matrix.version.name }}" == "v0.3.0" ]]; then
-            pytest integrations/langchain/tests/unit_tests/test_genie.py
-          fi
           pytest integrations/langchain/tests/unit_tests/test_embeddings.py
           pytest integrations/langchain/tests/unit_tests/test_chat_models.py
 
