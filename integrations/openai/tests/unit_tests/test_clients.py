@@ -526,9 +526,11 @@ class TestAppErrorWrapping:
         [
             (404, "Not Found", ["/responses endpoint"]),
             (405, "Method Not Allowed", ["/responses endpoint"]),
-            (403, "Forbidden", ["CAN_QUERY"]),
-            (500, "Internal Server Error", []),
-            (503, "DNS resolution failure", ["stopped or unavailable"]),
+            (403, "Forbidden", ["CAN_USE"]),
+            (500, "Internal Server Error", ["internal error", "Check the app logs"]),
+            (502, "Bad Gateway", ["internal error", "Check the app logs"]),
+            (503, "Service Unavailable", ["internal error", "Check the app logs"]),
+            (429, "Too Many Requests", []),  # No specific hint for rate limiting
         ],
     )
     def test_wrap_app_error_status_errors(self, status_code, message, expected_hints):

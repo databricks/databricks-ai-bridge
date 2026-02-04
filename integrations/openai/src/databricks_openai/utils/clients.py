@@ -66,7 +66,8 @@ def _validate_oauth_for_apps(workspace_client: WorkspaceClient) -> None:
     except Exception as e:
         raise ValueError(
             "Querying Databricks Apps requires OAuth authentication. "
-            "See https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html"
+            "See https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html "
+            "or https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m.html"
         ) from e
 
 
@@ -93,11 +94,16 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
         message = e.message
         if status_code == 404 or status_code == 405:
             hint = (
-                f"Hint: App '{app_name}' may not support the Responses API. "
+                f"Hint: App '{app_name}' may not support the OpenAI Responses API. "
                 f"Ensure the app implements the /responses endpoint."
             )
         elif status_code == 403:
-            hint = f"Hint: Ensure you have CAN_QUERY permission on app '{app_name}'."
+            hint = f"Hint: Ensure you have CAN_USE permission on app '{app_name}'."
+        elif status_code >= 500:
+            hint = (
+                f"Hint: App '{app_name}' encountered an internal error. "
+                f"Check the app logs and status in the Databricks workspace."
+            )
         elif "DNS" in message or "resolution" in message.lower():
             hint = (
                 f"Hint: App '{app_name}' may be stopped or unavailable. "
@@ -118,7 +124,10 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
                 f"Check the app status in the Databricks workspace."
             )
         else:
-            hint = f"Hint: App '{app_name}' may be starting up or unavailable."
+            hint = (
+                f"Hint: App '{app_name}' may be starting up or unavailable. "
+                f"Check the app status in the Databricks workspace."
+            )
         return ValueError(f"Error connecting to app '{app_name}': {message}\n{hint}")
     return ValueError(f"Error querying app '{app_name}': {e}")
 
@@ -152,6 +161,7 @@ class DatabricksResponses(Responses):
         if app_name not in self._app_clients_cache:
             _validate_oauth_for_apps(self._workspace_client)
             app_url = _get_app_url(self._workspace_client, app_name)
+            # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = OpenAI(
                 base_url=app_url,
                 api_key="no-token",
@@ -240,6 +250,7 @@ class DatabricksOpenAI(OpenAI):
             # Default: Serving endpoints
             target_base_url = f"{workspace_client.config.host}/serving-endpoints"
 
+        # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
             api_key="no-token",
@@ -295,6 +306,7 @@ class AsyncDatabricksResponses(AsyncResponses):
         if app_name not in self._app_clients_cache:
             _validate_oauth_for_apps(self._workspace_client)
             app_url = _get_app_url(self._workspace_client, app_name)
+            # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = AsyncOpenAI(
                 base_url=app_url,
                 api_key="no-token",
@@ -383,6 +395,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             # Default: Serving endpoints
             target_base_url = f"{workspace_client.config.host}/serving-endpoints"
 
+        # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
             api_key="no-token",
