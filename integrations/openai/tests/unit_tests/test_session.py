@@ -221,8 +221,10 @@ class TestMemorySessionInit:
             assert url.port == 5432
             assert url.database == "databricks_postgres"
 
-    def test_init_uses_null_pool(self, mock_workspace_client, mock_engine, mock_event_listens_for):
-        """Test that initialization uses NullPool to avoid connection caching."""
+    def test_init_uses_pool_recycle(
+        self, mock_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that initialization uses pool_recycle for connection recycling."""
         with (
             patch(
                 "databricks_ai_bridge.lakebase.WorkspaceClient",
@@ -237,7 +239,10 @@ class TestMemorySessionInit:
                 side_effect=mock_event_listens_for,
             ),
         ):
-            from databricks_openai.agents.session import MemorySession, NullPool
+            from databricks_openai.agents.session import (
+                DEFAULT_POOL_RECYCLE_SECONDS,
+                MemorySession,
+            )
 
             MemorySession(
                 session_id="test-session-123",
@@ -246,7 +251,10 @@ class TestMemorySessionInit:
             )
 
             call_kwargs = mock_create_engine.call_args[1]
-            assert call_kwargs["poolclass"] == NullPool
+            # Should use pool_recycle for connection recycling (default QueuePool)
+            assert call_kwargs["pool_recycle"] == DEFAULT_POOL_RECYCLE_SECONDS
+            # Should NOT use NullPool (uses default QueuePool instead)
+            assert "poolclass" not in call_kwargs
 
     def test_init_sets_ssl_mode(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test that initialization sets SSL mode to require."""

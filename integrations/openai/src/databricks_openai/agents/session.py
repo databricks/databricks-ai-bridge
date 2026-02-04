@@ -34,7 +34,6 @@ try:
     from databricks_ai_bridge.lakebase import _LakebasePoolBase
     from sqlalchemy import URL, event
     from sqlalchemy.ext.asyncio import create_async_engine
-    from sqlalchemy.pool import NullPool
 except ImportError as e:
     raise ImportError(
         "MemorySession requires databricks-openai[memory]. "
@@ -45,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Constants for Lakebase connection
 DEFAULT_TOKEN_CACHE_DURATION_SECONDS = 50 * 60  # 50 minutes
+DEFAULT_POOL_RECYCLE_SECONDS = 45 * 60  # 45 minutes (before token cache expires)
 DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
@@ -184,11 +184,12 @@ class MemorySession(SQLAlchemySession):
             database=DEFAULT_DATABASE,
         )
 
-        # Create engine with NullPool to avoid connection caching issues
-        # Each operation gets a fresh connection with a fresh token check
+        # Use default QueuePool with connection recycling.
+        # Connections are recycled before token cache expires (50 min),
+        # ensuring fresh tokens are injected via do_connect event.
         engine = create_async_engine(
             url,
-            poolclass=NullPool,
+            pool_recycle=DEFAULT_POOL_RECYCLE_SECONDS,
             connect_args={"sslmode": DEFAULT_SSLMODE},
             **engine_kwargs,
         )
