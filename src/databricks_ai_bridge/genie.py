@@ -35,7 +35,7 @@ class GenieResponse:
     description: Optional[str] = ""
     conversation_id: Optional[str] = None
     suggested_questions: Optional[List[str]] = None
-    text_summary: Optional[str] = ""
+    text_attachment_content: Optional[str] = ""
 
 
 def _parse_query_result(
@@ -230,7 +230,7 @@ def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[st
     return [q for q in questions if isinstance(q, str)] or None
 
 
-def _extract_text_summary_from_attachment(attachment) -> Optional[str]:
+def _extract_text_attachment_content_from_attachment(attachment) -> Optional[str]:
     """Extract text summary from a Genie API response attachment."""
     if not isinstance(attachment, dict):
         return ""
@@ -289,7 +289,7 @@ class Genie:
         import mlflow
 
         def poll_query_results(
-            attachment_id, query_str, description, conversation_id=conversation_id, suggested_questions=None, text_summary=None
+            attachment_id, query_str, description, conversation_id=conversation_id, suggested_questions=None, text_attachment_content=None
         ):
             with mlflow.start_span(name="poll_query_results"):
                 iteration_count = 0
@@ -307,7 +307,7 @@ class Genie:
                             resp, self.truncate_results, self.return_pandas
                         )
                         return GenieResponse(
-                            result, query_str, description, returned_conversation_id, suggested_questions, text_summary
+                            result, query_str, description, returned_conversation_id, suggested_questions, text_attachment_content
                         )
                     elif state in ["RUNNING", "PENDING"]:
                         logging.debug("Waiting for query result...")
@@ -319,7 +319,7 @@ class Genie:
                             description,
                             returned_conversation_id,
                             suggested_questions,
-                            text_summary
+                            text_attachment_content
                         )
                 return GenieResponse(
                     f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
@@ -327,7 +327,7 @@ class Genie:
                     description,
                     conversation_id,
                     suggested_questions,
-                    text_summary
+                    text_attachment_content
                 )
 
         def poll_result():
@@ -391,7 +391,7 @@ class Genie:
                         if current_status == "COMPLETED":
                             parsed = _parse_attachments(resp)
                             suggested_questions = _extract_suggested_questions_from_attachment(parsed["suggested_questions_attachment"])
-                            text_summary = _extract_text_summary_from_attachment(parsed["text_attachment"])
+                            text_attachment_content = _extract_text_attachment_content_from_attachment(parsed["text_attachment"])
 
                             if parsed["query_attachment"]:
                                 query_obj = parsed["query_attachment"].get("query") or {}
@@ -404,15 +404,15 @@ class Genie:
                                         description=query_obj.get("description", ""),
                                         suggested_questions=suggested_questions,
                                         conversation_id=returned_conversation_id,
-                                        text_summary = text_summary
+                                        text_attachment_content = text_attachment_content
                                     )
 
                             # if there is no query attachment, use text attachment as result                    
                             return GenieResponse(
-                                result=text_summary,
+                                result=text_attachment_content,
                                 suggested_questions=suggested_questions,
                                 conversation_id=returned_conversation_id,
-                                text_summary = text_summary
+                                text_attachment_content = text_attachment_content
                             )
 
                         elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
