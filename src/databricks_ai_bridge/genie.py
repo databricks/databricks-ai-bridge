@@ -34,8 +34,8 @@ class GenieResponse:
     query: Optional[str] = ""
     description: Optional[str] = ""
     conversation_id: Optional[str] = None
-    suggested_follow_up_questions: Optional[List[str]] = None
-    text_summary: Optional[str] = None
+    suggested_questions: Optional[List[str]] = None
+    text_summary: Optional[str] = ""
 
 
 def _parse_query_result(
@@ -214,20 +214,33 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
 
     return result
 
-def _extract_questions_from_attachment(attachment) -> Optional[List[str]]:
+def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[str]]:
     """Extract suggested follow-up questions from a Genie API response attachment."""
     if not isinstance(attachment, dict):
         return None
 
-    sq = attachment.get("suggested_questions")
-    if not isinstance(sq, dict):
+    sq_obj = attachment.get("suggested_questions")
+    if not isinstance(sq_obj, dict):
         return None
 
-    questions = sq.get("questions")
+    questions = sq_obj.get("questions")
     if not isinstance(questions, list):
         return None
 
     return [q for q in questions if isinstance(q, str)] or None
+
+
+def _extract_text_summary_from_attachment(attachment) -> Optional[str]:
+    """Extract text summary from a Genie API response attachment."""
+    if not isinstance(attachment, dict):
+        return ""
+
+    text_obj = attachment.get("text")
+    if not isinstance(text_obj, dict):
+        return ""
+
+    return text_obj.get("content", "")
+
 
 class Genie:
     def __init__(
@@ -377,7 +390,8 @@ class Genie:
 
                         if current_status == "COMPLETED":
                             parsed = _parse_attachments(resp)
-                            suggested_questions = _extract_questions_from_attachment(parsed["suggested_questions_attachment"])
+                            suggested_questions = _extract_suggested_questions_from_attachment(parsed["suggested_questions_attachment"])
+                            text_summary = _extract_text_summary_from_attachment(parsed["text_attachment"])
 
                             if parsed["query_attachment"]:
                                 query_obj = parsed["query_attachment"].get("query") or {}
@@ -390,17 +404,15 @@ class Genie:
                                         description=query_obj.get("description", ""),
                                         suggested_questions=suggested_questions,
                                         conversation_id=returned_conversation_id,
-                                        text_summary = parsed["text_attachment"].get("text", {}).get("content", "")
+                                        text_summary = text_summary
                                     )
 
-                            # TODO: suggest to remove this text_content and use text_summary instead. This result is sql query result, not text result.
-                            text_content = parsed["text_attachment"].get("text", {}).get("content", "")
-                    
-
+                            # if there is no query attachment, use text attachment as result                    
                             return GenieResponse(
-                                result=text_content,
-                                suggested_follow_up_questions=suggested_questions,
+                                result=text_summary,
+                                suggested_questions=suggested_questions,
                                 conversation_id=returned_conversation_id,
+                                text_summary = text_summary
                             )
 
                         elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
