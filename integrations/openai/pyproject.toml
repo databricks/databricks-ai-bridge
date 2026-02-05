@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 memory = [
     "databricks-ai-bridge[memory]>=0.13.0",
+    "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [dependency-groups]
