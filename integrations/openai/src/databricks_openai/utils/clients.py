@@ -99,15 +99,20 @@ def _wrap_app_error(e: Exception, app_name: str) -> ValueError:
             )
         elif status_code == 403:
             hint = f"Hint: Ensure you have CAN_USE permission on app '{app_name}'."
+        elif "DNS" in message or "resolution" in message.lower():
+            hint = (
+                f"Hint: App '{app_name}' may be stopped or unavailable. "
+                f"Check the app status in the Databricks workspace."
+            )
         elif status_code >= 500:
             hint = (
                 f"Hint: App '{app_name}' encountered an internal error. "
                 f"Check the app logs and status in the Databricks workspace."
             )
-        elif "DNS" in message or "resolution" in message.lower():
+        elif status_code != 200:
             hint = (
-                f"Hint: App '{app_name}' may be stopped or unavailable. "
-                f"Check the app status in the Databricks workspace."
+                f"Hint: App '{app_name}' returned a non-200 status code: {status_code}. "
+                f"Check the app logs and status in the Databricks workspace."
             )
         else:
             hint = None

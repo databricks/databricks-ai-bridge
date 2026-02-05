@@ -20,7 +20,7 @@ class TestDatabricksAppsErrors:
         "app_name",
         [
             "ai-slide-generator-dev",
-            "agent-builder-assistant",
+            "agent-lc-ts-dev",
             "at-observability-poc",
         ],
     )
@@ -39,10 +39,10 @@ class TestDatabricksAppsErrors:
             )
 
     def test_no_permission_to_app(self):
-        client_id = os.environ.get("TEST_SP_CLIENT_ID")
-        client_secret = os.environ.get("TEST_SP_CLIENT_SECRET")
+        client_id = os.environ.get("DATABRICKS_CLIENT_ID")
+        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET")
         if not client_id or not client_secret:
-            pytest.skip("TEST_SP_CLIENT_ID and TEST_SP_CLIENT_SECRET env vars required")
+            pytest.skip("DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET env vars required")
 
         ws = WorkspaceClient(
             host="https://e2-dogfood.staging.cloud.databricks.com",
