@@ -1558,7 +1558,7 @@ def _convert_dict_to_message(
 def _convert_dict_to_message_chunk(
     _dict: Mapping[str, Any],
     default_role: str | None,
-    usage: dict[str, Any] | None = None,
+    usage: CompletionUsage | dict[str, Any] | None = None,
 ) -> BaseMessageChunk:
     role = _dict.get("role", default_role)
     content = _dict.get("content") or ""
@@ -1594,7 +1594,12 @@ def _convert_dict_to_message_chunk(
                 ]
             except KeyError:
                 pass
-        usage_metadata = UsageMetadata(**usage) if usage else None  # type: ignore
+        
+        if isinstance(usage, CompletionUsage):
+            usage_metadata = ChatDatabricks._convert_completion_usage_to_usage_metadata(usage)
+        else:
+            usage_metadata = UsageMetadata(**usage) if usage else None  # type: ignore
+
         lc_chunk = AIMessageChunk(
             content=content,
             additional_kwargs=additional_kwargs,
