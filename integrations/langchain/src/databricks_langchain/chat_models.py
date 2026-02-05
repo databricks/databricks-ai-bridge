@@ -676,7 +676,8 @@ class ChatDatabricks(BaseChatModel):
         llm_output = {}
         if response.usage:
             usage_metadata = self._convert_completion_usage_to_usage_metadata(response.usage)
-            llm_output["usage"] = usage_metadata
+            llm_output["usage_metadata"] = usage_metadata
+            llm_output["usage"] = usage_metadata # for backwards compatibility
             # Add individual token counts for backwards compatibility with tests
             llm_output["prompt_tokens"] = response.usage.prompt_tokens
             llm_output["completion_tokens"] = response.usage.completion_tokens
