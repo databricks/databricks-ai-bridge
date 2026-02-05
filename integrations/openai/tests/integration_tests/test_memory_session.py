@@ -1,5 +1,5 @@
 """
-Integration tests for MemorySession.
+Integration tests for AsyncDatabricksSession.
 
 These tests require:
 1. A Lakebase instance to be available
@@ -59,14 +59,14 @@ def cleanup_tables():
 
 
 # =============================================================================
-# MemorySession Tests
+# AsyncDatabricksSession Tests
 # =============================================================================
 
 
 @pytest.mark.asyncio
 async def test_memory_session_crud_operations(cleanup_tables):
     """
-    Comprehensive CRUD test for MemorySession.
+    Comprehensive CRUD test for AsyncDatabricksSession.
 
     Tests the full lifecycle:
     - clear_session() on fresh session
@@ -77,13 +77,13 @@ async def test_memory_session_crud_operations(cleanup_tables):
     - pop_item() removes and returns most recent item
     - clear_session() removes all items
     """
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
     session_id = str(uuid.uuid4())
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=session_id,
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -136,7 +136,7 @@ async def test_memory_session_crud_operations(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_multiple_sessions_isolated(cleanup_tables):
     """Test that different session_ids have isolated data."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
@@ -144,14 +144,14 @@ async def test_memory_session_multiple_sessions_isolated(cleanup_tables):
     session_id_1 = str(uuid.uuid4())
     session_id_2 = str(uuid.uuid4())
 
-    session_1 = MemorySession(
+    session_1 = AsyncDatabricksSession(
         session_id=session_id_1,
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
         messages_table=messages_table,
     )
 
-    session_2 = MemorySession(
+    session_2 = AsyncDatabricksSession(
         session_id=session_id_2,
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -188,12 +188,12 @@ async def test_memory_session_multiple_sessions_isolated(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_pop_empty_returns_none(cleanup_tables):
     """Test that pop_item returns None on empty session."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=str(uuid.uuid4()),
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -208,12 +208,12 @@ async def test_memory_session_pop_empty_returns_none(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_add_empty_items_noop(cleanup_tables):
     """Test that add_items with empty list is a no-op."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=str(uuid.uuid4()),
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -231,12 +231,12 @@ async def test_memory_session_add_empty_items_noop(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_complex_message_data(cleanup_tables):
     """Test storing complex message data with nested structures."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=str(uuid.uuid4()),
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -278,13 +278,13 @@ async def test_memory_session_complex_message_data(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_properties(cleanup_tables):
     """Test that session properties return correct values."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
     session_id = str(uuid.uuid4())
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=session_id,
         instance_name=get_instance_name(),
         sessions_table=sessions_table,
@@ -303,12 +303,12 @@ async def test_memory_session_properties(cleanup_tables):
 @pytest.mark.asyncio
 async def test_memory_session_get_items_ordering(cleanup_tables):
     """Test that get_items returns items in correct chronological order."""
-    from databricks_openai.agents.session import MemorySession
+    from databricks_openai.agents import AsyncDatabricksSession
 
     sessions_table, messages_table = get_unique_table_names()
     cleanup_tables.append((sessions_table, messages_table))
 
-    session = MemorySession(
+    session = AsyncDatabricksSession(
         session_id=str(uuid.uuid4()),
         instance_name=get_instance_name(),
         sessions_table=sessions_table,

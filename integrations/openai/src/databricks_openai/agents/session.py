@@ -1,21 +1,31 @@
 """
-MemorySession - SQLAlchemy-based session storage for Databricks Lakebase.
+AsyncDatabricksSession - Async SQLAlchemy-based session storage for Databricks Lakebase.
 
-This module provides a MemorySession class that subclasses OpenAI's SQLAlchemySession
+This module provides a AsyncDatabricksSession class that subclasses OpenAI's SQLAlchemySession
 to provide persistent conversation history storage in Databricks Lakebase.
+
+Note:
+    This class is **async-only** as it follows the Session Protocol. Use within async context
+    https://openai.github.io/openai-agents-python/ref/memory/session/#agents.memory.session.Session
 
 Usage::
 
-    from databricks_openai.agents.session import MemorySession
+    import asyncio
+    from databricks_openai.agents import AsyncDatabricksSession
     from agents import Agent, Runner
 
-    session = MemorySession(
-        session_id="user-123",
-        instance_name="my-lakebase-instance",
-    )
 
-    agent = Agent(name="Assistant")
-    result = await Runner.run(agent, "Hello!", session=session)
+    async def main():
+        session = AsyncDatabricksSession(
+            session_id="user-123",
+            instance_name="my-lakebase-instance",
+        )
+
+        agent = Agent(name="Assistant")
+        result = await Runner.run(agent, "Hello!", session=session)
+
+
+    asyncio.run(main())
 """
 
 from __future__ import annotations
@@ -31,12 +41,12 @@ if TYPE_CHECKING:
 try:
     from agents.extensions.memory import SQLAlchemySession
     from databricks.sdk import WorkspaceClient
-    from databricks_ai_bridge.lakebase import _LakebasePoolBase
+    from databricks_ai_bridge.lakebase import _LakebaseBase
     from sqlalchemy import URL, event
     from sqlalchemy.ext.asyncio import create_async_engine
 except ImportError as e:
     raise ImportError(
-        "MemorySession requires databricks-openai[memory]. "
+        "AsyncDatabricksSession requires databricks-openai[memory]. "
         "Please install with: pip install databricks-openai[memory]"
     ) from e
 
@@ -50,9 +60,9 @@ DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
 
 
-class _LakebaseCredentials(_LakebasePoolBase):
+class _LakebaseCredentials(_LakebaseBase):
     """
-    Lightweight credential provider that reuses _LakebasePoolBase for:
+    Lightweight credential provider that reuses _LakebaseBase for:
     - Instance name → host resolution
     - Username inference from workspace client
     - Token minting and caching
@@ -85,14 +95,24 @@ class _LakebaseCredentials(_LakebasePoolBase):
             return token
 
 
-class MemorySession(SQLAlchemySession):
+class AsyncDatabricksSession(SQLAlchemySession):
     """
-    OpenAI Agents SDK Session implementation for Databricks Lakebase.
+    Async OpenAI Agents SDK Session implementation for Databricks Lakebase.
 
     This class subclasses SQLAlchemySession to provide:
     - Lakebase instance resolution
     - OAuth token rotation for authentication
+    - Connection pooling with automatic token refresh
     - SQL logic inherited from SQLAlchemySession
+
+    Note:
+        This class is **async-only**. All session methods (get_items, add_items,
+        clear_session, etc.) are coroutines and must be awaited.
+
+    Note:
+        Engines are cached and reused across sessions with the same instance_name.
+        This means multiple AsyncDatabricksSession instances share a single connection pool,
+        rather than creating a new pool per session
 
     The session stores conversation history in two tables:
     - agent_sessions: Tracks session metadata (session_id, created_at, updated_at)
@@ -100,22 +120,31 @@ class MemorySession(SQLAlchemySession):
 
     Example:
         ```python
-        from databricks_openai.agents.session import MemorySession
+        import asyncio
+        from databricks_openai.agents import AsyncDatabricksSession
         from agents import Agent, Runner
 
 
-        async def run_agent(session_id: str, message: str):
-            session = MemorySession(
-                session_id=session_id,
+        async def main():
+            session = AsyncDatabricksSession(
+                session_id="user-123",
                 instance_name="my-lakebase-instance",
             )
             agent = Agent(name="Assistant")
-            return await Runner.run(agent, message, session=session)
+            result = await Runner.run(agent, "Hello!", session=session)
+
+
+        asyncio.run(main())
         ```
 
     For more information on the Session protocol, see:
     https://openai.github.io/openai-agents-python/ref/memory/session/
     """
+
+    # Class-level cache for engines and credentials, keyed by instance_name.
+    # This allows multiple AsyncDatabricksSession instances to share a single engine/pool.
+    _engine_cache: "dict[str, tuple[AsyncEngine, _LakebaseCredentials]]" = {}
+    _engine_cache_lock = Lock()
 
     def __init__(
         self,
@@ -130,7 +159,7 @@ class MemorySession(SQLAlchemySession):
         **engine_kwargs,
     ) -> None:
         """
-        Initialize a MemorySession for Databricks Lakebase.
+        Initialize a AsyncDatabricksSession for Databricks Lakebase.
 
         Args:
             session_id: Unique identifier for the conversation session.
@@ -148,14 +177,13 @@ class MemorySession(SQLAlchemySession):
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
-        # Create credential provider
-        self._credentials = _LakebaseCredentials(
+        engine, credentials = self._get_or_create_engine(
             instance_name=instance_name,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            **engine_kwargs,
         )
-
-        engine = self._create_engine(**engine_kwargs)
+        self._credentials = credentials
 
         # Initialize parent SQLAlchemySession - inherits all SQL logic
         super().__init__(
@@ -167,26 +195,88 @@ class MemorySession(SQLAlchemySession):
         )
 
         logger.info(
-            "MemorySession initialized: instance=%s host=%s session_id=%s",
+            "AsyncDatabricksSession initialized: instance=%s host=%s session_id=%s",
             instance_name,
             self._credentials.host,
             session_id,
         )
 
-    def _create_engine(self, **engine_kwargs) -> "AsyncEngine":
-        """Create an AsyncEngine with do_connect event for token injection."""
-        # https://docs.sqlalchemy.org/en/21/core/engines.html#creating-urls-programmatically
-        url = URL.create(
+    @classmethod
+    def _get_or_create_engine(
+        cls,
+        *,
+        instance_name: str,
+        workspace_client: Optional[WorkspaceClient],
+        token_cache_duration_seconds: int,
+        **engine_kwargs,
+    ) -> "tuple[AsyncEngine, _LakebaseCredentials]":
+        """Get cached engine or create a new one (thread-safe).
+
+        Engines are cached by instance_name so multiple sessions can share
+        the same connection pool.
+        """
+        with cls._engine_cache_lock:
+            if instance_name in cls._engine_cache:
+                logger.debug("Reusing cached engine for instance=%s", instance_name)
+                return cls._engine_cache[instance_name]
+
+            credentials = _LakebaseCredentials(
+                instance_name=instance_name,
+                workspace_client=workspace_client,
+                token_cache_duration_seconds=token_cache_duration_seconds,
+            )
+
+            engine = cls._create_engine(credentials, **engine_kwargs)
+            cls._engine_cache[instance_name] = (engine, credentials)
+            logger.info(
+                "Created new engine for instance=%s host=%s",
+                instance_name,
+                credentials.host,
+            )
+
+            return engine, credentials
+
+    @classmethod
+    def clear_engine_cache(cls, instance_name: Optional[str] = None) -> None:
+        """Clear cached engines.
+
+        Args:
+            instance_name: If provided, only clear the engine for this instance.
+                If None, clear all cached engines.
+
+        Note:
+            This does not close the engines. Use this when you need to force
+            creation of a new engine with different settings.
+        """
+        with cls._engine_cache_lock:
+            if instance_name is not None:
+                cls._engine_cache.pop(instance_name, None)
+                logger.info("Cleared engine cache for instance=%s", instance_name)
+            else:
+                cls._engine_cache.clear()
+                logger.info("Cleared all engine caches")
+
+    @staticmethod
+    def _create_url(credentials: _LakebaseCredentials):
+        """Create a SQLAlchemy URL for Lakebase connection.
+
+        https://docs.sqlalchemy.org/en/21/core/engines.html#creating-urls-programmatically
+        """
+        return URL.create(
             drivername="postgresql+psycopg",
-            username=self._credentials.username,
-            host=self._credentials.host,
+            username=credentials.username,
+            host=credentials.host,
             port=DEFAULT_PORT,
             database=DEFAULT_DATABASE,
         )
 
-        # Use default QueuePool with connection recycling.
-        # Connections are recycled before token cache expires (50 min),
-        # ensuring fresh tokens are injected via do_connect event.
+    @staticmethod
+    def _create_engine(
+        credentials: _LakebaseCredentials, **engine_kwargs
+    ) -> "AsyncEngine":
+        """Create an AsyncEngine with do_connect event for token injection."""
+        url = AsyncDatabricksSession._create_url(credentials)
+
         engine = create_async_engine(
             url,
             pool_recycle=DEFAULT_POOL_RECYCLE_SECONDS,
@@ -194,10 +284,9 @@ class MemorySession(SQLAlchemySession):
             **engine_kwargs,
         )
 
-        # Attach event to inject Lakebase token before each connection
-        # Note: do_connect fires on sync_engine even for async operations
-        credentials = self._credentials
-
+        # AsyncEngine wraps a sync Engine internally - connection events like
+        # do_connect must be registered on sync_engine, not the async wrapper.
+        # https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension
         @event.listens_for(engine.sync_engine, "do_connect")
         def inject_lakebase_token(dialect, conn_rec, cargs, cparams):
             cparams["password"] = credentials.get_token()
@@ -220,15 +309,4 @@ class MemorySession(SQLAlchemySession):
         """The database username."""
         return self._credentials.username
 
-    @property
-    def connection_url(self) -> str:
-        """The SQLAlchemy connection URL (without password, for debugging)."""
-        url = URL.create(
-            drivername="postgresql+psycopg",
-            username=self._credentials.username,
-            host=self._credentials.host,
-            port=DEFAULT_PORT,
-            database=DEFAULT_DATABASE,
-            query={"sslmode": DEFAULT_SSLMODE},
-        )
-        return url.render_as_string(hide_password=True)
+

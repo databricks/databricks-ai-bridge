@@ -81,12 +81,12 @@ class SequencePrivilege(str, Enum):
     ALL = "ALL"  # Renders as ALL PRIVILEGES
 
 
-class _LakebasePoolBase:
+class _LakebaseBase:
     """
-    Base logic for Lakebase connection pools: resolve host, infer username,
+    Base class for Lakebase connections: resolve host, infer username,
     token cache + minting, and conninfo building.
 
-    Subclasses implement pool-specific initialization and lifecycle methods.
+    Subclasses implement specific initialization and lifecycle methods.
     """
 
     def __init__(
@@ -168,7 +168,7 @@ class _LakebasePoolBase:
         raise ValueError("Unable to infer username for Lakebase connection.")
 
 
-class LakebasePool(_LakebasePoolBase):
+class LakebasePool(_LakebaseBase):
     """Sync Lakebase connection pool built on psycopg with rotating credentials.
 
     instance_name: Name of Lakebase Instance
@@ -262,7 +262,7 @@ class LakebasePool(_LakebasePoolBase):
         self._pool.close()
 
 
-class AsyncLakebasePool(_LakebasePoolBase):
+class AsyncLakebasePool(_LakebaseBase):
     """Async Lakebase connection pool built on psycopg with rotating credentials.
 
     instance_name: Name of Lakebase Instance
