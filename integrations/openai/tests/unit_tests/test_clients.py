@@ -228,7 +228,9 @@ class TestDatabricksOpenAIStrictStripping:
 
             with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
-                tools: list[Any] = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: list[Any] = [
+                    {"type": "function", "function": {"name": "test", "strict": True}}
+                ]
                 client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
@@ -253,7 +255,9 @@ class TestDatabricksOpenAIStrictStripping:
 
             with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
-                tools: list[Any] = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: list[Any] = [
+                    {"type": "function", "function": {"name": "test", "strict": True}}
+                ]
                 client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
@@ -303,7 +307,9 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
-                tools: list[Any] = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: list[Any] = [
+                    {"type": "function", "function": {"name": "test", "strict": True}}
+                ]
                 await client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
@@ -328,7 +334,9 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
-                tools: list[Any] = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: list[Any] = [
+                    {"type": "function", "function": {"name": "test", "strict": True}}
+                ]
                 await client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
