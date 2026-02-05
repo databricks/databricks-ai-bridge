@@ -702,11 +702,13 @@ class ChatDatabricks(BaseChatModel):
         Returns:
             Dictionary with usage info or None if not available
         """
+        if hasattr(chunk, "response"):
+            response = chunk.response
+            if hasattr(response, "usage") and response.usage is not None and stream_usage and isinstance(response.usage, ResponseUsage):
+                return response.usage
+        
         if not stream_usage or not hasattr(chunk, "usage") or not chunk.usage:
             return None
-
-        if isinstance(chunk.usage, ResponseUsage):
-            return chunk.usage
 
         input_tokens = getattr(chunk.usage, "prompt_tokens", None)
         output_tokens = getattr(chunk.usage, "completion_tokens", None)
