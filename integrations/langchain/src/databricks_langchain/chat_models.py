@@ -588,13 +588,14 @@ class ChatDatabricks(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
+        print(usage)
         if usage.prompt_tokens_details is not None:
             # Most likely an OpenAI Model
             input_token_details = None
-            if usage.prompt_token_details:
+            if usage.prompt_tokens_details:
                 input_token_details = InputTokenDetails(
                     audio=usage.prompt_tokens_details.audio_tokens or 0,
-                    cache_read=usage.prompt_tokens_details.cache_read or 0,
+                    cache_read=usage.prompt_tokens_details.cached_tokens or 0,
                 )
             
             output_token_details = None
@@ -605,31 +606,34 @@ class ChatDatabricks(BaseChatModel):
                 )
                 
             return UsageMetadata(
-                input_tokens=usage.prompt_tokens,
-                output_tokens=usage.completion_tokens,
-                total_tokens=usage.total_tokens,
-                input_token_details=input_token_details,
-                output_token_details=output_token_details
+                input_tokens=usage.prompt_tokens or 0,
+                output_tokens=usage.completion_tokens or 0,
+                total_tokens=usage.total_tokens or 0,
+                input_token_details=input_token_details or 0,
+                output_token_details=output_token_details or 0
             )
         elif usage.cache_read_input_tokens is not None:
+            print(usage)
             # Most likely Claude Model
             cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
             cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", None) or 0
 
-            return UsageMetadata(
-                input_tokens = usage.prompt_tokens + cache_read_input_tokens + cache_creation_input_tokens,
-                output_tokens = usage.completion_tokens,
-                total_tokens = usage.total_tokens,
+            usage_metadata = UsageMetadata(
+                input_tokens = (usage.prompt_tokens or 0) + cache_read_input_tokens + cache_creation_input_tokens,
+                output_tokens = usage.completion_tokens or 0,
+                total_tokens = usage.total_tokens or 0,
                 input_token_details=InputTokenDetails(
                     cache_read= cache_read_input_tokens,
                     cache_creation=cache_creation_input_tokens
                 )
             )
+            print(usage_metadata)
+            return usage_metadata
         else:
             return UsageMetadata(
-                input_tokens=usage.prompt_tokens,
-                output_tokens=usage.completion_tokens,
-                total_tokens=usage.total_tokens,
+                input_tokens=usage.prompt_tokens or 0,
+                output_tokens=usage.completion_tokens or 0,
+                total_tokens=usage.total_tokens or 0,
 
             )
     
