@@ -54,6 +54,7 @@ class TestDatabricksOpenAI:
         request = Request("GET", "https://test.databricks.com/api/test")
 
         # Authenticate the request
+        assert http_client.auth is not None
         auth_flow = http_client.auth.auth_flow(request)
         authenticated_request = next(auth_flow)
 
@@ -98,6 +99,7 @@ class TestAsyncDatabricksOpenAI:
         request = Request("GET", "https://test.databricks.com/api/test")
 
         # Authenticate the request
+        assert http_client.auth is not None
         auth_flow = http_client.auth.auth_flow(request)
         authenticated_request = next(auth_flow)
 
@@ -200,7 +202,7 @@ class TestDatabricksOpenAIStrictStripping:
 
             with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
-                tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: Any = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
@@ -225,7 +227,7 @@ class TestDatabricksOpenAIStrictStripping:
 
             with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
-                tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: Any = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
@@ -275,7 +277,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
-                tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: Any = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 await client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
@@ -300,7 +302,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
-                tools = [{"type": "function", "function": {"name": "test", "strict": True}}]
+                tools: Any = [{"type": "function", "function": {"name": "test", "strict": True}}]
                 await client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
