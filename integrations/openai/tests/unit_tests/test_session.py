@@ -650,9 +650,7 @@ class TestAsyncDatabricksSessionEngineCaching:
             # Sessions should have different engines
             assert session1._engine is not session2._engine
 
-    def test_clear_engine_cache(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
+    def test_clear_engine_cache(self, mock_workspace_client, mock_engine, mock_event_listens_for):
         """Test that clear_engine_cache forces new engine creation."""
         with (
             patch(

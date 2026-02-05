@@ -271,9 +271,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
         )
 
     @staticmethod
-    def _create_engine(
-        credentials: _LakebaseCredentials, **engine_kwargs
-    ) -> "AsyncEngine":
+    def _create_engine(credentials: _LakebaseCredentials, **engine_kwargs) -> "AsyncEngine":
         """Create an AsyncEngine with do_connect event for token injection."""
         url = AsyncDatabricksSession._create_url(credentials)
 
@@ -308,5 +306,3 @@ class AsyncDatabricksSession(SQLAlchemySession):
     def username(self) -> str:
         """The database username."""
         return self._credentials.username
-
-
