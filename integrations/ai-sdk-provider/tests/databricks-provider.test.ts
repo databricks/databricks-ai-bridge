@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { DATABRICKS_TOOL_CALL_ID, DATABRICKS_TOOL_DEFINITION } from '../src/tools'
 import {
   createDatabricksProvider,
   type DatabricksProvider,
@@ -80,7 +79,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksChatAgentLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('responses method exists and returns DatabricksResponsesAgentLanguageModel', () => {
@@ -88,7 +87,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksResponsesAgentLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('chatCompletions method exists and returns DatabricksFmapiLanguageModel', () => {
@@ -96,7 +95,7 @@ describe('createDatabricksProvider', () => {
 
       expect(model).toBeInstanceOf(DatabricksFmapiLanguageModel)
       expect(model.modelId).toBe('test-model')
-      expect(model.specificationVersion).toBe('v2')
+      expect(model.specificationVersion).toBe('v3')
     })
 
     it('models have correct provider name with default', () => {
@@ -385,24 +384,6 @@ describe('createDatabricksProvider', () => {
       } catch (e) {
         expect((e as Error).message).toContain('LanguageModel')
       }
-    })
-  })
-
-  describe('Re-exports from tools', () => {
-    it('DATABRICKS_TOOL_CALL_ID is exported and has correct value', () => {
-      expect(DATABRICKS_TOOL_CALL_ID).toBe('databricks-tool-call')
-    })
-
-    it('DATABRICKS_TOOL_DEFINITION is exported and has correct structure', () => {
-      expect(DATABRICKS_TOOL_DEFINITION).toBeDefined()
-      expect(DATABRICKS_TOOL_DEFINITION.name).toBe('databricks-tool-call')
-      expect(DATABRICKS_TOOL_DEFINITION.description).toBe('Databricks tool call')
-      expect(DATABRICKS_TOOL_DEFINITION.inputSchema).toBeDefined()
-      expect(DATABRICKS_TOOL_DEFINITION.outputSchema).toBeDefined()
-    })
-
-    it('DATABRICKS_TOOL_DEFINITION name matches DATABRICKS_TOOL_CALL_ID', () => {
-      expect(DATABRICKS_TOOL_DEFINITION.name).toBe(DATABRICKS_TOOL_CALL_ID)
     })
   })
 

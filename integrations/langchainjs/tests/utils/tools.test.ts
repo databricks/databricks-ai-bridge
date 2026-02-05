@@ -5,9 +5,8 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { DATABRICKS_TOOL_CALL_ID } from "@databricks/ai-sdk-provider";
 
-import { convertToAISDKToolSet, getToolNameFromAiSDKTool } from "../../src/utils/tools.js";
+import { convertToAISDKToolSet } from "../../src/utils/tools.js";
 
 describe("convertToAISDKToolSet", () => {
   it("converts OpenAI format tools (ToolDefinition)", () => {
@@ -160,7 +159,7 @@ describe("convertToAISDKToolSet", () => {
     expect(result.get_weather.description).toBe("Get the weather for a location");
   });
 
-  it("includes Databricks tool definition in result", () => {
+  it("converts single tool correctly", () => {
     const tools = [
       {
         name: "my_tool",
@@ -170,62 +169,13 @@ describe("convertToAISDKToolSet", () => {
 
     const result = convertToAISDKToolSet(tools);
 
-    expect(result).toHaveProperty(DATABRICKS_TOOL_CALL_ID);
     expect(result).toHaveProperty("my_tool");
+    expect(Object.keys(result)).toHaveLength(1);
   });
 
   it("handles empty tools array", () => {
     const result = convertToAISDKToolSet([]);
 
-    // Should still have the Databricks tool
-    expect(result).toHaveProperty(DATABRICKS_TOOL_CALL_ID);
-    expect(Object.keys(result)).toHaveLength(1);
-  });
-});
-
-describe("getToolNameFromAiSDKTool", () => {
-  it("returns toolName for regular tools", () => {
-    const toolCall = {
-      type: "tool-call" as const,
-      toolCallId: "call_123",
-      toolName: "get_weather",
-      input: { location: "NYC" },
-    };
-
-    const result = getToolNameFromAiSDKTool(toolCall);
-
-    expect(result).toBe("get_weather");
-  });
-
-  it("extracts toolName from Databricks provider metadata", () => {
-    const toolCall = {
-      type: "tool-call" as const,
-      toolCallId: "call_456",
-      toolName: DATABRICKS_TOOL_CALL_ID,
-      input: { location: "SF" },
-      providerMetadata: {
-        databricks: {
-          toolName: "actual_tool_name",
-        },
-      },
-    };
-
-    const result = getToolNameFromAiSDKTool(toolCall);
-
-    expect(result).toBe("actual_tool_name");
-  });
-
-  it("falls back to toolName when Databricks metadata is missing", () => {
-    const toolCall = {
-      type: "tool-call" as const,
-      toolCallId: "call_789",
-      toolName: DATABRICKS_TOOL_CALL_ID,
-      input: {},
-      providerMetadata: {},
-    };
-
-    const result = getToolNameFromAiSDKTool(toolCall);
-
-    expect(result).toBe(DATABRICKS_TOOL_CALL_ID);
+    expect(Object.keys(result)).toHaveLength(0);
   });
 });

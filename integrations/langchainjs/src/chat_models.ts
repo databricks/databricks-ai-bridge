@@ -13,11 +13,9 @@ import {
   BaseChatModelCallOptions,
   BindToolsInput,
 } from "@langchain/core/language_models/chat_models";
-import { BaseMessage, AIMessageChunk } from "@langchain/core/messages";
+import { BaseMessage } from "@langchain/core/messages";
 import { ChatResult, ChatGenerationChunk } from "@langchain/core/outputs";
 import { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
-import { Runnable } from "@langchain/core/runnables";
-import { BaseLanguageModelInput } from "@langchain/core/language_models/base";
 import type { LanguageModel } from "ai";
 import { generateText, streamText } from "ai";
 import { createDatabricksProvider, type DatabricksProvider } from "@databricks/ai-sdk-provider";
@@ -69,7 +67,7 @@ export interface ChatDatabricksCallOptions extends BaseChatModelCallOptions {
  */
 export interface ChatDatabricksInput extends BaseChatModelParams {
   /** Model serving endpoint name */
-  endpoint: string;
+  model: string;
 
   /**
    * Whether to use the Responses API or Chat Completions API
@@ -108,26 +106,26 @@ export interface ChatDatabricksInput extends BaseChatModelParams {
  *
  * @example Chat Completions
  * ```typescript
- * const model = new ChatDatabricks({
- *   endpoint: "databricks-claude-sonnet-4-5",
+ * const llm = new ChatDatabricks({
+ *   model: "databricks-claude-sonnet-4-5",
  *   useResponsesApi: false, // can be omitted
  * });
- * const response = await model.invoke("Hello!");
+ * const response = await llm.invoke("Hello!");
  * ```
  *
  * @example Responses
  * ```typescript
- * const model = new ChatDatabricks({
- *   endpoint: "databricks-gpt-5-2",
+ * const llm = new ChatDatabricks({
+ *   model: "databricks-gpt-5-2",
  *   useResponsesApi: true,
  * });
- * const response = await model.invoke("Hello!");
+ * const response = await llm.invoke("Hello!");
  * ```
  *
  * @example With explicit authentication
  * ```typescript
- * const model = new ChatDatabricks({
- *   endpoint: "databricks-claude-sonnet-4-5",
+ * const llm = new ChatDatabricks({
+ *   model: "databricks-claude-sonnet-4-5",
  *   auth: {
  *     host: "https://your-workspace.databricks.com",
  *     token: "dapi...",
@@ -143,7 +141,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   lc_serializable = true;
 
   /** Model serving endpoint name */
-  endpoint: string;
+  model: string;
 
   /** Whether to use the Responses API or Chat Completions API */
   useResponsesApi?: boolean;
@@ -178,7 +176,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   constructor(fields: ChatDatabricksInput) {
     super(fields);
 
-    this.endpoint = fields.endpoint;
+    this.model = fields.model;
     this.useResponsesApi = fields.useResponsesApi;
     this.temperature = fields.temperature;
     this.maxTokens = fields.maxTokens;
@@ -189,7 +187,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     // Create Databricks AI SDK Provider
     this.provider = this.createProvider();
 
-    // Get appropriate language model based on endpoint type
+    // Get appropriate language model based on model
     this.languageModel = this.getLanguageModel();
   }
 
@@ -229,9 +227,9 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   private async getLanguageModel(): Promise<LanguageModel> {
     const provider = await this.provider;
     if (this.useResponsesApi) {
-      return provider.responses(this.endpoint) as LanguageModel;
+      return provider.responses(this.model) as LanguageModel;
     }
-    return provider.chatCompletions(this.endpoint) as LanguageModel;
+    return provider.chatCompletions(this.model) as LanguageModel;
   }
 
   _llmType(): string {
@@ -352,10 +350,10 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
   bindTools(
     tools: BindToolsInput[],
     kwargs?: Partial<ChatDatabricksCallOptions>
-  ): Runnable<BaseLanguageModelInput, AIMessageChunk, ChatDatabricksCallOptions> {
+  ): InstanceType<typeof ChatDatabricks> {
     // Create a new instance with bound tools
     const bound = new ChatDatabricks({
-      endpoint: this.endpoint,
+      model: this.model,
       useResponsesApi: this.useResponsesApi,
       auth: this.auth,
       temperature: this.temperature,
@@ -367,11 +365,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
     bound.boundTools = tools;
     bound.boundToolChoice = kwargs?.toolChoice;
 
-    return bound satisfies Runnable<
-      BaseLanguageModelInput,
-      AIMessageChunk,
-      ChatDatabricksCallOptions
-    >;
+    return bound;
   }
 
   /**
@@ -379,7 +373,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
    */
   get identifyingParams(): Record<string, unknown> {
     return {
-      endpoint: this.endpoint,
+      model: this.model,
       useResponsesApi: this.useResponsesApi,
       temperature: this.temperature,
       maxTokens: this.maxTokens,
@@ -394,7 +388,7 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
 
   get lc_aliases(): { [key: string]: string } {
     return {
-      endpoint: "model",
+      model: "endpoint",
     };
   }
 }

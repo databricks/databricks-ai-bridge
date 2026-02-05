@@ -2,7 +2,8 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
-from openai import OpenAI
+from databricks_openai import AsyncDatabricksOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 
 def get_deployment_client(target_uri: str) -> Any:
@@ -47,6 +48,26 @@ def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
             "Please run `pip install databricks-sdk` to install "
             "required dependencies."
         ) from e
+
+
+def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpenAI:
+    """Get an async OpenAI client configured for Databricks using databricks-openai.
+
+    Args:
+        workspace_client: Optional WorkspaceClient instance to use for authentication.
+            If not provided, creates a default WorkspaceClient.
+        **kwargs: Additional keyword arguments to pass to AsyncDatabricksOpenAI(),
+            such as timeout and max_retries.
+    """
+    from databricks.sdk import WorkspaceClient
+
+    # If workspace_client is provided, use it directly
+    if workspace_client is not None:
+        return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
+    else:
+        # Otherwise, create default workspace client and use it
+        workspace_client = WorkspaceClient()
+        return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
 
 
 # Utility function for Maximal Marginal Relevance (MMR) reranking.

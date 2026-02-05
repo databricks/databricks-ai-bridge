@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import type { LanguageModelV2CallOptions, LanguageModelV2Prompt } from '@ai-sdk/provider'
+import type { LanguageModelV3CallOptions, LanguageModelV3Prompt } from '@ai-sdk/provider'
 import { callOptionsToResponsesArgs } from '../src/responses-agent-language-model/call-options-to-responses-args'
 
-const defaultPrompt: LanguageModelV2Prompt = [{ role: 'user', content: [{ type: 'text', text: 'test' }] }]
-const createOptions = (overrides: Partial<LanguageModelV2CallOptions> = {}): LanguageModelV2CallOptions => ({
+const defaultPrompt: LanguageModelV3Prompt = [{ role: 'user', content: [{ type: 'text', text: 'test' }] }]
+const createOptions = (overrides: Partial<LanguageModelV3CallOptions> = {}): LanguageModelV3CallOptions => ({
   prompt: defaultPrompt,
   ...overrides,
 })
@@ -64,12 +64,12 @@ describe('callOptionsToResponsesArgs', () => {
     }))
 
     expect(warnings).toHaveLength(5)
-    const settings = warnings.map((w) => w.type === 'unsupported-setting' && w.setting)
-    expect(settings).toContain('topK')
-    expect(settings).toContain('presencePenalty')
-    expect(settings).toContain('frequencyPenalty')
-    expect(settings).toContain('seed')
-    expect(settings).toContain('stopSequences')
+    const features = warnings.map((w) => w.type === 'unsupported' && w.feature)
+    expect(features).toContain('topK')
+    expect(features).toContain('presencePenalty')
+    expect(features).toContain('frequencyPenalty')
+    expect(features).toContain('seed')
+    expect(features).toContain('stopSequences')
   })
 
   it('should handle zero values correctly', () => {

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-01-30
+
+### Fixed
+
+- Added missing `id` field to `mcp_approval_response` when converting tool approval responses to Responses API format
+
+## [0.4.0] - 2026-01-30
+
+### Changed
+
+- MCP approval handling now uses AI SDK v6 native `tool-approval-request` and `tool-approval-response` types
+- Simplified MCP approval flow - approval status is determined from AI SDK state instead of custom tracking
+
+### Removed
+
+- Removed `extractDatabricksMetadata` function - access provider metadata directly via `part.callProviderMetadata?.databricks` instead
+- Removed `DatabricksToolMetadata` type export
+- Removed MCP utility exports (`MCP_APPROVAL_STATUS_KEY`, `MCP_APPROVAL_REQUEST_TYPE`, `MCP_APPROVAL_RESPONSE_TYPE`, `isMcpApprovalRequest`, `isMcpApprovalResponse`, `createApprovalStatusOutput`, `getMcpApprovalState`) - use AI SDK v6 native tool approval instead
+
+## [0.3.0] - 2026-01-28
+
+### Added
+
+- Added `useRemoteToolCalling` option to provider settings for controlling how tool calls are handled
+  - When `true`: Tool calls are marked as `dynamic: true` and `providerExecuted: true`, indicating they are executed remotely by Databricks
+  - When `false` (default): Tool calls are passed through normally for local execution
+  - Useful for Databricks agents with built-in tools, Agents on Apps, and MCP integrations
+
+### Changed
+
+- **BREAKING**: Upgraded to AI SDK v6 (`@ai-sdk/provider@3.0.5`, `@ai-sdk/provider-utils@4.0.10`)
+- Usage structure changed from `{ inputTokens: number, outputTokens: number }` to `{ inputTokens: { total, noCache, cacheRead, cacheWrite }, outputTokens: { total, text, reasoning } }`
+- FinishReason changed from string to `{ raw: unknown, unified: string }`
+- Warning format changed from `{ type: 'unsupported-setting', setting }` to `{ type: 'unsupported', feature }`
+- Provider specification version updated to `'v3'`
+
+### Removed
+
+- **BREAKING**: Removed `DATABRICKS_TOOL_DEFINITION` export and `src/tools.ts`
+  - This workaround is no longer needed with the new `useRemoteToolCalling` option
+  - If you were using `DATABRICKS_TOOL_DEFINITION`, enable `useRemoteToolCalling: true` instead
+
 ## [0.2.3] - 2026-01-26
 
 ### Added

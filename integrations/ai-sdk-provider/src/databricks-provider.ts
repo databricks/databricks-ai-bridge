@@ -1,4 +1,4 @@
-import type { LanguageModelV2, ProviderV2 } from '@ai-sdk/provider'
+import type { LanguageModelV3, ProviderV3 } from '@ai-sdk/provider'
 import { combineHeaders, type FetchFunction, withoutTrailingSlash } from '@ai-sdk/provider-utils'
 import { DatabricksChatAgentLanguageModel } from './chat-agent-language-model/chat-agent-language-model'
 import { DatabricksResponsesAgentLanguageModel } from './responses-agent-language-model/responses-agent-language-model'
@@ -9,15 +9,25 @@ export type DatabricksLanguageModelConfig = {
   headers: () => Record<string, string | undefined>
   url: (options: { path: string }) => string
   fetch?: FetchFunction
+  /**
+   * When true, marks all tool calls as dynamic and provider-executed.
+   * This indicates that tool execution is handled remotely by Databricks agents.
+   * Defaults to true.
+   */
+  useRemoteToolCalling?: boolean
 }
 
-export interface DatabricksProvider extends ProviderV2 {
+export interface DatabricksProvider extends ProviderV3 {
   /** Agents */
-  chatAgent(modelId: string): LanguageModelV2 // agent/v2/chat
-  responses(modelId: string): LanguageModelV2 // agent/v1/responses
+  chatAgent(modelId: string): LanguageModelV3 // agent/v2/chat
+  responses(modelId: string): LanguageModelV3 // agent/v1/responses
 
   /** Foundation Models */
-  chatCompletions(modelId: string): LanguageModelV2 // llm/v1/chat
+  chatCompletions(modelId: string): LanguageModelV3 // llm/v1/chat
+
+  /** Required overrides from ProviderV3 */
+  textEmbeddingModel(modelId: string): never
+  languageModel(modelId: string): never
 }
 
 export interface DatabricksProviderSettings {
@@ -38,6 +48,13 @@ export interface DatabricksProviderSettings {
    * Optional function to format the URL
    */
   formatUrl?: (options: { baseUrl?: string; path: string }) => string
+
+  /**
+   * When true, marks all tool calls as dynamic and provider-executed.
+   * This indicates that tool execution is handled remotely by Databricks agents.
+   * Defaults to true.
+   */
+  useRemoteToolCalling?: boolean
 }
 
 export const createDatabricksProvider = (
@@ -51,7 +68,7 @@ export const createDatabricksProvider = (
   const formatUrl = ({ path }: { path: string }) =>
     settings.formatUrl?.({ baseUrl, path }) ?? `${baseUrl}${path}`
 
-  const createChatAgent = (modelId: string): LanguageModelV2 =>
+  const createChatAgent = (modelId: string): LanguageModelV3 =>
     new DatabricksChatAgentLanguageModel(modelId, {
       url: formatUrl,
       headers: getHeaders,
@@ -59,20 +76,22 @@ export const createDatabricksProvider = (
       provider,
     })
 
-  const createResponsesAgent = (modelId: string): LanguageModelV2 =>
+  const createResponsesAgent = (modelId: string): LanguageModelV3 =>
     new DatabricksResponsesAgentLanguageModel(modelId, {
       url: formatUrl,
       headers: getHeaders,
       fetch,
       provider,
+      useRemoteToolCalling: settings.useRemoteToolCalling,
     })
 
-  const createFmapi = (modelId: string): LanguageModelV2 =>
+  const createFmapi = (modelId: string): LanguageModelV3 =>
     new DatabricksFmapiLanguageModel(modelId, {
       url: formatUrl,
       headers: getHeaders,
       fetch,
       provider,
+      useRemoteToolCalling: settings.useRemoteToolCalling,
     })
 
   const notImplemented = (name: string) => {
@@ -82,11 +101,13 @@ export const createDatabricksProvider = (
   }
 
   return {
+    specificationVersion: 'v3' as const,
     responses: createResponsesAgent,
     chatCompletions: createFmapi,
     chatAgent: createChatAgent,
     imageModel: notImplemented('ImageModel'),
     textEmbeddingModel: notImplemented('TextEmbeddingModel'),
+    embeddingModel: notImplemented('EmbeddingModel'),
     languageModel: notImplemented('LanguageModel'),
   }
 }

@@ -50,6 +50,12 @@ def _parse_query_result(
         header: list[str] = [str(col["name"]) for col in columns]
         rows: list[list] = []
 
+        # Track float column indices (+1 offset for index column added by to_markdown)
+        float_column_indices: list[int] = []
+        for idx, col in enumerate(columns):
+            if col["type_name"] in ["FLOAT", "DOUBLE", "DECIMAL"]:
+                float_column_indices.append(idx + 1)
+
         for item in output["data_array"]:
             row: list = []
             for column, value in zip(columns, item):
@@ -61,7 +67,11 @@ def _parse_query_result(
                 if type_name in ["INT", "LONG", "SHORT", "BYTE"]:
                     row.append(int(value))
                 elif type_name in ["FLOAT", "DOUBLE", "DECIMAL"]:
-                    row.append(float(value))
+                    if return_pandas:
+                        row.append(float(value))
+                    else:
+                        # Keep as string to avoid scientific notation in markdown
+                        row.append(value)
                 elif type_name == "BOOLEAN":
                     row.append(value.lower() == "true")
                 elif type_name == "DATE":
@@ -106,16 +116,19 @@ def _parse_query_result(
         if return_pandas:
             return dataframe
 
+        # Disable numparse for float columns to prevent scientific notation while preserving INT alignment
+        disable_numparse = float_column_indices if float_column_indices else False
+
         if truncate_results:
-            query_result = _truncate_result(dataframe)
+            query_result = _truncate_result(dataframe, disable_numparse)
         else:
-            query_result = dataframe.to_markdown()
+            query_result = dataframe.to_markdown(disable_numparse=disable_numparse)
 
         return query_result.strip()
 
 
-def _truncate_result(dataframe):
-    query_result = dataframe.to_markdown()
+def _truncate_result(dataframe, disable_numparse=False):
+    query_result = dataframe.to_markdown(disable_numparse=disable_numparse)
     tokens_used = _count_tokens(query_result)
 
     # If the full result fits, return it
@@ -123,7 +136,10 @@ def _truncate_result(dataframe):
         return query_result.strip()
 
     def is_too_big(n):
-        return _count_tokens(dataframe.iloc[:n].to_markdown()) > MAX_TOKENS_OF_DATA
+        return (
+            _count_tokens(dataframe.iloc[:n].to_markdown(disable_numparse=disable_numparse))
+            > MAX_TOKENS_OF_DATA
+        )
 
     # Use bisect_left to find the cutoff point of rows within the max token data limit in a O(log n) complexity
     # Passing True, as this is the target value we are looking for when _is_too_big returns
@@ -136,11 +152,11 @@ def _truncate_result(dataframe):
     if len(truncated_df) == 0:
         return ""
 
-    truncated_result = truncated_df.to_markdown()
+    truncated_result = truncated_df.to_markdown(disable_numparse=disable_numparse)
 
     # Double-check edge case if we overshot by one
     if _count_tokens(truncated_result) > MAX_TOKENS_OF_DATA:
-        truncated_result = truncated_df.iloc[:-1].to_markdown()
+        truncated_result = truncated_df.iloc[:-1].to_markdown(disable_numparse=disable_numparse)
     return truncated_result
 
 
