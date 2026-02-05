@@ -588,7 +588,6 @@ class ChatDatabricks(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
-        print(usage)
         if usage.prompt_tokens_details is not None:
             # Most likely an OpenAI Model
             input_token_details = None
@@ -613,7 +612,6 @@ class ChatDatabricks(BaseChatModel):
                 output_token_details=output_token_details or 0
             )
         elif usage.cache_read_input_tokens is not None:
-            print(usage)
             # Most likely Claude Model
             cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
             cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", None) or 0
@@ -627,7 +625,6 @@ class ChatDatabricks(BaseChatModel):
                     cache_creation=cache_creation_input_tokens
                 )
             )
-            print(usage_metadata)
             return usage_metadata
         else:
             return UsageMetadata(
