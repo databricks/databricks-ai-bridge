@@ -41,6 +41,7 @@ tests = [
     "pytest-timeout>=2.3.1",
     "pytest-cov>=4.1.0",
     "databricks-ai-bridge[memory]>=0.13.0",
+    "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [build-system]
