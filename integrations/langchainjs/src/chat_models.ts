@@ -204,6 +204,9 @@ export class ChatDatabricks extends BaseChatModel<ChatDatabricksCallOptions> {
 
     return createDatabricksProvider({
       baseURL: `${config.host}/serving-endpoints`,
+      // Set to false for foundation model endpoints with client-side tool calling
+      // Set to true only when calling Agent Bricks or other remote agent endpoints
+      useRemoteToolCalling: false,
       // Custom fetch that uses SDK authentication
       fetch: async (url, options) => {
         // Ensure config is resolved (handles async auth like OAuth)

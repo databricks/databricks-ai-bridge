@@ -141,6 +141,8 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
   }
 
   // Handle Databricks-specific provider options
+  console.log('[callOptionsToResponsesArgs] databricksOptions:', JSON.stringify(databricksOptions))
+
   if (databricksOptions?.parallelToolCalls != null) {
     args.parallel_tool_calls = databricksOptions.parallelToolCalls
   }
@@ -154,8 +156,12 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
   }
 
   if (databricksOptions?.databricksOptions != null) {
+    console.log('[callOptionsToResponsesArgs] Adding databricks_options:', databricksOptions.databricksOptions)
     args.databricks_options = databricksOptions.databricksOptions
+  } else {
+    console.log('[callOptionsToResponsesArgs] No databricksOptions.databricksOptions found')
   }
 
+  console.log('[callOptionsToResponsesArgs] Final args:', JSON.stringify(args))
   return { args, warnings }
 }
