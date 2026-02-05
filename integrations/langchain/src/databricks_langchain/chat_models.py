@@ -619,6 +619,7 @@ class ChatDatabricks(BaseChatModel):
             return UsageMetadata(
                 input_tokens = usage.prompt_tokens + cache_read_input_tokens + cache_creation_input_tokens,
                 output_tokens = usage.completion_tokens,
+                total_tokens = usage.total_tokens,
                 input_token_details=InputTokenDetails(
                     cache_read= cache_read_input_tokens,
                     cache_creation=cache_creation_input_tokens
