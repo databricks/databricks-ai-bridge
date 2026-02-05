@@ -613,12 +613,15 @@ class ChatDatabricks(BaseChatModel):
             )
         elif usage.cache_read_input_tokens is not None:
             # Most likely Claude Model
+            cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
+            cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", None) or 0
+
             return UsageMetadata(
-                input_tokens = usage.prompt_tokens + usage.cache_read_input_tokens + (usage.cache_createion_input_tokens or 0),
+                input_tokens = usage.prompt_tokens + cache_read_input_tokens + cache_creation_input_tokens,
                 output_tokens = usage.completion_tokens,
                 input_token_details=InputTokenDetails(
-                    cache_read=usage.cache_read_input_tokens or 0,
-                    cache_creation=usage.cache_creation_input_tokens or 0
+                    cache_read= cache_read_input_tokens,
+                    cache_creation=cache_creation_input_tokens
                 )
             )
         else:
