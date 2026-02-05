@@ -587,7 +587,7 @@ class ChatDatabricks(BaseChatModel):
             message.custom_outputs = response.custom_outputs  # ty:ignore[unresolved-attribute]
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def _convert_completion_usage_to_usage_metadata(self, usage: CompletionUsage) -> UsageMetadata:
+    def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
         if usage.prompt_tokens_details is not None:
             # Most likely an OpenAI Model
             input_token_details = None
@@ -668,16 +668,18 @@ class ChatDatabricks(BaseChatModel):
 
             generations.append(
                 ChatGeneration(
-                    message=_convert_dict_to_message(message_dict),
+                    message=_convert_dict_to_message(message_dict, response.usage),
                     generation_info=generation_info,
                 )
             )
 
-        llm_output = {}
+        llm_output = {}        
         if response.usage:
-            usage_metadata = self._convert_completion_usage_to_usage_metadata(response.usage)
-            llm_output["usage_metadata"] = usage_metadata
-            llm_output["usage"] = usage_metadata # for backwards compatibility
+            llm_output["usage"] = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
             # Add individual token counts for backwards compatibility with tests
             llm_output["prompt_tokens"] = response.usage.prompt_tokens
             llm_output["completion_tokens"] = response.usage.completion_tokens
@@ -1504,6 +1506,7 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
 
 def _convert_dict_to_message(
     _dict: dict,
+    usage: Optional[CompletionUsage]
 ) -> HumanMessage | SystemMessage | ToolMessage | AIMessage | ChatMessage:
     role = _dict["role"]
     content = _dict.get("content") or ""
@@ -1532,12 +1535,16 @@ def _convert_dict_to_message(
                     tool_calls.append(parse_tool_call(raw_tool_call, return_id=True))
                 except Exception as e:
                     invalid_tool_calls.append(make_invalid_tool_call(raw_tool_call, str(e)))
+        usage_metadata = None
+        if usage is not None:
+            usage_metadata = ChatDatabricks._convert_completion_usage_to_usage_metadata(usage)
         lc_message = AIMessage(
             content=content,
             additional_kwargs=additional_kwargs,
             id=_dict.get("id"),
             tool_calls=tool_calls,
             invalid_tool_calls=invalid_tool_calls,
+            usage_metadata=usage_metadata
         )
     else:
         lc_message = ChatMessage(content=content, role=role)
