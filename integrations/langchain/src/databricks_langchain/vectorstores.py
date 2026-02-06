@@ -629,7 +629,7 @@ class DatabricksVectorSearch(VectorStore):
             document_class=Document,
             include_score=self._include_score,
         )
-    
+
     async def asimilarity_search_by_vector_with_score(
         self, embedding: List[float], k: int = 4, **kwargs: Any
     ) -> List[Tuple[Document, float]]:
