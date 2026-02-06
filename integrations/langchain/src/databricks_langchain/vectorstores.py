@@ -630,6 +630,15 @@ class DatabricksVectorSearch(VectorStore):
             include_score=self._include_score,
         )
 
+    async def asimilarity_search_by_vector_with_score(
+        self, embedding: List[float], k: int = 4, **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        # This is a temporary workaround to make the similarity search
+        # asynchronous. The proper solution is to make the similarity search
+        # asynchronous in the vector store implementations.
+        func = partial(self.similarity_search_by_vector_with_score, embedding, k=k, **kwargs)
+        return await asyncio.get_event_loop().run_in_executor(None, func)
+
     def max_marginal_relevance_search(
         self,
         query: str,
