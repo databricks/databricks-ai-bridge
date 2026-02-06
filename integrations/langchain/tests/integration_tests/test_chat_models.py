@@ -930,3 +930,254 @@ def test_chat_databricks_gpt5_stream_with_usage():
         f"Expected total_tokens ({usage_chunk.usage_metadata['total_tokens']}) "
         f"to equal input_tokens + output_tokens ({expected_total})"
     )
+
+
+### Tests for usage metadata key parity with OpenAI client ###
+
+# Long system context (matching notebook's SYSTEM_CONTEXT pattern)
+_LONG_SYSTEM_CONTEXT = (
+    "You are an expert assistant with deep knowledge of data engineering and analytics. " * 500
+)
+
+
+def _build_claude_messages():
+    """Build messages for Claude with cache_control."""
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": _LONG_SYSTEM_CONTEXT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+def _build_openai_messages():
+    """Build messages for OpenAI chat completions."""
+    return [
+        {"role": "system", "content": [{"type": "text", "text": _LONG_SYSTEM_CONTEXT}]},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+def _build_responses_messages():
+    """Build messages for OpenAI responses API."""
+    return [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": _LONG_SYSTEM_CONTEXT}],
+            "id": "msg_sys",
+        },
+        {"role": "user", "content": "What is the capital of France?", "id": "msg_user"},
+    ]
+
+
+def _verify_usage_metadata_keys(lc_usage, openai_usage):
+    """Helper to verify usage metadata keys exist in ChatDatabricks response when present in OpenAI response."""
+    # Verify basic token count keys exist
+    assert "input_tokens" in lc_usage
+    assert "output_tokens" in lc_usage
+    assert "total_tokens" in lc_usage
+
+    # Check OpenAI-style prompt_tokens_details -> input_token_details
+    if hasattr(openai_usage, "prompt_tokens_details") and openai_usage.prompt_tokens_details:
+        assert "input_token_details" in lc_usage
+        if openai_usage.prompt_tokens_details.cached_tokens is not None:
+            assert "cache_read" in lc_usage["input_token_details"]
+        if openai_usage.prompt_tokens_details.audio_tokens is not None:
+            assert "audio" in lc_usage["input_token_details"]
+
+    # Check OpenAI-style completion_tokens_details -> output_token_details
+    if (
+        hasattr(openai_usage, "completion_tokens_details")
+        and openai_usage.completion_tokens_details
+    ):
+        assert "output_token_details" in lc_usage
+        if openai_usage.completion_tokens_details.reasoning_tokens is not None:
+            assert "reasoning" in lc_usage["output_token_details"]
+
+    # Check Claude-style cache tokens
+    cache_read = getattr(openai_usage, "cache_read_input_tokens", None)
+    cache_creation = getattr(openai_usage, "cache_creation_input_tokens", None)
+    if cache_read is not None or cache_creation is not None:
+        assert "input_token_details" in lc_usage
+        if cache_read is not None:
+            assert "cache_read" in lc_usage["input_token_details"]
+        if cache_creation is not None:
+            assert "cache_creation" in lc_usage["input_token_details"]
+
+
+def _verify_responses_usage_metadata_keys(lc_usage, openai_usage):
+    """Helper to verify usage metadata keys exist for responses API."""
+    # Verify basic token count keys exist
+    assert "input_tokens" in lc_usage
+    assert "output_tokens" in lc_usage
+    assert "total_tokens" in lc_usage
+
+    # Verify input_token_details keys
+    if openai_usage.input_tokens_details is not None:
+        assert "input_token_details" in lc_usage
+        if openai_usage.input_tokens_details.cached_tokens is not None:
+            assert "cache_read" in lc_usage["input_token_details"]
+
+    # Verify output_token_details keys
+    if openai_usage.output_tokens_details is not None:
+        assert "output_token_details" in lc_usage
+        if openai_usage.output_tokens_details.reasoning_tokens is not None:
+            assert "reasoning_tokens" in lc_usage["output_token_details"]
+
+
+@pytest.mark.foundation_models
+@pytest.mark.parametrize(
+    ("model", "message_builder"),
+    [
+        ("databricks-gpt-5-2", _build_openai_messages),
+        ("databricks-claude-3-7-sonnet", _build_claude_messages),
+    ],
+)
+def test_chat_databricks_usage_metadata_keys(model, message_builder):
+    """
+    Test that ChatDatabricks usage_metadata has the same keys as OpenAI client.
+    Uses a long system prompt to trigger caching behavior.
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks_openai import DatabricksOpenAI
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    messages = message_builder()
+
+    # Call via OpenAI client
+    client = DatabricksOpenAI(workspace_client=workspace_client)
+    openai_response = client.chat.completions.create(model=model, messages=messages, max_tokens=20)
+
+    # Call via ChatDatabricks (using same message format)
+    llm = ChatDatabricks(model=model, workspace_client=workspace_client, max_tokens=20)
+    lc_response = llm.invoke(messages)
+
+    assert lc_response.usage_metadata is not None, "usage_metadata should be present"
+    _verify_usage_metadata_keys(lc_response.usage_metadata, openai_response.usage)
+
+
+@pytest.mark.foundation_models
+@pytest.mark.parametrize(
+    ("model", "message_builder"),
+    [
+        ("databricks-gpt-5-2", _build_openai_messages),
+        ("databricks-claude-3-7-sonnet", _build_claude_messages),
+    ],
+)
+def test_chat_databricks_stream_usage_metadata_keys(model, message_builder):
+    """
+    Test that ChatDatabricks streaming usage_metadata has the same keys as OpenAI client.
+    Uses a long system prompt to trigger caching behavior.
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks_openai import DatabricksOpenAI
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    messages = message_builder()
+
+    # Call via OpenAI client streaming
+    client = DatabricksOpenAI(workspace_client=workspace_client)
+    openai_stream = client.chat.completions.create(
+        model=model, messages=messages, max_tokens=20, stream=True
+    )
+    openai_usage = None
+    for chunk in openai_stream:
+        if chunk.usage is not None:
+            openai_usage = chunk.usage
+
+    # Call via ChatDatabricks streaming (using same message format)
+    llm = ChatDatabricks(
+        model=model, workspace_client=workspace_client, max_tokens=20, stream_usage=True
+    )
+    lc_chunks = list(llm.stream(messages))
+
+    # Find usage chunk
+    usage_chunks = [
+        chunk for chunk in lc_chunks if chunk.content == "" and chunk.usage_metadata is not None
+    ]
+    assert len(usage_chunks) >= 1, "Expected at least one usage chunk"
+
+    if openai_usage is not None:
+        _verify_usage_metadata_keys(usage_chunks[-1].usage_metadata, openai_usage)
+
+
+@pytest.mark.foundation_models
+def test_chat_databricks_responses_api_usage_metadata_keys():
+    """
+    Test that ChatDatabricks responses API usage_metadata has the same keys as OpenAI client.
+    Uses a long system prompt to trigger caching behavior.
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks_openai import DatabricksOpenAI
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    model = "databricks-gpt-5-2"
+    messages = _build_responses_messages()
+
+    # Call via OpenAI client responses API
+    client = DatabricksOpenAI(workspace_client=workspace_client)
+    openai_response = client.responses.create(model=model, input=messages, max_output_tokens=20)
+
+    # Call via ChatDatabricks with responses API (using same message format)
+    llm = ChatDatabricks(
+        model=model, workspace_client=workspace_client, use_responses_api=True, max_tokens=20
+    )
+    lc_response = llm.invoke(messages)
+
+    assert lc_response.usage_metadata is not None, "usage_metadata should be present"
+    _verify_responses_usage_metadata_keys(lc_response.usage_metadata, openai_response.usage)
+
+
+@pytest.mark.foundation_models
+def test_chat_databricks_responses_api_stream_usage_metadata_keys():
+    """
+    Test that ChatDatabricks responses API streaming usage_metadata has the same keys as OpenAI client.
+    Uses a long system prompt to trigger caching behavior.
+    """
+    from databricks.sdk import WorkspaceClient
+    from databricks_openai import DatabricksOpenAI
+
+    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+    model = "databricks-gpt-5-2"
+    messages = _build_responses_messages()
+
+    # Call via OpenAI client responses API streaming
+    client = DatabricksOpenAI(workspace_client=workspace_client)
+    openai_stream = client.responses.create(
+        model=model, input=messages, max_output_tokens=20, stream=True
+    )
+    openai_usage = None
+    for event in openai_stream:
+        if (
+            hasattr(event, "response")
+            and event.response is not None
+            and hasattr(event.response, "usage")
+        ):
+            openai_usage = event.response.usage
+
+    # Call via ChatDatabricks with responses API streaming (using same message format)
+    llm = ChatDatabricks(
+        model=model,
+        workspace_client=workspace_client,
+        use_responses_api=True,
+        max_tokens=10,
+        stream_usage=True,
+    )
+    lc_chunks = list(llm.stream(messages))
+
+    # Find usage chunk
+    usage_chunks = [
+        chunk for chunk in lc_chunks if chunk.content == "" and chunk.usage_metadata is not None
+    ]
+    assert len(usage_chunks) >= 1, "Expected at least one usage chunk"
+
+    if openai_usage is not None:
+        _verify_responses_usage_metadata_keys(usage_chunks[-1].usage_metadata, openai_usage)
