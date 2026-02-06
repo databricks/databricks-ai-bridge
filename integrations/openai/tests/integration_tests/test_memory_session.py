@@ -276,31 +276,6 @@ async def test_memory_session_complex_message_data(cleanup_tables):
 
 
 @pytest.mark.asyncio
-async def test_memory_session_properties(cleanup_tables):
-    """Test that session properties return correct values."""
-    from databricks_openai.agents import AsyncDatabricksSession
-
-    sessions_table, messages_table = get_unique_table_names()
-    cleanup_tables.append((sessions_table, messages_table))
-
-    session_id = str(uuid.uuid4())
-    session = AsyncDatabricksSession(
-        session_id=session_id,
-        instance_name=get_instance_name(),
-        sessions_table=sessions_table,
-        messages_table=messages_table,
-    )
-
-    # Verify properties
-    assert session.instance_name == get_instance_name()
-    assert session.host is not None
-    assert len(session.host) > 0
-    assert session.username is not None
-    assert len(session.username) > 0
-    assert session.session_id == session_id
-
-
-@pytest.mark.asyncio
 async def test_memory_session_get_items_ordering(cleanup_tables):
     """Test that get_items returns items in correct chronological order."""
     from databricks_openai.agents import AsyncDatabricksSession

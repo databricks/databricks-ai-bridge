@@ -21,14 +21,14 @@ def clear_engine_cache():
     try:
         from databricks_openai.agents.session import AsyncDatabricksSession
 
-        AsyncDatabricksSession.clear_engine_cache()
+        AsyncDatabricksSession._lakebase_sql_alchemy_cache.clear()
     except ImportError:
         pass
     yield
     try:
         from databricks_openai.agents.session import AsyncDatabricksSession
 
-        AsyncDatabricksSession.clear_engine_cache()
+        AsyncDatabricksSession._lakebase_sql_alchemy_cache.clear()
     except ImportError:
         pass
 
@@ -78,78 +78,106 @@ def mock_event_listens_for():
     return create_decorator
 
 
-class TestLakebaseCredentials:
-    """Tests for _LakebaseCredentials class."""
+class TestAsyncLakebaseSQLAlchemy:
+    """Tests for AsyncLakebaseSQLAlchemy class."""
 
     def test_init_resolves_host(self, mock_workspace_client):
         """Test that initialization resolves the Lakebase host."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=MagicMock(sync_engine=MagicMock()),
+            ),
         ):
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            creds = _LakebaseCredentials(
+            lakebase = AsyncLakebaseSQLAlchemy(
                 instance_name="test-instance",
                 workspace_client=mock_workspace_client,
             )
 
-            assert creds.host == "test-instance.lakebase.databricks.com"
+            assert lakebase.host == "test-instance.lakebase.databricks.com"
             mock_workspace_client.database.get_database_instance.assert_called_once_with(
                 "test-instance"
             )
 
     def test_init_infers_username(self, mock_workspace_client):
         """Test that initialization infers the username."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=MagicMock(sync_engine=MagicMock()),
+            ),
         ):
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            creds = _LakebaseCredentials(
+            lakebase = AsyncLakebaseSQLAlchemy(
                 instance_name="test-instance",
                 workspace_client=mock_workspace_client,
             )
 
-            assert creds.username == "test_user@databricks.com"
+            assert lakebase.username == "test_user@databricks.com"
             mock_workspace_client.current_user.me.assert_called()
 
     def test_get_token_mints_new_token(self, mock_workspace_client):
         """Test that get_token mints a new token when cache is empty."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=MagicMock(sync_engine=MagicMock()),
+            ),
         ):
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            creds = _LakebaseCredentials(
+            lakebase = AsyncLakebaseSQLAlchemy(
                 instance_name="test-instance",
                 workspace_client=mock_workspace_client,
             )
 
-            token = creds.get_token()
+            token = lakebase.get_token()
 
             assert token == "test-oauth-token"
             mock_workspace_client.database.generate_database_credential.assert_called_once()
 
     def test_get_token_returns_cached_token(self, mock_workspace_client):
         """Test that get_token returns cached token when valid."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=MagicMock(sync_engine=MagicMock()),
+            ),
         ):
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            creds = _LakebaseCredentials(
+            lakebase = AsyncLakebaseSQLAlchemy(
                 instance_name="test-instance",
                 workspace_client=mock_workspace_client,
             )
 
             # First call - mints token
-            token1 = creds.get_token()
+            token1 = lakebase.get_token()
             # Second call - should return cached
-            token2 = creds.get_token()
+            token2 = lakebase.get_token()
 
             assert token1 == token2 == "test-oauth-token"
             # Should only mint once
@@ -157,26 +185,33 @@ class TestLakebaseCredentials:
 
     def test_get_token_refreshes_expired_token(self, mock_workspace_client):
         """Test that get_token refreshes token when expired."""
-        with patch(
-            "databricks_ai_bridge.lakebase.WorkspaceClient",
-            return_value=mock_workspace_client,
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=MagicMock(sync_engine=MagicMock()),
+            ),
         ):
             import time
 
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            creds = _LakebaseCredentials(
+            lakebase = AsyncLakebaseSQLAlchemy(
                 instance_name="test-instance",
                 workspace_client=mock_workspace_client,
                 token_cache_duration_seconds=0,  # Immediate expiration
             )
 
             # First call
-            creds.get_token()
+            lakebase.get_token()
             # Wait a tiny bit
             time.sleep(0.01)
             # Second call - should mint new token
-            creds.get_token()
+            lakebase.get_token()
 
             # Should mint twice due to expiration
             assert mock_workspace_client.database.generate_database_credential.call_count == 2
@@ -191,13 +226,36 @@ class TestLakebaseCredentials:
             "databricks_ai_bridge.lakebase.WorkspaceClient",
             return_value=mock_workspace_client,
         ):
-            from databricks_openai.agents.session import _LakebaseCredentials
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
             with pytest.raises(ValueError, match="Unable to resolve Lakebase instance"):
-                _LakebaseCredentials(
+                AsyncLakebaseSQLAlchemy(
                     instance_name="invalid-instance",
                     workspace_client=mock_workspace_client,
                 )
+
+    def test_engine_property_returns_engine(self, mock_workspace_client):
+        """Test that engine property returns the created engine."""
+        mock_eng = MagicMock(sync_engine=MagicMock())
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch("sqlalchemy.event.listens_for", return_value=lambda f: f),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_eng,
+            ),
+        ):
+            from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
+
+            lakebase = AsyncLakebaseSQLAlchemy(
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+            )
+
+            assert lakebase.engine is mock_eng
 
 
 class TestAsyncDatabricksSessionInit:
@@ -213,11 +271,11 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -249,18 +307,17 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
-            from databricks_openai.agents.session import (
-                DEFAULT_POOL_RECYCLE_SECONDS,
-                AsyncDatabricksSession,
-            )
+            from databricks_ai_bridge.lakebase import DEFAULT_POOL_RECYCLE_SECONDS
+
+            from databricks_openai.agents.session import AsyncDatabricksSession
 
             AsyncDatabricksSession(
                 session_id="test-session-123",
@@ -282,11 +339,11 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -309,10 +366,10 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
-            patch("databricks_openai.agents.session.event.listens_for") as mock_listens_for,
+            patch("sqlalchemy.event.listens_for") as mock_listens_for,
         ):
             from databricks_openai.agents.session import AsyncDatabricksSession
 
@@ -335,11 +392,11 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
             patch(
@@ -372,11 +429,11 @@ class TestAsyncDatabricksSessionInit:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
             patch(
@@ -395,90 +452,6 @@ class TestAsyncDatabricksSessionInit:
 
             call_kwargs = mock_parent_init.call_args[1]
             assert call_kwargs["create_tables"] is False
-
-
-class TestAsyncDatabricksSessionProperties:
-    """Tests for AsyncDatabricksSession properties."""
-
-    def test_instance_name_property(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
-        """Test instance_name property returns correct value."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "databricks_openai.agents.session.create_async_engine",
-                return_value=mock_engine,
-            ),
-            patch(
-                "databricks_openai.agents.session.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            session = AsyncDatabricksSession(
-                session_id="test-session-123",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-
-            assert session.instance_name == "test-instance"
-
-    def test_host_property(self, mock_workspace_client, mock_engine, mock_event_listens_for):
-        """Test host property returns resolved host."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "databricks_openai.agents.session.create_async_engine",
-                return_value=mock_engine,
-            ),
-            patch(
-                "databricks_openai.agents.session.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            session = AsyncDatabricksSession(
-                session_id="test-session-123",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-
-            assert session.host == "test-instance.lakebase.databricks.com"
-
-    def test_username_property(self, mock_workspace_client, mock_engine, mock_event_listens_for):
-        """Test username property returns inferred username."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "databricks_openai.agents.session.create_async_engine",
-                return_value=mock_engine,
-            ),
-            patch(
-                "databricks_openai.agents.session.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            session = AsyncDatabricksSession(
-                session_id="test-session-123",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-
-            assert session.username == "test_user@databricks.com"
 
 
 class TestAsyncDatabricksSessionTokenInjection:
@@ -502,11 +475,11 @@ class TestAsyncDatabricksSessionTokenInjection:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=capture_handler,
             ),
         ):
@@ -540,11 +513,11 @@ class TestAsyncDatabricksSessionEngineKwargs:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -576,11 +549,11 @@ class TestAsyncDatabricksSessionEngineCaching:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -622,11 +595,11 @@ class TestAsyncDatabricksSessionEngineCaching:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 side_effect=lambda *args, **kwargs: next(engine_iter),
             ) as mock_create_engine,
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -650,43 +623,6 @@ class TestAsyncDatabricksSessionEngineCaching:
             # Sessions should have different engines
             assert session1._engine is not session2._engine
 
-    def test_clear_engine_cache(self, mock_workspace_client, mock_engine, mock_event_listens_for):
-        """Test that clear_engine_cache forces new engine creation."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "databricks_openai.agents.session.create_async_engine",
-                return_value=mock_engine,
-            ) as mock_create_engine,
-            patch(
-                "databricks_openai.agents.session.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            # Create first session
-            AsyncDatabricksSession(
-                session_id="session-1",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-            assert mock_create_engine.call_count == 1
-
-            # Clear cache
-            AsyncDatabricksSession.clear_engine_cache()
-
-            # Create second session - should create new engine
-            AsyncDatabricksSession(
-                session_id="session-2",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-            assert mock_create_engine.call_count == 2
-
 
 class TestAsyncDatabricksSessionAsyncOnly:
     """Tests verifying AsyncDatabricksSession is async-only."""
@@ -701,11 +637,11 @@ class TestAsyncDatabricksSessionAsyncOnly:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -736,11 +672,11 @@ class TestAsyncDatabricksSessionAsyncOnly:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):
@@ -771,11 +707,11 @@ class TestAsyncDatabricksSessionAsyncOnly:
                 return_value=mock_workspace_client,
             ),
             patch(
-                "databricks_openai.agents.session.create_async_engine",
+                "sqlalchemy.ext.asyncio.create_async_engine",
                 return_value=mock_engine,
             ),
             patch(
-                "databricks_openai.agents.session.event.listens_for",
+                "sqlalchemy.event.listens_for",
                 side_effect=mock_event_listens_for,
             ),
         ):

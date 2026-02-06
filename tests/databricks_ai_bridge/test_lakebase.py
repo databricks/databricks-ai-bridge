@@ -83,7 +83,7 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         )
 
     assert any(
-        record.levelno == logging.INFO and re.search(r"cache=3000s$", record.getMessage())
+        record.levelno == logging.INFO and re.search(r"cache=900s$", record.getMessage())
         for record in caplog.records
     )
 
@@ -255,7 +255,7 @@ async def test_async_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         )
 
     assert any(
-        record.levelno == logging.INFO and re.search(r"cache=3000s$", record.getMessage())
+        record.levelno == logging.INFO and re.search(r"cache=900s$", record.getMessage())
         for record in caplog.records
     )
 

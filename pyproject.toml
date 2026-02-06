@@ -24,6 +24,7 @@ file = "LICENSE.txt"
 [project.optional-dependencies]
 memory = [
   "psycopg[binary,pool]>=3.2.10",
+  "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [dependency-groups]
