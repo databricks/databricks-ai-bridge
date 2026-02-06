@@ -169,4 +169,3 @@ class AsyncDatabricksSession(SQLAlchemySession):
             )
             cls._lakebase_sql_alchemy_cache[instance_name] = lakebase
             return lakebase
-
