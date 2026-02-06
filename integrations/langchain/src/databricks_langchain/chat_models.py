@@ -606,13 +606,16 @@ class ChatDatabricks(BaseChatModel):
                     audio=usage.completion_tokens_details.audio_tokens or 0,
                 )
 
-            return UsageMetadata(
-                input_tokens=usage.prompt_tokens or 0,
-                output_tokens=usage.completion_tokens or 0,
-                total_tokens=usage.total_tokens or 0,
-                input_token_details=input_token_details or 0,
-                output_token_details=output_token_details or 0,
-            )
+            result: UsageMetadata = {
+                "input_tokens": usage.prompt_tokens or 0,
+                "output_tokens": usage.completion_tokens or 0,
+                "total_tokens": usage.total_tokens or 0,
+            }
+            if input_token_details is not None:
+                result["input_token_details"] = input_token_details
+            if output_token_details is not None:
+                result["output_token_details"] = output_token_details
+            return result
         elif getattr(usage, "cache_read_input_tokens", None) is not None:
             # Most likely Claude Model
             cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", None) or 0
@@ -645,7 +648,7 @@ class ChatDatabricks(BaseChatModel):
                 cache_read=usage.input_tokens_details.cached_tokens or 0,
             ),
             output_token_details=OutputTokenDetails(
-                reasoning_tokens=usage.output_tokens_details.reasoning_tokens or 0,
+                reasoning=usage.output_tokens_details.reasoning_tokens or 0,
             ),
         )
 
@@ -829,7 +832,7 @@ class ChatDatabricks(BaseChatModel):
         )
 
         usage_chunk_emitted = False
-        final_usage: dict[str, int] | None = None
+        final_usage: ResponseUsage | CompletionUsage | dict[str, int] | None = None
 
         if self.use_responses_api:
             prev_chunk = None
@@ -934,7 +937,7 @@ class ChatDatabricks(BaseChatModel):
         )
 
         usage_chunk_emitted = False
-        final_usage: dict[str, int] | None = None
+        final_usage: ResponseUsage | CompletionUsage | dict[str, int] | None = None
 
         if self.use_responses_api:
             prev_chunk = None

@@ -828,17 +828,12 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
     assert gen.message.content == expected_content
     assert gen.generation_info == {"finish_reason": "stop"}
     # usage_metadata is now populated from usage
-    assert gen.message.usage_metadata is not None
-    assert (
-        gen.message.usage_metadata["input_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"]
-    )
-    assert (
-        gen.message.usage_metadata["output_tokens"]
-        == _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"]
-    )
-    assert (
-        gen.message.usage_metadata["total_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["total_tokens"]
-    )
+    assert isinstance(gen.message, AIMessage)
+    usage_metadata = gen.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"]
+    assert usage_metadata["output_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"]
+    assert usage_metadata["total_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["total_tokens"]
 
 
 def test_convert_lc_messages_to_responses_api_basic():
@@ -1764,7 +1759,7 @@ def test_convert_responses_usage_to_usage_metadata(cached_tokens, reasoning_toke
     assert result["output_tokens"] == 50
     assert result["total_tokens"] == 150
     assert result["input_token_details"]["cache_read"] == cached_tokens
-    assert result["output_token_details"]["reasoning_tokens"] == reasoning_tokens
+    assert result["output_token_details"]["reasoning"] == reasoning_tokens
 
 
 ### Test usage extraction methods ###
@@ -1845,11 +1840,13 @@ def test_build_usage_chunk_from_completions(use_completion_usage):
 
     result = llm._build_usage_chunk_from_completions(usage)
 
+    assert isinstance(result.message, AIMessageChunk)
     assert result.message.content == ""
-    assert result.message.usage_metadata is not None
-    assert result.message.usage_metadata["input_tokens"] == 100
-    assert result.message.usage_metadata["output_tokens"] == 50
-    assert result.message.usage_metadata["total_tokens"] == 150
+    usage_metadata = result.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == 100
+    assert usage_metadata["output_tokens"] == 50
+    assert usage_metadata["total_tokens"] == 150
 
 
 @pytest.mark.parametrize("use_response_usage", [True, False])
@@ -1870,11 +1867,13 @@ def test_build_usage_chunk_from_responses(use_response_usage):
 
     result = llm._build_usage_chunk_from_responses(usage)
 
+    assert isinstance(result.message, AIMessageChunk)
     assert result.message.content == ""
-    assert result.message.usage_metadata is not None
-    assert result.message.usage_metadata["input_tokens"] == 100
-    assert result.message.usage_metadata["output_tokens"] == 50
-    assert result.message.usage_metadata["total_tokens"] == 150
+    usage_metadata = result.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == 100
+    assert usage_metadata["output_tokens"] == 50
+    assert usage_metadata["total_tokens"] == 150
 
 
 ### Test _convert_dict_to_message with usage ###
@@ -2005,11 +2004,13 @@ def test_chat_databricks_stream_with_detailed_usage_metadata():
         assert len(usage_chunks) == 1
 
         usage_chunk = usage_chunks[0]
-        assert usage_chunk.usage_metadata["input_tokens"] == 100
-        assert usage_chunk.usage_metadata["output_tokens"] == 50
-        assert usage_chunk.usage_metadata["total_tokens"] == 150
-        assert usage_chunk.usage_metadata["input_token_details"]["cache_read"] == 80
-        assert usage_chunk.usage_metadata["output_token_details"]["reasoning"] == 10
+        usage_metadata = usage_chunk.usage_metadata
+        assert usage_metadata is not None
+        assert usage_metadata["input_tokens"] == 100
+        assert usage_metadata["output_tokens"] == 50
+        assert usage_metadata["total_tokens"] == 150
+        assert usage_metadata["input_token_details"]["cache_read"] == 80
+        assert usage_metadata["output_token_details"]["reasoning"] == 10
 
 
 def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
@@ -2045,9 +2046,10 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
         result = llm.invoke([HumanMessage(content="Hello")])
 
         assert isinstance(result, AIMessage)
-        assert result.usage_metadata is not None
-        assert result.usage_metadata["input_tokens"] == 100
-        assert result.usage_metadata["output_tokens"] == 50
-        assert result.usage_metadata["total_tokens"] == 150
-        assert result.usage_metadata["input_token_details"]["cache_read"] == 25
-        assert result.usage_metadata["output_token_details"]["reasoning_tokens"] == 10
+        usage_metadata = result.usage_metadata
+        assert usage_metadata is not None
+        assert usage_metadata["input_tokens"] == 100
+        assert usage_metadata["output_tokens"] == 50
+        assert usage_metadata["total_tokens"] == 150
+        assert usage_metadata["input_token_details"]["cache_read"] == 25
+        assert usage_metadata["output_token_details"]["reasoning"] == 10
