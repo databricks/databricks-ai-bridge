@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from enum import Enum
@@ -97,29 +98,38 @@ class _LakebasePoolBase:
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
         self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
-        self.instance_name: str = instance_name
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
 
-        # Resolve host from the Lakebase name
-        try:
-            instance = self.workspace_client.database.get_database_instance(instance_name)
-        except Exception as exc:
-            raise ValueError(
-                f"Unable to resolve Lakebase instance '{instance_name}'. "
-                "Ensure the instance name is correct."
-            ) from exc
+        # If input is hostname (e.g., from Databricks Apps valueFrom resolution)
+        # resolve to lakebase name
+        if _is_hostname(instance_name):
+            # Input is a hostname - resolve to instance name
+            self.instance_name, self.host = _resolve_instance_name_from_hostname(
+                self.workspace_client, instance_name
+            )
+        else:
+            # Input is an instance name
+            self.instance_name = instance_name
+            try:
+                instance = self.workspace_client.database.get_database_instance(instance_name)
+            except Exception as exc:
+                raise ValueError(
+                    f"Unable to resolve Lakebase instance '{instance_name}'. "
+                    "Ensure the instance name is correct."
+                ) from exc
 
-        resolved_host = getattr(instance, "read_write_dns", None) or getattr(
-            instance, "read_only_dns", None
-        )
-
-        if not resolved_host:
-            raise ValueError(
-                f"Lakebase host not found for instance '{instance_name}'. "
-                "Ensure the instance is running and in AVAILABLE state."
+            resolved_host = getattr(instance, "read_write_dns", None) or getattr(
+                instance, "read_only_dns", None
             )
 
-        self.host: str = resolved_host
+            if not resolved_host:
+                raise ValueError(
+                    f"Lakebase host not found for instance '{instance_name}'. "
+                    "Ensure the instance is running and in AVAILABLE state."
+                )
+
+            self.host = resolved_host
+
         self.username: str = self._infer_username()
 
         self._cached_token: str | None = None
@@ -869,3 +879,76 @@ class LakebaseClient:
                 schema,
                 grantee,
             )
+
+
+# =============================================================================
+# Hostname Resolution Helpers
+# =============================================================================
+
+# Regex pattern for Lakebase hostnames: *.database.<region>.*.databricks.com
+_LAKEBASE_HOSTNAME_PATTERN = re.compile(r"^.+\.database\.[^.]+\..+\.databricks\.com$")
+
+
+def _is_hostname(value: str) -> bool:
+    """
+    Check if the value looks like a Lakebase hostname rather than an instance name.
+
+    Hostname examples:
+        - instance-uuid-.database.region.cloud.databricks.com
+
+    Instance name examples (NOT hostnames):
+        - lakebase
+        - my-database-instance
+
+    Args:
+        value: The string to check (either an instance name or hostname)
+
+    Returns:
+        True if the value appears to be a hostname, False if it's an instance name
+    """
+    return bool(_LAKEBASE_HOSTNAME_PATTERN.match(value))
+
+
+def _resolve_instance_name_from_hostname(
+    workspace_client: WorkspaceClient, hostname: str
+) -> tuple[str, str]:
+    """
+    Resolve instance name from a hostname by listing database instances.
+
+    This is useful when a hostname is provided (e.g., from Databricks Apps valueFrom
+    resolution) instead of an instance name.
+
+    Hostname examples:
+        - instance-uuid-.database.region.cloud.databricks.com
+
+    Args:
+        workspace_client: The WorkspaceClient to use for API calls
+        hostname: The database hostname (e.g., from Databricks Apps valueFrom: "database")
+
+    Returns:
+        Tuple of (instance_name, host)
+
+    Raises:
+        ValueError: If no matching instance is found or unable to list instances
+    """
+    try:
+        # Note: This lists all database instances the user has access to. For workspaces
+        # with many instances, this may have performance implications but there is no way
+        # to retrieve the instance name from the lakebase hostname
+        instances = list(workspace_client.database.list_database_instances())
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to list database instances to resolve hostname '{hostname}'. "
+            "Ensure you have permission to list database instances."
+        ) from exc
+
+    # Find the instance that matches this hostname
+    for instance in instances:
+        if instance.read_write_dns == hostname:
+            return instance.name, hostname
+
+    raise ValueError(
+        f"Unable to find database instance matching hostname '{hostname}'. "
+        "Ensure the hostname is correct, the instance exists, and you have the proper "
+        "permissions on the Lakebase instance."
+    )

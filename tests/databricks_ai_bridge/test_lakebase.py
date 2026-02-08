@@ -1056,3 +1056,159 @@ class TestExecuteGrantErrorHandling:
         error_msg = str(exc_info.value)
         assert "Insufficient privileges" in error_msg
         assert "CAN MANAGE" in error_msg
+
+
+# =============================================================================
+# Hostname Resolution Tests
+# =============================================================================
+
+
+def test_is_hostname_detects_database_hostname():
+    """Test that _is_hostname correctly identifies database hostnames."""
+    from databricks_ai_bridge.lakebase import _is_hostname
+
+    # Should be detected as hostnames (pattern: *.database.<region>.*.databricks.com)
+    assert _is_hostname(
+        "instance-f757b615-f2fd-4614-87cc-9ba35f2eeb61.database.staging.cloud.databricks.com"
+    )
+    assert _is_hostname("instance-abc123.database.prod.cloud.databricks.com")
+    assert _is_hostname("my-instance.database.us-west-2.cloud.databricks.com")
+
+    # Should NOT be detected as hostnames (regular instance names)
+    assert not _is_hostname("lakebase")
+    assert not _is_hostname("my-database-instance")
+    assert not _is_hostname("production_db")
+    # Should not match non-databricks domains
+    assert not _is_hostname("my-db.database.example.net")
+
+
+def test_lakebase_pool_accepts_hostname(monkeypatch):
+    """Test that LakebasePool accepts hostname and resolves instance name."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_workspace()
+
+    # Mock list_database_instances to return an instance matching the hostname
+    hostname = "instance-abc123.database.staging.cloud.databricks.com"
+    mock_instance = MagicMock()
+    mock_instance.name = "my-lakebase-instance"
+    mock_instance.read_write_dns = hostname
+    mock_instance.read_only_dns = None
+    workspace.database.list_database_instances.return_value = [mock_instance]
+
+    pool = LakebasePool(
+        instance_name=hostname,  # Pass hostname instead of instance name
+        workspace_client=workspace,
+    )
+
+    # Should have resolved to the instance name
+    assert pool.instance_name == "my-lakebase-instance"
+    assert pool.host == hostname
+
+    # get_database_instance should NOT have been called (we used list instead)
+    workspace.database.get_database_instance.assert_not_called()
+
+
+def test_lakebase_pool_hostname_not_found_raises_error(monkeypatch):
+    """Test that LakebasePool raises error when hostname doesn't match any instance."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_workspace()
+
+    # Mock list_database_instances to return instances that don't match
+    other_instance = MagicMock()
+    other_instance.name = "other-instance"
+    other_instance.read_write_dns = "other-host.database.staging.cloud.databricks.com"
+    other_instance.read_only_dns = None
+    workspace.database.list_database_instances.return_value = [other_instance]
+
+    hostname = "instance-not-found.database.staging.cloud.databricks.com"
+
+    with pytest.raises(ValueError, match="Unable to find database instance matching hostname"):
+        LakebasePool(
+            instance_name=hostname,
+            workspace_client=workspace,
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_lakebase_pool_accepts_hostname(monkeypatch):
+    """Test that AsyncLakebasePool accepts hostname and resolves instance name."""
+    TestAsyncConnectionPool = _make_async_connection_pool_class()
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
+
+    workspace = _make_workspace()
+
+    # Mock list_database_instances to return an instance matching the hostname
+    hostname = "instance-xyz789.database.prod.cloud.databricks.com"
+    mock_instance = MagicMock()
+    mock_instance.name = "prod-lakebase"
+    mock_instance.read_write_dns = hostname
+    mock_instance.read_only_dns = None
+    workspace.database.list_database_instances.return_value = [mock_instance]
+
+    pool = AsyncLakebasePool(
+        instance_name=hostname,  # Pass hostname instead of instance name
+        workspace_client=workspace,
+    )
+
+    # Should have resolved to the instance name
+    assert pool.instance_name == "prod-lakebase"
+    assert pool.host == hostname
+
+
+# =============================================================================
+# Integration Tests for Hostname Resolution
+# =============================================================================
+
+
+@pytest.mark.integration
+def test_lakebase_pool_hostname_resolution_integration():
+    """
+    Integration test: Verify hostname resolution works with real Databricks infrastructure.
+
+    This test requires:
+    - DATABRICKS_HOST and authentication configured
+    - Access to a Lakebase instance in the workspace
+
+    Run with: pytest -m integration tests/databricks_ai_bridge/test_lakebase.py
+    """
+    from databricks.sdk import WorkspaceClient
+
+    from databricks_ai_bridge.lakebase import _is_hostname, _resolve_instance_name_from_hostname
+
+    workspace_client = WorkspaceClient()
+
+    # List all database instances and pick the first one
+    instances = list(workspace_client.database.list_database_instances())
+    if not instances:
+        pytest.skip("No Lakebase instances available in the workspace")
+
+    # Get the first instance with a read_write_dns
+    test_instance = None
+    for instance in instances:
+        if getattr(instance, "read_write_dns", None):
+            test_instance = instance
+            break
+
+    if not test_instance:
+        pytest.skip("No Lakebase instance with read_write_dns found")
+
+    hostname = test_instance.read_write_dns
+    expected_name = test_instance.name
+
+    # Verify hostname detection
+    assert _is_hostname(hostname), f"Expected '{hostname}' to be detected as hostname"
+
+    # Verify resolution
+    resolved_name, resolved_host = _resolve_instance_name_from_hostname(
+        workspace_client, hostname
+    )
+    assert resolved_name == expected_name, (
+        f"Expected instance name '{expected_name}', got '{resolved_name}'"
+    )
+    assert resolved_host == hostname
