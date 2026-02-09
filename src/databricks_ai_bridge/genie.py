@@ -202,13 +202,13 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(a, dict):
             continue
 
-        if "query" in a:
+        if "query" in a and result["query_attachment"] is None:
             result["query_attachment"] = a
 
-        elif "text" in a:
+        elif "text" in a and result["text_attachment"] is None:
             result["text_attachment"] = a
 
-        elif "suggested_questions" in a:
+        elif "suggested_questions" in a and result["suggested_questions_attachment"] is None:
             result["suggested_questions_attachment"] = a
 
 
