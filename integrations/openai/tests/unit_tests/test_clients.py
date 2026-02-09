@@ -227,7 +227,7 @@ class TestDatabricksOpenAIStrictStripping:
                 client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=tools,
+                    tools=cast(Any, tools),
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -252,7 +252,7 @@ class TestDatabricksOpenAIStrictStripping:
                 client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=tools,
+                    tools=cast(Any, tools),
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -302,7 +302,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
                 await client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=tools,
+                    tools=cast(Any, tools),
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -327,7 +327,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
                 await client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=tools,
+                    tools=cast(Any, tools),
                 )
 
                 call_kwargs = mock_create.call_args.kwargs

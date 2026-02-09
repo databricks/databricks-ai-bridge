@@ -1,4 +1,4 @@
-from typing import Generator
+from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
@@ -18,7 +18,7 @@ class BearerAuth(Auth):
         yield request
 
 
-def _strip_strict_from_tools(tools: list | None) -> list | None:
+def _strip_strict_from_tools(tools: Any) -> Any:
     """Remove 'strict' field from tool function definitions.
 
     Databricks model endpoints (except GPT) don't support the 'strict' field

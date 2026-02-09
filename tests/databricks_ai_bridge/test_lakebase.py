@@ -1295,5 +1295,3 @@ def test_async_lakebase_sqlalchemy_invalid_instance_raises():
                 instance_name="bad-instance",
                 workspace_client=workspace,
             )
-
-
