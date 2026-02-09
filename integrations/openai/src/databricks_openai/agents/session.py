@@ -42,11 +42,11 @@ try:
         DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         AsyncLakebaseSQLAlchemy,
     )
-except ImportError as e:
-    raise ImportError(
-        "AsyncDatabricksSession requires databricks-openai[memory]. "
-        "Please install with: pip install databricks-openai[memory]"
-    ) from e
+
+    _session_imports_available = True
+except ImportError:
+    SQLAlchemySession = object  # type: ignore
+    _session_imports_available = False
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,12 @@ class AsyncDatabricksSession(SQLAlchemySession):
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
+        if not _session_imports_available:
+            raise ImportError(
+                "AsyncDatabricksSession requires databricks-openai[memory]. "
+                "Please install with: pip install databricks-openai[memory]"
+            )
+
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             workspace_client=workspace_client,

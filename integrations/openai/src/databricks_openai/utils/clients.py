@@ -24,8 +24,10 @@ def _strip_strict_from_tools(tools: list | None) -> list | None:
     Databricks model endpoints (except GPT) don't support the 'strict' field
     in tool schemas, but openai-agents SDK v0.6.4+ includes it.
     """
-    if tools is None:
-        return None
+    # Handle None or OpenAI's NOT_GIVEN/Omit sentinel types (non-iterable placeholders).
+    # See https://deepwiki.com/openai/openai-python/5-data-types-and-models#special-types-and-sentinels
+    if not tools:
+        return tools
     for tool in tools:
         if isinstance(tool, dict) and "function" in tool:
             tool.get("function", {}).pop("strict", None)

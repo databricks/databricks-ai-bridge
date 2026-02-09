@@ -89,6 +89,12 @@ jobs:
             --exact --group tests --extra memory \
             pytest tests/unit_tests/test_checkpoint.py \
               tests/unit_tests/test_store.py
+      - name: Run databricks-openai Tests
+        working-directory: integrations/openai
+        run: |
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest tests/unit_tests/test_session.py
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest

@@ -128,6 +128,27 @@ class TestStrictFieldStripping:
 
         assert _strip_strict_from_tools(None) is None
 
+    def test_strip_strict_from_tools_handles_openai_not_given_sentinel(self):
+        """OpenAI Agents SDK may pass NOT_GIVEN instead of None or a list."""
+        from openai._types import NOT_GIVEN
+
+        from databricks_openai.utils.clients import _strip_strict_from_tools
+
+        # Should not raise TypeError: 'NotGiven' object is not iterable
+        result = _strip_strict_from_tools(NOT_GIVEN)
+        assert result is NOT_GIVEN
+
+    def test_strip_strict_from_tools_handles_openai_omit_sentinel(self):
+        """OpenAI Agents SDK may pass Omit() instead of None or a list."""
+        from openai._types import Omit
+
+        from databricks_openai.utils.clients import _strip_strict_from_tools
+
+        omit = Omit()
+        # Should not raise TypeError: 'Omit' object is not iterable
+        result = _strip_strict_from_tools(omit)
+        assert result is omit
+
     def test_strip_strict_from_tools_handles_empty_list(self):
         from databricks_openai.utils.clients import _strip_strict_from_tools
 
@@ -206,7 +227,7 @@ class TestDatabricksOpenAIStrictStripping:
                 client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=cast(Any, tools),
+                    tools=tools,
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -231,7 +252,7 @@ class TestDatabricksOpenAIStrictStripping:
                 client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=cast(Any, tools),
+                    tools=tools,
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -281,7 +302,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
                 await client.chat.completions.create(
                     model="databricks-claude-3-7-sonnet",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=cast(Any, tools),
+                    tools=tools,
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
@@ -306,7 +327,7 @@ class TestAsyncDatabricksOpenAIStrictStripping:
                 await client.chat.completions.create(
                     model="databricks-gpt-4o",
                     messages=[{"role": "user", "content": "hi"}],
-                    tools=cast(Any, tools),
+                    tools=tools,
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
