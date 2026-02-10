@@ -9,9 +9,9 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
-from psycopg.rows import DictRow
 
 if TYPE_CHECKING:
+    from psycopg.rows import DictRow
     from sqlalchemy import URL
     from sqlalchemy.ext.asyncio import AsyncEngine
 
