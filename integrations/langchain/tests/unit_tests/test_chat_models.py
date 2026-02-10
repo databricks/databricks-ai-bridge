@@ -40,7 +40,9 @@ from openai.types.responses import (
     ResponseOutputText,
     ResponseReasoningItem,
     ResponseTextDeltaEvent,
+    ResponseUsage,
 )
+from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 from pydantic import BaseModel, Field
 from utils.chat_models import (
     _MOCK_CHAT_RESPONSE,
@@ -665,7 +667,7 @@ def test_convert_message(role: str, expected_output: BaseMessage) -> None:
         message = {"role": role, "content": "foo", "tool_call_id": "call_123"}
     else:
         message = {"role": role, "content": "foo"}
-    result = _convert_dict_to_message(message)
+    result = _convert_dict_to_message(message, None)
     assert result == expected_output
 
     # convert back
@@ -700,7 +702,7 @@ def test_convert_message_with_tool_calls() -> None:
         "tool_calls": tool_calls,
         "id": ID,
     }
-    result = _convert_dict_to_message(message_with_tools)
+    result = _convert_dict_to_message(message_with_tools, None)
     expected_output = AIMessage(
         content="",
         additional_kwargs={"tool_calls": tool_calls},
@@ -729,7 +731,7 @@ def test_convert_tool_message() -> None:
     assert result == expected
 
     # convert back
-    converted_back = _convert_dict_to_message(result)
+    converted_back = _convert_dict_to_message(result, None)
     assert isinstance(converted_back, ToolMessage)
     assert converted_back.content == tool_message.content
     assert converted_back.tool_call_id == tool_message.tool_call_id
@@ -810,24 +812,28 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
 
     result = llm._convert_response_to_chat_result(response)
 
-    expected = ChatResult(
-        generations=[
-            ChatGeneration(
-                message=AIMessage(content=expected_content),
-                generation_info={"finish_reason": "stop"},
-            ),
-        ],
-        llm_output={
-            "usage": _MOCK_CHAT_RESPONSE["usage"],
-            "prompt_tokens": _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"],
-            "completion_tokens": _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"],
-            "total_tokens": _MOCK_CHAT_RESPONSE["usage"]["total_tokens"],
-            "model": _MOCK_CHAT_RESPONSE["model"],
-            "model_name": _MOCK_CHAT_RESPONSE["model"],
-        },
-    )
+    # Verify llm_output structure
+    assert result.llm_output == {
+        "usage": _MOCK_CHAT_RESPONSE["usage"],
+        "prompt_tokens": _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"],
+        "completion_tokens": _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"],
+        "total_tokens": _MOCK_CHAT_RESPONSE["usage"]["total_tokens"],
+        "model": _MOCK_CHAT_RESPONSE["model"],
+        "model_name": _MOCK_CHAT_RESPONSE["model"],
+    }
 
-    assert result == expected
+    # Verify the message content and usage_metadata
+    assert len(result.generations) == 1
+    gen = result.generations[0]
+    assert gen.message.content == expected_content
+    assert gen.generation_info == {"finish_reason": "stop"}
+    # usage_metadata is now populated from usage
+    assert isinstance(gen.message, AIMessage)
+    usage_metadata = gen.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["prompt_tokens"]
+    assert usage_metadata["output_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["completion_tokens"]
+    assert usage_metadata["total_tokens"] == _MOCK_CHAT_RESPONSE["usage"]["total_tokens"]
 
 
 def test_convert_lc_messages_to_responses_api_basic():
@@ -1415,7 +1421,7 @@ def test_convert_dict_to_message_with_non_string_content():
             {"type": "text", "text": "asdf"},
         ],
     }
-    result = _convert_dict_to_message(message_dict)
+    result = _convert_dict_to_message(message_dict, None)
     expected = AIMessage(
         content='[{"type": "reasoning", "summary": [{"type": "summary_text", "text": "asdf"}]}, {"type": "text", "text": "asdf"}]'
     )
@@ -1507,7 +1513,7 @@ def test_convert_dict_to_message_with_custom_outputs():
         "content": "Hello!",
         "custom_outputs": {"confidence": 0.95, "reasoning": "high confidence"},
     }
-    result = _convert_dict_to_message(message_dict)
+    result = _convert_dict_to_message(message_dict, None)
 
     assert isinstance(result, AIMessage)
     assert result.content == "Hello!"
@@ -1517,7 +1523,7 @@ def test_convert_dict_to_message_with_custom_outputs():
 
 def test_convert_dict_to_message_without_custom_outputs():
     message_dict = {"role": "assistant", "content": "Hello!"}
-    result = _convert_dict_to_message(message_dict)
+    result = _convert_dict_to_message(message_dict, None)
 
     assert isinstance(result, AIMessage)
     assert result.content == "Hello!"
@@ -1652,3 +1658,416 @@ def test_invoke_with_custom_inputs_integration():
         call_args = mock_client.chat.completions.create.call_args[1]
         assert "extra_body" in call_args
         assert call_args["extra_body"]["custom_inputs"] == custom_inputs
+
+
+### Test usage metadata conversion functions ###
+
+
+def _create_openai_completion_usage():
+    """Helper to create OpenAI-style CompletionUsage with prompt_tokens_details."""
+    from openai.types.completion_usage import (
+        CompletionTokensDetails,
+        PromptTokensDetails,
+    )
+
+    return CompletionUsage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetails(audio_tokens=10, cached_tokens=20),
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=5, audio_tokens=3),
+    )
+
+
+def _create_claude_completion_usage():
+    """Helper to create Claude-style CompletionUsage with cache tokens."""
+    usage = CompletionUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    usage.cache_read_input_tokens = 30  # type: ignore[attr-defined]
+    usage.cache_creation_input_tokens = 20  # type: ignore[attr-defined]
+    return usage
+
+
+@pytest.mark.parametrize(
+    ("usage_type", "expected"),
+    [
+        (
+            "openai",
+            {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_token_details": {"audio": 10, "cache_read": 20},
+                "output_token_details": {"reasoning": 5, "audio": 3},
+            },
+        ),
+        (
+            "claude",
+            {
+                "input_tokens": 150,  # prompt_tokens + cache_read + cache_creation
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_token_details": {"cache_read": 30, "cache_creation": 20},
+            },
+        ),
+        (
+            "generic",
+            {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+        ),
+    ],
+)
+def test_convert_completion_usage_to_usage_metadata(usage_type, expected):
+    """Test _convert_completion_usage_to_usage_metadata with different model types."""
+    if usage_type == "openai":
+        usage = _create_openai_completion_usage()
+    elif usage_type == "claude":
+        usage = _create_claude_completion_usage()
+    else:
+        usage = CompletionUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    result = ChatDatabricks._convert_completion_usage_to_usage_metadata(usage)
+
+    assert result["input_tokens"] == expected["input_tokens"]
+    assert result["output_tokens"] == expected["output_tokens"]
+    assert result["total_tokens"] == expected["total_tokens"]
+
+    if "input_token_details" in expected:
+        for key, value in expected["input_token_details"].items():
+            assert result["input_token_details"][key] == value
+
+    if "output_token_details" in expected:
+        for key, value in expected["output_token_details"].items():
+            assert result["output_token_details"][key] == value
+
+
+@pytest.mark.parametrize(
+    ("cached_tokens", "reasoning_tokens"),
+    [(25, 10), (0, 0)],
+)
+def test_convert_responses_usage_to_usage_metadata(cached_tokens, reasoning_tokens):
+    """Test _convert_responses_usage_to_usage_metadata with ResponseUsage."""
+    usage = ResponseUsage(
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens),
+    )
+
+    result = ChatDatabricks._convert_responses_usage_to_usage_metadata(usage)
+
+    assert result["input_tokens"] == 100
+    assert result["output_tokens"] == 50
+    assert result["total_tokens"] == 150
+    assert result["input_token_details"]["cache_read"] == cached_tokens
+    assert result["output_token_details"]["reasoning"] == reasoning_tokens
+
+
+def test_convert_responses_usage_to_usage_metadata_with_none_details():
+    """Test _convert_responses_usage_to_usage_metadata handles None token details."""
+    usage = Mock()
+    usage.input_tokens = 100
+    usage.output_tokens = 50
+    usage.total_tokens = 150
+    usage.input_tokens_details = None
+    usage.output_tokens_details = None
+
+    result = ChatDatabricks._convert_responses_usage_to_usage_metadata(usage)
+
+    assert result["input_tokens"] == 100
+    assert result["output_tokens"] == 50
+    assert result["total_tokens"] == 150
+    assert result.get("input_token_details") is None
+    assert result.get("output_token_details") is None
+
+
+### Test usage extraction methods ###
+
+
+@pytest.mark.parametrize(
+    ("has_usage", "stream_usage", "is_completion_usage", "expect_result"),
+    [
+        (True, True, True, True),  # Returns CompletionUsage
+        (True, True, False, True),  # Returns dict
+        (True, False, True, False),  # stream_usage=False returns None
+        (False, True, True, False),  # No usage returns None
+    ],
+)
+def test_extract_completion_usage_from_chunk(
+    has_usage, stream_usage, is_completion_usage, expect_result
+):
+    """Test _extract_completion_usage_from_chunk with various scenarios."""
+    llm = ChatDatabricks(model="test-model")
+    chunk = Mock()
+
+    if has_usage:
+        if is_completion_usage:
+            chunk.usage = CompletionUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        else:
+            mock_usage = Mock()
+            mock_usage.prompt_tokens = 100
+            mock_usage.completion_tokens = 50
+            chunk.usage = mock_usage
+    else:
+        chunk.usage = None
+
+    result = llm._extract_completion_usage_from_chunk(chunk, stream_usage=stream_usage)
+
+    if expect_result:
+        assert result is not None
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("stream_usage", [True, False])
+def test_extract_response_usage_from_chunk(stream_usage):
+    """Test _extract_response_usage_from_chunk with different stream_usage values."""
+    llm = ChatDatabricks(model="test-model")
+
+    usage = ResponseUsage(
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        input_tokens_details=InputTokensDetails(cached_tokens=25),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
+    )
+    response = Mock()
+    response.usage = usage
+    chunk = Mock()
+    chunk.response = response
+
+    result = llm._extract_response_usage_from_chunk(chunk, stream_usage=stream_usage)
+
+    if stream_usage:
+        assert result == usage
+    else:
+        assert result is None
+
+
+### Test usage chunk builder methods ###
+
+
+@pytest.mark.parametrize("use_completion_usage", [True, False])
+def test_build_usage_chunk_from_completions(use_completion_usage):
+    """Test _build_usage_chunk_from_completions with CompletionUsage or dict."""
+    llm = ChatDatabricks(model="test-model")
+
+    if use_completion_usage:
+        usage = _create_openai_completion_usage()
+    else:
+        usage = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+
+    result = llm._build_usage_chunk_from_completions(usage)
+
+    assert isinstance(result.message, AIMessageChunk)
+    assert result.message.content == ""
+    usage_metadata = result.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == 100
+    assert usage_metadata["output_tokens"] == 50
+    assert usage_metadata["total_tokens"] == 150
+
+
+@pytest.mark.parametrize("use_response_usage", [True, False])
+def test_build_usage_chunk_from_responses(use_response_usage):
+    """Test _build_usage_chunk_from_responses with ResponseUsage or dict."""
+    llm = ChatDatabricks(model="test-model")
+
+    if use_response_usage:
+        usage = ResponseUsage(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=InputTokensDetails(cached_tokens=25),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
+        )
+    else:
+        usage = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+
+    result = llm._build_usage_chunk_from_responses(usage)
+
+    assert isinstance(result.message, AIMessageChunk)
+    assert result.message.content == ""
+    usage_metadata = result.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata["input_tokens"] == 100
+    assert usage_metadata["output_tokens"] == 50
+    assert usage_metadata["total_tokens"] == 150
+
+
+### Test _convert_dict_to_message with usage ###
+
+
+def test_convert_dict_to_message_with_usage():
+    """Test _convert_dict_to_message includes usage_metadata when usage is provided."""
+    usage = _create_openai_completion_usage()
+    message_dict = {"role": "assistant", "content": "Hello!"}
+    result = _convert_dict_to_message(message_dict, usage)
+
+    assert isinstance(result, AIMessage)
+    assert result.content == "Hello!"
+    assert result.usage_metadata is not None
+    assert result.usage_metadata["input_tokens"] == 100
+    assert result.usage_metadata["output_tokens"] == 50
+    assert result.usage_metadata["input_token_details"]["cache_read"] == 20
+
+
+def test_convert_dict_to_message_chunk_with_completion_usage():
+    """Test _convert_dict_to_message_chunk includes usage_metadata when CompletionUsage is provided."""
+    usage = _create_openai_completion_usage()
+    chunk_dict = {"role": "assistant", "content": "Hello"}
+    result = _convert_dict_to_message_chunk(chunk_dict, "assistant", usage)
+
+    assert isinstance(result, AIMessageChunk)
+    assert result.content == "Hello"
+    assert result.usage_metadata is not None
+    assert result.usage_metadata["input_tokens"] == 100
+    assert result.usage_metadata["output_tokens"] == 50
+    assert result.usage_metadata["input_token_details"]["cache_read"] == 20
+
+
+### Test invoke with usage metadata ###
+
+
+@pytest.mark.parametrize("usage_type", ["openai", "claude"])
+def test_chat_databricks_invoke_returns_usage_metadata(usage_type):
+    """Test that invoke returns AIMessage with usage_metadata populated for different model types."""
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Hello!",
+        }
+        mock_response.choices[0].finish_reason = "stop"
+
+        if usage_type == "openai":
+            mock_response.usage = _create_openai_completion_usage()
+            mock_response.model = "test-model"
+            expected_input_tokens = 100
+            expected_cache_read = 20
+        else:
+            mock_response.usage = _create_claude_completion_usage()
+            mock_response.model = "databricks-claude-3-7-sonnet"
+            expected_input_tokens = 150  # 100 + 30 + 20
+            expected_cache_read = 30
+
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = ChatDatabricks(model=mock_response.model)
+        result = llm.invoke([HumanMessage(content="Hello")])
+
+        assert isinstance(result, AIMessage)
+        assert result.usage_metadata is not None
+        assert result.usage_metadata["input_tokens"] == expected_input_tokens
+        assert result.usage_metadata["output_tokens"] == 50
+        assert result.usage_metadata["input_token_details"]["cache_read"] == expected_cache_read
+
+
+def test_chat_databricks_stream_with_detailed_usage_metadata():
+    """Test streaming with stream_usage=True includes detailed usage metadata."""
+    from openai.types.completion_usage import (
+        CompletionTokensDetails,
+        PromptTokensDetails,
+    )
+
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        # Mock streaming response with usage in final chunk
+        mock_chunk1 = Mock()
+        mock_chunk1.choices = [Mock()]
+        mock_chunk1.choices[0].delta.model_dump.return_value = {
+            "role": "assistant",
+            "content": "Hello",
+        }
+        mock_chunk1.choices[0].finish_reason = None
+        mock_chunk1.choices[0].logprobs = None
+        mock_chunk1.usage = None
+
+        mock_chunk2 = Mock()
+        mock_chunk2.choices = [Mock()]
+        mock_chunk2.choices[0].delta.model_dump.return_value = {
+            "role": "assistant",
+            "content": " world",
+        }
+        mock_chunk2.choices[0].finish_reason = "stop"
+        mock_chunk2.choices[0].logprobs = None
+        mock_chunk2.usage = CompletionUsage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetails(
+                audio_tokens=0,
+                cached_tokens=80,
+            ),
+            completion_tokens_details=CompletionTokensDetails(
+                reasoning_tokens=10,
+                audio_tokens=0,
+            ),
+        )
+
+        mock_client.chat.completions.create.return_value = iter([mock_chunk1, mock_chunk2])
+
+        llm = ChatDatabricks(model="test-model")
+        chunks = list(llm.stream([HumanMessage(content="Hello")], stream_usage=True))
+
+        # Find usage chunk
+        usage_chunks = [
+            chunk for chunk in chunks if chunk.content == "" and chunk.usage_metadata is not None
+        ]
+        assert len(usage_chunks) == 1
+
+        usage_chunk = usage_chunks[0]
+        usage_metadata = usage_chunk.usage_metadata
+        assert usage_metadata is not None
+        assert usage_metadata["input_tokens"] == 100
+        assert usage_metadata["output_tokens"] == 50
+        assert usage_metadata["total_tokens"] == 150
+        assert usage_metadata["input_token_details"]["cache_read"] == 80
+        assert usage_metadata["output_token_details"]["reasoning"] == 10
+
+
+def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
+    """Test that responses API invoke returns AIMessage with usage_metadata."""
+    with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        # Mock responses API response with usage
+        mock_response = Response.model_construct(
+            id="response_123",
+            output=[
+                ResponseOutputMessage.model_construct(
+                    type="message",
+                    content=[
+                        ResponseOutputText.model_construct(
+                            type="output_text", text="Hello!", id="text_123"
+                        )
+                    ],
+                )
+            ],
+            usage=ResponseUsage(
+                input_tokens=100,
+                output_tokens=50,
+                total_tokens=150,
+                input_tokens_details=InputTokensDetails(cached_tokens=25),
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
+            ),
+        )
+        mock_client.responses.create.return_value = mock_response
+
+        llm = ChatDatabricks(model="test-model", use_responses_api=True)
+        result = llm.invoke([HumanMessage(content="Hello")])
+
+        assert isinstance(result, AIMessage)
+        usage_metadata = result.usage_metadata
+        assert usage_metadata is not None
+        assert usage_metadata["input_tokens"] == 100
+        assert usage_metadata["output_tokens"] == 50
+        assert usage_metadata["total_tokens"] == 150
+        assert usage_metadata["input_token_details"]["cache_read"] == 25
+        assert usage_metadata["output_token_details"]["reasoning"] == 10
