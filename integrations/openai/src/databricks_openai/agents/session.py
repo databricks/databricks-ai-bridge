@@ -178,9 +178,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
         """Get cached AsyncLakebaseSQLAlchemy or create a new one.
         The cache key uses both instance_name and engine_kwargs
         """
-        cache_key = cls._build_cache_key(
-            instance_name, pool_recycle=pool_recycle, **engine_kwargs
-        )
+        cache_key = cls._build_cache_key(instance_name, pool_recycle=pool_recycle, **engine_kwargs)
 
         if use_cached_engine:
             with cls._lakebase_sql_alchemy_cache_lock:
