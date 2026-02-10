@@ -1,7 +1,7 @@
 """
 AsyncDatabricksSession - Async SQLAlchemy-based session storage for Databricks Lakebase.
 
-This module provides a AsyncDatabricksSession class that subclasses OpenAI's SQLAlchemySession
+This module provides an AsyncDatabricksSession class that subclasses OpenAI's SQLAlchemySession
 to provide persistent conversation history storage in Databricks Lakebase.
 
 Note:
@@ -30,9 +30,10 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from agents.extensions.memory import SQLAlchemySession
@@ -85,8 +86,9 @@ class AsyncDatabricksSession(SQLAlchemySession):
         ```
     """
 
-    # Class-level cache for AsyncLakebaseSQLAlchemy instances, keyed by instance_name.
-    # This allows multiple AsyncDatabricksSession instances to share a single engine/pool.
+    # Class-level cache for AsyncLakebaseSQLAlchemy instances keyed by
+    # (instance_name, engine_kwargs).  This allows multiple sessions to share
+    # a single engine/connection pool when the configuration is identical.
     _lakebase_sql_alchemy_cache: dict[str, AsyncLakebaseSQLAlchemy] = {}
     _lakebase_sql_alchemy_cache_lock = Lock()
 
@@ -100,10 +102,11 @@ class AsyncDatabricksSession(SQLAlchemySession):
         create_tables: bool = True,
         sessions_table: str = "agent_sessions",
         messages_table: str = "agent_messages",
+        use_cached_engine: bool = True,
         **engine_kwargs,
     ) -> None:
         """
-        Initialize a AsyncDatabricksSession for Databricks Lakebase.
+        Initialize an AsyncDatabricksSession for Databricks Lakebase.
 
         Args:
             session_id: Unique identifier for the conversation session.
@@ -118,6 +121,9 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 Defaults to "agent_sessions".
             messages_table: Name of the messages table.
                 Defaults to "agent_messages".
+            use_cached_engine: Whether to reuse a cached engine for the same
+                instance_name and engine_kwargs combination. Set to False to
+                always create a new engine. Defaults to True.
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
@@ -132,6 +138,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=engine_kwargs.pop("pool_recycle", DEFAULT_POOL_RECYCLE_SECONDS),
+            use_cached_engine=use_cached_engine,
             **engine_kwargs,
         )
 
@@ -151,6 +158,13 @@ class AsyncDatabricksSession(SQLAlchemySession):
         )
 
     @classmethod
+    def _build_cache_key(cls, instance_name: str, **engine_kwargs: Any) -> str:
+        """Build a cache key from instance_name and engine_kwargs."""
+        # Sort kwargs for deterministic key; use JSON for serializable values
+        kwargs_key = json.dumps(engine_kwargs, sort_keys=True, default=str)
+        return f"{instance_name}::{kwargs_key}"
+
+    @classmethod
     def _get_or_create_lakebase(
         cls,
         *,
@@ -158,20 +172,32 @@ class AsyncDatabricksSession(SQLAlchemySession):
         workspace_client: Optional[WorkspaceClient],
         token_cache_duration_seconds: int,
         pool_recycle: int,
+        use_cached_engine: bool = True,
         **engine_kwargs,
     ) -> AsyncLakebaseSQLAlchemy:
-        """Get cached AsyncLakebaseSQLAlchemy or create a new one (thread-safe)."""
-        with cls._lakebase_sql_alchemy_cache_lock:
-            if instance_name in cls._lakebase_sql_alchemy_cache:
-                logger.debug("Reusing cached engine for instance=%s", instance_name)
-                return cls._lakebase_sql_alchemy_cache[instance_name]
+        """Get cached AsyncLakebaseSQLAlchemy or create a new one.
+        The cache key uses both instance_name and engine_kwargs
+        """
+        cache_key = cls._build_cache_key(
+            instance_name, pool_recycle=pool_recycle, **engine_kwargs
+        )
 
-            lakebase = AsyncLakebaseSQLAlchemy(
-                instance_name=instance_name,
-                workspace_client=workspace_client,
-                token_cache_duration_seconds=token_cache_duration_seconds,
-                pool_recycle=pool_recycle,
-                **engine_kwargs,
-            )
-            cls._lakebase_sql_alchemy_cache[instance_name] = lakebase
-            return lakebase
+        if use_cached_engine:
+            with cls._lakebase_sql_alchemy_cache_lock:
+                if cache_key in cls._lakebase_sql_alchemy_cache:
+                    logger.debug("Reusing cached engine for key=%s", cache_key)
+                    return cls._lakebase_sql_alchemy_cache[cache_key]
+
+        lakebase = AsyncLakebaseSQLAlchemy(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            token_cache_duration_seconds=token_cache_duration_seconds,
+            pool_recycle=pool_recycle,
+            **engine_kwargs,
+        )
+
+        if use_cached_engine:
+            with cls._lakebase_sql_alchemy_cache_lock:
+                cls._lakebase_sql_alchemy_cache[cache_key] = lakebase
+
+        return lakebase

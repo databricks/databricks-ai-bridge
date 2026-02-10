@@ -623,6 +623,139 @@ class TestAsyncDatabricksSessionEngineCaching:
             # Sessions should have different engines
             assert session1._engine is not session2._engine
 
+    def test_different_engine_kwargs_get_different_engines(
+        self, mock_workspace_client, mock_event_listens_for
+    ):
+        """Test that same instance_name with different engine_kwargs get different engines."""
+        engine1 = MagicMock()
+        engine1.sync_engine = MagicMock()
+        engine2 = MagicMock()
+        engine2.sync_engine = MagicMock()
+
+        engines = [engine1, engine2]
+        engine_iter = iter(engines)
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=lambda *args, **kwargs: next(engine_iter),
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                echo=False,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                echo=True,
+            )
+
+            # Engine should be created twice (different engine_kwargs)
+            assert mock_create_engine.call_count == 2
+
+            # Sessions should have different engines
+            assert session1._engine is not session2._engine
+
+    def test_use_cached_engine_false_creates_new_engine(
+        self, mock_workspace_client, mock_event_listens_for
+    ):
+        """Test that use_cached_engine=False always creates a new engine."""
+        engine1 = MagicMock()
+        engine1.sync_engine = MagicMock()
+        engine2 = MagicMock()
+        engine2.sync_engine = MagicMock()
+
+        engines = [engine1, engine2]
+        engine_iter = iter(engines)
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=lambda *args, **kwargs: next(engine_iter),
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                use_cached_engine=False,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                use_cached_engine=False,
+            )
+
+            # Engine should be created twice despite same instance_name
+            assert mock_create_engine.call_count == 2
+
+            # Sessions should have different engines
+            assert session1._engine is not session2._engine
+
+    def test_same_instance_and_kwargs_share_engine(
+        self, mock_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that same instance_name with same engine_kwargs reuse the cached engine."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                echo=True,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                echo=True,
+            )
+
+            # Engine should only be created once
+            assert mock_create_engine.call_count == 1
+
+            # Both sessions should share the same engine
+            assert session1._engine is session2._engine
+
 
 class TestAsyncDatabricksSessionAsyncOnly:
     """Tests verifying AsyncDatabricksSession is async-only."""
