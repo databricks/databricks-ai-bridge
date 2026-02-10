@@ -12,6 +12,7 @@ pytest.importorskip("psycopg_pool")
 import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import (
     AsyncLakebasePool,
+    AsyncLakebaseSQLAlchemy,
     LakebaseClient,
     LakebasePool,
     SchemaPrivilege,
@@ -83,7 +84,7 @@ def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         )
 
     assert any(
-        record.levelno == logging.INFO and re.search(r"cache=3000s$", record.getMessage())
+        record.levelno == logging.INFO and re.search(r"cache=900s$", record.getMessage())
         for record in caplog.records
     )
 
@@ -255,7 +256,7 @@ async def test_async_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
         )
 
     assert any(
-        record.levelno == logging.INFO and re.search(r"cache=3000s$", record.getMessage())
+        record.levelno == logging.INFO and re.search(r"cache=900s$", record.getMessage())
         for record in caplog.records
     )
 
@@ -1056,3 +1057,241 @@ class TestExecuteGrantErrorHandling:
         error_msg = str(exc_info.value)
         assert "Insufficient privileges" in error_msg
         assert "CAN MANAGE" in error_msg
+
+
+# =============================================================================
+# AsyncLakebaseSQLAlchemy Tests
+# =============================================================================
+
+pytest.importorskip("sqlalchemy")
+
+
+def _make_sqlalchemy_patches(workspace):
+    """Return a context manager that patches SQLAlchemy internals for AsyncLakebaseSQLAlchemy."""
+    from unittest.mock import patch
+
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    return (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            return_value=mock_engine,
+        ),
+        patch(
+            "sqlalchemy.event.listens_for",
+            return_value=lambda f: f,
+        ),
+        mock_engine,
+    )
+
+
+def test_async_lakebase_sqlalchemy_resolves_host():
+    """Test that AsyncLakebaseSQLAlchemy resolves the Lakebase host from instance name."""
+    workspace = _make_workspace()
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    assert sa.host == "db.host"
+    workspace.database.get_database_instance.assert_called_once_with("lake-instance")
+
+
+def test_async_lakebase_sqlalchemy_infers_username():
+    """Test that AsyncLakebaseSQLAlchemy infers the username from workspace client."""
+    workspace = _make_workspace(user_name="alice@databricks.com")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    assert sa.username == "alice@databricks.com"
+
+
+def test_async_lakebase_sqlalchemy_engine_property():
+    """Test that engine property returns the created AsyncEngine."""
+    workspace = _make_workspace()
+    patch_engine, patch_event, mock_engine = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    assert sa.engine is mock_engine
+
+
+def test_async_lakebase_sqlalchemy_creates_engine_with_correct_url():
+    """Test that the engine is created with the correct SQLAlchemy URL."""
+    from unittest.mock import patch
+
+    workspace = _make_workspace()
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            return_value=mock_engine,
+        ) as mock_create,
+        patch(
+            "sqlalchemy.event.listens_for",
+            return_value=lambda f: f,
+        ),
+    ):
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    url = mock_create.call_args[0][0]
+    assert url.drivername == "postgresql+psycopg"
+    assert url.username == "test@databricks.com"
+    assert url.host == "db.host"
+    assert url.port == 5432
+    assert url.database == "databricks_postgres"
+
+
+def test_async_lakebase_sqlalchemy_passes_extra_engine_kwargs():
+    """Test that additional kwargs are forwarded to create_async_engine."""
+    from unittest.mock import patch
+
+    workspace = _make_workspace()
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            return_value=mock_engine,
+        ) as mock_create,
+        patch(
+            "sqlalchemy.event.listens_for",
+            return_value=lambda f: f,
+        ),
+    ):
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+            echo=True,
+            pool_pre_ping=True,
+        )
+
+    call_kwargs = mock_create.call_args[1]
+    assert call_kwargs["echo"] is True
+    assert call_kwargs["pool_pre_ping"] is True
+
+
+def test_async_lakebase_sqlalchemy_do_connect_injects_token():
+    """Test that the do_connect handler injects the OAuth token into cparams."""
+    from unittest.mock import patch
+
+    workspace = _make_workspace(credential_token="my-secret-token")
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    captured_handler = None
+
+    def capture_handler(engine, event_name):
+        def decorator(fn):
+            nonlocal captured_handler
+            captured_handler = fn
+            return fn
+
+        return decorator
+
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            return_value=mock_engine,
+        ),
+        patch(
+            "sqlalchemy.event.listens_for",
+            side_effect=capture_handler,
+        ),
+    ):
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    assert captured_handler is not None
+    cparams = {}
+    captured_handler(None, None, None, cparams)
+    assert cparams["password"] == "my-secret-token"
+
+
+def test_async_lakebase_sqlalchemy_get_token_caches():
+    """Test that get_token returns cached token on repeated calls."""
+    workspace = _make_workspace()
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    token1 = sa.get_token()
+    token2 = sa.get_token()
+
+    assert token1 == token2 == "token-1"
+    assert workspace.database.generate_database_credential.call_count == 1
+
+
+def test_async_lakebase_sqlalchemy_get_token_refreshes_after_expiry(monkeypatch):
+    """Test that get_token mints a new token after cache expiry."""
+    import time
+
+    call_count = []
+
+    def mock_generate_credential(**kwargs):
+        call_count.append(1)
+        return MagicMock(token=f"token-{len(call_count)}")
+
+    workspace = _make_workspace()
+    workspace.database.generate_database_credential = mock_generate_credential
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+            token_cache_duration_seconds=1,
+        )
+
+    test_time = [100.0]
+    monkeypatch.setattr(time, "time", lambda: test_time[0])
+
+    token1 = sa.get_token()
+    assert token1 == "token-1"
+
+    # Within cache window
+    test_time[0] = 100.5
+    token2 = sa.get_token()
+    assert token2 == "token-1"
+    assert len(call_count) == 1
+
+    # After cache expiry
+    test_time[0] = 101.5
+    token3 = sa.get_token()
+    assert token3 == "token-2"
+    assert len(call_count) == 2
+
+
+def test_async_lakebase_sqlalchemy_invalid_instance_raises():
+    """Test that an invalid instance name raises ValueError."""
+    workspace = _make_workspace()
+    workspace.database.get_database_instance.side_effect = Exception("Not found")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        with pytest.raises(ValueError, match="Unable to resolve Lakebase instance"):
+            AsyncLakebaseSQLAlchemy(
+                instance_name="bad-instance",
+                workspace_client=workspace,
+            )

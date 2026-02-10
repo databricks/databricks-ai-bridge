@@ -6,10 +6,14 @@ import time
 import uuid
 from enum import Enum
 from threading import Lock
-from typing import Any, List, Literal, Optional, Sequence
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
 from psycopg.rows import DictRow
+
+if TYPE_CHECKING:
+    from sqlalchemy import URL
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 try:
     import psycopg
@@ -24,12 +28,16 @@ except ImportError as e:
 
 __all__ = [
     "AsyncLakebasePool",
+    "AsyncLakebaseSQLAlchemy",
     "LakebasePool",
 ]
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOKEN_CACHE_DURATION_SECONDS = 50 * 60  # Cache token for 50 minutes
+# Token cache duration based on Databricks Lakebase docs (15 minutes)
+# https://docs.databricks.com/aws/en/oltp/projects/authentication?language=Python%3A+SQLAlchemy
+DEFAULT_TOKEN_CACHE_DURATION_SECONDS = 15 * 60  # 15 minutes (900 seconds)
+DEFAULT_POOL_RECYCLE_SECONDS = 14 * 60  # 14 minutes (before token cache expires)
 DEFAULT_MIN_SIZE = 1
 DEFAULT_MAX_SIZE = 10
 DEFAULT_TIMEOUT = 30.0
@@ -81,12 +89,12 @@ class SequencePrivilege(str, Enum):
     ALL = "ALL"  # Renders as ALL PRIVILEGES
 
 
-class _LakebasePoolBase:
+class _LakebaseBase:
     """
-    Base logic for Lakebase connection pools: resolve host, infer username,
+    Base class for Lakebase connections: resolve host, infer username,
     token cache + minting, and conninfo building.
 
-    Subclasses implement pool-specific initialization and lifecycle methods.
+    Subclasses implement specific initialization and lifecycle methods.
     """
 
     def __init__(
@@ -168,7 +176,7 @@ class _LakebasePoolBase:
         raise ValueError("Unable to infer username for Lakebase connection.")
 
 
-class LakebasePool(_LakebasePoolBase):
+class LakebasePool(_LakebaseBase):
     """Sync Lakebase connection pool built on psycopg with rotating credentials.
 
     instance_name: Name of Lakebase Instance
@@ -262,7 +270,7 @@ class LakebasePool(_LakebasePoolBase):
         self._pool.close()
 
 
-class AsyncLakebasePool(_LakebasePoolBase):
+class AsyncLakebasePool(_LakebaseBase):
     """Async Lakebase connection pool built on psycopg with rotating credentials.
 
     instance_name: Name of Lakebase Instance
@@ -869,3 +877,129 @@ class LakebaseClient:
                 schema,
                 grantee,
             )
+
+
+# =============================================================================
+# AsyncLakebaseSQLAlchemy - SQLAlchemy async engine factory
+# =============================================================================
+
+
+class AsyncLakebaseSQLAlchemy(_LakebaseBase):
+    """Async SQLAlchemy engine factory for Databricks Lakebase.
+
+    Provides an AsyncEngine with automatic OAuth token injection via
+    SQLAlchemy's do_connect event. Tokens are cached and refreshed
+    every 15 minutes.
+
+    Note:
+        This class is **async-only**. The engine uses SQLAlchemy's
+        async extension with the psycopg driver.
+
+    Reference:
+        https://docs.databricks.com/aws/en/oltp/instances/authentication
+
+    Example:
+        ```python
+        from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
+
+        # Create once and reuse the engine
+        lakebase = AsyncLakebaseSQLAlchemy(instance_name="my-lakebase")
+
+        async with lakebase.engine.connect() as conn:
+            result = await conn.execute(text("SELECT 1"))
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        instance_name: str,
+        workspace_client: WorkspaceClient | None = None,
+        token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
+        **engine_kwargs,
+    ) -> None:
+        """
+        Initialize AsyncLakebaseSQLAlchemy for Databricks Lakebase.
+
+        Args:
+            instance_name: Name of the Lakebase instance.
+            workspace_client: Optional WorkspaceClient for authentication.
+                If not provided, a default client will be created.
+            token_cache_duration_seconds: How long to cache OAuth tokens.
+                Defaults to 15 minutes.
+            pool_recycle: Connection pool recycle time in seconds.
+                Defaults to 14 minutes (before token cache expires).
+            **engine_kwargs: Additional keyword arguments passed to
+                SQLAlchemy's create_async_engine().
+        """
+        super().__init__(
+            instance_name=instance_name,
+            workspace_client=workspace_client,
+            token_cache_duration_seconds=token_cache_duration_seconds,
+        )
+
+        # Thread-safe lock for token caching (do_connect is sync context)
+        self._cache_lock = Lock()
+        self._pool_recycle = pool_recycle
+        self._engine = self._create_engine(**engine_kwargs)
+
+        logger.info(
+            "AsyncLakebaseSQLAlchemy initialized: instance=%s host=%s",
+            instance_name,
+            self.host,
+        )
+
+    @property
+    def engine(self) -> "AsyncEngine":
+        """The SQLAlchemy AsyncEngine."""
+        return self._engine
+
+    def get_token(self) -> str:
+        """Get cached token or mint a new one (thread-safe)."""
+        with self._cache_lock:
+            if cached := self._get_cached_token():
+                return cached
+            token = self._mint_token()
+            self._cached_token = token
+            self._cache_ts = time.time()
+            return token
+
+    def _create_url(self) -> "URL":
+        """Create SQLAlchemy URL for Lakebase connection."""
+        from sqlalchemy import URL
+
+        # Create engine without password - token injected via event listener
+        # Note: empty password in URL, actual token provided on connect
+        return URL.create(
+            drivername="postgresql+psycopg",
+            username=self.username,
+            host=self.host,
+            port=DEFAULT_PORT,
+            database=DEFAULT_DATABASE,
+        )
+
+    def _create_engine(self, **engine_kwargs) -> "AsyncEngine":
+        """Create AsyncEngine with do_connect event for token injection."""
+        from sqlalchemy import event
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        url = self._create_url()
+
+        engine: AsyncEngine = create_async_engine(
+            url,
+            pool_recycle=self._pool_recycle,
+            connect_args={"sslmode": DEFAULT_SSLMODE},
+            **engine_kwargs,
+        )
+
+        # AsyncEngine wraps a sync Engine internally - connection events like
+        # do_connect must be registered on sync_engine, not the async wrapper.
+        # https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension
+        # Lakebase docs https://docs.databricks.com/aws/en/oltp/projects/authentication?language=Python%3A+SQLAlchemy
+        @event.listens_for(engine.sync_engine, "do_connect")
+        def inject_token(dialect, conn_rec, cargs, cparams):
+            cparams["password"] = self.get_token()
+            logger.debug("Injected Lakebase token for connection")
+
+        return engine
