@@ -11,14 +11,13 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence
 from databricks.sdk import WorkspaceClient
 
 if TYPE_CHECKING:
-    from psycopg.rows import DictRow
     from sqlalchemy import URL
     from sqlalchemy.ext.asyncio import AsyncEngine
 
 try:
     import psycopg
     from psycopg import sql
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
 except ImportError as e:
     raise ImportError(
