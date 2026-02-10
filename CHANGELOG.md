@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.14.0 databricks-langchain 0.15.0 databricks-openai 0.11.0 databricks-mcp 0.8.0 (2026-02-09)
+
+### New Features
+- databricks-ai-bridge: Added `AsyncLakebaseSQLAlchemy` class for SQLAlchemy async engine with automatic OAuth token rotation
+- databricks-openai: Added `AsyncDatabricksSession` class supporting Session Protocol for stateful conversation management
+- databricks-openai: Added support for querying Databricks apps via OpenAI client
+- databricks-langchain: Added async support for `similarity_search_by_vector_with_score`
+- databricks-langchain: Added async support to `ChatDatabricks`
+
+### Improvements
+- Updated Lakebase token cache duration to 15 minutes per Databricks documentation
+
+### Testing & Infrastructure
+- Added pytest coverage reporting to CI
+
 ## databricks-ai-bridge 0.13.0 databricks-langchain 0.14.0 databricks-openai 0.10.0 databricks-mcp 0.7.0 (2026-01-28)
 
 - Lakebase Permission Granting SDK
