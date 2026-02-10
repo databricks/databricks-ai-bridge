@@ -589,6 +589,7 @@ class ChatDatabricks(BaseChatModel):
             message.custom_outputs = response.custom_outputs  # ty:ignore[unresolved-attribute]
         return ChatResult(generations=[ChatGeneration(message=message)])
 
+    @staticmethod
     def _convert_completion_usage_to_usage_metadata(usage: CompletionUsage) -> UsageMetadata:
         if usage.prompt_tokens_details is not None:
             # Most likely an OpenAI Model
@@ -639,17 +640,26 @@ class ChatDatabricks(BaseChatModel):
                 total_tokens=usage.total_tokens or 0,
             )
 
+    @staticmethod
     def _convert_responses_usage_to_usage_metadata(usage: ResponseUsage) -> UsageMetadata:
+        input_token_details = None
+        if usage.input_tokens_details is not None:
+            input_token_details = InputTokenDetails(
+                cache_read=usage.input_tokens_details.cached_tokens or 0,
+            )
+
+        output_token_details = None
+        if usage.output_tokens_details is not None:
+            output_token_details = OutputTokenDetails(
+                reasoning=usage.output_tokens_details.reasoning_tokens or 0,
+            )
+
         return UsageMetadata(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             total_tokens=usage.total_tokens,
-            input_token_details=InputTokenDetails(
-                cache_read=usage.input_tokens_details.cached_tokens or 0,
-            ),
-            output_token_details=OutputTokenDetails(
-                reasoning=usage.output_tokens_details.reasoning_tokens or 0,
-            ),
+            input_token_details=input_token_details,
+            output_token_details=output_token_details,
         )
 
     def _convert_response_to_chat_result(self, response: ChatCompletion) -> ChatResult:

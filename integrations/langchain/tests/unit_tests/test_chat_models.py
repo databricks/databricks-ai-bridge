@@ -1762,6 +1762,24 @@ def test_convert_responses_usage_to_usage_metadata(cached_tokens, reasoning_toke
     assert result["output_token_details"]["reasoning"] == reasoning_tokens
 
 
+def test_convert_responses_usage_to_usage_metadata_with_none_details():
+    """Test _convert_responses_usage_to_usage_metadata handles None token details."""
+    usage = Mock()
+    usage.input_tokens = 100
+    usage.output_tokens = 50
+    usage.total_tokens = 150
+    usage.input_tokens_details = None
+    usage.output_tokens_details = None
+
+    result = ChatDatabricks._convert_responses_usage_to_usage_metadata(usage)
+
+    assert result["input_tokens"] == 100
+    assert result["output_tokens"] == 50
+    assert result["total_tokens"] == 150
+    assert result.get("input_token_details") is None
+    assert result.get("output_token_details") is None
+
+
 ### Test usage extraction methods ###
 
 
