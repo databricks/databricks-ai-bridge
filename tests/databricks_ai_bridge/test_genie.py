@@ -829,261 +829,91 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
         assert result.result == "Success"
 
 
-# Tests for _parse_attachments
-def test_parse_attachments_with_all_attachment_types():
-    """Test parsing response with all three types of attachments."""
-    resp = {
-        "attachments": [
+
+# Parametrized tests for _parse_attachments
+@pytest.mark.parametrize("resp,exp_query,exp_text,exp_questions", [
+    # All three attachment types
+    (
+        {"attachments": [
             {"attachment_id": "1", "query": {"query": "SELECT *", "description": "Test"}},
             {"attachment_id": "2", "text": {"content": "Summary text"}},
-            {
-                "attachment_id": "3",
-                "suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]},
-            },
-        ]
-    }
+            {"attachment_id": "3", "suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]}}
+        ]},
+        {"attachment_id": "1", "query": {"query": "SELECT *", "description": "Test"}},
+        {"attachment_id": "2", "text": {"content": "Summary text"}},
+        {"attachment_id": "3", "suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]}}
+    ),
+    # Only query
+    ({"attachments": [{"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Desc"}}]},
+     {"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Desc"}}, None, None),
+    # Only text
+    ({"attachments": [{"attachment_id": "2", "text": {"content": "Text only"}}]},
+     None, {"attachment_id": "2", "text": {"content": "Text only"}}, None),
+    # Only suggested questions
+    ({"attachments": [{"attachment_id": "3", "suggested_questions": {"questions": ["Question?"]}}]},
+     None, None, {"attachment_id": "3", "suggested_questions": {"questions": ["Question?"]}}),
+    # Edge cases - all return None for all fields
+    ({"attachments": []}, None, None, None),
+    ({}, None, None, None),
+    ({"attachments": None}, None, None, None),
+    ({"attachments": "not a list"}, None, None, None),
+    # Invalid items - only valid dict is parsed
+    ({"attachments": ["string", 123, None, {"query": {"query": "SELECT 1"}}]},
+     {"query": {"query": "SELECT 1"}}, None, None),
+])
+def test_parse_attachments(resp, exp_query, exp_text, exp_questions):
+    """Test parsing attachments with various input scenarios."""
     result = _parse_attachments(resp)
-    assert result["query_attachment"] is not None
-    assert result["query_attachment"]["query"]["query"] == "SELECT *"
-    assert result["text_attachment"] is not None
-    assert result["text_attachment"]["text"]["content"] == "Summary text"
-    assert result["suggested_questions_attachment"] is not None
-    assert len(result["suggested_questions_attachment"]["suggested_questions"]["questions"]) == 3
+    assert result["query_attachment"] == exp_query
+    assert result["text_attachment"] == exp_text
+    assert result["suggested_questions_attachment"] == exp_questions
 
 
-def test_parse_attachments_with_only_query():
-    """Test parsing response with only query attachment."""
-    resp = {
-        "attachments": [
-            {"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Desc"}}
-        ]
-    }
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is not None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
+# Parametrized tests for _extract_suggested_questions_from_attachment
+@pytest.mark.parametrize("attachment,expected", [
+    ({"suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]}}, ["Q1?", "Q2?", "Q3?"]),
+    ({"suggested_questions": {"questions": ["Only?"]}}, ["Only?"]),
+    ({"suggested_questions": {"questions": []}}, None),
+    ("not a dict", None),
+    (None, None),
+    ({"other_key": "value"}, None),
+    ({"suggested_questions": "not a dict"}, None),
+    ({"suggested_questions": {"other_key": "value"}}, None),
+    ({"suggested_questions": {"questions": "not a list"}}, None),
+    ({"suggested_questions": {"questions": ["Valid?", 123, None, "Another?", {}]}}, ["Valid?", "Another?"]),
+    ({"suggested_questions": {"questions": [123, None, {}, []]}}, None),
+])
+def test_extract_suggested_questions(attachment, expected):
+    """Test extracting suggested questions with various inputs."""
+    assert _extract_suggested_questions_from_attachment(attachment) == expected
 
 
-def test_parse_attachments_with_only_text():
-    """Test parsing response with only text attachment."""
-    resp = {"attachments": [{"attachment_id": "2", "text": {"content": "Text only"}}]}
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is not None
-    assert result["suggested_questions_attachment"] is None
+# Parametrized tests for _extract_text_attachment_content_from_attachment
+@pytest.mark.parametrize("attachment,expected", [
+    ({"text": {"content": "Summary text"}}, "Summary text"),
+    ({"text": {"content": ""}}, ""),
+    ("not a dict", ""),
+    (None, ""),
+    ({"other_key": "value"}, ""),
+    ({"text": "not a dict"}, ""),
+    ({"text": {"other_key": "value"}}, ""),
+    ({"text": {"content": "Line 1\nLine 2\nLine 3"}}, "Line 1\nLine 2\nLine 3"),
+])
+def test_extract_text_content(attachment, expected):
+    """Test extracting text content with various inputs."""
+    assert _extract_text_attachment_content_from_attachment(attachment) == expected
 
 
-def test_parse_attachments_with_only_suggested_questions():
-    """Test parsing response with only suggested questions attachment."""
-    resp = {
-        "attachments": [
-            {"attachment_id": "3", "suggested_questions": {"questions": ["Question?"]}}
-        ]
-    }
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is not None
-
-
-def test_parse_attachments_empty_attachments():
-    """Test parsing response with empty attachments list."""
-    resp = {"attachments": []}
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
-
-
-def test_parse_attachments_no_attachments_key():
-    """Test parsing response without attachments key."""
-    resp = {}
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
-
-
-def test_parse_attachments_attachments_is_none():
-    """Test parsing response where attachments is None."""
-    resp = {"attachments": None}
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
-
-
-def test_parse_attachments_attachments_not_list():
-    """Test parsing response where attachments is not a list."""
-    resp = {"attachments": "not a list"}
-    result = _parse_attachments(resp)
-    assert result["query_attachment"] is None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
-
-
-def test_parse_attachments_invalid_attachment_items():
-    """Test parsing response with invalid attachment items (not dicts)."""
-    resp = {"attachments": ["string", 123, None, {"query": {"query": "SELECT 1"}}]}
-    result = _parse_attachments(resp)
-    # Should only parse the valid dict
-    assert result["query_attachment"] is not None
-    assert result["text_attachment"] is None
-    assert result["suggested_questions_attachment"] is None
-
-
-# Tests for _extract_suggested_questions_from_attachment
-def test_extract_suggested_questions_valid():
-    """Test extracting suggested questions with valid attachment."""
-    attachment = {"suggested_questions": {"questions": ["Question 1?", "Question 2?", "Question 3?"]}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result == ["Question 1?", "Question 2?", "Question 3?"]
-
-
-def test_extract_suggested_questions_single_question():
-    """Test extracting suggested questions with single question."""
-    attachment = {"suggested_questions": {"questions": ["Only question?"]}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result == ["Only question?"]
-
-
-def test_extract_suggested_questions_empty_list():
-    """Test extracting suggested questions with empty questions list."""
-    attachment = {"suggested_questions": {"questions": []}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-def test_extract_suggested_questions_not_dict():
-    """Test extracting suggested questions when attachment is not a dict."""
-    result = _extract_suggested_questions_from_attachment("not a dict")
-    assert result is None
-
-
-def test_extract_suggested_questions_none():
-    """Test extracting suggested questions when attachment is None."""
-    result = _extract_suggested_questions_from_attachment(None)
-    assert result is None
-
-
-def test_extract_suggested_questions_missing_key():
-    """Test extracting suggested questions when 'suggested_questions' key is missing."""
-    attachment = {"some_other_key": "value"}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-def test_extract_suggested_questions_not_dict_value():
-    """Test extracting suggested questions when suggested_questions is not a dict."""
-    attachment = {"suggested_questions": "not a dict"}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-def test_extract_suggested_questions_missing_questions_key():
-    """Test extracting suggested questions when 'questions' key is missing."""
-    attachment = {"suggested_questions": {"other_key": "value"}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-def test_extract_suggested_questions_not_list():
-    """Test extracting suggested questions when questions is not a list."""
-    attachment = {"suggested_questions": {"questions": "not a list"}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-def test_extract_suggested_questions_mixed_types():
-    """Test extracting suggested questions with mixed types in list (filters non-strings)."""
-    attachment = {
-        "suggested_questions": {"questions": ["Valid question?", 123, None, "Another valid?", {}]}
-    }
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result == ["Valid question?", "Another valid?"]
-
-
-def test_extract_suggested_questions_only_non_strings():
-    """Test extracting suggested questions with only non-string items."""
-    attachment = {"suggested_questions": {"questions": [123, None, {}, []]}}
-    result = _extract_suggested_questions_from_attachment(attachment)
-    assert result is None
-
-
-# Tests for _extract_text_attachment_content_from_attachment
-def test_extract_text_content_valid():
-    """Test extracting text content with valid attachment."""
-    attachment = {"text": {"content": "This is the summary text"}}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == "This is the summary text"
-
-
-def test_extract_text_content_empty_string():
-    """Test extracting text content with empty content string."""
-    attachment = {"text": {"content": ""}}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == ""
-
-
-def test_extract_text_content_not_dict():
-    """Test extracting text content when attachment is not a dict."""
-    result = _extract_text_attachment_content_from_attachment("not a dict")
-    assert result == ""
-
-
-def test_extract_text_content_none():
-    """Test extracting text content when attachment is None."""
-    result = _extract_text_attachment_content_from_attachment(None)
-    assert result == ""
-
-
-def test_extract_text_content_missing_text_key():
-    """Test extracting text content when 'text' key is missing."""
-    attachment = {"other_key": "value"}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == ""
-
-
-def test_extract_text_content_text_not_dict():
-    """Test extracting text content when text value is not a dict."""
-    attachment = {"text": "not a dict"}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == ""
-
-
-def test_extract_text_content_missing_content_key():
-    """Test extracting text content when 'content' key is missing."""
-    attachment = {"text": {"other_key": "value"}}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == ""
-
-
-def test_extract_text_content_multiline():
-    """Test extracting text content with multiline text."""
-    attachment = {"text": {"content": "Line 1\nLine 2\nLine 3"}}
-    result = _extract_text_attachment_content_from_attachment(attachment)
-    assert result == "Line 1\nLine 2\nLine 3"
-
-
-# Integration tests for suggested_questions and text_attachment_content in GenieResponse
-def test_poll_for_result_with_suggested_questions_and_text(genie, mock_workspace_client):
-    """Test that poll_for_result properly extracts suggested questions and text content."""
+def test_poll_with_all_attachments(genie, mock_workspace_client):
+    """Test with suggested questions, text, and query."""
     mock_workspace_client.genie._api.do.side_effect = [
         {
             "status": "COMPLETED",
             "conversation_id": "conv_123",
             "attachments": [
-                {"attachment_id": "1", "text": {"content": "Summary of results"}},
-                {
-                    "attachment_id": "2",
-                    "suggested_questions": {
-                        "questions": ["What about X?", "How does Y work?", "When is Z?"]
-                    },
-                },
-                {
-                    "attachment_id": "3",
-                    "query": {"query": "SELECT * FROM table", "description": "Query desc"},
-                },
+                {"attachment_id": "1", "text": {"content": "Summary"}},
+                {"attachment_id": "2", "suggested_questions": {"questions": ["Q1?", "Q2?"]}},
+                {"attachment_id": "3", "query": {"query": "SELECT *", "description": "Query"}},
             ],
         },
         {
@@ -1097,47 +927,38 @@ def test_poll_for_result_with_suggested_questions_and_text(genie, mock_workspace
     ]
 
     result = genie.poll_for_result("conv_123", "msg_456")
-
-    assert result.suggested_questions == ["What about X?", "How does Y work?", "When is Z?"]
-    assert result.text_attachment_content == "Summary of results"
+    assert result.suggested_questions == ["Q1?", "Q2?"]
+    assert result.text_attachment_content == "Summary"
     assert result.conversation_id == "conv_123"
-    assert isinstance(result.result, str)  # Should have query result
+    assert isinstance(result.result, str)
 
 
-def test_poll_for_result_with_only_text_no_query(genie, mock_workspace_client):
-    """Test poll_for_result when there's only text attachment and no query."""
+def test_poll_text_only_no_query(genie, mock_workspace_client):
+    """Test with only text attachment and no query."""
     mock_workspace_client.genie._api.do.side_effect = [
         {
             "status": "COMPLETED",
             "conversation_id": "conv_456",
             "attachments": [
-                {"attachment_id": "1", "text": {"content": "Just a text response"}},
-                {
-                    "attachment_id": "2",
-                    "suggested_questions": {"questions": ["Follow-up question?"]},
-                },
+                {"attachment_id": "1", "text": {"content": "Just text"}},
+                {"attachment_id": "2", "suggested_questions": {"questions": ["Follow-up?"]}},
             ],
         }
     ]
-
+    
     result = genie.poll_for_result("conv_456", "msg_789")
-
-    assert result.result == "Just a text response"
-    assert result.text_attachment_content == "Just a text response"
-    assert result.suggested_questions == ["Follow-up question?"]
-    assert result.conversation_id == "conv_456"
+    assert result.result == "Just text"
+    assert result.text_attachment_content == "Just text"
+    assert result.suggested_questions == ["Follow-up?"]
 
 
-def test_poll_for_result_no_suggested_questions_or_text(genie, mock_workspace_client):
-    """Test poll_for_result when there are no suggested questions or text attachments."""
+def test_poll_query_only(genie, mock_workspace_client):
+    """Test with query only - no suggestions or text."""
     mock_workspace_client.genie._api.do.side_effect = [
         {
             "status": "COMPLETED",
             "attachments": [
-                {
-                    "attachment_id": "1",
-                    "query": {"query": "SELECT 1", "description": "Simple query"},
-                }
+                {"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Simple"}},
             ],
         },
         {
@@ -1148,21 +969,17 @@ def test_poll_for_result_no_suggested_questions_or_text(genie, mock_workspace_cl
             }
         },
     ]
-
+    
     result = genie.poll_for_result("conv_123", "msg_456")
-
     assert result.suggested_questions is None
     assert result.text_attachment_content == ""
     assert isinstance(result.result, str)
 
 
-def test_poll_for_result_with_null_attachments(genie, mock_workspace_client):
-    """Test poll_for_result handles null/missing attachments gracefully."""
-    mock_workspace_client.genie._api.do.side_effect = [
-        {"status": "COMPLETED", "attachments": None}
-    ]
-
+def test_poll_null_attachments(genie, mock_workspace_client):
+    """Test with null/missing attachments."""
+    mock_workspace_client.genie._api.do.side_effect = [{"status": "COMPLETED", "attachments": None}]
+    
     result = genie.poll_for_result("conv_123", "msg_456")
-
     assert result.suggested_questions is None
     assert result.text_attachment_content == ""
