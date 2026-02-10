@@ -187,6 +187,8 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const useRemoteToolCalling = this.config.useRemoteToolCalling ?? false
     // Track tool call IDs to tool names for looking up tool names in function_call_output events
     const toolNamesByCallId = new Map<string, string>()
+    // Track active text items to emit text-start before first delta
+    const activeTextItems = new Set<string>()
 
     // Create a mutable object to capture trace_id and span_id from responses.completed event
     // This object will be mutated as the stream is consumed
@@ -271,6 +273,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
               const parts = convertResponsesAgentChunkToMessagePart(chunk.value, {
                 useRemoteToolCalling,
                 toolNamesByCallId,
+                activeTextItems,
               })
 
               allParts.push(...parts)

@@ -5,12 +5,18 @@ import { type ResponsesAgentChunk, type ResponsesAgentResponse } from './respons
 export type ConvertChunkOptions = {
   useRemoteToolCalling: boolean
   toolNamesByCallId?: Map<string, string>
+  activeTextItems?: Set<string> // Track active text items for this stream
 }
 
 export const convertResponsesAgentChunkToMessagePart = (
   chunk: ResponsesAgentChunk,
   options: ConvertChunkOptions = { useRemoteToolCalling: false }
 ): LanguageModelV3StreamPart[] => {
+  // Initialize activeTextItems if not provided
+  if (!options.activeTextItems) {
+    options.activeTextItems = new Set<string>()
+  }
+  const activeTextItems = options.activeTextItems
   const parts: LanguageModelV3StreamPart[] = []
 
   if ('error' in chunk) {
@@ -23,16 +29,36 @@ export const convertResponsesAgentChunkToMessagePart = (
 
   switch (chunk.type) {
     case 'response.output_text.delta':
-      parts.push({
-        type: 'text-delta',
+      console.log('[Provider] Received text-delta:', chunk.delta, 'for item:', chunk.item_id)
+      // Emit text-start for new text items before first delta
+      if (!activeTextItems.has(chunk.item_id)) {
+        activeTextItems.add(chunk.item_id)
+        const textStart = {
+          type: 'text-start' as const,
+          id: chunk.item_id,
+          providerMetadata: {
+            databricks: {
+              itemId: chunk.item_id,
+            },
+          },
+        }
+        console.log('[Provider] Emitting text-start')
+        parts.push(textStart)
+      }
+
+      const textDelta = {
+        type: 'text-delta' as const,
         id: chunk.item_id,
-        delta: chunk.delta,
+        text: chunk.delta,  // TextStreamPart uses 'text'
+        delta: chunk.delta,  // UIMessageChunk uses 'delta' - include both for compatibility
         providerMetadata: {
           databricks: {
             itemId: chunk.item_id,
           },
         },
-      })
+      } as any
+      console.log('[Provider] Emitting text-delta:', JSON.stringify(textDelta))
+      parts.push(textDelta)
       break
 
     case 'response.reasoning_summary_text.delta':
@@ -95,23 +121,61 @@ const convertOutputItemDone = (
   item: OutputItemDoneItem,
   options: ConvertChunkOptions
 ): LanguageModelV3StreamPart[] => {
+  const activeTextItems = options.activeTextItems
+
   switch (item.type) {
     case 'message': {
       const firstContent = item.content[0]
       if (!firstContent) return []
-      return [
-        {
-          type: 'text-delta',
-          id: item.id,
-          delta: firstContent.text,
-          providerMetadata: {
-            databricks: {
-              itemId: item.id,
-              itemType: 'response.output_item.done',
+
+      // If we were tracking this text item, emit text-end and clean up
+      if (activeTextItems?.has(item.id)) {
+        activeTextItems.delete(item.id)
+        return [
+          {
+            type: 'text-end',
+            id: item.id,
+            providerMetadata: {
+              databricks: {
+                itemId: item.id,
+              },
             },
           },
-        },
-      ]
+        ]
+      } else {
+        // Non-streaming case: emit complete text sequence at once
+        return [
+          {
+            type: 'text-start',
+            id: item.id,
+            providerMetadata: {
+              databricks: {
+                itemId: item.id,
+              },
+            },
+          },
+          {
+            type: 'text-delta',
+            id: item.id,
+            delta: firstContent.text,
+            providerMetadata: {
+              databricks: {
+                itemId: item.id,
+                itemType: 'response.output_item.done',
+              },
+            },
+          },
+          {
+            type: 'text-end',
+            id: item.id,
+            providerMetadata: {
+              databricks: {
+                itemId: item.id,
+              },
+            },
+          },
+        ]
+      }
     }
 
     case 'function_call':
