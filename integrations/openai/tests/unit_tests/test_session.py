@@ -6,10 +6,6 @@ import pytest
 
 pytest.importorskip("databricks_ai_bridge.lakebase")
 
-from databricks_ai_bridge.lakebase import _LakebaseBase
-from psycopg.rows import DictRow
-from sqlalchemy.ext.asyncio import AsyncEngine
-
 
 @pytest.fixture(autouse=True)
 def clear_engine_cache():
