@@ -27,6 +27,7 @@ from databricks_langchain.multi_server_mcp_client import (
     MCPServer,
 )
 from databricks_langchain.store import AsyncDatabricksStore, DatabricksStore
+from databricks_langchain.uc_volume_tool import UCVolumeTool
 from databricks_langchain.vector_search_retriever_tool import VectorSearchRetrieverTool
 from databricks_langchain.vectorstores import DatabricksVectorSearch
 
@@ -40,6 +41,7 @@ __all__ = [
     "DatabricksStore",
     "DatabricksVectorSearch",
     "GenieAgent",
+    "UCVolumeTool",
     "VectorSearchRetrieverTool",
     "UCFunctionToolkit",
     "UnityCatalogTool",
