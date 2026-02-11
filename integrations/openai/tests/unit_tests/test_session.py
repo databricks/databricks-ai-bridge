@@ -4,13 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytest.importorskip("psycopg")
-pytest.importorskip("psycopg_pool")
-pytest.importorskip("sqlalchemy")
+pytest.importorskip("databricks_ai_bridge.lakebase")
 
-from databricks_ai_bridge.lakebase import _LakebaseBase  # noqa: E402, F401
-from psycopg.rows import DictRow  # noqa: E402, F401
-from sqlalchemy.ext.asyncio import AsyncEngine  # noqa: E402, F401
+from databricks_ai_bridge.lakebase import _LakebaseBase
+from psycopg.rows import DictRow
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 
 @pytest.fixture(autouse=True)

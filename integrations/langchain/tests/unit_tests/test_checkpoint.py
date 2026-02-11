@@ -4,8 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("psycopg")
-pytest.importorskip("psycopg_pool")
+pytest.importorskip("databricks_ai_bridge.lakebase")
 pytest.importorskip("langgraph.checkpoint.postgres")
 
 from databricks_ai_bridge import lakebase

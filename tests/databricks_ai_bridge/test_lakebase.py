@@ -6,8 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("psycopg")
-pytest.importorskip("psycopg_pool")
+pytest.importorskip("databricks_ai_bridge.lakebase")
 
 import databricks_ai_bridge.lakebase as lakebase
 from databricks_ai_bridge.lakebase import (
