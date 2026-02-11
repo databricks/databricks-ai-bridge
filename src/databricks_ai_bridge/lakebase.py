@@ -9,7 +9,6 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
-from psycopg.rows import DictRow
 
 if TYPE_CHECKING:
     from sqlalchemy import URL
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
 try:
     import psycopg
     from psycopg import sql
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
     from psycopg_pool import AsyncConnectionPool, ConnectionPool
 except ImportError as e:
     raise ImportError(
