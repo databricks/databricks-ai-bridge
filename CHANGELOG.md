@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## databricks-openai 0.11.1 (2026-02-10)
+## databricks-ai-bridge 0.14.1 databricks-openai 0.11.1 (2026-02-10)
 
 ### Bug Fixes
 - databricks-openai: Patch release to fix bug in 0.11.0 where importing classes crashed unless optional dependencies were installed
