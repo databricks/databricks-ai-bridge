@@ -78,6 +78,7 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
             )
         ],
         text_attachments=["Based on the data, today's weather is sunny."],
+        suggested_questions=["What about tomorrow?", "Show by city"],
         conversation_id="conv-123",
         message_id="msg-123",
     )
@@ -87,7 +88,7 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
 
     # Mock the ask_question method to return our mock response
     with patch.object(genie, "ask_question", return_value=mock_genie_response):
-        # Test with include_context=False (default)
+        # Test with include_context=False (default) - no suggested_questions
         result = _query_genie_as_agent(input_data, genie, "Genie")
         expected_result = {
             "messages": [
@@ -100,6 +101,16 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
             "message_id": "msg-123",
         }
         assert result == expected_result
+        # Verify no suggested_questions message when flag is off
+        assert not any(m.name == "suggested_questions" for m in result["messages"])
+
+        # Test with include_suggested_questions=True
+        result = _query_genie_as_agent(
+            input_data, genie, "Genie", include_suggested_questions=True
+        )
+        assert any(m.name == "suggested_questions" for m in result["messages"])
+        sq_msg = [m for m in result["messages"] if m.name == "suggested_questions"][0]
+        assert sq_msg.content == "What about tomorrow?\n\nShow by city"
 
         # Test with include_context=True
         result = _query_genie_as_agent(input_data, genie, "Genie", include_context=True)
@@ -266,6 +277,50 @@ def test_create_genie_agent_with_include_context(MockWorkspaceClient, MockMCPCli
             "message_id": "",
         }
         assert result == expected_result
+
+    mock_client.genie.get_space.assert_called_once()
+
+
+@patch("databricks_ai_bridge.genie.DatabricksMCPClient")
+@patch("databricks.sdk.WorkspaceClient")
+def test_create_genie_agent_with_include_suggested_questions(MockWorkspaceClient, MockMCPClient):
+    """Test creating a GenieAgent with include_suggested_questions and verify it propagates"""
+    mock_space = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    mock_client = MockWorkspaceClient.return_value
+    mock_client.genie.get_space.return_value = mock_space
+    MockMCPClient.return_value = _mock_mcp_client()
+
+    mock_genie_response = GenieResponse(
+        query_attachments=[
+            QueryAttachment(
+                query="SELECT * FROM weather",
+                description="This is the reasoning for the query",
+                result="| condition |\n|-----------|\n| sunny     |",
+            )
+        ],
+        text_attachments=["Today's weather is sunny."],
+        suggested_questions=["What about tomorrow?", "Show by region"],
+        conversation_id="conv-789",
+    )
+
+    agent = GenieAgent(
+        "space-id", "Genie", include_suggested_questions=True, client=mock_client
+    )
+    assert agent.description == "description"
+
+    input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
+
+    with patch("databricks_ai_bridge.genie.Genie.ask_question", return_value=mock_genie_response):
+        result = agent.invoke(input_data)
+
+        # Should have suggested_questions message since flag is True
+        assert any(m.name == "suggested_questions" for m in result["messages"])
+        sq_msg = [m for m in result["messages"] if m.name == "suggested_questions"][0]
+        assert sq_msg.content == "What about tomorrow?\n\nShow by region"
 
     mock_client.genie.get_space.assert_called_once()
 
@@ -585,6 +640,7 @@ def test_multiple_attachments_concatenated(MockWorkspaceClient, MockMCPClient):
             "Based on the data, Q1 had $1000 in revenue.",
             "Expenses for Q1 were $500, resulting in $500 profit.",
         ],
+        suggested_questions=["What about Q2?", "Break down by department"],
         conversation_id="conv-multi-123",
         message_id="msg-multi-123",
     )
@@ -628,6 +684,17 @@ def test_multiple_attachments_concatenated(MockWorkspaceClient, MockMCPClient):
         result_msg = result_with_context["messages"][2]
         assert result_msg.name == "query_result"
 
+        # Test include_suggested_questions=False (default) — no suggested_questions message
+        assert not any(m.name == "suggested_questions" for m in result["messages"])
+
+        # Test include_suggested_questions=True
+        result_with_sq = _query_genie_as_agent(
+            input_data, genie, "Genie", include_suggested_questions=True
+        )
+        assert any(m.name == "suggested_questions" for m in result_with_sq["messages"])
+        sq_msg = [m for m in result_with_sq["messages"] if m.name == "suggested_questions"][0]
+        assert sq_msg.content == "What about Q2?\n\nBreak down by department"
+
 
 @patch("databricks_ai_bridge.genie.DatabricksMCPClient")
 @patch("databricks.sdk.WorkspaceClient")
@@ -647,6 +714,7 @@ def test_text_only_response(MockWorkspaceClient, MockMCPClient):
         text_attachments=[
             "I cannot answer that question based on the available data in this space.",
         ],
+        suggested_questions=["Try asking about sales", "Ask about revenue"],
         conversation_id="conv-text-123",
         message_id="msg-text-123",
     )
@@ -672,3 +740,14 @@ def test_text_only_response(MockWorkspaceClient, MockMCPClient):
         # Only result message (no reasoning or sql since query_attachments is empty)
         assert len(result_with_context["messages"]) == 1
         assert result_with_context["messages"][0].name == "query_result"
+
+        # Test include_suggested_questions=False (default) — no suggested_questions message
+        assert not any(m.name == "suggested_questions" for m in result["messages"])
+
+        # Test include_suggested_questions=True
+        result_with_sq = _query_genie_as_agent(
+            input_data, genie, "Genie", include_suggested_questions=True
+        )
+        assert any(m.name == "suggested_questions" for m in result_with_sq["messages"])
+        sq_msg = [m for m in result_with_sq["messages"] if m.name == "suggested_questions"][0]
+        assert sq_msg.content == "Try asking about sales\n\nAsk about revenue"

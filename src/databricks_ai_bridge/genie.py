@@ -44,6 +44,7 @@ class QueryAttachment:
 class GenieResponse:
     query_attachments: List[QueryAttachment] = field(default_factory=list)
     text_attachments: List[str] = field(default_factory=list)
+    suggested_questions: List[str] = field(default_factory=list)
     error_msg: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
@@ -273,6 +274,7 @@ def _parse_genie_mcp_response(
     try:
         raw_query_attachments = content.get("queryAttachments", [])
         raw_text_attachments = content.get("textAttachments", [])
+        raw_suggested_questions = content.get("suggestedQuestions", [])
 
         # Build legacy fields for backward compatibility
 
@@ -311,8 +313,9 @@ def _parse_genie_mcp_response(
 
             query_attachments.append(QueryAttachment(query=q, description=desc, result=qa_result))
 
-        # build text attachments (already List[str])
+        # build text attachments and suggested questions (already List[str])
         text_attachments = list(raw_text_attachments)
+        suggested_questions = list(raw_suggested_questions)
 
         return GenieResponse(
             _result=result,
@@ -322,6 +325,7 @@ def _parse_genie_mcp_response(
             message_id=msg_id,
             query_attachments=query_attachments,
             text_attachments=text_attachments,
+            suggested_questions=suggested_questions,
         )
 
     except (KeyError, TypeError, AttributeError):

@@ -78,6 +78,7 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
                         "content": {
                             "queryAttachments": [],
                             "textAttachments": ["Result"],
+                            "suggestedQuestions": ["Follow-up 1", "Follow-up 2"],
                         },
                         "conversationId": "123",
                         "messageId": "456",
@@ -93,6 +94,7 @@ def test_poll_for_result_completed_with_text(genie, mock_workspace_client):
         assert len(genie_result.text_attachments) == 1
         assert genie_result.text_attachments[0] == "Result"
         assert len(genie_result.query_attachments) == 0
+        assert genie_result.suggested_questions == ["Follow-up 1", "Follow-up 2"]
         assert genie_result.error_msg is None
         assert genie_result.message_id == "456"
         assert genie_result.conversation_id == "123"
@@ -113,6 +115,7 @@ def test_poll_for_result_multiple_text_attachments(genie, mock_workspace_client)
                                 "Second message",
                                 "Third message",
                             ],
+                            "suggestedQuestions": ["Ask about Q2"],
                         },
                         "conversationId": "123",
                         "messageId": "456",
@@ -129,6 +132,7 @@ def test_poll_for_result_multiple_text_attachments(genie, mock_workspace_client)
         assert genie_result.text_attachments[0] == "First message"
         assert genie_result.text_attachments[1] == "Second message"
         assert genie_result.text_attachments[2] == "Third message"
+        assert genie_result.suggested_questions == ["Ask about Q2"]
         assert genie_result.error_msg is None
 
 
@@ -169,6 +173,7 @@ def test_poll_for_result_completed_with_query(genie, mock_workspace_client):
         assert genie_result.query_attachments[0].description == "Test query"
         assert genie_result.query_attachments[0].result == pd.DataFrame().to_markdown()
         assert len(genie_result.text_attachments) == 0
+        assert genie_result.suggested_questions == []
         assert genie_result.error_msg is None
 
 
@@ -282,6 +287,7 @@ def test_poll_for_result_max_iterations(genie, mock_workspace_client):
         with patch.object(genie._mcp_client, "call_tool", return_value=mock_mcp_result):
             result = genie.poll_for_result("123", "456")
             assert len(result.text_attachments) == 0
+            assert result.suggested_questions == []
             assert result.error_msg is not None
             assert "timed out" in result.error_msg.lower()
             assert "2 iterations of 0.1 seconds" in result.error_msg
@@ -297,6 +303,7 @@ def test_ask_question(genie, mock_workspace_client):
                         "content": {
                             "queryAttachments": [],
                             "textAttachments": ["Answer"],
+                            "suggestedQuestions": ["Follow-up 1"],
                         },
                         "conversationId": "123",
                         "messageId": "456",
@@ -311,6 +318,7 @@ def test_ask_question(genie, mock_workspace_client):
         genie_result = genie.ask_question("What is the meaning of life?")
         assert len(genie_result.text_attachments) == 1
         assert genie_result.text_attachments[0] == "Answer"
+        assert genie_result.suggested_questions == ["Follow-up 1"]
         assert genie_result.conversation_id == "123"
         assert genie_result.error_msg is None
 
@@ -1782,6 +1790,7 @@ def test_multiple_query_attachments(genie, mock_workspace_client):
                                 },
                             ],
                             "textAttachments": ["Summary text"],
+                            "suggestedQuestions": ["Drill into table1", "Compare tables"],
                         },
                         "conversationId": "123",
                         "messageId": "456",
@@ -1806,6 +1815,7 @@ def test_multiple_query_attachments(genie, mock_workspace_client):
 
         assert len(result.text_attachments) == 1
         assert result.text_attachments[0] == "Summary text"
+        assert result.suggested_questions == ["Drill into table1", "Compare tables"]
         assert result.error_msg is None
 
 
@@ -1879,6 +1889,7 @@ def test_query_attachments_with_text_attachments(genie, mock_workspace_client):
                                 }
                             ],
                             "textAttachments": ["Additional summary text"],
+                            "suggestedQuestions": ["What about table2?"],
                         },
                         "conversationId": "123",
                         "messageId": "456",
@@ -1897,6 +1908,7 @@ def test_query_attachments_with_text_attachments(genie, mock_workspace_client):
         assert "42" in result.query_attachments[0].result
         assert len(result.text_attachments) == 1
         assert result.text_attachments[0] == "Additional summary text"
+        assert result.suggested_questions == ["What about table2?"]
         assert result.error_msg is None
 
 

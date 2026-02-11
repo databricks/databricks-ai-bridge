@@ -32,6 +32,7 @@ def _query_genie_as_agent(
     genie: Genie,
     genie_agent_name,
     include_context: bool = False,
+    include_suggested_questions: bool = False,
     message_processor: Optional[Callable] = None,
 ):
     """
@@ -72,6 +73,7 @@ def _query_genie_as_agent(
     query_message_id = genie_response.message_id or ""
     query_attachments = genie_response.query_attachments
     text_attachments = genie_response.text_attachments
+    suggested_questions = genie_response.suggested_questions
     error_msg = genie_response.error_msg
 
     descriptions, queries, results = _extract_query_attachment_fields(query_attachments)
@@ -84,6 +86,11 @@ def _query_genie_as_agent(
             messages.append(AIMessage(content="\n\n".join(descriptions), name="query_reasoning"))
         if queries:
             messages.append(AIMessage(content="\n\n".join(queries), name="query_sql"))
+
+    if include_suggested_questions and suggested_questions:
+        messages.append(
+            AIMessage(content="\n\n".join(suggested_questions), name="suggested_questions")
+        )
 
     query_result_parts = []
     if results:
@@ -115,6 +122,7 @@ def GenieAgent(
     genie_agent_name: str = "Genie",
     description: str = "",
     include_context: bool = False,
+    include_suggested_questions: bool = False,
     message_processor: Optional[Callable] = None,
     client: Optional["WorkspaceClient"] = None,
     return_pandas: bool = False,
@@ -126,6 +134,7 @@ def GenieAgent(
         genie_agent_name: Name for the agent (default: "Genie")
         description: Custom description for the agent
         include_context: Whether to include query reasoning and SQL in the response
+        include_suggested_questions: Whether to include suggested follow-up questions in the response
         message_processor: Optional function to process messages before querying. It should accept a list of either dict
                             or LangChain Message objects and return a query string. If not provided, the agent will
                             use the chat history to form the query.
@@ -181,6 +190,7 @@ def GenieAgent(
         genie=genie,
         genie_agent_name=genie_agent_name,
         include_context=include_context,
+        include_suggested_questions=include_suggested_questions,
         message_processor=message_processor,
     )
 
