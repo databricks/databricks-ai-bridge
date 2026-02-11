@@ -214,7 +214,7 @@ class TestOpenAIKwargsPassThrough:
         tool = VectorSearchRetrieverTool(
             index_name=DELTA_SYNC_INDEX,
             workspace_client=workspace_client,
-            score_threshold=0.99,
+            score_threshold=0.99,  # type: ignore[unknown-argument]
         )
         result = tool.execute(query="machine learning")
         # High threshold may return fewer or no results, but should not error
