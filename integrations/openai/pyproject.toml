@@ -41,10 +41,6 @@ tests = [
     "pytest-cov>=4.1.0",
 ]
 
-tests-no-memory = [
-    "pytest>=9.0.0",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
