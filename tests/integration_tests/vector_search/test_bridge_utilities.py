@@ -132,6 +132,8 @@ class TestParseVectorSearchResponse:
             assert isinstance(doc["page_content"], str)
             assert len(doc["page_content"]) > 0
             assert isinstance(score, (int, float))
+            assert score != "", "Score must not be empty string (regression)"
+            assert score >= 0, f"Score should be non-negative, got {score}"
 
     def test_parse_with_doc_uri_and_primary_key(self, delta_sync_index):
         search_resp = delta_sync_index.similarity_search(
@@ -197,6 +199,10 @@ class TestParseVectorSearchResponse:
         assert len(results) > 0
         doc, _ = results[0]
         assert "score" in doc["metadata"]
+        score = doc["metadata"]["score"]
+        assert score != "", "Score must not be empty string (regression)"
+        assert isinstance(score, (int, float))
+        assert score >= 0, f"Score should be non-negative, got {score}"
 
     def test_parse_direct_access_response(self, direct_access_index, test_query_vector):
         search_resp = direct_access_index.similarity_search(
@@ -220,6 +226,8 @@ class TestParseVectorSearchResponse:
             assert "page_content" in doc
             assert "metadata" in doc
             assert isinstance(score, (int, float))
+            assert score != "", "Score must not be empty string (regression)"
+            assert score >= 0, f"Score should be non-negative, got {score}"
 
 
 # =============================================================================

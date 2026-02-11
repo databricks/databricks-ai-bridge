@@ -179,13 +179,14 @@ class TestLangChainDatabricksVectorSearch:
     def test_similarity_search_with_score(self, vectorstore):
         results = vectorstore.similarity_search_with_score("Databricks analytics", k=2)
         assert isinstance(results, list)
-        assert len(results) <= 2
+        assert len(results) == 2
         for _doc, score in results:
             assert isinstance(score, (int, float))
 
     def test_similarity_search_with_filter(self, vectorstore):
         docs = vectorstore.similarity_search("technology", k=10, filter={"category": "databricks"})
         # Our test data has only 2 docs with category="databricks"
+        assert len(docs) > 0
         assert len(docs) <= 2
 
     def test_similarity_search_with_columns_returns_metadata(self, workspace_client):
@@ -200,3 +201,109 @@ class TestLangChainDatabricksVectorSearch:
         assert len(docs) > 0
         metadata = docs[0].metadata
         assert "title" in metadata or "category" in metadata
+
+
+# =============================================================================
+# Kwargs Pass-Through Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestLangChainKwargsPassThrough:
+    """Verify our code correctly forwards/filters kwargs to the VS client."""
+
+    @pytest.fixture(scope="class")
+    def vectorstore(self, workspace_client):
+        from databricks_langchain.vectorstores import DatabricksVectorSearch
+
+        return DatabricksVectorSearch(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+        )
+
+    def test_score_threshold_kwarg_accepted(self, vectorstore):
+        results = vectorstore.similarity_search_with_score(
+            "machine learning", k=3, score_threshold=0.99
+        )
+        # High threshold may return fewer or no results, but should not error
+        assert isinstance(results, list)
+
+    def test_invalid_kwargs_silently_dropped(self, vectorstore):
+        docs = vectorstore.similarity_search(
+            "machine learning",
+            k=3,
+            totally_fake_kwarg="ignored",
+            another_invalid_kwarg=42,
+        )
+        # Our inspect.signature filtering should drop unknown kwargs
+        assert isinstance(docs, list)
+        assert len(docs) > 0
+
+    def test_query_type_override(self, vectorstore):
+        docs = vectorstore.similarity_search("machine learning", k=3, query_type="HYBRID")
+        assert isinstance(docs, list)
+        assert len(docs) > 0
+
+
+# =============================================================================
+# Auth Path Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestLangChainAuthPaths:
+    """Verify auth credentials are correctly forwarded to VectorSearchClient."""
+
+    def test_current_auth_produces_working_vectorstore(self, workspace_client):
+        from databricks_langchain.vectorstores import DatabricksVectorSearch
+
+        vs = DatabricksVectorSearch(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+        )
+        docs = vs.similarity_search("machine learning", k=1)
+        assert len(docs) > 0
+
+    def test_pat_auth_produces_working_vectorstore(self, workspace_client):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_langchain.vectorstores import DatabricksVectorSearch
+
+        # Extract a bearer token from the current auth (works for any auth type)
+        headers = workspace_client.config.authenticate()
+        token = headers.get("Authorization", "").replace("Bearer ", "")
+        assert token, "Could not extract bearer token from workspace client"
+
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
+        vs = DatabricksVectorSearch(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=pat_wc,
+        )
+        docs = vs.similarity_search("machine learning", k=1)
+        assert len(docs) > 0
+
+    def test_oauth_m2m_auth_produces_working_vectorstore(self):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_langchain.vectorstores import DatabricksVectorSearch
+
+        client_id = os.environ.get("DATABRICKS_CLIENT_ID")
+        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET")
+        host = os.environ.get("DATABRICKS_HOST")
+        if not (client_id and client_secret and host):
+            pytest.skip(
+                "OAuth-M2M credentials not available "
+                "(need DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET)"
+            )
+
+        oauth_wc = WorkspaceClient(
+            host=host,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        vs = DatabricksVectorSearch(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=oauth_wc,
+        )
+        docs = vs.similarity_search("machine learning", k=1)
+        assert len(docs) > 0

@@ -148,3 +148,178 @@ class TestOpenAIRetrieverToolExecution:
         )
         result = tool.execute(query="technology")
         assert len(result) <= 2
+
+
+# =============================================================================
+# Filter Pass-Through Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestOpenAIRetrieverWithFilter:
+    """Test filter pass-through (parity with LangChain tests)."""
+
+    def test_execute_with_static_filter(self, workspace_client):
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+            filters={"category": "databricks"},
+            num_results=10,
+        )
+        result = tool.execute(query="technology")
+        assert isinstance(result, list)
+        # Our test data has only 2 docs with category="databricks"
+        assert len(result) > 0
+        assert len(result) <= 2
+
+    def test_execute_with_dynamic_filter(self, workspace_client):
+        from databricks_ai_bridge.vector_search_retriever_tool import FilterItem
+
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+            num_results=10,
+        )
+        result = tool.execute(
+            query="technology",
+            filters=[FilterItem(key="category", value="databricks")],
+        )
+        assert isinstance(result, list)
+        assert len(result) > 0
+        assert len(result) <= 2
+
+
+# =============================================================================
+# Kwargs Pass-Through Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestOpenAIKwargsPassThrough:
+    """Verify kwargs forwarding and filtering in our execute() code."""
+
+    def test_score_threshold_from_constructor(self, workspace_client):
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+            score_threshold=0.99,
+        )
+        result = tool.execute(query="machine learning")
+        # High threshold may return fewer or no results, but should not error
+        assert isinstance(result, list)
+
+    def test_invalid_kwargs_filtered_out(self, workspace_client):
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+        )
+        # Our inspect.signature filtering should drop unknown kwargs
+        result = tool.execute(
+            query="machine learning",
+            totally_fake_kwarg="ignored",
+        )
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    def test_num_results_override_at_execute_time(self, workspace_client):
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+            num_results=10,
+        )
+        result = tool.execute(query="machine learning", num_results=1)
+        # Execute-time override takes precedence
+        assert len(result) <= 1
+
+
+# =============================================================================
+# Auth Path Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestOpenAIAuthPaths:
+    """Verify auth credentials are correctly forwarded to VectorSearchClient."""
+
+    def test_current_auth_produces_working_tool(self, workspace_client):
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=workspace_client,
+        )
+        result = tool.execute(query="machine learning")
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    def test_pat_auth_produces_working_tool(self, workspace_client):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        # Extract a bearer token from the current auth (works for any auth type)
+        headers = workspace_client.config.authenticate()
+        token = headers.get("Authorization", "").replace("Bearer ", "")
+        assert token, "Could not extract bearer token from workspace client"
+
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=pat_wc,
+        )
+        result = tool.execute(query="machine learning")
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+    def test_oauth_m2m_auth_produces_working_tool(self):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_openai.vector_search_retriever_tool import (
+            VectorSearchRetrieverTool,
+        )
+
+        client_id = os.environ.get("DATABRICKS_CLIENT_ID")
+        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET")
+        host = os.environ.get("DATABRICKS_HOST")
+        if not (client_id and client_secret and host):
+            pytest.skip(
+                "OAuth-M2M credentials not available "
+                "(need DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET)"
+            )
+
+        oauth_wc = WorkspaceClient(
+            host=host,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        tool = VectorSearchRetrieverTool(
+            index_name=DELTA_SYNC_INDEX,
+            workspace_client=oauth_wc,
+        )
+        result = tool.execute(query="machine learning")
+        assert isinstance(result, list)
+        assert len(result) > 0
