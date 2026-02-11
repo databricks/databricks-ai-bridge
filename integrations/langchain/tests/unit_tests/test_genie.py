@@ -105,9 +105,7 @@ def test_query_genie_as_agent(MockWorkspaceClient, MockMCPClient):
         assert not any(m.name == "suggested_questions" for m in result["messages"])
 
         # Test with include_suggested_questions=True
-        result = _query_genie_as_agent(
-            input_data, genie, "Genie", include_suggested_questions=True
-        )
+        result = _query_genie_as_agent(input_data, genie, "Genie", include_suggested_questions=True)
         assert any(m.name == "suggested_questions" for m in result["messages"])
         sq_msg = [m for m in result["messages"] if m.name == "suggested_questions"][0]
         assert sq_msg.content == "What about tomorrow?\n\nShow by city"
@@ -307,9 +305,7 @@ def test_create_genie_agent_with_include_suggested_questions(MockWorkspaceClient
         conversation_id="conv-789",
     )
 
-    agent = GenieAgent(
-        "space-id", "Genie", include_suggested_questions=True, client=mock_client
-    )
+    agent = GenieAgent("space-id", "Genie", include_suggested_questions=True, client=mock_client)
     assert agent.description == "description"
 
     input_data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
