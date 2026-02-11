@@ -47,6 +47,8 @@ try:
     _session_imports_available = True
 except ImportError:
     SQLAlchemySession = object  # type: ignore
+    DEFAULT_TOKEN_CACHE_DURATION_SECONDS = None  # type: ignore
+    DEFAULT_POOL_RECYCLE_SECONDS = None  # type: ignore
     _session_imports_available = False
 
 logger = logging.getLogger(__name__)

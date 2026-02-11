@@ -1,6 +1,6 @@
 [project]
 name = "databricks-openai"
-version = "0.11.0"
+version = "0.11.1"
 description = "Support for Databricks AI support with OpenAI"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "databricks-vectorsearch>=0.50",
     "langchain>=0.3.0",
-    "databricks-ai-bridge>=0.14.0",
+    "databricks-ai-bridge>=0.14.1",
     "openai>=1.99.9",
     "pydantic>2.10.0",
     "mlflow>=2.20.1",
@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory = [
-    "databricks-ai-bridge[memory]>=0.14.0",
+    "databricks-ai-bridge[memory]>=0.14.1",
 ]
 
 [dependency-groups]
