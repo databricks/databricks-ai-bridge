@@ -685,7 +685,7 @@ class DatabricksVectorSearch(VectorStore):
 
         query_vector = self._embeddings.embed_query(query)  # type: ignore[union-attr]
         docs = self.max_marginal_relevance_search_by_vector(
-            query,
+            query_text,
             query_vector,
             k,
             fetch_k,
