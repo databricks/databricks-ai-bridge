@@ -2,16 +2,17 @@
 Shared fixtures and configuration for integration tests.
 
 These tests require a live Databricks workspace. They are NOT run by default -
-set RUN_VS_INTEGRATION_TESTS=1 to enable.
+set RUN_VS_INTEGRATION_TESTS=1 or RUN_GENIE_INTEGRATION_TESTS=1 to enable.
 
 Feature-specific fixtures live in their respective subdirectories:
 - vector_search/conftest.py  - Vector Search indexes, clients, index details
-- lakebase/conftest.py       - Lakebase instances, pools, clients
+- genie/conftest.py          - Genie space, client fixtures
 
 Environment Variables:
 ======================
 Required:
-    RUN_VS_INTEGRATION_TESTS     - Set to "1" to enable integration tests
+    RUN_VS_INTEGRATION_TESTS     - Set to "1" to enable VS integration tests
+    RUN_GENIE_INTEGRATION_TESTS  - Set to "1" to enable Genie integration tests
     DATABRICKS_HOST           - Workspace URL
     DATABRICKS_CLIENT_ID      - Service principal client ID
     DATABRICKS_CLIENT_SECRET  - Service principal client secret
