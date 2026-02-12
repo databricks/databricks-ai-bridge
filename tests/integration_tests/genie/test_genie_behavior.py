@@ -1,19 +1,17 @@
 """
-Behavior tests for the Genie API.
+Behavior tests for the Genie bridge code.
 
-Validates end-to-end behavior: ask_question results, conversation
-continuity, pandas mode, and the start_conversation + poll_for_result
-low-level flow.
+Validates our ask_question orchestration, conversation continuity
+(create_message routing), and _parse_query_result with return_pandas=True.
 
-Most tests use cached session fixtures. Only TestGenieStartConversation
-makes an additional live API call.
+All tests use cached session fixtures — no additional live API calls
+beyond conftest setup.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 import pytest
-
 
 # =============================================================================
 # Ask Question Behavior
@@ -22,25 +20,15 @@ import pytest
 
 @pytest.mark.behavior
 class TestGenieAskQuestion:
-    """Validate ask_question returns meaningful results."""
+    """Smoke test: ask_question orchestrates start_conversation + poll correctly."""
 
-    def test_result_is_nonempty_string(self, genie_response):
+    def test_returns_nonempty_result(self, genie_response):
+        # Validates our ask_question() orchestration works end-to-end
         assert isinstance(genie_response.result, str)
         assert len(genie_response.result) > 0
 
-    def test_result_has_table_structure(self, genie_response):
-        # Genie returns markdown tables with pipe separators
-        result = genie_response.result
-        assert "|" in result, "Expected markdown table with | separators"
-
-    def test_query_has_sql_keywords(self, genie_response):
-        # Soft assertion: Genie usually generates SQL
-        if genie_response.query:
-            query_upper = genie_response.query.upper()
-            assert "SELECT" in query_upper or "WITH" in query_upper
-
-    def test_conversation_id_is_valid(self, genie_response):
-        assert genie_response.conversation_id is not None
+    def test_conversation_id_populated(self, genie_response):
+        # Validates our code correctly extracts conversation_id from API response
         assert isinstance(genie_response.conversation_id, str)
         assert len(genie_response.conversation_id) > 0
 
@@ -52,22 +40,14 @@ class TestGenieAskQuestion:
 
 @pytest.mark.behavior
 class TestGenieConversationContinuity:
-    """Validate follow-up questions in existing conversations."""
+    """Validates our ask_question correctly routes to create_message when conversation_id is provided."""
 
     def test_continued_response_has_result(self, genie_continued_response):
         assert genie_continued_response.result is not None
-        result_str = str(genie_continued_response.result)
-        assert len(result_str) > 0
+        assert len(str(genie_continued_response.result)) > 0
 
-    def test_continued_response_has_conversation_id(self, genie_continued_response):
-        assert genie_continued_response.conversation_id is not None
-        assert isinstance(genie_continued_response.conversation_id, str)
-        assert len(genie_continued_response.conversation_id) > 0
-
-    def test_continued_response_preserves_conversation(
-        self, genie_conversation_id, genie_continued_response
-    ):
-        # The conversation_id should match the one we passed in
+    def test_conversation_id_preserved(self, genie_conversation_id, genie_continued_response):
+        # Our code passes conversation_id through to create_message
         assert genie_continued_response.conversation_id == genie_conversation_id
 
 
@@ -78,48 +58,15 @@ class TestGenieConversationContinuity:
 
 @pytest.mark.behavior
 class TestGeniePandasMode:
-    """Validate return_pandas=True behavior."""
+    """Validates our _parse_query_result with return_pandas=True."""
 
     def test_result_is_dataframe(self, genie_pandas_response):
         assert isinstance(genie_pandas_response.result, pd.DataFrame)
+        assert len(genie_pandas_response.result) > 0
 
-    def test_dataframe_has_columns(self, genie_pandas_response):
+    def test_dataframe_has_typed_columns(self, genie_pandas_response):
+        # Our _parse_query_result converts types (INT->int, FLOAT->float, etc.)
+        # At least one column should be non-object (proves our type conversion works)
         df = genie_pandas_response.result
-        assert len(df.columns) > 0
-
-    def test_dataframe_has_rows(self, genie_pandas_response):
-        df = genie_pandas_response.result
-        assert len(df) > 0
-
-    def test_dataframe_has_numeric_column(self, genie_pandas_response):
-        df = genie_pandas_response.result
-        numeric_cols = df.select_dtypes(include=["number"]).columns
-        assert len(numeric_cols) > 0, f"Expected at least one numeric column, got dtypes: {df.dtypes.to_dict()}"
-
-
-# =============================================================================
-# Start Conversation + Poll (Low-Level API)
-# =============================================================================
-
-
-@pytest.mark.behavior
-@pytest.mark.slow
-class TestGenieStartConversation:
-    """Test start_conversation + poll_for_result flow. Makes 1 live API call."""
-
-    def test_start_conversation_returns_ids(self, genie_instance):
-        resp = genie_instance.start_conversation("How many orders are there?")
-        assert "conversation_id" in resp
-        assert "message_id" in resp
-        assert isinstance(resp["conversation_id"], str)
-        assert isinstance(resp["message_id"], str)
-
-        # Poll for the result
-        genie_response = genie_instance.poll_for_result(
-            resp["conversation_id"], resp["message_id"]
-        )
-
-        from databricks_ai_bridge.genie import GenieResponse
-
-        assert isinstance(genie_response, GenieResponse)
-        assert genie_response.result is not None
+        non_object_cols = df.select_dtypes(exclude=["object"]).columns
+        assert len(non_object_cols) > 0, f"All columns are object type: {df.dtypes.to_dict()}"

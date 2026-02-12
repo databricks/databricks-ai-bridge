@@ -2,7 +2,8 @@
 Integration tests for LangChain GenieAgent wrapper.
 
 Tests GenieAgent initialization, execution, include_context mode,
-pandas mode, and conversation continuity against a live Genie Space.
+pandas mode, conversation continuity, and auth paths against a live
+Genie Space.
 
 Prerequisites:
 - Genie Space must be pre-created with test table and SP permissions
@@ -129,16 +130,8 @@ def agent_continued_response(genie_agent, agent_response):
 class TestGenieAgentInit:
     """Test GenieAgent initialization."""
 
-    def test_agent_has_invoke(self, genie_agent):
-        assert hasattr(genie_agent, "invoke")
-        assert callable(genie_agent.invoke)
-
     def test_agent_default_name(self, genie_agent):
         assert genie_agent.name == "Genie"
-
-    def test_agent_has_description(self, genie_agent):
-        assert hasattr(genie_agent, "description")
-        assert isinstance(genie_agent.description, str)
 
     def test_agent_custom_name(self, workspace_client, genie_space_id):
         from databricks_langchain.genie import GenieAgent
@@ -166,13 +159,10 @@ class TestGenieAgentInit:
 class TestGenieAgentExecution:
     """Test GenieAgent invoke returns expected structure."""
 
-    def test_returns_dict(self, agent_response):
+    def test_response_structure(self, agent_response):
+        # Our _query_genie_as_agent returns dict with messages + conversation_id
         assert isinstance(agent_response, dict)
-
-    def test_has_messages_key(self, agent_response):
         assert "messages" in agent_response
-
-    def test_has_conversation_id(self, agent_response):
         assert "conversation_id" in agent_response
         assert isinstance(agent_response["conversation_id"], str)
         assert len(agent_response["conversation_id"]) > 0
@@ -185,13 +175,8 @@ class TestGenieAgentExecution:
         assert len(messages) > 0
         for msg in messages:
             assert isinstance(msg, AIMessage)
-
-    def test_message_content_nonempty(self, agent_response):
-        messages = agent_response["messages"]
-        # At least the query_result message should have content
-        last_msg = messages[-1]
-        assert isinstance(last_msg.content, str)
-        assert len(last_msg.content) > 0
+        # Last message (query_result) should have content
+        assert len(messages[-1].content) > 0
 
 
 # =============================================================================
@@ -203,19 +188,14 @@ class TestGenieAgentExecution:
 class TestGenieAgentIncludeContext:
     """Test GenieAgent with include_context=True."""
 
-    def test_has_three_messages(self, agent_context_response):
+    def test_includes_reasoning_sql_and_result(self, agent_context_response):
+        # Our _query_genie_as_agent with include_context=True adds 3 named messages
         messages = agent_context_response["messages"]
-        assert len(messages) == 3, f"Expected 3 messages (reasoning + sql + result), got {len(messages)}"
-
-    def test_message_names(self, agent_context_response):
-        messages = agent_context_response["messages"]
+        assert len(messages) == 3
         names = [msg.name for msg in messages]
         assert names == ["query_reasoning", "query_sql", "query_result"]
-
-    def test_query_result_has_content(self, agent_context_response):
-        messages = agent_context_response["messages"]
+        # Result message should have content
         result_msg = next(m for m in messages if m.name == "query_result")
-        assert isinstance(result_msg.content, str)
         assert len(result_msg.content) > 0
 
     def test_query_sql_has_content(self, agent_context_response):
@@ -271,3 +251,67 @@ class TestGenieAgentConversationContinuity:
         assert "conversation_id" in agent_continued_response
         assert isinstance(agent_continued_response["conversation_id"], str)
         assert len(agent_continued_response["conversation_id"]) > 0
+
+
+# =============================================================================
+# GenieAgent Auth Path Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestGenieAgentAuthPaths:
+    """Verify auth credentials are correctly forwarded through GenieAgent -> Genie -> WorkspaceClient."""
+
+    def test_current_auth_produces_working_agent(self, workspace_client, genie_space_id):
+        from databricks_langchain.genie import GenieAgent
+
+        # E2E: create agent with current auth, verify it can query
+        agent = GenieAgent(genie_space_id=genie_space_id, client=workspace_client)
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": "How many orders are there?"}]}
+        )
+        assert "messages" in result
+        assert len(result["messages"]) > 0
+
+    def test_pat_auth_produces_working_agent(self, workspace_client, genie_space_id):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_langchain.genie import GenieAgent
+
+        # Extract a bearer token from the current auth (works for any auth type)
+        headers = workspace_client.config.authenticate()
+        token = headers.get("Authorization", "").replace("Bearer ", "")
+        assert token, "Could not extract bearer token"
+
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
+        agent = GenieAgent(genie_space_id=genie_space_id, client=pat_wc)
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": "How many orders are there?"}]}
+        )
+        assert "messages" in result
+
+    def test_oauth_m2m_auth_produces_working_agent(self, genie_space_id):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_langchain.genie import GenieAgent
+
+        # Skip if OAuth creds not available
+        client_id = os.environ.get("DATABRICKS_CLIENT_ID")
+        client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET")
+        host = os.environ.get("DATABRICKS_HOST")
+        if not (client_id and client_secret and host):
+            pytest.skip(
+                "OAuth-M2M credentials not available "
+                "(need DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET)"
+            )
+
+        oauth_wc = WorkspaceClient(
+            host=host,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        agent = GenieAgent(genie_space_id=genie_space_id, client=oauth_wc)
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": "How many orders are there?"}]}
+        )
+        assert "messages" in result
