@@ -4,12 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from databricks_openai.agents.session import _session_imports_available
-
-if not _session_imports_available:
-    pytest.skip(
-        "AsyncDatabricksSession requires databricks-openai[memory]", allow_module_level=True
-    )
+pytest.importorskip("databricks_ai_bridge.lakebase")
 
 
 @pytest.fixture(autouse=True)

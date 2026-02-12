@@ -5,11 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 pytest.importorskip("databricks_ai_bridge.lakebase")
-
-from databricks_langchain.checkpoint import _checkpoint_imports_available
-
-if not _checkpoint_imports_available:
-    pytest.skip("CheckpointSaver requires databricks-langchain[memory]", allow_module_level=True)
+pytest.importorskip("langgraph.checkpoint.postgres")
 
 from databricks_ai_bridge import lakebase
 
