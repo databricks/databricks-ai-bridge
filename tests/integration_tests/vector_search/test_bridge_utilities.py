@@ -21,8 +21,8 @@ from databricks_ai_bridge.utils.vector_search import (
 )
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("RUN_INTEGRATION_TESTS") != "1",
-    reason="Integration tests disabled. Set RUN_INTEGRATION_TESTS=1 to enable.",
+    os.environ.get("RUN_VS_INTEGRATION_TESTS") != "1",
+    reason="Integration tests disabled. Set RUN_VS_INTEGRATION_TESTS=1 to enable.",
 )
 
 
