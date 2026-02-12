@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="session")
-def genie_space_id() -> str:
+def genie_space_id():
     """Get the Genie Space ID from the GENIE_SPACE_ID environment variable."""
     space_id = os.environ.get("GENIE_SPACE_ID")
     if not space_id:

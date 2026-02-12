@@ -41,7 +41,11 @@ def workspace_client():
     """
     from databricks.sdk import WorkspaceClient
 
-    wc = WorkspaceClient()
+    try:
+        wc = WorkspaceClient()
+    except ValueError:
+        pytest.skip("Databricks credentials not configured")
+
     if wc.config.auth_type not in ("pat", "oauth-m2m", "model_serving_user_credentials"):
         headers = wc.config.authenticate()
         token = headers.get("Authorization", "").replace("Bearer ", "")
