@@ -38,6 +38,28 @@ jobs:
             --exact --group tests \
             pytest --cov --cov-report=term tests/
 
+  core_test_with_extras:
+    runs-on: ubuntu-latest
+    name: "core_test_with_extras (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        uv-resolution: ["lowest-direct", "highest"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests with extras
+        run: |
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest --cov --cov-report=term tests/
+
   langchain_test:
     runs-on: ubuntu-latest
     name: "langchain_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
@@ -61,9 +83,9 @@ jobs:
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest --cov --cov-report=term tests/unit_tests
 
-  extra_dependency_test:
+  langchain_test_with_extras:
     runs-on: ubuntu-latest
-    name: "extra_dependency_test (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
+    name: "langchain_test_with_extras (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
     strategy:
       matrix:
         python-version: ["3.10"]
@@ -77,24 +99,12 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Run databricks-ai-bridge Tests
-        run: |
-          uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests --extra memory \
-            pytest tests/databricks_ai_bridge/test_lakebase.py
-      - name: Run databricks-langchain Tests
+      - name: Run langchain tests with extras
         working-directory: integrations/langchain
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests --extra memory \
-            pytest tests/unit_tests/test_checkpoint.py \
-              tests/unit_tests/test_store.py
-      - name: Run databricks-openai Tests
-        working-directory: integrations/openai
-        run: |
-          uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests --extra memory \
-            pytest tests/unit_tests/test_session.py
+            pytest --cov --cov-report=term tests/unit_tests
 
   langchain_cross_version_test:
     runs-on: ubuntu-latest
@@ -164,6 +174,29 @@ jobs:
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest --cov --cov-report=term tests/unit_tests
+
+  openai_test_with_extras:
+    runs-on: ubuntu-latest
+    name: "openai_test_with_extras (python: ${{ matrix.python-version }}, uv: ${{ matrix.uv-resolution }})"
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+        uv-resolution: ["lowest-direct", "highest"]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        working-directory: integrations/openai
+        run: |
+          uv run --resolution ${{ matrix.uv-resolution }} \
+            --exact --group tests --extra memory \
+            pytest --cov --cov-report=term tests/unit_tests
 
   openai_cross_version_test:
     runs-on: ubuntu-latest
