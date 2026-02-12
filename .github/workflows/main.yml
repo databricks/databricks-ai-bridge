@@ -99,7 +99,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Run langchain tests with extras
+      - name: Run tests with extras
         working-directory: integrations/langchain
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
@@ -191,7 +191,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-      - name: Run tests
+      - name: Run tests with extras
         working-directory: integrations/openai
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
