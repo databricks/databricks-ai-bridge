@@ -4,15 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-try:
-    from databricks_ai_bridge.lakebase import _LakebaseBase  # noqa: F401
-    from psycopg.rows import DictRow  # noqa: F401
-    from sqlalchemy.ext.asyncio import AsyncEngine  # noqa: F401
-except ImportError as e:
-    raise ImportError(
-        "AsyncDatabricksSession tests require databricks-openai[memory]. "
-        "Please install with: pip install databricks-openai[memory]"
-    ) from e
+pytest.importorskip("databricks_ai_bridge.lakebase")
 
 
 @pytest.fixture(autouse=True)
