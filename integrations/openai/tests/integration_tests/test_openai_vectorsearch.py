@@ -216,9 +216,13 @@ class TestOpenAIKwargsPassThrough:
             workspace_client=workspace_client,
             score_threshold=0.99,  # type: ignore[unknown-argument]
         )
-        result = tool.execute(query="machine learning")
-        # High threshold may return fewer or no results, but should not error
+        # Use a gibberish query + high threshold to prove score_threshold is forwarded
+        result = tool.execute(query="xyzzy_nonexistent_query_12345")
+        # Garbage query with 0.99 threshold should return 0 results
         assert isinstance(result, list)
+        assert len(result) == 0, (
+            f"Expected 0 results with gibberish query + score_threshold=0.99, got {len(result)}"
+        )
 
     def test_invalid_kwargs_filtered_out(self, workspace_client):
         from databricks_openai.vector_search_retriever_tool import (

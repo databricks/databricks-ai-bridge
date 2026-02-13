@@ -222,11 +222,15 @@ class TestLangChainKwargsPassThrough:
         )
 
     def test_score_threshold_kwarg_accepted(self, vectorstore):
+        # Use a gibberish query + high threshold to prove score_threshold is forwarded
         results = vectorstore.similarity_search_with_score(
-            "machine learning", k=3, score_threshold=0.99
+            "xyzzy_nonexistent_query_12345", k=3, score_threshold=0.99
         )
-        # High threshold may return fewer or no results, but should not error
+        # Garbage query with 0.99 threshold should return 0 results
         assert isinstance(results, list)
+        assert len(results) == 0, (
+            f"Expected 0 results with gibberish query + score_threshold=0.99, got {len(results)}"
+        )
 
     def test_invalid_kwargs_silently_dropped(self, vectorstore):
         docs = vectorstore.similarity_search(

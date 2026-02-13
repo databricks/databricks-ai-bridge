@@ -34,10 +34,20 @@ def workspace_client():
     The SDK auto-detects auth from env vars (e.g. DATABRICKS_HOST,
     DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET for OAuth M2M).
     For local testing, set DATABRICKS_CONFIG_PROFILE instead.
+
+    Converts non-standard auth types (e.g. databricks-cli) to PAT so
+    credentials are forwarded correctly to downstream clients like
+    VectorSearchClient and Genie.
     """
     from databricks.sdk import WorkspaceClient
 
-    return WorkspaceClient()
+    wc = WorkspaceClient()
+    if wc.config.auth_type not in ("pat", "oauth-m2m", "model_serving_user_credentials"):
+        headers = wc.config.authenticate()
+        token = headers.get("Authorization", "").replace("Bearer ", "")
+        if token:
+            return WorkspaceClient(host=wc.config.host, token=token, auth_type="pat")
+    return wc
 
 
 # =============================================================================
