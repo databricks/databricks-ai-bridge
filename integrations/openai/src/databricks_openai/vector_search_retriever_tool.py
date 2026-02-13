@@ -119,6 +119,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
                     "credential_strategy", CredentialStrategy.MODEL_SERVING_USER_CREDENTIALS
                 )
             elif config.auth_type == "pat":
+                client_args.setdefault("workspace_url", config.host)
                 client_args.setdefault("personal_access_token", config.token)
             elif config.auth_type == "oauth-m2m":
                 client_args.setdefault("workspace_url", config.host)

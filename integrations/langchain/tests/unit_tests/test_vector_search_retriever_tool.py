@@ -327,7 +327,10 @@ def test_vector_search_client_non_model_serving_environment():
 
 
 def test_vector_search_client_with_pat_workspace_client():
-    w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
+    w = create_autospec(WorkspaceClient, instance=True)
+    w.config.auth_type = "pat"
+    w.config.host = "https://testDogfod.com"
+    w.config.token = "fakeToken"
     with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             mock_instance = mockVSClient.return_value
@@ -338,7 +341,9 @@ def test_vector_search_client_with_pat_workspace_client():
                 workspace_client=w,
             )
             mockVSClient.assert_called_once_with(
-                disable_notice=True, personal_access_token="fakeToken"
+                disable_notice=True,
+                workspace_url="https://testDogfod.com",
+                personal_access_token="fakeToken",
             )
 
 
