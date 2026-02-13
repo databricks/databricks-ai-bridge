@@ -4,6 +4,7 @@ import type {
   LanguageModelV3FinishReason,
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
+  SharedV3Headers,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -95,6 +96,18 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const content = convertResponsesAgentResponseToMessagePart(response)
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
+    // Extract trace_id from both root level (legacy) and nested databricks_output structure
+    const traceId =
+      response.trace_id ?? response.databricks_output?.trace?.info?.trace_id ?? undefined
+    const spanId = response.span_id ?? undefined
+
+    // Create a normalized response body with trace_id at root level for easier access
+    const responseBody = {
+      ...response,
+      ...(traceId && { trace_id: traceId }),
+      ...(spanId && { span_id: spanId }),
+    }
+
     return {
       content,
       finishReason: mapResponsesFinishReason({
@@ -111,6 +124,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
         outputTokens: { total: response.usage?.output_tokens ?? 0, text: 0, reasoning: 0 },
       },
       warnings,
+      response: {
+        body: responseBody,
+      } as { headers?: SharedV3Headers; body?: unknown },
     }
   }
 
@@ -158,6 +174,10 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     // Track tool call IDs to tool names for looking up tool names in function_call_output events
     const toolNamesByCallId = new Map<string, string>()
 
+    // Create a mutable object to capture trace_id and span_id from responses.completed event
+    // This object will be mutated as the stream is consumed
+    const responseBody: Record<string, unknown> = {}
+
     return {
       stream: response
         .pipeThrough(
@@ -189,7 +209,26 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 })
                 usage.inputTokens.total = chunk.value.response.usage.input_tokens
                 usage.outputTokens.total = chunk.value.response.usage.output_tokens
+                // Capture trace_id and span_id in the responseBody object
+                if (chunk.value.response.trace_id !== undefined) {
+                  responseBody.trace_id = chunk.value.response.trace_id
+                }
+                if (chunk.value.response.span_id !== undefined) {
+                  responseBody.span_id = chunk.value.response.span_id
+                }
                 return
+              }
+
+              // Extract trace info from response.output_item.done event
+              // The endpoint returns trace info in databricks_output.trace.info
+              if (chunk.value.type === 'response.output_item.done') {
+                const databricksOutput = (chunk.value as any).databricks_output
+                if (databricksOutput?.trace?.info?.trace_id) {
+                  // Normalize trace_id at root level for easier access
+                  responseBody.trace_id = databricksOutput.trace.info.trace_id
+                  // Store full databricks_output structure for complete trace data
+                  responseBody.databricks_output = databricksOutput
+                }
               }
 
               // Track tool call IDs to names from response.output_item.done function_call events
@@ -306,7 +345,10 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
         )
         .pipeThrough(getDatabricksLanguageModelTransformStream()),
       request: { body: networkArgs.body },
-      response: { headers: responseHeaders },
+      response: {
+        headers: responseHeaders,
+        body: responseBody,
+      } as { headers?: SharedV3Headers; body?: unknown },
     }
   }
 
