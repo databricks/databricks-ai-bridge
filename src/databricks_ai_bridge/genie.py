@@ -126,7 +126,7 @@ def _parse_query_result(
         else:
             query_result = dataframe.to_markdown(disable_numparse=disable_numparse)
 
-        return query_result.strip()
+        return (query_result or "").strip()
 
 
 def _truncate_result(dataframe, disable_numparse=False):
@@ -135,7 +135,7 @@ def _truncate_result(dataframe, disable_numparse=False):
 
     # If the full result fits, return it
     if tokens_used <= MAX_TOKENS_OF_DATA:
-        return query_result.strip()
+        return (query_result or "").strip()
 
     def is_too_big(n):
         return (
@@ -184,6 +184,7 @@ def _end_current_span(client, parent_trace_id, current_span, final_state, error=
 
     return None
 
+
 def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse and normalize attachments from a Genie API response into a predictable structure.
@@ -211,8 +212,8 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
         elif "suggested_questions" in a and result["suggested_questions_attachment"] is None:
             result["suggested_questions_attachment"] = a
 
-
     return result
+
 
 def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[str]]:
     """Extract suggested follow-up questions from a Genie API response attachment."""
@@ -289,7 +290,12 @@ class Genie:
         import mlflow
 
         def poll_query_results(
-            attachment_id, query_str, description, conversation_id=conversation_id, suggested_questions=None, text_attachment_content=None
+            attachment_id,
+            query_str,
+            description,
+            conversation_id=conversation_id,
+            suggested_questions=None,
+            text_attachment_content=None,
         ):
             with mlflow.start_span(name="poll_query_results"):
                 iteration_count = 0
@@ -307,7 +313,12 @@ class Genie:
                             resp, self.truncate_results, self.return_pandas
                         )
                         return GenieResponse(
-                            result, query_str, description, returned_conversation_id, suggested_questions, text_attachment_content
+                            result,
+                            query_str,
+                            description,
+                            returned_conversation_id,
+                            suggested_questions,
+                            text_attachment_content,
                         )
                     elif state in ["RUNNING", "PENDING"]:
                         logging.debug("Waiting for query result...")
@@ -319,7 +330,7 @@ class Genie:
                             description,
                             returned_conversation_id,
                             suggested_questions,
-                            text_attachment_content
+                            text_attachment_content,
                         )
                 return GenieResponse(
                     f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
@@ -327,7 +338,7 @@ class Genie:
                     description,
                     conversation_id,
                     suggested_questions,
-                    text_attachment_content
+                    text_attachment_content,
                 )
 
         def poll_result():
@@ -390,8 +401,14 @@ class Genie:
 
                         if current_status == "COMPLETED":
                             parsed = _parse_attachments(resp)
-                            suggested_questions = _extract_suggested_questions_from_attachment(parsed["suggested_questions_attachment"])
-                            text_attachment_content = _extract_text_attachment_content_from_attachment(parsed["text_attachment"])
+                            suggested_questions = _extract_suggested_questions_from_attachment(
+                                parsed["suggested_questions_attachment"]
+                            )
+                            text_attachment_content = (
+                                _extract_text_attachment_content_from_attachment(
+                                    parsed["text_attachment"]
+                                )
+                            )
 
                             if parsed["query_attachment"]:
                                 query_obj = parsed["query_attachment"].get("query") or {}
@@ -404,15 +421,15 @@ class Genie:
                                         description=query_obj.get("description", ""),
                                         suggested_questions=suggested_questions,
                                         conversation_id=returned_conversation_id,
-                                        text_attachment_content = text_attachment_content
+                                        text_attachment_content=text_attachment_content,
                                     )
 
-                            # if there is no query attachment, use text attachment as result                    
+                            # if there is no query attachment, use text attachment as result
                             return GenieResponse(
-                                result=text_attachment_content,
+                                result=text_attachment_content or "",
                                 suggested_questions=suggested_questions,
                                 conversation_id=returned_conversation_id,
-                                text_attachment_content = text_attachment_content
+                                text_attachment_content=text_attachment_content,
                             )
 
                         elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
