@@ -3,7 +3,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 from databricks.sdk import WorkspaceClient
@@ -34,6 +34,8 @@ class GenieResponse:
     query: Optional[str] = ""
     description: Optional[str] = ""
     conversation_id: Optional[str] = None
+    suggested_questions: Optional[List[str]] = None
+    text_attachment_content: Optional[str] = ""
 
 
 def _parse_query_result(
@@ -124,7 +126,7 @@ def _parse_query_result(
         else:
             query_result = dataframe.to_markdown(disable_numparse=disable_numparse)
 
-        return query_result.strip()
+        return (query_result or "").strip()
 
 
 def _truncate_result(dataframe, disable_numparse=False):
@@ -133,7 +135,7 @@ def _truncate_result(dataframe, disable_numparse=False):
 
     # If the full result fits, return it
     if tokens_used <= MAX_TOKENS_OF_DATA:
-        return query_result.strip()
+        return (query_result or "").strip()
 
     def is_too_big(n):
         return (
@@ -183,6 +185,64 @@ def _end_current_span(client, parent_trace_id, current_span, final_state, error=
     return None
 
 
+def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Parse and normalize attachments from a Genie API response into a predictable structure.
+    """
+    result = {
+        "query_attachment": None,
+        "text_attachment": None,
+        "suggested_questions_attachment": None,
+    }
+
+    attachments = resp.get("attachments") or []
+    if not isinstance(attachments, list):
+        return result
+
+    for a in attachments:
+        if not isinstance(a, dict):
+            continue
+
+        if "query" in a and result["query_attachment"] is None:
+            result["query_attachment"] = a
+
+        elif "text" in a and result["text_attachment"] is None:
+            result["text_attachment"] = a
+
+        elif "suggested_questions" in a and result["suggested_questions_attachment"] is None:
+            result["suggested_questions_attachment"] = a
+
+    return result
+
+
+def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[str]]:
+    """Extract suggested follow-up questions from a Genie API response attachment."""
+    if not isinstance(attachment, dict):
+        return None
+
+    sq_obj = attachment.get("suggested_questions")
+    if not isinstance(sq_obj, dict):
+        return None
+
+    questions = sq_obj.get("questions")
+    if not isinstance(questions, list):
+        return None
+
+    return [q for q in questions if isinstance(q, str)] or None
+
+
+def _extract_text_attachment_content_from_attachment(attachment) -> Optional[str]:
+    """Extract text summary from a Genie API response attachment."""
+    if not isinstance(attachment, dict):
+        return ""
+
+    text_obj = attachment.get("text")
+    if not isinstance(text_obj, dict):
+        return ""
+
+    return text_obj.get("content", "")
+
+
 class Genie:
     def __init__(
         self,
@@ -230,7 +290,12 @@ class Genie:
         import mlflow
 
         def poll_query_results(
-            attachment_id, query_str, description, conversation_id=conversation_id
+            attachment_id,
+            query_str,
+            description,
+            conversation_id=conversation_id,
+            suggested_questions=None,
+            text_attachment_content=None,
         ):
             with mlflow.start_span(name="poll_query_results"):
                 iteration_count = 0
@@ -248,7 +313,12 @@ class Genie:
                             resp, self.truncate_results, self.return_pandas
                         )
                         return GenieResponse(
-                            result, query_str, description, returned_conversation_id
+                            result,
+                            query_str,
+                            description,
+                            returned_conversation_id,
+                            suggested_questions,
+                            text_attachment_content,
                         )
                     elif state in ["RUNNING", "PENDING"]:
                         logging.debug("Waiting for query result...")
@@ -259,12 +329,16 @@ class Genie:
                             query_str,
                             description,
                             returned_conversation_id,
+                            suggested_questions,
+                            text_attachment_content,
                         )
                 return GenieResponse(
                     f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
                     query_str,
                     description,
                     conversation_id,
+                    suggested_questions,
+                    text_attachment_content,
                 )
 
         def poll_result():
@@ -326,28 +400,37 @@ class Genie:
                             last_status = current_status
 
                         if current_status == "COMPLETED":
-                            attachment = next(
-                                (r for r in resp["attachments"] if "query" in r), None
+                            parsed = _parse_attachments(resp)
+                            suggested_questions = _extract_suggested_questions_from_attachment(
+                                parsed["suggested_questions_attachment"]
                             )
-                            if attachment:
-                                query_obj = attachment["query"]
-                                description = query_obj.get("description", "")
-                                query_str = query_obj.get("query", "")
-                                attachment_id = attachment["attachment_id"]
-                                return poll_query_results(
-                                    attachment_id,
-                                    query_str,
-                                    description,
-                                    returned_conversation_id,
+                            text_attachment_content = (
+                                _extract_text_attachment_content_from_attachment(
+                                    parsed["text_attachment"]
                                 )
-                            if current_status == "COMPLETED":
-                                text_content = next(r for r in resp["attachments"] if "text" in r)[
-                                    "text"
-                                ]["content"]
-                                return GenieResponse(
-                                    result=text_content,
-                                    conversation_id=returned_conversation_id,
-                                )
+                            )
+
+                            if parsed["query_attachment"]:
+                                query_obj = parsed["query_attachment"].get("query") or {}
+                                attachment_id = parsed["query_attachment"].get("attachment_id")
+
+                                if attachment_id:
+                                    return poll_query_results(
+                                        attachment_id=attachment_id,
+                                        query_str=query_obj.get("query", ""),
+                                        description=query_obj.get("description", ""),
+                                        suggested_questions=suggested_questions,
+                                        conversation_id=returned_conversation_id,
+                                        text_attachment_content=text_attachment_content,
+                                    )
+
+                            # if there is no query attachment, use text attachment as result
+                            return GenieResponse(
+                                result=text_attachment_content or "",
+                                suggested_questions=suggested_questions,
+                                conversation_id=returned_conversation_id,
+                                text_attachment_content=text_attachment_content,
+                            )
 
                         elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
                             return GenieResponse(result=f"Genie query {current_status.lower()}.")
