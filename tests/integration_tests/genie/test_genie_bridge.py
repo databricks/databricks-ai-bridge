@@ -8,8 +8,15 @@ no additional live API calls.
 
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_GENIE_INTEGRATION_TESTS") != "1",
+    reason="Genie integration tests disabled. Set RUN_GENIE_INTEGRATION_TESTS=1 to enable.",
+)
 
 # =============================================================================
 # Response Parsing (String Mode)
