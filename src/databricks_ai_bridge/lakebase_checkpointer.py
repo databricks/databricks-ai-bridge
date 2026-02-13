@@ -97,7 +97,6 @@ class LakebaseCheckpointer:
         self.client.execute(sql = sql, params = params)
         return
 
-
     def insert_checkpoint(self, id : str, state : dict) -> None:
         _checkpoint = self.checkpoint_class(
             id = id, state = state, creation_timestamp = datetime.now(), update_timestamp = datetime.now()
@@ -105,7 +104,6 @@ class LakebaseCheckpointer:
         sql, params = _checkpoint.generate_insert_sql(table_name = self.table_name)
         response = self.client.execute(sql=sql, params=params)
         return
-
 
     def save_checkpoint(self, id : str, state : dict, overwrite : bool = False) -> None:
         if overwrite:
