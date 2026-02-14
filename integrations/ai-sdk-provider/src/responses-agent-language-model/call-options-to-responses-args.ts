@@ -19,6 +19,9 @@ export type ResponsesBodyArgs = {
       | { type: 'json_object' }
       | { type: 'json_schema'; json_schema: unknown }
   }
+  databricks_options?: {
+    return_trace?: boolean
+  }
 }
 
 /**
@@ -29,6 +32,9 @@ export type DatabricksProviderOptions = {
   metadata?: Record<string, string>
   reasoning?: {
     effort?: 'low' | 'medium' | 'high'
+  }
+  databricksOptions?: {
+    return_trace?: boolean
   }
 }
 
@@ -135,6 +141,8 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
   }
 
   // Handle Databricks-specific provider options
+  console.log('[callOptionsToResponsesArgs] databricksOptions:', JSON.stringify(databricksOptions))
+
   if (databricksOptions?.parallelToolCalls != null) {
     args.parallel_tool_calls = databricksOptions.parallelToolCalls
   }
@@ -147,5 +155,13 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
     args.reasoning = databricksOptions.reasoning
   }
 
+  if (databricksOptions?.databricksOptions != null) {
+    console.log('[callOptionsToResponsesArgs] Adding databricks_options:', databricksOptions.databricksOptions)
+    args.databricks_options = databricksOptions.databricksOptions
+  } else {
+    console.log('[callOptionsToResponsesArgs] No databricksOptions.databricksOptions found')
+  }
+
+  console.log('[callOptionsToResponsesArgs] Final args:', JSON.stringify(args))
   return { args, warnings }
 }
