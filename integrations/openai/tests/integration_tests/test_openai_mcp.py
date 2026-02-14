@@ -253,9 +253,7 @@ class TestOpenAIMCPAuthPaths:
         token = headers.get("Authorization", "").replace("Bearer ", "")
         assert token, "Could not extract bearer token from workspace client"
 
-        pat_wc = WorkspaceClient(
-            host=workspace_client.config.host, token=token, auth_type="pat"
-        )
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
         toolkit = McpServerToolkit.from_uc_function(
             catalog=CATALOG,
             schema=SCHEMA,

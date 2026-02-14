@@ -53,12 +53,16 @@ def mcp_server(workspace_client):
 
 @pytest.fixture(scope="session")
 def cached_langchain_tools(mcp_server):
-    """Cache get_tools() result to minimize API calls."""
+    """Cache get_tools() result to minimize API calls.
+
+    As of langchain-mcp-adapters 0.1.0, MultiServerMCPClient no longer supports
+    context manager usage. Use client.get_tools() directly instead.
+    """
     from databricks_langchain import DatabricksMultiServerMCPClient
 
     async def _get():
-        async with DatabricksMultiServerMCPClient([mcp_server]) as client:
-            return await client.get_tools()
+        client = DatabricksMultiServerMCPClient([mcp_server])
+        return await client.get_tools()
 
     try:
         return asyncio.run(_get())
@@ -118,9 +122,7 @@ class TestDatabricksMultiServerMCPClientTools:
         from langchain_core.tools import BaseTool
 
         for tool in cached_langchain_tools:
-            assert isinstance(tool, BaseTool), (
-                f"Expected BaseTool, got {type(tool)}"
-            )
+            assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
 
     def test_tool_has_name_and_description(self, cached_langchain_tools):
         for tool in cached_langchain_tools:
@@ -141,11 +143,11 @@ class TestDatabricksMultiServerMCPClientExecution:
         from databricks_langchain import DatabricksMultiServerMCPClient
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([mcp_server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
-                result = await tools[0].ainvoke({"message": "hello"})
-                assert isinstance(result, str)
+            client = DatabricksMultiServerMCPClient([mcp_server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
+            result = await tools[0].ainvoke({"message": "hello"})
+            assert isinstance(result, str)
 
         asyncio.run(_test())
 
@@ -153,13 +155,11 @@ class TestDatabricksMultiServerMCPClientExecution:
         from databricks_langchain import DatabricksMultiServerMCPClient
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([mcp_server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
-                result = await tools[0].ainvoke({"message": "hello"})
-                assert "hello" in result, (
-                    f"Echo should return 'hello', got: {result}"
-                )
+            client = DatabricksMultiServerMCPClient([mcp_server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
+            result = await tools[0].ainvoke({"message": "hello"})
+            assert "hello" in result, f"Echo should return 'hello', got: {result}"
 
         asyncio.run(_test())
 
@@ -189,13 +189,13 @@ class TestLangChainMCPKwargsPassThrough:
         )
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
-                # Invoke with invalid args to trigger an error
-                result = await tools[0].ainvoke({})
-                assert isinstance(result, str)
-                assert "Custom error occurred" in result
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
+            # Invoke with invalid args to trigger an error
+            result = await tools[0].ainvoke({})
+            assert isinstance(result, str)
+            assert "Custom error occurred" in result
 
         asyncio.run(_test())
 
@@ -215,12 +215,12 @@ class TestLangChainMCPKwargsPassThrough:
         )
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
-                # Invoke with invalid args to trigger an error
-                result = await tools[0].ainvoke({})
-                assert isinstance(result, str)
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
+            # Invoke with invalid args to trigger an error
+            result = await tools[0].ainvoke({})
+            assert isinstance(result, str)
 
         asyncio.run(_test())
 
@@ -265,9 +265,9 @@ class TestLangChainMCPAuthPaths:
         )
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
 
         asyncio.run(_test())
 
@@ -283,9 +283,7 @@ class TestLangChainMCPAuthPaths:
         token = headers.get("Authorization", "").replace("Bearer ", "")
         assert token, "Could not extract bearer token from workspace client"
 
-        pat_wc = WorkspaceClient(
-            host=workspace_client.config.host, token=token, auth_type="pat"
-        )
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
         server = DatabricksMCPServer.from_uc_function(
             catalog=CATALOG,
             schema=SCHEMA,
@@ -295,9 +293,9 @@ class TestLangChainMCPAuthPaths:
         )
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
 
         asyncio.run(_test())
 
@@ -332,8 +330,8 @@ class TestLangChainMCPAuthPaths:
         )
 
         async def _test():
-            async with DatabricksMultiServerMCPClient([server]) as client:
-                tools = await client.get_tools()
-                assert len(tools) > 0
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) > 0
 
         asyncio.run(_test())

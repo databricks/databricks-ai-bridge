@@ -39,9 +39,7 @@ class TestMCPClientListTools:
         for tool in cached_tools_list:
             assert tool.name, "Tool name should be non-empty"
             assert tool.inputSchema, "Tool should have an inputSchema"
-            assert "properties" in tool.inputSchema, (
-                "inputSchema should have 'properties'"
-            )
+            assert "properties" in tool.inputSchema, "inputSchema should have 'properties'"
 
     def test_tool_name_contains_function_identifier(self, cached_tools_list):
         tool_names = [t.name for t in cached_tools_list]
@@ -128,9 +126,7 @@ class TestMCPClientAuth:
         token = headers.get("Authorization", "").replace("Bearer ", "")
         assert token, "Could not extract bearer token from workspace client"
 
-        pat_wc = WorkspaceClient(
-            host=workspace_client.config.host, token=token, auth_type="pat"
-        )
+        pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
         client = DatabricksMCPClient(uc_function_url, pat_wc)
         tools = client.list_tools()
         assert len(tools) > 0
