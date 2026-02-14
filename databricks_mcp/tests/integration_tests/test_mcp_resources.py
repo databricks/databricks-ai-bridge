@@ -43,7 +43,7 @@ class TestGetDatabricksResources:
         resources = schema_mcp_client.get_databricks_resources()
         assert len(resources) > 0
         for resource in resources:
-            name = resource.function_name
+            name = resource.name
             assert "." in name, f"Resource name should be dot-separated, got: {name}"
             assert "__" not in name, f"Resource name should not contain '__', got: {name}"
 
