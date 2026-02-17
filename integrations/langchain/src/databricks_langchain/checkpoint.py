@@ -39,7 +39,7 @@ class CheckpointSaver(PostgresSaver):
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
-            **dict(pool_kwargs),
+            **dict(pool_kwargs),  # ty:ignore[invalid-argument-type]
         )
         super().__init__(self._lakebase.pool)
 
@@ -77,7 +77,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
-            **dict(pool_kwargs),
+            **dict(pool_kwargs),  # ty:ignore[invalid-argument-type]
         )
         super().__init__(self._lakebase.pool)
 
