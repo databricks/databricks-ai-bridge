@@ -461,7 +461,15 @@ class Genie:
     def ask_question(self, question, conversation_id: Optional[str] = None):
         import mlflow
 
-        with mlflow.start_span(name="ask_question"):
+        with mlflow.start_span(name="ask_question") as span:
+            span.set_attributes(
+                {
+                    "space_id": self.space_id,
+                    "input.question": question,
+                    "input.conversation_id": conversation_id or "",
+                }
+            )
+
             # check if a conversation_id is supplied
             # if yes, continue an existing genie conversation
             # otherwise start a new conversation
@@ -472,4 +480,13 @@ class Genie:
             genie_response = self.poll_for_result(resp["conversation_id"], resp["message_id"])
             if not genie_response.conversation_id:
                 genie_response.conversation_id = resp["conversation_id"]
+
+            span.set_attributes(
+                {
+                    "output.query": genie_response.query or "",
+                    "output.description": genie_response.description or "",
+                    "output.conversation_id": genie_response.conversation_id or "",
+                }
+            )
+
             return genie_response
