@@ -9,6 +9,9 @@ export default defineConfig({
   // Output formats
   format: ['esm', 'cjs'],
 
+  // Use explicit extensions (.mjs/.cjs) for compatibility
+  fixedExtension: true,
+
   // Generate TypeScript declarations
   dts: true,
 

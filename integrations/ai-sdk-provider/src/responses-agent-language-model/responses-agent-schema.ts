@@ -12,17 +12,19 @@ const responsesAgentMessageSchema = z.object({
       type: z.literal('output_text'),
       text: z.string(),
       logprobs: z.unknown().nullish(),
-      annotations: z.array(
-        z.discriminatedUnion('type', [
-          z.object({
-            type: z.literal('url_citation'),
-            start_index: z.number(),
-            end_index: z.number(),
-            url: z.string(),
-            title: z.string(),
-          }),
-        ])
-      ),
+      annotations: z
+        .array(
+          z.discriminatedUnion('type', [
+            z.object({
+              type: z.literal('url_citation'),
+              start_index: z.number(),
+              end_index: z.number(),
+              url: z.string(),
+              title: z.string(),
+            }),
+          ])
+        )
+        .optional(),
     })
   ),
 })
@@ -101,6 +103,11 @@ export const responsesAgentResponseSchema = z.object({
       total_tokens: z.number(),
     })
     .optional(),
+  trace_id: z.string().optional(),
+  span_id: z.string().optional(),
+  // Databricks-specific trace output - use z.any() to accept any structure
+  // We'll extract trace_id in the code rather than validating the full structure
+  databricks_output: z.any().optional(),
 })
 
 /**
@@ -127,11 +134,17 @@ export const simpleErrorChunkSchema = z.object({
   error: z.string(),
 })
 
-const responseOutputItemDoneSchema = z.object({
-  type: z.literal('response.output_item.done'),
-  output_index: z.number(),
-  item: responsesAgentOutputItem,
-})
+const responseOutputItemDoneSchema = z
+  .object({
+    type: z.literal('response.output_item.done'),
+    output_index: z.number().optional(),
+    item: responsesAgentOutputItem,
+    id: z.string().optional(),
+    // Databricks-specific trace output - use z.any() to accept any structure
+    // We'll extract trace_id in the code rather than validating the full structure
+    databricks_output: z.any().optional(),
+  })
+  .passthrough()
 
 const responseAnnotationAddedSchema = z.object({
   type: z.literal('response.output_text.annotation.added'),
@@ -182,6 +195,8 @@ const responsesCompletedSchema = z.object({
       output_tokens: z.number(),
       total_tokens: z.number(),
     }),
+    trace_id: z.string().optional(),
+    span_id: z.string().optional(),
   }),
 })
 
