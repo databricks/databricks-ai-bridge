@@ -26,6 +26,9 @@ CATALOG = "integration_testing"
 SCHEMA = "databricks_ai_bridge_mcp_test"
 FUNCTION_NAME = "echo_message"
 
+VS_SCHEMA = "databricks_ai_bridge_vs_test"
+VS_INDEX = "delta_sync_managed"
+
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -337,5 +340,102 @@ class TestLangChainMCPAuthPaths:
             client = DatabricksMultiServerMCPClient([server])
             tools = await client.get_tools()
             assert len(tools) > 0
+
+        asyncio.run(_test())
+
+
+# =============================================================================
+# Schema-Level Listing Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMCPServerSchemaLevel:
+    """Test schema-level URL construction and listing through LangChain wrapper."""
+
+    def test_from_uc_function_schema_level_url(self, workspace_client):
+        from databricks_langchain import DatabricksMCPServer
+
+        server = DatabricksMCPServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            name="schema-level-test",
+            workspace_client=workspace_client,
+        )
+        expected_suffix = f"/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}"
+        assert server.url.endswith(expected_suffix), (
+            f"URL should end with '{expected_suffix}', got: {server.url}"
+        )
+
+    def test_schema_level_get_tools_returns_tools(self, workspace_client):
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            name="schema-level-tools",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            tools = await client.get_tools()
+            assert len(tools) >= 1, "Schema-level listing should return at least one tool"
+
+        asyncio.run(_test())
+
+
+# =============================================================================
+# Vector Search MCP Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMCPServerVectorSearch:
+    """Test DatabricksMCPServer.from_vector_search() with live VS MCP server."""
+
+    def test_from_vector_search_url_pattern(self, workspace_client):
+        from databricks_langchain import DatabricksMCPServer
+
+        server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            name="vs-test",
+            workspace_client=workspace_client,
+        )
+        expected_suffix = f"/api/2.0/mcp/vector-search/{CATALOG}/{VS_SCHEMA}/{VS_INDEX}"
+        assert server.url.endswith(expected_suffix), (
+            f"URL should end with '{expected_suffix}', got: {server.url}"
+        )
+
+    def test_from_vector_search_get_tools_returns_base_tools(self, workspace_client):
+        from langchain_core.tools import BaseTool
+
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            name="vs-tools-test",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            try:
+                tools = await client.get_tools()
+            except Exception as e:
+                pytest.skip(f"VS MCP endpoint not available: {e}")
+            assert len(tools) > 0
+            for tool in tools:
+                assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
 
         asyncio.run(_test())

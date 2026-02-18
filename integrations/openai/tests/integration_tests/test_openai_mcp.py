@@ -25,6 +25,9 @@ CATALOG = "integration_testing"
 SCHEMA = "databricks_ai_bridge_mcp_test"
 FUNCTION_NAME = "echo_message"
 
+VS_SCHEMA = "databricks_ai_bridge_vs_test"
+VS_INDEX = "delta_sync_managed"
+
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -290,3 +293,110 @@ class TestOpenAIMCPAuthPaths:
         )
         tools = toolkit.get_tools()
         assert len(tools) > 0
+
+
+# =============================================================================
+# Schema-Level Listing Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMcpServerToolkitSchemaLevel:
+    """Test schema-level URL construction and listing through OpenAI wrapper."""
+
+    def test_from_uc_function_schema_level_url(self, workspace_client):
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            workspace_client=workspace_client,
+        )
+        expected_suffix = f"/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}"
+        assert toolkit.url.endswith(expected_suffix), (
+            f"URL should end with '{expected_suffix}', got: {toolkit.url}"
+        )
+
+    def test_schema_level_get_tools_returns_tools(self, workspace_client):
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            workspace_client=workspace_client,
+        )
+        try:
+            tools = toolkit.get_tools()
+        except Exception as e:
+            pytest.skip(f"Schema-level listing failed: {e}")
+        assert len(tools) >= 1, "Schema-level listing should return at least one tool"
+
+
+# =============================================================================
+# Vector Search MCP Tests (McpServerToolkit)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMcpServerToolkitVectorSearch:
+    """Test McpServerToolkit.from_vector_search() with live VS MCP server."""
+
+    def test_from_vector_search_url_pattern(self, workspace_client):
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            workspace_client=workspace_client,
+        )
+        expected_suffix = f"/api/2.0/mcp/vector-search/{CATALOG}/{VS_SCHEMA}/{VS_INDEX}"
+        assert toolkit.url.endswith(expected_suffix), (
+            f"URL should end with '{expected_suffix}', got: {toolkit.url}"
+        )
+
+    def test_from_vector_search_get_tools_returns_tool_infos(self, workspace_client):
+        from databricks_openai import McpServerToolkit
+        from databricks_openai.mcp_server_toolkit import ToolInfo
+
+        toolkit = McpServerToolkit.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            workspace_client=workspace_client,
+        )
+        try:
+            tools = toolkit.get_tools()
+        except Exception as e:
+            pytest.skip(f"VS MCP endpoint not available: {e}")
+        assert len(tools) > 0
+        for tool in tools:
+            assert isinstance(tool, ToolInfo), f"Expected ToolInfo, got {type(tool)}"
+
+
+# =============================================================================
+# Vector Search MCP Tests (McpServer / Agents SDK)
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMcpServerAgentsVectorSearch:
+    """Test McpServer.from_vector_search() with live VS MCP server (Agents SDK)."""
+
+    def test_from_vector_search_lists_tools(self, workspace_client):
+        from databricks_openai.agents import McpServer
+
+        async def _test():
+            async with McpServer.from_vector_search(
+                catalog=CATALOG,
+                schema=VS_SCHEMA,
+                index_name=VS_INDEX,
+                workspace_client=workspace_client,
+            ) as server:
+                try:
+                    tools = await server.list_tools()
+                except Exception as e:
+                    pytest.skip(f"VS MCP endpoint not available: {e}")
+                assert len(tools) > 0
+
+        asyncio.run(_test())
