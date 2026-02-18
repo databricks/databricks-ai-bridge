@@ -207,9 +207,7 @@ def cached_genie_call_result(genie_mcp_client, cached_genie_tools_list):
     # rather than hardcoding it, since the server defines the schema.
     properties = tool.inputSchema.get("properties", {})
     param_name = next(iter(properties), "query")
-    return genie_mcp_client.call_tool(
-        tool.name, {param_name: "How many rows are there?"}
-    )
+    return genie_mcp_client.call_tool(tool.name, {param_name: "How many rows are there?"})
 
 
 # =============================================================================
