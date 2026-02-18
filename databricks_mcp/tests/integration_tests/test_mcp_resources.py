@@ -85,7 +85,7 @@ class TestGetVSDatabricksResources:
         resources = vs_schema_mcp_client.get_databricks_resources()
         assert len(resources) > 0
         for resource in resources:
-            name = resource.index_name
+            name = resource.name
             assert "." in name, f"Resource name should be dot-separated, got: {name}"
             assert "__" not in name, f"Resource name should not contain '__', got: {name}"
 
@@ -119,8 +119,8 @@ class TestGetGenieDatabricksResources:
 
     def test_genie_resource_has_correct_space_id(self, genie_mcp_client, genie_space_id):
         resources = genie_mcp_client.get_databricks_resources()
-        assert resources[0].genie_space_id == genie_space_id, (
-            f"Expected space ID '{genie_space_id}', got '{resources[0].genie_space_id}'"
+        assert resources[0].name == genie_space_id, (
+            f"Expected space ID '{genie_space_id}', got '{resources[0].name}'"
         )
 
 

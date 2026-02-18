@@ -203,7 +203,7 @@ def cached_genie_tools_list(genie_mcp_client):
 def cached_genie_call_result(genie_mcp_client, cached_genie_tools_list):
     """Cache a Genie call_tool() result for the session."""
     tool = cached_genie_tools_list[0]
-    return genie_mcp_client.call_tool(tool.name, {"question": "How many rows are there?"})
+    return genie_mcp_client.call_tool(tool.name, {"Query": "How many rows are there?"})
 
 
 # =============================================================================
