@@ -4,10 +4,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from databricks.sdk import WorkspaceClient
+from httpx import Request
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
+from openai._types import NOT_GIVEN, Omit
 from openai.resources.chat.completions import AsyncCompletions, Completions
+from openai.resources.responses import AsyncResponses, Responses
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
+from databricks_openai.utils.clients import (
+    _get_app_url,
+    _get_authorized_async_http_client,
+    _get_authorized_http_client,
+    _should_strip_strict,
+    _strip_strict_from_tools,
+    _validate_oauth_for_apps,
+    _wrap_app_error,
+)
 
 
 @pytest.fixture
@@ -20,7 +32,6 @@ def mock_workspace_client():
     mock_client.config.authenticate.return_value = {"Authorization": "Bearer test-token-123"}
 
     return mock_client
-
 
 @pytest.fixture
 def mock_workspace_client_with_oauth():
@@ -37,7 +48,6 @@ def mock_workspace_client_with_oauth():
 
     return mock_client
 
-
 @pytest.fixture
 def mock_workspace_client_no_oauth():
     """Create a mock WorkspaceClient without OAuth support for testing."""
@@ -47,7 +57,6 @@ def mock_workspace_client_no_oauth():
     mock_client.config.oauth_token.side_effect = Exception("No OAuth token available")
 
     return mock_client
-
 
 class TestDatabricksOpenAI:
     """Tests for DatabricksOpenAI client."""
@@ -59,8 +68,6 @@ class TestDatabricksOpenAI:
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
             mock_ws_client_class.return_value = mock_client
-
-            from databricks_openai.utils.clients import DatabricksOpenAI
 
             client = DatabricksOpenAI()
 
@@ -75,9 +82,6 @@ class TestDatabricksOpenAI:
 
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header."""
-        from httpx import Request
-
-        from databricks_openai.utils.clients import _get_authorized_http_client
 
         http_client = _get_authorized_http_client(mock_workspace_client)
 
@@ -96,7 +100,6 @@ class TestDatabricksOpenAI:
         # Verify authenticate was called
         mock_workspace_client.config.authenticate.assert_called()
 
-
 class TestAsyncDatabricksOpenAI:
     """Tests for AsyncDatabricksOpenAI client."""
 
@@ -108,8 +111,6 @@ class TestAsyncDatabricksOpenAI:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
             mock_ws_client_class.return_value = mock_client
 
-            from databricks_openai.utils.clients import AsyncDatabricksOpenAI
-
             client = AsyncDatabricksOpenAI()
 
             # Verify the client was initialized correctly
@@ -120,9 +121,6 @@ class TestAsyncDatabricksOpenAI:
 
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header for async client."""
-        from httpx import Request
-
-        from databricks_openai.utils.clients import _get_authorized_async_http_client
 
         http_client = _get_authorized_async_http_client(mock_workspace_client)
 
@@ -141,12 +139,10 @@ class TestAsyncDatabricksOpenAI:
         # Verify authenticate was called
         mock_workspace_client.config.authenticate.assert_called()
 
-
 class TestStrictFieldStripping:
     """Tests for strict field stripping helper functions."""
 
     def test_strip_strict_from_tools_removes_strict(self):
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         tools = [
             {"type": "function", "function": {"name": "test", "strict": True, "parameters": {}}}
@@ -155,15 +151,11 @@ class TestStrictFieldStripping:
         assert "strict" not in tools[0]["function"]
 
     def test_strip_strict_from_tools_handles_none(self):
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         assert _strip_strict_from_tools(None) is None
 
     def test_strip_strict_from_tools_handles_openai_not_given_sentinel(self):
         """OpenAI Agents SDK may pass NOT_GIVEN instead of None or a list."""
-        from openai._types import NOT_GIVEN
-
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         # Should not raise TypeError: 'NotGiven' object is not iterable
         result = _strip_strict_from_tools(NOT_GIVEN)
@@ -171,9 +163,6 @@ class TestStrictFieldStripping:
 
     def test_strip_strict_from_tools_handles_openai_omit_sentinel(self):
         """OpenAI Agents SDK may pass Omit() instead of None or a list."""
-        from openai._types import Omit
-
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         omit = Omit()
         # Should not raise TypeError: 'Omit' object is not iterable
@@ -181,21 +170,18 @@ class TestStrictFieldStripping:
         assert result is omit
 
     def test_strip_strict_from_tools_handles_empty_list(self):
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         tools = []
         _strip_strict_from_tools(tools)
         assert tools == []
 
     def test_strip_strict_from_tools_handles_tool_without_function(self):
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         tools = [{"type": "other"}]
         _strip_strict_from_tools(tools)
         assert tools == [{"type": "other"}]
 
     def test_strip_strict_preserves_other_fields(self):
-        from databricks_openai.utils.clients import _strip_strict_from_tools
 
         tools = [
             {
@@ -231,10 +217,8 @@ class TestStrictFieldStripping:
         ],
     )
     def test_should_strip_strict_by_model(self, model, should_strip):
-        from databricks_openai.utils.clients import _should_strip_strict
 
         assert _should_strip_strict(model) == should_strip
-
 
 class TestDatabricksOpenAIStrictStripping:
     """Tests for strict stripping in DatabricksOpenAI."""
@@ -245,10 +229,6 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.host = "https://test.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
-
-            from openai.resources.chat.completions import Completions
-
-            from databricks_openai import DatabricksOpenAI
 
             client = DatabricksOpenAI()
 
@@ -273,10 +253,6 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from openai.resources.chat.completions import Completions
-
-            from databricks_openai import DatabricksOpenAI
-
             client = DatabricksOpenAI()
 
             with patch.object(Completions, "create") as mock_create:
@@ -300,10 +276,6 @@ class TestDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from openai.resources.chat.completions import Completions
-
-            from databricks_openai import DatabricksOpenAI
-
             client = DatabricksOpenAI()
 
             with patch.object(Completions, "create") as mock_create:
@@ -313,7 +285,6 @@ class TestDatabricksOpenAIStrictStripping:
                     messages=[{"role": "user", "content": "hi"}],
                 )
                 mock_create.assert_called_once()
-
 
 class TestAsyncDatabricksOpenAIStrictStripping:
     """Tests for strict stripping in AsyncDatabricksOpenAI."""
@@ -325,10 +296,6 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_client.config.host = "https://test.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
-
-            from openai.resources.chat.completions import AsyncCompletions
-
-            from databricks_openai import AsyncDatabricksOpenAI
 
             client = AsyncDatabricksOpenAI()
 
@@ -353,10 +320,6 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
             mock_ws.return_value = mock_client
 
-            from openai.resources.chat.completions import AsyncCompletions
-
-            from databricks_openai import AsyncDatabricksOpenAI
-
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
@@ -372,38 +335,32 @@ class TestAsyncDatabricksOpenAIStrictStripping:
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs["tools"][0]["function"]["strict"] is True
 
-
 class TestDatabricksAppsSupport:
     """Tests for Databricks Apps support."""
 
     def test_validate_oauth_for_apps_success(self, mock_workspace_client_with_oauth):
-        from databricks_openai.utils.clients import _validate_oauth_for_apps
 
         _validate_oauth_for_apps(mock_workspace_client_with_oauth)
         mock_workspace_client_with_oauth.config.oauth_token.assert_called_once()
 
     def test_validate_oauth_for_apps_failure(self, mock_workspace_client_no_oauth):
-        from databricks_openai.utils.clients import _validate_oauth_for_apps
 
         with pytest.raises(ValueError, match="OAuth authentication"):
             _validate_oauth_for_apps(mock_workspace_client_no_oauth)
 
     def test_get_app_url_success(self, mock_workspace_client_with_oauth):
-        from databricks_openai.utils.clients import _get_app_url
 
         url = _get_app_url(mock_workspace_client_with_oauth, "my-app")
         assert url == "https://my-app.aws.databricksapps.com"
         mock_workspace_client_with_oauth.apps.get.assert_called_once_with(name="my-app")
 
     def test_get_app_url_app_not_found(self, mock_workspace_client_with_oauth):
-        from databricks_openai.utils.clients import _get_app_url
 
         mock_workspace_client_with_oauth.apps.get.side_effect = Exception("App not found")
         with pytest.raises(ValueError, match="Failed to get Databricks App"):
             _get_app_url(mock_workspace_client_with_oauth, "nonexistent-app")
 
     def test_get_app_url_no_url(self, mock_workspace_client_with_oauth):
-        from databricks_openai.utils.clients import _get_app_url
 
         mock_app = MagicMock()
         mock_app.url = None
@@ -412,7 +369,6 @@ class TestDatabricksAppsSupport:
         with pytest.raises(ValueError, match="has no URL"):
             _get_app_url(mock_workspace_client_with_oauth, "my-app")
 
-
 class TestDatabricksClientWithBaseUrl:
     """Tests for DatabricksOpenAI and AsyncDatabricksOpenAI with base_url parameter."""
 
@@ -420,7 +376,6 @@ class TestDatabricksClientWithBaseUrl:
     def test_init_with_base_url_validates_oauth(
         self, client_cls_name, mock_workspace_client_with_oauth
     ):
-        from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 
         client_cls = (
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
@@ -436,7 +391,6 @@ class TestDatabricksClientWithBaseUrl:
     def test_init_with_base_url_requires_oauth(
         self, client_cls_name, mock_workspace_client_no_oauth
     ):
-        from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 
         client_cls = (
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
@@ -448,7 +402,6 @@ class TestDatabricksClientWithBaseUrl:
             )
 
     def test_init_without_base_url_uses_serving_endpoints(self, mock_workspace_client_with_oauth):
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
         assert "/serving-endpoints/" in str(client.base_url)
@@ -458,7 +411,6 @@ class TestDatabricksClientWithBaseUrl:
     def test_init_with_non_databricksapps_base_url_does_not_require_oauth(
         self, client_cls_name, mock_workspace_client_no_oauth
     ):
-        from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 
         client_cls = (
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
@@ -472,14 +424,10 @@ class TestDatabricksClientWithBaseUrl:
         # OAuth should not be validated for non-databricksapps URLs
         mock_workspace_client_no_oauth.config.oauth_token.assert_not_called()
 
-
 class TestAppsRouting:
     """Tests for apps/ prefix routing in DatabricksOpenAI and AsyncDatabricksOpenAI."""
 
     def test_sync_responses_create_routes_to_app(self, mock_workspace_client_with_oauth):
-        from openai.resources.responses import Responses
-
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -496,9 +444,6 @@ class TestAppsRouting:
 
     @pytest.mark.asyncio
     async def test_async_responses_create_routes_to_app(self, mock_workspace_client_with_oauth):
-        from openai.resources.responses import AsyncResponses
-
-        from databricks_openai import AsyncDatabricksOpenAI
 
         client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -511,9 +456,6 @@ class TestAppsRouting:
             mock_workspace_client_with_oauth.apps.get.assert_called_once_with(name="my-agent")
 
     def test_responses_caches_app_clients(self, mock_workspace_client_with_oauth):
-        from openai.resources.responses import Responses
-
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -524,7 +466,6 @@ class TestAppsRouting:
             assert mock_workspace_client_with_oauth.apps.get.call_count == 1
 
     def test_sync_responses_validates_oauth_for_apps_prefix(self, mock_workspace_client_no_oauth):
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_no_oauth)
         with pytest.raises(ValueError, match="OAuth authentication"):
@@ -537,7 +478,6 @@ class TestAppsRouting:
     async def test_async_responses_validates_oauth_for_apps_prefix(
         self, mock_workspace_client_no_oauth
     ):
-        from databricks_openai import AsyncDatabricksOpenAI
 
         client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_no_oauth)
         with pytest.raises(ValueError, match="OAuth authentication"):
@@ -546,13 +486,11 @@ class TestAppsRouting:
                 input=[{"role": "user", "content": "Hello"}],
             )
 
-
 def _make_api_status_error(status_code: int, message: str) -> APIStatusError:
     """Helper to create an APIStatusError with a properly configured request/response."""
     request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
     response = httpx.Response(status_code, json={"detail": message}, request=request)
     return APIStatusError(message=message, response=response, body=None)
-
 
 class TestAppErrorWrapping:
     @pytest.mark.parametrize(
@@ -568,7 +506,6 @@ class TestAppErrorWrapping:
         ],
     )
     def test_wrap_app_error_status_errors(self, status_code, message, expected_hints):
-        from databricks_openai.utils.clients import _wrap_app_error
 
         error = _make_api_status_error(status_code, message)
         wrapped = _wrap_app_error(error, "my-app")
@@ -588,7 +525,6 @@ class TestAppErrorWrapping:
         ],
     )
     def test_wrap_app_error_connection_errors(self, message, expected_hint):
-        from databricks_openai.utils.clients import _wrap_app_error
 
         request = httpx.Request("POST", "https://test.databricksapps.com/v1/responses")
         error = APIConnectionError(message=message, request=request)
@@ -598,7 +534,6 @@ class TestAppErrorWrapping:
         assert message in wrapped_str
         assert "Hint:" in wrapped_str
         assert expected_hint in wrapped_str
-
 
 class TestDatabricksOpenAIAppsErrorHandling:
     @pytest.mark.parametrize(
@@ -617,9 +552,6 @@ class TestDatabricksOpenAIAppsErrorHandling:
     def test_responses_wraps_app_errors(
         self, mock_workspace_client_with_oauth, error, expected_match
     ):
-        from openai.resources.responses import Responses
-
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -631,9 +563,6 @@ class TestDatabricksOpenAIAppsErrorHandling:
                 )
 
     def test_responses_non_apps_model_does_not_wrap_errors(self, mock_workspace_client_with_oauth):
-        from openai.resources.responses import Responses
-
-        from databricks_openai import DatabricksOpenAI
 
         client = DatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -645,7 +574,6 @@ class TestDatabricksOpenAIAppsErrorHandling:
                     model="databricks-claude-3-7-sonnet",
                     input=[{"role": "user", "content": "Hello"}],
                 )
-
 
 class TestAsyncDatabricksOpenAIAppsErrorHandling:
     @pytest.mark.asyncio
@@ -665,9 +593,6 @@ class TestAsyncDatabricksOpenAIAppsErrorHandling:
     async def test_responses_wraps_app_errors(
         self, mock_workspace_client_with_oauth, error, expected_match
     ):
-        from openai.resources.responses import AsyncResponses
-
-        from databricks_openai import AsyncDatabricksOpenAI
 
         client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client_with_oauth)
 
@@ -678,8 +603,6 @@ class TestAsyncDatabricksOpenAIAppsErrorHandling:
                     model="apps/my-agent",
                     input=[{"role": "user", "content": "Hello"}],
                 )
-
-
 
 class TestChatCompletionsEmptyContentFix:
     @pytest.mark.parametrize(
@@ -719,13 +642,11 @@ class TestChatCompletionsEmptyContentFix:
                 )
                 assert mock_create.call_args.kwargs["messages"][1]["content"] == expected_content
 
-
 def _mock_workspace_client():
     mock_client = MagicMock(spec=WorkspaceClient)
     mock_client.config.host = "https://test.databricks.com"
     mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
     return mock_client
-
 
 def _messages_with_empty_assistant_content() -> list[dict[str, Any]]:
     return [
