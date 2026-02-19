@@ -1,0 +1,41 @@
+{
+  "name": "@databricks/ai-sdk-provider",
+  "version": "0.5.0-pr335",
+  "description": "Databricks provider for Vercel AI SDK (root proxy for GitHub installs)",
+  "main": "./integrations/ai-sdk-provider/dist/index.cjs",
+  "module": "./integrations/ai-sdk-provider/dist/index.js",
+  "types": "./integrations/ai-sdk-provider/dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./integrations/ai-sdk-provider/dist/index.d.ts",
+        "default": "./integrations/ai-sdk-provider/dist/index.js"
+      },
+      "require": {
+        "types": "./integrations/ai-sdk-provider/dist/index.d.cts",
+        "default": "./integrations/ai-sdk-provider/dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "integrations/ai-sdk-provider/dist",
+    "integrations/ai-sdk-provider/README.md"
+  ],
+  "scripts": {
+    "prepare": "cd integrations/ai-sdk-provider && npm install && npm run build",
+    "prepublishOnly": "cd integrations/ai-sdk-provider && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/databricks/databricks-ai-bridge.git"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.5",
+    "@ai-sdk/provider-utils": "^3.0.1",
+    "zod": "^4.3.5"
+  },
+  "peerDependencies": {
+    "zod": "^3 || ^4"
+  }
+}
