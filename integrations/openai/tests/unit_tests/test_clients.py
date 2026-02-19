@@ -675,3 +675,230 @@ class TestAsyncDatabricksOpenAIAppsErrorHandling:
                     model="apps/my-agent",
                     input=[{"role": "user", "content": "Hello"}],
                 )
+
+
+class TestIsClaudeModel:
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("databricks-claude-3-7-sonnet", True),
+            ("claude-3-opus", True),
+            ("Claude-3-Haiku", True),
+            ("my-claude-model", True),
+            ("databricks-meta-llama-3-1-70b-instruct", False),
+            ("databricks-gpt-4o", False),
+            ("gpt-4", False),
+            (None, False),
+            ("", False),
+        ],
+    )
+    def test_is_claude_model(self, model, expected):
+        from databricks_openai.utils.clients import _is_claude_model
+
+        assert _is_claude_model(model) == expected
+
+
+class TestIsEmptyContent:
+    @pytest.mark.parametrize(
+        "content,expected",
+        [
+            (None, True),
+            ("", True),
+            ("  ", True),
+            ("\t\n", True),
+            ("hello", False),
+            ([], True),
+            ([{"type": "text", "text": ""}], True),
+            ([{"type": "text", "text": "  "}], True),
+            ([{"type": "text", "text": "hello"}], False),
+            ([{"type": "refusal", "refusal": "no"}], False),
+            ([{"type": "text", "text": ""}, {"type": "text", "text": ""}], True),
+            ([{"type": "text", "text": ""}, {"type": "text", "text": "hi"}], False),
+        ],
+    )
+    def test_is_empty_content(self, content, expected):
+        from databricks_openai.utils.clients import _is_empty_content
+
+        assert _is_empty_content(content) == expected
+
+
+class TestFixEmptyAssistantContentInMessages:
+    def test_fixes_empty_string_content(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == " "
+
+    def test_fixes_none_content(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "1"}]},
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == " "
+
+    def test_fixes_list_with_empty_text(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+                "tool_calls": [{"id": "1"}],
+            },
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == " "
+
+    def test_does_not_fix_nonempty_content(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {"role": "assistant", "content": "hello", "tool_calls": [{"id": "1"}]},
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == "hello"
+
+    def test_does_not_fix_without_tool_calls(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {"role": "assistant", "content": ""},
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == ""
+
+    def test_does_not_fix_user_messages(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        messages = [
+            {"role": "user", "content": "", "tool_calls": [{"id": "1"}]},
+        ]
+        _fix_empty_assistant_content_in_messages(messages)
+        assert messages[0]["content"] == ""
+
+    def test_handles_none_messages(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        _fix_empty_assistant_content_in_messages(None)
+
+    def test_handles_empty_messages(self):
+        from databricks_openai.utils.clients import _fix_empty_assistant_content_in_messages
+
+        _fix_empty_assistant_content_in_messages([])
+
+
+class TestChatCompletionsEmptyContentFix:
+    def test_chat_completions_fixes_empty_content_for_claude(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            from openai.resources.chat.completions import Completions
+
+            from databricks_openai import DatabricksOpenAI
+
+            client = DatabricksOpenAI()
+
+            with patch.object(Completions, "create") as mock_create:
+                mock_create.return_value = MagicMock()
+                messages: list[dict[str, Any]] = [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "content": "result", "tool_call_id": "1"},
+                ]
+                client.chat.completions.create(
+                    model="databricks-claude-3-7-sonnet",
+                    messages=cast(Any, messages),
+                )
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs["messages"][1]["content"] == " "
+
+    def test_chat_completions_does_not_fix_for_gpt(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            from openai.resources.chat.completions import Completions
+
+            from databricks_openai import DatabricksOpenAI
+
+            client = DatabricksOpenAI()
+
+            with patch.object(Completions, "create") as mock_create:
+                mock_create.return_value = MagicMock()
+                messages: list[dict[str, Any]] = [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "content": "result", "tool_call_id": "1"},
+                ]
+                original_content = messages[1]["content"]
+                client.chat.completions.create(
+                    model="databricks-gpt-4o",
+                    messages=cast(Any, messages),
+                )
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs["messages"][1]["content"] == original_content
+
+    @pytest.mark.asyncio
+    async def test_async_chat_completions_fixes_empty_content_for_claude(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            from openai.resources.chat.completions import AsyncCompletions
+
+            from databricks_openai import AsyncDatabricksOpenAI
+
+            client = AsyncDatabricksOpenAI()
+
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
+                messages: list[dict[str, Any]] = [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "content": "result", "tool_call_id": "1"},
+                ]
+                await client.chat.completions.create(
+                    model="databricks-claude-3-7-sonnet",
+                    messages=cast(Any, messages),
+                )
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs["messages"][1]["content"] == " "
+
+    @pytest.mark.asyncio
+    async def test_async_chat_completions_does_not_fix_for_gpt(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            from openai.resources.chat.completions import AsyncCompletions
+
+            from databricks_openai import AsyncDatabricksOpenAI
+
+            client = AsyncDatabricksOpenAI()
+
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
+                messages: list[dict[str, Any]] = [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "content": "result", "tool_call_id": "1"},
+                ]
+                original_content = messages[1]["content"]
+                await client.chat.completions.create(
+                    model="databricks-gpt-4o",
+                    messages=cast(Any, messages),
+                )
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs["messages"][1]["content"] == original_content
