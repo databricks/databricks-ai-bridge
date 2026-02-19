@@ -8,7 +8,6 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat.completions import AsyncCompletions, Completions
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
-from databricks_openai.utils.clients import _is_claude_model, _is_empty_content
 
 
 @pytest.fixture
@@ -681,55 +680,33 @@ class TestAsyncDatabricksOpenAIAppsErrorHandling:
                 )
 
 
-class TestIsClaudeModel:
-    @pytest.mark.parametrize(
-        "model,expected",
-        [
-            ("databricks-claude-3-7-sonnet", True),
-            ("databricks-gpt-4o", False),
-        ],
-    )
-    def test_is_claude_model(self, model, expected):
-        assert _is_claude_model(model) == expected
-
-
-class TestIsEmptyContent:
-    @pytest.mark.parametrize(
-        "content,expected",
-        [
-            ("", True),
-            ("hello", False),
-        ],
-    )
-    def test_is_empty_content(self, content, expected):
-        assert _is_empty_content(content) == expected
-
 
 class TestChatCompletionsEmptyContentFix:
-    def test_chat_completions_fixes_empty_content_for_claude(self):
+    @pytest.mark.parametrize(
+        "model,expected_content",
+        [
+            ("databricks-claude-3-7-sonnet", " "),
+            ("databricks-gpt-4o", ""),
+        ],
+    )
+    def test_sync_empty_content_fix(self, model, expected_content):
         with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
             mock_ws.return_value = _mock_workspace_client()
             client = DatabricksOpenAI()
             with patch.object(Completions, "create", return_value=MagicMock()) as mock_create:
                 messages = _messages_with_empty_assistant_content()
-                client.chat.completions.create(
-                    model="databricks-claude-3-7-sonnet", messages=cast(Any, messages)
-                )
-                assert mock_create.call_args.kwargs["messages"][1]["content"] == " "
-
-    def test_chat_completions_does_not_fix_for_gpt(self):
-        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
-            mock_ws.return_value = _mock_workspace_client()
-            client = DatabricksOpenAI()
-            with patch.object(Completions, "create", return_value=MagicMock()) as mock_create:
-                messages = _messages_with_empty_assistant_content()
-                client.chat.completions.create(
-                    model="databricks-gpt-4o", messages=cast(Any, messages)
-                )
-                assert mock_create.call_args.kwargs["messages"][1]["content"] == ""
+                client.chat.completions.create(model=model, messages=cast(Any, messages))
+                assert mock_create.call_args.kwargs["messages"][1]["content"] == expected_content
 
     @pytest.mark.asyncio
-    async def test_async_chat_completions_fixes_empty_content_for_claude(self):
+    @pytest.mark.parametrize(
+        "model,expected_content",
+        [
+            ("databricks-claude-3-7-sonnet", " "),
+            ("databricks-gpt-4o", ""),
+        ],
+    )
+    async def test_async_empty_content_fix(self, model, expected_content):
         with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
             mock_ws.return_value = _mock_workspace_client()
             client = AsyncDatabricksOpenAI()
@@ -738,23 +715,9 @@ class TestChatCompletionsEmptyContentFix:
             ) as mock_create:
                 messages = _messages_with_empty_assistant_content()
                 await client.chat.completions.create(
-                    model="databricks-claude-3-7-sonnet", messages=cast(Any, messages)
+                    model=model, messages=cast(Any, messages)
                 )
-                assert mock_create.call_args.kwargs["messages"][1]["content"] == " "
-
-    @pytest.mark.asyncio
-    async def test_async_chat_completions_does_not_fix_for_gpt(self):
-        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
-            mock_ws.return_value = _mock_workspace_client()
-            client = AsyncDatabricksOpenAI()
-            with patch.object(
-                AsyncCompletions, "create", new_callable=AsyncMock
-            ) as mock_create:
-                messages = _messages_with_empty_assistant_content()
-                await client.chat.completions.create(
-                    model="databricks-gpt-4o", messages=cast(Any, messages)
-                )
-                assert mock_create.call_args.kwargs["messages"][1]["content"] == ""
+                assert mock_create.call_args.kwargs["messages"][1]["content"] == expected_content
 
 
 def _mock_workspace_client():
