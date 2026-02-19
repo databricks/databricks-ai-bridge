@@ -3,6 +3,7 @@ import { combineHeaders, type FetchFunction, withoutTrailingSlash } from '@ai-sd
 import { DatabricksChatAgentLanguageModel } from './chat-agent-language-model/chat-agent-language-model'
 import { DatabricksResponsesAgentLanguageModel } from './responses-agent-language-model/responses-agent-language-model'
 import { DatabricksFmapiLanguageModel } from './fmapi-language-model/fmapi-language-model'
+import { OpenResponsesLanguageModel } from './open-responses-language-model/open-responses-language-model'
 
 export type DatabricksLanguageModelConfig = {
   provider: string
@@ -21,6 +22,7 @@ export interface DatabricksProvider extends ProviderV3 {
   /** Agents */
   chatAgent(modelId: string): LanguageModelV3 // agent/v2/chat
   responses(modelId: string): LanguageModelV3 // agent/v1/responses
+  openResponses(modelId: string): LanguageModelV3 // OpenResponses format (agent apps)
 
   /** Foundation Models */
   chatCompletions(modelId: string): LanguageModelV3 // llm/v1/chat
@@ -94,6 +96,14 @@ export const createDatabricksProvider = (
       useRemoteToolCalling: settings.useRemoteToolCalling,
     })
 
+  const createOpenResponses = (modelId: string): LanguageModelV3 =>
+    new OpenResponsesLanguageModel({
+      modelId,
+      baseUrl: formatUrl({ path: '/invocations' }),
+      headers: getHeaders(),
+      fetch,
+    })
+
   const notImplemented = (name: string) => {
     return () => {
       throw new Error(`${name} is not supported yet`)
@@ -105,6 +115,7 @@ export const createDatabricksProvider = (
     responses: createResponsesAgent,
     chatCompletions: createFmapi,
     chatAgent: createChatAgent,
+    openResponses: createOpenResponses,
     imageModel: notImplemented('ImageModel'),
     textEmbeddingModel: notImplemented('TextEmbeddingModel'),
     embeddingModel: notImplemented('EmbeddingModel'),
