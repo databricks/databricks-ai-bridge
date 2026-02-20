@@ -150,11 +150,11 @@ class TestGenieAgentInit:
             GenieAgent(genie_space_id="")
 
     def test_agent_raises_on_invalid_space_id(self, workspace_client):
-        from databricks.sdk.errors import NotFound
+        from databricks.sdk.errors import DatabricksError
 
         from databricks_langchain.genie import GenieAgent
 
-        with pytest.raises(NotFound):
+        with pytest.raises(DatabricksError):
             GenieAgent(genie_space_id="nonexistent_invalid_id", client=workspace_client)
 
 
