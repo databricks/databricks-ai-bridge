@@ -51,6 +51,47 @@ def _should_strip_strict(model: str | None) -> bool:
     return "gpt" not in model.lower()
 
 
+def _is_claude_model(model: str | None) -> bool:
+    """Returns True if the model is a Claude variant."""
+    if not model:
+        return False
+    return "claude" in model.lower()
+
+
+def _is_empty_content(content: Any) -> bool:
+    """Check if message content is effectively empty."""
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    if isinstance(content, list):
+        if not content:
+            return True
+        return all(
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and not (part.get("text") or "").strip()
+            for part in content
+        )
+    return False
+
+
+def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
+    """Replace empty assistant content with a single space when tool_calls are present.
+
+    Claude models on Databricks reject empty text content blocks in assistant messages.
+    When tool_calls are present but content is empty, set content to " " to avoid errors.
+    """
+    if not messages:
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            if _is_empty_content(message.get("content")):
+                message["content"] = " "
+
+
 def _get_authorized_http_client(workspace_client: WorkspaceClient) -> Client:
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
     return Client(auth=databricks_token_auth)
@@ -146,6 +187,8 @@ class DatabricksCompletions(Completions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+        if _is_claude_model(model):
+            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         return super().create(**kwargs)
 
 
@@ -291,6 +334,8 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+        if _is_claude_model(model):
+            _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         return await super().create(**kwargs)
 
 

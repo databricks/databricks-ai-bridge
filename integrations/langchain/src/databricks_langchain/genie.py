@@ -2,24 +2,24 @@ from typing import Callable, Optional
 
 import pandas as pd
 from databricks.sdk import WorkspaceClient
+from databricks_ai_bridge._compat import mlflow_trace
 from databricks_ai_bridge.genie import Genie
 
 
+@mlflow_trace
 def _concat_messages_array(messages):
-    import mlflow
-
-    with mlflow.start_span(name="_concat_messages_array"):
-        concatenated_message = "\n".join(
-            [
-                f"{message.get('role', message.get('name', 'unknown'))}: {message.get('content', '')}"
-                if isinstance(message, dict)
-                else f"{getattr(message, 'role', getattr(message, 'name', 'unknown'))}: {getattr(message, 'content', '')}"
-                for message in messages
-            ]
-        )
-        return concatenated_message
+    concatenated_message = "\n".join(
+        [
+            f"{message.get('role', message.get('name', 'unknown'))}: {message.get('content', '')}"
+            if isinstance(message, dict)
+            else f"{getattr(message, 'role', getattr(message, 'name', 'unknown'))}: {getattr(message, 'content', '')}"
+            for message in messages
+        ]
+    )
+    return concatenated_message
 
 
+@mlflow_trace
 def _query_genie_as_agent(
     input,
     genie: Genie,
@@ -44,55 +44,53 @@ def _query_genie_as_agent(
         If include_context is True, the dictionary will also contain the query_reasoning and query_sql fields.
         If Genie returned a dataframe because it was told to do returns in Pandas format, the dictionary will also contain the dataframe field.
     """
-    import mlflow
     from langchain_core.messages import AIMessage
 
-    with mlflow.start_span(name="_query_genie_as_agent"):
-        messages = input.get("messages", [])
-        # Get conversation_id from input state if it exists
-        conversation_id = input.get("conversation_id", None)
+    messages = input.get("messages", [])
+    # Get conversation_id from input state if it exists
+    conversation_id = input.get("conversation_id", None)
 
-        # Apply message processor if provided
-        if message_processor:
-            query = message_processor(messages)
-        else:
-            query = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
-            # Concatenate messages to form the chat history
-            query += _concat_messages_array(messages)
+    # Apply message processor if provided
+    if message_processor:
+        query = message_processor(messages)
+    else:
+        query = f"I will provide you a chat history, where your name is {genie_agent_name}. Please help with the described information in the chat history.\n"
+        # Concatenate messages to form the chat history
+        query += _concat_messages_array(messages)
 
-        # Send the message and wait for a response, passing conversation_id if available
-        genie_response = genie.ask_question(query, conversation_id=conversation_id)
+    # Send the message and wait for a response, passing conversation_id if available
+    genie_response = genie.ask_question(query, conversation_id=conversation_id)
 
-        query_reasoning = genie_response.description or ""
-        query_sql = genie_response.query or ""
-        query_result = genie_response.result if genie_response.result is not None else ""
-        query_conversation_id = genie_response.conversation_id or ""
+    query_reasoning = genie_response.description or ""
+    query_sql = genie_response.query or ""
+    query_result = genie_response.result if genie_response.result is not None else ""
+    query_conversation_id = genie_response.conversation_id or ""
 
-        # Create a list of AIMessage to return
-        messages = []
+    # Create a list of AIMessage to return
+    messages = []
 
-        if include_context:
-            messages.append(AIMessage(content=query_reasoning, name="query_reasoning"))
-            messages.append(AIMessage(content=query_sql, name="query_sql"))
+    if include_context:
+        messages.append(AIMessage(content=query_reasoning, name="query_reasoning"))
+        messages.append(AIMessage(content=query_sql, name="query_sql"))
 
-        # Handle DataFrame vs string results
-        if isinstance(query_result, pd.DataFrame):  # if we asked for Pandas return
-            # Convert to markdown for message display
-            query_result_content = query_result.to_markdown(index=False)
-            messages.append(AIMessage(content=query_result_content, name="query_result"))
+    # Handle DataFrame vs string results
+    if isinstance(query_result, pd.DataFrame):  # if we asked for Pandas return
+        # Convert to markdown for message display
+        query_result_content = query_result.to_markdown(index=False)
+        messages.append(AIMessage(content=query_result_content, name="query_result"))
 
-            # Return with DataFrame included
-            return {
-                "messages": messages,
-                "conversation_id": query_conversation_id,
-                "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
-            }
-        else:
-            # String result - just add to messages
-            messages.append(AIMessage(content=query_result, name="query_result"))
+        # Return with DataFrame included
+        return {
+            "messages": messages,
+            "conversation_id": query_conversation_id,
+            "dataframe": query_result,  # Include raw DataFrame if Genie returned dataframe
+        }
+    else:
+        # String result - just add to messages
+        messages.append(AIMessage(content=query_result, name="query_result"))
 
-            # Return without DataFrame field
-            return {"messages": messages, "conversation_id": query_conversation_id}
+        # Return without DataFrame field
+        return {"messages": messages, "conversation_id": query_conversation_id}
 
 
 def GenieAgent(
