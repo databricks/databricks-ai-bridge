@@ -55,6 +55,20 @@ function mapResponsesFinishReason({
   return { raw: finishReason ?? undefined, unified }
 }
 
+/**
+ * Extracts trace_id from a Databricks-specific databricks_output object.
+ * The trace_id is nested at databricks_output.trace.info.trace_id.
+ */
+function extractTraceIdFromDatabricksOutput(databricksOutput: unknown): string | undefined {
+  if (!databricksOutput || typeof databricksOutput !== 'object') return undefined
+  const trace = (databricksOutput as { trace?: unknown }).trace
+  if (!trace || typeof trace !== 'object') return undefined
+  const info = (trace as { info?: unknown }).info
+  if (!info || typeof info !== 'object') return undefined
+  const traceId = (info as { trace_id?: unknown }).trace_id
+  return typeof traceId === 'string' ? traceId : undefined
+}
+
 export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
   readonly specificationVersion = 'v3'
 
@@ -96,30 +110,20 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const content = convertResponsesAgentResponseToMessagePart(response)
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
-    // Extract trace_id from both root level (legacy) and nested databricks_output structure
+    // Extract trace_id from both root level (legacy) and nested databricks_output structure.
+    // databricks_output is a Databricks extension not present in the base LanguageModelV3 response type,
+    // so we cast through unknown before accessing it.
     let traceId: string | undefined = response.trace_id
-    if (!traceId && response.databricks_output) {
-      const databricksOutput = response.databricks_output as unknown
-      if (databricksOutput && typeof databricksOutput === 'object' && 'trace' in databricksOutput) {
-        const trace = (databricksOutput as { trace?: unknown }).trace
-        if (trace && typeof trace === 'object' && 'info' in trace) {
-          const info = (trace as { info?: unknown }).info
-          if (info && typeof info === 'object' && 'trace_id' in info) {
-            const nestedTraceId = (info as { trace_id?: unknown }).trace_id
-            if (typeof nestedTraceId === 'string') {
-              traceId = nestedTraceId
-            }
-          }
-        }
-      }
+    if (!traceId) {
+      traceId = extractTraceIdFromDatabricksOutput(response.databricks_output as unknown)
     }
     const spanId: string | undefined = response.span_id
 
     // Create a normalized response body with trace_id at root level for easier access
     const responseBody: Record<string, unknown> = {
       ...response,
-      ...(traceId && { trace_id: traceId }),
-      ...(spanId && { span_id: spanId }),
+      ...(traceId != null ? { trace_id: traceId } : {}),
+      ...(spanId != null ? { span_id: spanId } : {}),
     }
 
     return {
@@ -188,8 +192,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     // Track tool call IDs to tool names for looking up tool names in function_call_output events
     const toolNamesByCallId = new Map<string, string>()
 
-    // Create a mutable object to capture trace_id and span_id from responses.completed event
-    // This object will be mutated as the stream is consumed
+    // Lazily populated as the stream is consumed — only valid after the stream is fully drained.
+    // trace_id may be populated from either the response.output_item.done or responses.completed event,
+    // whichever arrives first. span_id is only available in responses.completed.
     const responseBody: Record<string, unknown> = {}
 
     return {
@@ -233,30 +238,19 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 return
               }
 
-              // Extract trace info from response.output_item.done event
-              // The endpoint returns trace info in databricks_output.trace.info
+              // Extract trace info from response.output_item.done event.
+              // databricks_output is a Databricks extension not present in the base chunk type,
+              // so we cast through unknown before accessing it.
+              // Note: span_id is not available in output_item.done — it only appears in responses.completed.
               if (chunk.value.type === 'response.output_item.done') {
-                const databricksOutput: unknown = (
-                  chunk.value as { databricks_output?: unknown }
-                ).databricks_output
-                if (
-                  databricksOutput &&
-                  typeof databricksOutput === 'object' &&
-                  'trace' in databricksOutput
-                ) {
-                  const trace = (databricksOutput as { trace?: unknown }).trace
-                  if (trace && typeof trace === 'object' && 'info' in trace) {
-                    const info = (trace as { info?: unknown }).info
-                    if (info && typeof info === 'object' && 'trace_id' in info) {
-                      const traceId = (info as { trace_id?: unknown }).trace_id
-                      if (typeof traceId === 'string') {
-                        // Normalize trace_id at root level for easier access
-                        responseBody.trace_id = traceId
-                        // Store full databricks_output structure for complete trace data
-                        responseBody.databricks_output = databricksOutput
-                      }
-                    }
-                  }
+                const databricksOutput = (chunk.value as { databricks_output?: unknown })
+                  .databricks_output
+                const traceId = extractTraceIdFromDatabricksOutput(databricksOutput)
+                if (traceId != null) {
+                  // Normalize trace_id at root level for easier access
+                  responseBody.trace_id = traceId
+                  // Store full databricks_output structure for complete trace data
+                  responseBody.databricks_output = databricksOutput
                 }
               }
 
