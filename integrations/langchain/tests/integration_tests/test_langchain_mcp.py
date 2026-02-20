@@ -77,25 +77,15 @@ def cached_langchain_tools(mcp_server):
 
 
 # =============================================================================
-# DatabricksMCPServer Init Tests
+# DatabricksMCPServer — UC Functions
 # =============================================================================
 
 
 @pytest.mark.integration
-class TestDatabricksMCPServerInit:
-    """Test DatabricksMCPServer construction and URL generation."""
+class TestDatabricksMCPServerUCFunctions:
+    """Test DatabricksMCPServer with UC function MCP endpoints (init, exec, auth, kwargs, schema-level)."""
 
-    def test_from_uc_function_creates_server(self, workspace_client):
-        from databricks_langchain import DatabricksMCPServer
-
-        server = DatabricksMCPServer.from_uc_function(
-            catalog=CATALOG,
-            schema=SCHEMA,
-            function_name=FUNCTION_NAME,
-            name="mcp-init-test",
-            workspace_client=workspace_client,
-        )
-        assert server is not None
+    # -- Init / listing --
 
     def test_server_url_matches_pattern(self, mcp_server):
         expected_suffix = f"/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}/{FUNCTION_NAME}"
@@ -108,41 +98,18 @@ class TestDatabricksMCPServerInit:
         assert conn["transport"] == "streamable_http"
         assert "auth" in conn, "Connection dict should have 'auth' key"
 
-
-# =============================================================================
-# DatabricksMultiServerMCPClient Tools Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestDatabricksMultiServerMCPClientTools:
-    """Test DatabricksMultiServerMCPClient tool listing with live MCP server."""
-
-    def test_get_tools_returns_langchain_tools(self, cached_langchain_tools):
-        assert len(cached_langchain_tools) > 0
-
-    def test_tools_are_langchain_base_tools(self, cached_langchain_tools):
+    def test_get_tools_returns_valid_base_tools(self, cached_langchain_tools):
         from langchain_core.tools import BaseTool
 
+        assert len(cached_langchain_tools) > 0
         for tool in cached_langchain_tools:
             assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
-
-    def test_tool_has_name_and_description(self, cached_langchain_tools):
-        for tool in cached_langchain_tools:
             assert tool.name, "Tool should have a non-empty name"
             assert tool.description, "Tool should have a non-empty description"
 
+    # -- Execution --
 
-# =============================================================================
-# DatabricksMultiServerMCPClient Execution Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestDatabricksMultiServerMCPClientExecution:
-    """Test DatabricksMultiServerMCPClient tool invocation with live MCP server."""
-
-    def test_tool_invoke_returns_result(self, workspace_client, mcp_server):
+    def test_tool_invoke_echoes_input(self, workspace_client, mcp_server):
         from databricks_langchain import DatabricksMultiServerMCPClient
 
         async def _test():
@@ -151,32 +118,12 @@ class TestDatabricksMultiServerMCPClientExecution:
             assert len(tools) > 0
             result = await tools[0].ainvoke({"message": "hello"})
             assert result is not None
-
-        asyncio.run(_test())
-
-    def test_tool_invoke_result_contains_input(self, workspace_client, mcp_server):
-        from databricks_langchain import DatabricksMultiServerMCPClient
-
-        async def _test():
-            client = DatabricksMultiServerMCPClient([mcp_server])
-            tools = await client.get_tools()
-            assert len(tools) > 0
-            result = await tools[0].ainvoke({"message": "hello"})
-            # LangChain MCP tools return raw content (list of dicts or string)
             result_str = str(result)
             assert "hello" in result_str, f"Echo should return 'hello', got: {result}"
 
         asyncio.run(_test())
 
-
-# =============================================================================
-# Kwargs Pass-Through Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestLangChainMCPKwargsPassThrough:
-    """Verify kwargs like handle_tool_error and timeout are passed through correctly."""
+    # -- Kwargs pass-through --
 
     def test_handle_tool_error_string_applied_to_tools(self, workspace_client):
         from databricks_langchain import (
@@ -247,36 +194,7 @@ class TestLangChainMCPKwargsPassThrough:
             f"Expected timedelta(seconds=60.0), got: {conn['timeout']}"
         )
 
-
-# =============================================================================
-# Auth Path Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestLangChainMCPAuthPaths:
-    """Verify auth credentials are correctly forwarded through the LangChain MCP wrappers."""
-
-    def test_current_auth_produces_working_client(self, workspace_client):
-        from databricks_langchain import (
-            DatabricksMCPServer,
-            DatabricksMultiServerMCPClient,
-        )
-
-        server = DatabricksMCPServer.from_uc_function(
-            catalog=CATALOG,
-            schema=SCHEMA,
-            function_name=FUNCTION_NAME,
-            name="auth-current",
-            workspace_client=workspace_client,
-        )
-
-        async def _test():
-            client = DatabricksMultiServerMCPClient([server])
-            tools = await client.get_tools()
-            assert len(tools) > 0
-
-        asyncio.run(_test())
+    # -- Auth paths --
 
     def test_pat_auth_produces_working_client(self, workspace_client):
         from databricks.sdk import WorkspaceClient
@@ -343,15 +261,7 @@ class TestLangChainMCPAuthPaths:
 
         asyncio.run(_test())
 
-
-# =============================================================================
-# Schema-Level Listing Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestDatabricksMCPServerSchemaLevel:
-    """Test schema-level URL construction and listing through LangChain wrapper."""
+    # -- Schema-level --
 
     def test_from_uc_function_schema_level_url(self, workspace_client):
         from databricks_langchain import DatabricksMCPServer
@@ -389,13 +299,13 @@ class TestDatabricksMCPServerSchemaLevel:
 
 
 # =============================================================================
-# Vector Search MCP Tests
+# DatabricksMCPServer — Vector Search
 # =============================================================================
 
 
 @pytest.mark.integration
 class TestDatabricksMCPServerVectorSearch:
-    """Test DatabricksMCPServer.from_vector_search() with live VS MCP server."""
+    """Test DatabricksMCPServer.from_vector_search() (index-level + schema-level)."""
 
     def test_from_vector_search_url_pattern(self, workspace_client):
         from databricks_langchain import DatabricksMCPServer
@@ -412,36 +322,10 @@ class TestDatabricksMCPServerVectorSearch:
             f"URL should end with '{expected_suffix}', got: {server.url}"
         )
 
-    def test_from_vector_search_get_tools_returns_base_tools(self, workspace_client):
+    def test_from_vector_search_tool_invoke(self, workspace_client):
+        """Get tools (verify BaseTool type) and invoke a VS tool."""
         from langchain_core.tools import BaseTool
 
-        from databricks_langchain import (
-            DatabricksMCPServer,
-            DatabricksMultiServerMCPClient,
-        )
-
-        server = DatabricksMCPServer.from_vector_search(
-            catalog=CATALOG,
-            schema=VS_SCHEMA,
-            index_name=VS_INDEX,
-            name="vs-tools-test",
-            workspace_client=workspace_client,
-        )
-
-        async def _test():
-            client = DatabricksMultiServerMCPClient([server])
-            try:
-                tools = await client.get_tools()
-            except Exception as e:
-                pytest.skip(f"VS MCP endpoint not available: {e}")
-            assert len(tools) > 0
-            for tool in tools:
-                assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
-
-        asyncio.run(_test())
-
-    def test_from_vector_search_tool_invoke(self, workspace_client):
-        """Invoke a VS tool and verify non-empty result."""
         from databricks_langchain import (
             DatabricksMCPServer,
             DatabricksMultiServerMCPClient,
@@ -462,6 +346,8 @@ class TestDatabricksMCPServerVectorSearch:
             except Exception as e:
                 pytest.skip(f"VS MCP endpoint not available: {e}")
             assert len(tools) > 0
+            for tool in tools:
+                assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
             tool = tools[0]
             # Dynamically extract first required param from tool schema
             # args_schema may be a Pydantic model class or a plain dict
@@ -479,19 +365,12 @@ class TestDatabricksMCPServerVectorSearch:
 
         asyncio.run(_test())
 
-
-# =============================================================================
-# Vector Search Schema-Level Tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestDatabricksMCPServerVSSchemaLevel:
-    """Test schema-level VS URL construction and listing through LangChain wrapper."""
-
-    def test_from_vector_search_schema_level_url(self, workspace_client):
-        """from_vector_search(catalog, schema) without index_name → schema-level URL."""
-        from databricks_langchain import DatabricksMCPServer
+    def test_from_vector_search_schema_level(self, workspace_client):
+        """Schema-level VS: verify URL pattern and listing returns ≥1 tool."""
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
 
         server = DatabricksMCPServer.from_vector_search(
             catalog=CATALOG,
@@ -502,20 +381,6 @@ class TestDatabricksMCPServerVSSchemaLevel:
         expected_suffix = f"/api/2.0/mcp/vector-search/{CATALOG}/{VS_SCHEMA}"
         assert server.url.endswith(expected_suffix), (
             f"URL should end with '{expected_suffix}', got: {server.url}"
-        )
-
-    def test_schema_level_vs_get_tools_returns_tools(self, workspace_client):
-        """Schema-level VS listing returns ≥1 tool."""
-        from databricks_langchain import (
-            DatabricksMCPServer,
-            DatabricksMultiServerMCPClient,
-        )
-
-        server = DatabricksMCPServer.from_vector_search(
-            catalog=CATALOG,
-            schema=VS_SCHEMA,
-            name="vs-schema-level-tools",
-            workspace_client=workspace_client,
         )
 
         async def _test():

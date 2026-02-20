@@ -160,7 +160,9 @@ def cached_vs_tools_list(vs_mcp_client):
 def cached_vs_call_result(vs_mcp_client, cached_vs_tools_list):
     """Cache a VS call_tool() result for the session."""
     tool = cached_vs_tools_list[0]
-    return vs_mcp_client.call_tool(tool.name, {"query": "test"})
+    properties = tool.inputSchema.get("properties", {})
+    param_name = next(iter(properties), "query")
+    return vs_mcp_client.call_tool(tool.name, {param_name: "test"})
 
 
 # =============================================================================

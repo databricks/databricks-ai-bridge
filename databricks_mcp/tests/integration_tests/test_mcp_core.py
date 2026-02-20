@@ -2,7 +2,7 @@
 Core DatabricksMCPClient integration tests.
 
 Tests list_tools, call_tool, and auth paths against a live Databricks MCP server
-backed by a UC function (echo_message).
+backed by UC functions, Vector Search indexes, and Genie spaces.
 """
 
 from __future__ import annotations
@@ -24,18 +24,16 @@ SCHEMA = "databricks_ai_bridge_mcp_test"
 FUNCTION_NAME = "echo_message"
 
 # =============================================================================
-# list_tools tests
+# UC Functions
 # =============================================================================
 
 
 @pytest.mark.integration
-class TestMCPClientListTools:
-    """Verify list_tools() returns valid tool metadata from a live MCP server."""
+class TestMCPClientUCFunctions:
+    """Verify list_tools() and call_tool() against a live UC function MCP server."""
 
-    def test_list_tools_returns_nonempty(self, cached_tools_list):
+    def test_list_tools_returns_valid_tools(self, cached_tools_list):
         assert len(cached_tools_list) > 0
-
-    def test_tools_have_name_and_schema(self, cached_tools_list):
         for tool in cached_tools_list:
             assert tool.name, "Tool name should be non-empty"
             assert tool.inputSchema, "Tool should have an inputSchema"
@@ -55,28 +53,15 @@ class TestMCPClientListTools:
             pytest.skip(f"Schema-level list_tools failed: {e}")
         assert len(tools) >= 1, "Schema-level listing should return at least one tool"
 
-
-# =============================================================================
-# call_tool tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestMCPClientCallTool:
-    """Verify call_tool() executes tools and returns valid results."""
-
-    def test_call_tool_returns_result(self, cached_call_result):
+    def test_call_tool_echoes_input(self, cached_call_result):
         assert isinstance(cached_call_result, CallToolResult)
-
-    def test_call_tool_content_is_text(self, cached_call_result):
         assert cached_call_result.content, "call_tool result should have content"
         assert len(cached_call_result.content) > 0
         first_item = cached_call_result.content[0]
         assert hasattr(first_item, "text"), "First content item should have .text"
-
-    def test_call_tool_echo_returns_input(self, cached_call_result):
-        text = cached_call_result.content[0].text
-        assert "hello" in text, f"Echo function should return input 'hello', got: {text}"
+        assert "hello" in first_item.text, (
+            f"Echo function should return input 'hello', got: {first_item.text}"
+        )
 
     def test_call_tool_with_different_args(self, mcp_client, cached_tools_list):
         tool_name = cached_tools_list[0].name
@@ -88,7 +73,59 @@ class TestMCPClientCallTool:
 
 
 # =============================================================================
-# Auth path tests
+# Vector Search
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMCPClientVectorSearch:
+    """Verify list_tools() and call_tool() against a live VS MCP server."""
+
+    def test_list_tools_returns_valid_tools(self, cached_vs_tools_list):
+        assert len(cached_vs_tools_list) > 0
+        for tool in cached_vs_tools_list:
+            assert tool.name, "Tool name should be non-empty"
+            assert tool.inputSchema, "Tool should have an inputSchema"
+            assert "properties" in tool.inputSchema, "inputSchema should have 'properties'"
+
+    def test_call_tool_returns_result_with_content(self, cached_vs_call_result):
+        assert isinstance(cached_vs_call_result, CallToolResult)
+        assert cached_vs_call_result.content, "call_tool result should have content"
+        assert len(cached_vs_call_result.content) > 0
+
+    def test_schema_level_lists_tools(self, vs_schema_mcp_client):
+        """Schema-level VS URL should list at least one tool."""
+        try:
+            tools = vs_schema_mcp_client.list_tools()
+        except Exception as e:
+            pytest.skip(f"VS schema-level list_tools failed: {e}")
+        assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
+
+
+# =============================================================================
+# Genie
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMCPClientGenie:
+    """Verify list_tools() and call_tool() against a live Genie MCP server."""
+
+    def test_list_tools_returns_valid_tools(self, cached_genie_tools_list):
+        assert len(cached_genie_tools_list) > 0
+        for tool in cached_genie_tools_list:
+            assert tool.name, "Tool name should be non-empty"
+            assert tool.inputSchema, "Tool should have an inputSchema"
+            assert "properties" in tool.inputSchema, "inputSchema should have 'properties'"
+
+    def test_call_tool_returns_result_with_content(self, cached_genie_call_result):
+        assert isinstance(cached_genie_call_result, CallToolResult)
+        assert cached_genie_call_result.content, "call_tool result should have content"
+        assert len(cached_genie_call_result.content) > 0
+
+
+# =============================================================================
+# Auth paths
 # =============================================================================
 
 

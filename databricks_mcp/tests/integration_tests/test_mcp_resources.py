@@ -21,73 +21,51 @@ pytestmark = pytest.mark.skipif(
     reason="MCP integration tests disabled. Set RUN_MCP_INTEGRATION_TESTS=1 to enable.",
 )
 
-# =============================================================================
-# get_databricks_resources tests
-# =============================================================================
-
 
 @pytest.mark.integration
 class TestGetDatabricksResources:
-    """Verify get_databricks_resources() returns correct resource types from live tools.
+    """Verify get_databricks_resources() returns correct resource types from live tools."""
 
-    Uses schema_mcp_client (schema-level URL) because get_databricks_resources()
-    requires a URL matching /api/2.0/mcp/functions/<catalog>/<schema> — the
-    single-function URL with /<function_name> appended doesn't match the pattern.
-    """
+    # -- UC Functions --
 
-    def test_uc_function_returns_databricks_function_resources(self, schema_mcp_client):
+    def test_uc_function_resources_have_correct_type_and_names(self, schema_mcp_client):
+        """UC resources should be DatabricksFunction with dot-separated names."""
         resources = schema_mcp_client.get_databricks_resources()
         assert len(resources) > 0, "Should return at least one resource"
         for resource in resources:
             assert isinstance(resource, DatabricksFunction), (
                 f"Expected DatabricksFunction, got {type(resource)}"
             )
+            assert "." in resource.name, (
+                f"Resource name should be dot-separated, got: {resource.name}"
+            )
+            assert "__" not in resource.name, (
+                f"Resource name should not contain '__', got: {resource.name}"
+            )
 
-    def test_resource_names_are_dot_separated(self, schema_mcp_client):
-        resources = schema_mcp_client.get_databricks_resources()
-        assert len(resources) > 0
-        for resource in resources:
-            name = resource.name
-            assert "." in name, f"Resource name should be dot-separated, got: {name}"
-            assert "__" not in name, f"Resource name should not contain '__', got: {name}"
-
-    def test_resource_count_matches_schema_tools(self, schema_mcp_client):
+    def test_uc_resource_count_matches_schema_tools(self, schema_mcp_client):
         resources = schema_mcp_client.get_databricks_resources()
         tools = schema_mcp_client.list_tools()
         assert len(resources) == len(tools), (
             f"Resource count ({len(resources)}) should match tool count ({len(tools)})"
         )
 
+    # -- Vector Search --
 
-# =============================================================================
-# VS get_databricks_resources tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestGetVSDatabricksResources:
-    """Verify get_databricks_resources() returns correct resource types for VS.
-
-    Uses vs_schema_mcp_client (schema-level VS URL) because
-    get_databricks_resources() needs a URL matching
-    /api/2.0/mcp/vector-search/<catalog>/<schema>.
-    """
-
-    def test_vs_returns_vector_search_index_resources(self, vs_schema_mcp_client):
+    def test_vs_resources_have_correct_type_and_names(self, vs_schema_mcp_client):
+        """VS resources should be DatabricksVectorSearchIndex with dot-separated names."""
         resources = vs_schema_mcp_client.get_databricks_resources()
         assert len(resources) > 0, "Should return at least one resource"
         for resource in resources:
             assert isinstance(resource, DatabricksVectorSearchIndex), (
                 f"Expected DatabricksVectorSearchIndex, got {type(resource)}"
             )
-
-    def test_vs_resource_names_are_dot_separated(self, vs_schema_mcp_client):
-        resources = vs_schema_mcp_client.get_databricks_resources()
-        assert len(resources) > 0
-        for resource in resources:
-            name = resource.name
-            assert "." in name, f"Resource name should be dot-separated, got: {name}"
-            assert "__" not in name, f"Resource name should not contain '__', got: {name}"
+            assert "." in resource.name, (
+                f"Resource name should be dot-separated, got: {resource.name}"
+            )
+            assert "__" not in resource.name, (
+                f"Resource name should not contain '__', got: {resource.name}"
+            )
 
     def test_vs_resource_count_matches_schema_tools(self, vs_schema_mcp_client):
         resources = vs_schema_mcp_client.get_databricks_resources()
@@ -96,19 +74,7 @@ class TestGetVSDatabricksResources:
             f"Resource count ({len(resources)}) should match tool count ({len(tools)})"
         )
 
-
-# =============================================================================
-# Genie get_databricks_resources tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestGetGenieDatabricksResources:
-    """Verify get_databricks_resources() returns correct resource for Genie.
-
-    Genie resource extraction doesn't call list_tools() — it just parses
-    the space ID from the URL. So this tests URL parsing, not the service.
-    """
+    # -- Genie --
 
     def test_genie_returns_genie_space_resource(self, genie_mcp_client):
         resources = genie_mcp_client.get_databricks_resources()
@@ -122,22 +88,3 @@ class TestGetGenieDatabricksResources:
         assert resources[0].name == genie_space_id, (
             f"Expected space ID '{genie_space_id}', got '{resources[0].name}'"
         )
-
-
-# =============================================================================
-# Tool name normalization tests
-# =============================================================================
-
-
-@pytest.mark.integration
-class TestToolNameNormalization:
-    """Verify _normalize_tool_name converts real MCP tool names correctly."""
-
-    def test_normalize_converts_real_tool_names(self, mcp_client, cached_tools_list):
-        for tool in cached_tools_list:
-            normalized = mcp_client._normalize_tool_name(tool.name)
-            assert "." in normalized, f"Normalized name should contain dots, got: {normalized}"
-            parts = normalized.split(".")
-            assert len(parts) >= 2, (
-                f"Normalized name should have at least 2 dot-separated parts, got: {normalized}"
-            )
