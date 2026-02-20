@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from databricks.sdk import WorkspaceClient
 
 try:
@@ -27,7 +29,7 @@ class CheckpointSaver(PostgresSaver):
         *,
         instance_name: str,
         workspace_client: WorkspaceClient | None = None,
-        **pool_kwargs: object,
+        **pool_kwargs: Any,
     ) -> None:
         # Lazy imports
         if not _checkpoint_imports_available:
@@ -65,7 +67,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         *,
         instance_name: str,
         workspace_client: WorkspaceClient | None = None,
-        **pool_kwargs: object,
+        **pool_kwargs: Any,
     ) -> None:
         # Lazy imports
         if not _checkpoint_imports_available:

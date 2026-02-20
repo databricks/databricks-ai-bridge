@@ -6,6 +6,7 @@ from databricks.sdk import WorkspaceClient
 from mcp.types import CallToolResult, TextContent, Tool
 
 from databricks_mcp.mcp import (
+    EXTERNAL_MCP,
     GENIE_MCP,
     MCP_URL_PATTERNS,
     UC_FUNCTIONS_MCP,
@@ -56,6 +57,10 @@ class TestDatabricksMCPClient:
                 "https://test.com/api/2.0/mcp/genie/space-id",
                 GENIE_MCP,
             ),
+            (
+                "https://test.com/api/2.0/mcp/external/my-connection",
+                EXTERNAL_MCP,
+            ),
             ("https://test.com/invalid/path", None),
         ],
     )
@@ -102,6 +107,60 @@ class TestDatabricksMCPClient:
 
         with pytest.raises(ValueError, match=expected_error):
             client._extract_genie_id()
+
+    @pytest.mark.parametrize(
+        "url,expected_connection_name",
+        [
+            ("https://test.com/api/2.0/mcp/external/my-connection", "my-connection"),
+            ("https://test.com/api/2.0/mcp/external/tavily_mcp", "tavily_mcp"),
+        ],
+    )
+    def test_extract_connection_name_valid(self, url, expected_connection_name):
+        """Test extraction of connection name from valid external MCP URLs."""
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient(url, workspace_client)
+        assert client._extract_connection_name() == expected_connection_name
+
+    @pytest.mark.parametrize(
+        "url,expected_error",
+        [
+            (
+                "https://test.com/api/2.0/mcp/functions/catalog/schema",
+                "Missing /external/ segment in:",
+            ),
+            (
+                "https://test.com/api/2.0/mcp/external/",
+                "Connection name not found in:",
+            ),
+        ],
+    )
+    def test_extract_connection_name_errors(self, url, expected_error):
+        """Test extraction of connection name from invalid URLs."""
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient(url, workspace_client)
+        with pytest.raises(ValueError, match=expected_error):
+            client._extract_connection_name()
+
+    def test_get_databricks_resources_external(self):
+        """Test getting Databricks resources for external MCP."""
+        with (
+            patch.object(
+                DatabricksMCPClient,
+                "_get_databricks_managed_mcp_url_type",
+                return_value=EXTERNAL_MCP,
+            ),
+            patch.object(
+                DatabricksMCPClient, "_extract_connection_name", return_value="my-connection"
+            ),
+        ):
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/external/my-connection", workspace_client
+            )
+            resources = client.get_databricks_resources()
+
+            assert len(resources) == 1
+            assert resources[0].name == "my-connection"
 
     @pytest.mark.parametrize(
         "input_name,expected_name",
@@ -344,6 +403,18 @@ class TestMCPURLPatterns:
                 [
                     "/api/2.0/mcp/genie",
                     "/api/2.0/mcp/genie/space-id/extra",
+                    "/api/2.0/mcp/functions/catalog/schema",
+                ],
+            ),
+            (
+                EXTERNAL_MCP,
+                [
+                    "/api/2.0/mcp/external/my-connection",
+                    "/api/2.0/mcp/external/tavily_mcp",
+                ],
+                [
+                    "/api/2.0/mcp/external",
+                    "/api/2.0/mcp/external/my-connection/extra",
                     "/api/2.0/mcp/functions/catalog/schema",
                 ],
             ),

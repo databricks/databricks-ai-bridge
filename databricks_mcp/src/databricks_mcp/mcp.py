@@ -16,6 +16,7 @@ from mlflow.models.resources import (
     DatabricksFunction,
     DatabricksGenieSpace,
     DatabricksResource,
+    DatabricksUCConnection,
     DatabricksVectorSearchIndex,
 )
 
@@ -49,11 +50,13 @@ def _is_oauth_auth(workspace_client: WorkspaceClient) -> bool:
 UC_FUNCTIONS_MCP = "uc_functions_mcp"
 VECTOR_SEARCH_MCP = "vector_search_mcp"
 GENIE_MCP = "genie_mcp"
+EXTERNAL_MCP = "external_mcp"
 
 MCP_URL_PATTERNS = {
     UC_FUNCTIONS_MCP: r"^/api/2\.0/mcp/functions/[^/]+/[^/]+$",
     VECTOR_SEARCH_MCP: r"^/api/2\.0/mcp/vector-search/[^/]+/[^/]+$",
     GENIE_MCP: r"^/api/2\.0/mcp/genie/[^/]+$",
+    EXTERNAL_MCP: r"^/api/2\.0/mcp/external/[^/]+$",
 }
 
 
@@ -197,6 +200,16 @@ class DatabricksMCPClient:
             raise ValueError(f"Genie ID not found in: {self.server_url}")
         return genie_id
 
+    def _extract_connection_name(self) -> str:
+        """Extract the connection name from an external MCP URL."""
+        path = urlparse(self.server_url).path
+        if "/external/" not in path:
+            raise ValueError(f"Missing /external/ segment in: {self.server_url}")
+        connection_name = path.split("/external/", 1)[1]
+        if not connection_name:
+            raise ValueError(f"Connection name not found in: {self.server_url}")
+        return connection_name
+
     def _normalize_tool_name(self, name: str) -> str:
         """Convert double underscores to dots for compatibility."""
         return name.replace("__", ".")
@@ -241,12 +254,16 @@ class DatabricksMCPClient:
             if mcp_type is None:
                 raise ValueError(
                     "Invalid Databricks MCP URL. Please ensure the url is of the form: <host>/api/2.0/mcp/functions/<catalog>/<schema>, "
-                    "<host>/api/2.0/mcp/vector-search/<catalog>/<schema> "
-                    "or <host>/api/2.0/mcp/genie/<genie-space-id>"
+                    "<host>/api/2.0/mcp/vector-search/<catalog>/<schema>, "
+                    "<host>/api/2.0/mcp/genie/<genie-space-id>, "
+                    "or <host>/api/2.0/mcp/external/<connection-name>"
                 )
 
             if mcp_type == GENIE_MCP:
                 return [DatabricksGenieSpace(self._extract_genie_id())]
+
+            if mcp_type == EXTERNAL_MCP:
+                return [DatabricksUCConnection(self._extract_connection_name())]
 
             tools = self.list_tools()
             normalized = [self._normalize_tool_name(tool.name) for tool in tools]
