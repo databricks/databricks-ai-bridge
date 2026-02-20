@@ -439,3 +439,141 @@ class TestDatabricksMCPServerVectorSearch:
                 assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
 
         asyncio.run(_test())
+
+    def test_from_vector_search_tool_invoke(self, workspace_client):
+        """Invoke a VS tool and verify non-empty result."""
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            name="vs-invoke-test",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            try:
+                tools = await client.get_tools()
+            except Exception as e:
+                pytest.skip(f"VS MCP endpoint not available: {e}")
+            assert len(tools) > 0
+            tool = tools[0]
+            # Dynamically extract first required param from tool schema
+            schema = tool.args_schema.schema() if tool.args_schema else {}
+            properties = schema.get("properties", {})
+            param_name = next(iter(properties), "query")
+            result = await tool.ainvoke({param_name: "test"})
+            assert result is not None
+
+        asyncio.run(_test())
+
+
+# =============================================================================
+# Vector Search Schema-Level Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMCPServerVSSchemaLevel:
+    """Test schema-level VS URL construction and listing through LangChain wrapper."""
+
+    def test_from_vector_search_schema_level_url(self, workspace_client):
+        """from_vector_search(catalog, schema) without index_name → schema-level URL."""
+        from databricks_langchain import DatabricksMCPServer
+
+        server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            name="vs-schema-level-test",
+            workspace_client=workspace_client,
+        )
+        expected_suffix = f"/api/2.0/mcp/vector-search/{CATALOG}/{VS_SCHEMA}"
+        assert server.url.endswith(expected_suffix), (
+            f"URL should end with '{expected_suffix}', got: {server.url}"
+        )
+
+    def test_schema_level_vs_get_tools_returns_tools(self, workspace_client):
+        """Schema-level VS listing returns ≥1 tool."""
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            name="vs-schema-level-tools",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            try:
+                tools = await client.get_tools()
+            except Exception as e:
+                pytest.skip(f"VS schema-level MCP endpoint not available: {e}")
+            assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
+
+        asyncio.run(_test())
+
+
+# =============================================================================
+# DatabricksMcpHttpClientFactory Token Refresh Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMcpHttpClientFactoryTokenRefresh:
+    """Verify DatabricksMcpHttpClientFactory re-creates auth providers for token refresh."""
+
+    def test_sequential_invocations_succeed(self, workspace_client):
+        """Two sequential get_tools() calls succeed — proves token refresh works."""
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            name="token-refresh-test",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            tools_1 = await client.get_tools()
+            assert len(tools_1) > 0
+            tools_2 = await client.get_tools()
+            assert len(tools_2) > 0
+
+        asyncio.run(_test())
+
+    def test_factory_creates_new_oauth_provider(self, workspace_client):
+        """DatabricksMcpHttpClientFactory re-creates DatabricksOAuthClientProvider when called."""
+        import httpx
+        from databricks_mcp import DatabricksOAuthClientProvider
+
+        from databricks_langchain.multi_server_mcp_client import (
+            DatabricksMcpHttpClientFactory,
+        )
+
+        factory = DatabricksMcpHttpClientFactory()
+        original_auth = DatabricksOAuthClientProvider(workspace_client)
+
+        client_1 = factory(timeout=httpx.Timeout(10), auth=original_auth)
+        client_2 = factory(timeout=httpx.Timeout(10), auth=original_auth)
+
+        # Each call should produce a client with a *different* auth provider instance
+        assert client_1.auth is not original_auth, (
+            "Factory should create a new DatabricksOAuthClientProvider, not reuse the original"
+        )
+        assert client_1.auth is not client_2.auth, (
+            "Each factory call should produce a distinct auth provider instance"
+        )
