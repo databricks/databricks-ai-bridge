@@ -149,6 +149,14 @@ class TestGenieAgentInit:
         with pytest.raises(ValueError, match="genie_space_id is required"):
             GenieAgent(genie_space_id="")
 
+    def test_agent_raises_on_invalid_space_id(self, workspace_client):
+        from databricks.sdk.errors import NotFound
+
+        from databricks_langchain.genie import GenieAgent
+
+        with pytest.raises(NotFound):
+            GenieAgent(genie_space_id="nonexistent_invalid_id", client=workspace_client)
+
 
 # =============================================================================
 # GenieAgent Execution Tests
@@ -247,10 +255,11 @@ class TestGenieAgentConversationContinuity:
         assert len(messages) > 0
         assert len(messages[-1].content) > 0
 
-    def test_continued_response_has_conversation_id(self, agent_continued_response):
+    def test_continued_response_has_conversation_id(self, agent_continued_response, agent_response):
         assert "conversation_id" in agent_continued_response
         assert isinstance(agent_continued_response["conversation_id"], str)
         assert len(agent_continued_response["conversation_id"]) > 0
+        assert agent_continued_response["conversation_id"] == agent_response["conversation_id"]
 
 
 # =============================================================================
