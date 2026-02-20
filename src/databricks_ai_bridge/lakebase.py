@@ -223,7 +223,7 @@ class LakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(
+        self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(  # ty:ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
             min_size=min_size,  # type: ignore[invalid-argument-type]
@@ -316,7 +316,7 @@ class AsyncLakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(
+        self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(  # ty:ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
             min_size=min_size,  # type: ignore[invalid-argument-type]

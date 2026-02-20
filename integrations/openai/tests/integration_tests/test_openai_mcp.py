@@ -391,7 +391,7 @@ class TestMcpServerToolkitVectorSearch:
         tool = tools[0]
         # Dynamically extract first param from tool spec
         properties = tool.spec["function"]["parameters"].get("properties", {})
-        param_name = next(iter(properties), "query")
+        param_name = next(iter(properties), "query")  # ty:ignore[no-matching-overload]
         result = tool.execute(**{param_name: "test"})
         assert isinstance(result, str)
 
