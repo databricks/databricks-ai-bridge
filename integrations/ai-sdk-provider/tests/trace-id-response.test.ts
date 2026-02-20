@@ -2,12 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { DatabricksResponsesAgentLanguageModel } from '../src/responses-agent-language-model/responses-agent-language-model'
 
 /**
- * Creates a mock fetch function that returns a streaming response with trace_id and span_id
+ * Creates a mock fetch function that returns a streaming response with trace_id
  */
-function createMockFetchWithTrace(
-  traceId: string,
-  spanId: string
-): typeof fetch {
+function createMockFetchWithTrace(traceId: string): typeof fetch {
   return async () => {
     const encoder = new TextEncoder()
 
@@ -28,7 +25,6 @@ function createMockFetchWithTrace(
             total_tokens: 15,
           },
           trace_id: traceId,
-          span_id: spanId,
         },
       })}\n\n`,
     ]
@@ -52,12 +48,9 @@ function createMockFetchWithTrace(
 }
 
 /**
- * Creates a mock fetch function that returns a non-streaming response with trace_id and span_id
+ * Creates a mock fetch function that returns a non-streaming response with trace_id
  */
-function createMockFetchNonStreamingWithTrace(
-  traceId: string,
-  spanId: string
-): typeof fetch {
+function createMockFetchNonStreamingWithTrace(traceId: string): typeof fetch {
   return async () => {
     const responseBody = {
       id: 'resp_456',
@@ -82,7 +75,6 @@ function createMockFetchNonStreamingWithTrace(
         total_tokens: 15,
       },
       trace_id: traceId,
-      span_id: spanId,
     }
 
     return new Response(JSON.stringify(responseBody), {
@@ -158,11 +150,10 @@ function createMockFetchWithDatabricksOutputTrace(traceId: string): typeof fetch
 }
 
 describe('Trace ID in Response', () => {
-  it('should include trace_id and span_id in streaming response body', async () => {
+  it('should include trace_id in streaming response body', async () => {
     const expectedTraceId = 'trace_abc123'
-    const expectedSpanId = 'span_xyz789'
 
-    const mockFetch = createMockFetchWithTrace(expectedTraceId, expectedSpanId)
+    const mockFetch = createMockFetchWithTrace(expectedTraceId)
     const model = new DatabricksResponsesAgentLanguageModel('test-model', {
       provider: 'databricks',
       headers: () => ({ Authorization: 'Bearer test-token' }),
@@ -181,18 +172,16 @@ describe('Trace ID in Response', () => {
       if (done) break
     }
 
-    // Verify trace_id and span_id are in response.body
+    // Verify trace_id is in response.body
     const responseBody = (result.response as any)?.body
     expect(responseBody).toBeDefined()
     expect(responseBody?.trace_id).toBe(expectedTraceId)
-    expect(responseBody?.span_id).toBe(expectedSpanId)
   })
 
-  it('should include trace_id and span_id in non-streaming response body', async () => {
+  it('should include trace_id in non-streaming response body', async () => {
     const expectedTraceId = 'trace_def456'
-    const expectedSpanId = 'span_uvw012'
 
-    const mockFetch = createMockFetchNonStreamingWithTrace(expectedTraceId, expectedSpanId)
+    const mockFetch = createMockFetchNonStreamingWithTrace(expectedTraceId)
     const model = new DatabricksResponsesAgentLanguageModel('test-model', {
       provider: 'databricks',
       headers: () => ({ Authorization: 'Bearer test-token' }),
@@ -204,14 +193,13 @@ describe('Trace ID in Response', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    // Verify trace_id and span_id are in response.body
+    // Verify trace_id is in response.body
     const responseBody = (result.response as any)?.body
     expect(responseBody).toBeDefined()
     expect(responseBody?.trace_id).toBe(expectedTraceId)
-    expect(responseBody?.span_id).toBe(expectedSpanId)
   })
 
-  it('should not fail when trace_id and span_id are not present', async () => {
+  it('should not fail when trace_id is not present', async () => {
     const mockFetch: typeof fetch = async () => {
       const responseBody = {
         id: 'resp_789',
@@ -234,7 +222,7 @@ describe('Trace ID in Response', () => {
           output_tokens: 3,
           total_tokens: 8,
         },
-        // No trace_id or span_id
+        // No trace_id
       }
 
       return new Response(JSON.stringify(responseBody), {
@@ -256,10 +244,9 @@ describe('Trace ID in Response', () => {
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'test' }] }],
     })
 
-    // Should still have response.body but without trace_id/span_id
+    // Should still have response.body but without trace_id
     expect(result.response?.body).toBeDefined()
     expect((result.response?.body as any)?.trace_id).toBeUndefined()
-    expect((result.response?.body as any)?.span_id).toBeUndefined()
   })
 
   it('should capture trace_id from response.output_item.done.databricks_output.trace.info.trace_id', async () => {

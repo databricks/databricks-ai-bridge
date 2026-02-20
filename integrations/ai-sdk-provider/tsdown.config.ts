@@ -9,7 +9,7 @@ export default defineConfig({
   // Output formats
   format: ['esm', 'cjs'],
 
-  // Use explicit extensions (.mjs/.cjs) for compatibility
+  // Required so tsdown emits .mjs/.cjs files matching the explicit extensions in package.json "exports"
   fixedExtension: true,
 
   // Generate TypeScript declarations

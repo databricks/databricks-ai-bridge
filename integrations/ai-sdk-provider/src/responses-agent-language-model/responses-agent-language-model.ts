@@ -110,20 +110,19 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const content = convertResponsesAgentResponseToMessagePart(response)
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
-    // Extract trace_id from both root level (legacy) and nested databricks_output structure.
+    // trace_id may arrive at the root level (from MLflow agent server) or nested inside
+    // databricks_output.trace.info.trace_id. Normalise it to root level for easier access.
     // databricks_output is a Databricks extension not present in the base LanguageModelV3 response type,
     // so we cast through unknown before accessing it.
     let traceId: string | undefined = response.trace_id
     if (!traceId) {
       traceId = extractTraceIdFromDatabricksOutput(response.databricks_output as unknown)
     }
-    const spanId: string | undefined = response.span_id
 
     // Create a normalized response body with trace_id at root level for easier access
     const responseBody: Record<string, unknown> = {
       ...response,
       ...(traceId != null ? { trace_id: traceId } : {}),
-      ...(spanId != null ? { span_id: spanId } : {}),
     }
 
     return {
@@ -228,12 +227,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 })
                 usage.inputTokens.total = chunk.value.response.usage.input_tokens
                 usage.outputTokens.total = chunk.value.response.usage.output_tokens
-                // Capture trace_id and span_id in the responseBody object
+                // Capture trace_id in the responseBody object
                 if (chunk.value.response.trace_id !== undefined) {
                   responseBody.trace_id = chunk.value.response.trace_id
-                }
-                if (chunk.value.response.span_id !== undefined) {
-                  responseBody.span_id = chunk.value.response.span_id
                 }
                 return
               }
