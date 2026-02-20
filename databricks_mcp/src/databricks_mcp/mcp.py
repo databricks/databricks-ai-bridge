@@ -58,7 +58,7 @@ MCP_URL_PATTERNS = {
 
 
 def _handle_mcp_errors(func: Callable) -> Callable:
-    """Decorator to handle MCP connection errors for sync wrapper methods."""
+    """Decorator to handle MCP connection errors for sync and async wrapper methods."""
 
     def _process_mcp_error(client_instance, error: Exception) -> None:
         """Process and enhance MCP connection errors with better context."""
@@ -117,14 +117,26 @@ def _handle_mcp_errors(func: Callable) -> Callable:
         # If the error is not a 302 or 404, re-raise the original error
         raise error
 
-    @wraps(func)
-    def sync_wrapper(self, *args, **kwargs):
-        try:
-            return func(self, *args, **kwargs)
-        except Exception as error:
-            _process_mcp_error(self, error)
+    if asyncio.iscoroutinefunction(func):
 
-    return sync_wrapper
+        @wraps(func)
+        async def async_wrapper(self, *args, **kwargs):
+            try:
+                return await func(self, *args, **kwargs)
+            except Exception as error:
+                _process_mcp_error(self, error)
+
+        return async_wrapper
+    else:
+
+        @wraps(func)
+        def sync_wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as error:
+                _process_mcp_error(self, error)
+
+        return sync_wrapper
 
 
 @experimental
@@ -224,6 +236,32 @@ class DatabricksMCPClient:
             mcp.types.CallToolResult: The result of the tool call.
         """
         return asyncio.run(self._call_tools_async(tool_name, arguments))
+
+    @_handle_mcp_errors
+    async def alist_tools(self) -> List[Tool]:
+        """
+        Async version of list_tools. Lists the tools for the current MCP Server.
+
+        Returns:
+            List[mcp.types.Tool]: A list of tools for the current MCP Server.
+        """
+        return await self._get_tools_async()
+
+    @_handle_mcp_errors
+    async def acall_tool(
+        self, tool_name: str, arguments: dict[str, Any] | None = None
+    ) -> CallToolResult:
+        """
+        Async version of call_tool. Calls the tool with the given name and input.
+
+        Args:
+            tool_name (str): The name of the tool to call.
+            arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+
+        Returns:
+            mcp.types.CallToolResult: The result of the tool call.
+        """
+        return await self._call_tools_async(tool_name, arguments)
 
     def get_databricks_resources(self) -> List[DatabricksResource]:
         """
