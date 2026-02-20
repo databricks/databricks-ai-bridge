@@ -464,7 +464,14 @@ class TestDatabricksMCPServerVectorSearch:
             assert len(tools) > 0
             tool = tools[0]
             # Dynamically extract first required param from tool schema
-            schema = tool.args_schema.schema() if tool.args_schema else {}
+            # args_schema may be a Pydantic model class or a plain dict
+            raw_schema = tool.args_schema
+            if isinstance(raw_schema, dict):
+                schema = raw_schema
+            elif raw_schema is not None and hasattr(raw_schema, "schema"):
+                schema = raw_schema.schema()
+            else:
+                schema = {}
             properties = schema.get("properties", {})
             param_name = next(iter(properties), "query")
             result = await tool.ainvoke({param_name: "test"})

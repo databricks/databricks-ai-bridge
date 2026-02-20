@@ -616,8 +616,10 @@ class TestMcpServerAgentsMLflowTracing:
                 tool_name = tools[0].name
                 await server.call_tool(tool_name, {"message": "tracing-test"})
 
-            trace = mlflow.get_last_active_trace()
-            assert trace is not None, "call_tool should produce an MLflow trace"
+            trace_id = mlflow.get_last_active_trace_id()
+            assert trace_id is not None, "call_tool should produce an MLflow trace"
+            trace = mlflow.get_trace(trace_id)
+            assert trace is not None, "Should be able to retrieve the trace by ID"
             spans = trace.data.spans
             assert len(spans) > 0, "Trace should contain at least one span"
             root_span = spans[0]
