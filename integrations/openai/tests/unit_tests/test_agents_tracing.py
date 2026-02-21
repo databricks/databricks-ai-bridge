@@ -11,9 +11,7 @@ def test_import_disables_agents_tracing_by_default(mock_set_trace_processors):
 
 
 @patch("agents.tracing.set_trace_processors")
-def test_import_keeps_agents_tracing_when_env_var_set(
-    mock_set_trace_processors, monkeypatch
-):
+def test_import_keeps_agents_tracing_when_env_var_set(mock_set_trace_processors, monkeypatch):
     monkeypatch.setenv("ENABLE_OPENAI_AGENTS_TRACING", "true")
     import databricks_openai
 
