@@ -125,9 +125,3 @@ root = ["./src", "./tests"]
 
 [tool.ty.src]
 include = ["./src", "./tests"]
-
-[tool.uv.sources]
-databricks-langchain = { path = "integrations/langchain", editable = true }
-databricks-openai = { path = "integrations/openai", editable = true }
-databricks-dspy = { path = "integrations/dspy", editable = true }
-databricks-mcp = { path = "databricks_mcp", editable = true }
