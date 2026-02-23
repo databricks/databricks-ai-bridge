@@ -3,21 +3,24 @@
 We generate our API docs with Sphinx, and they get published to [this directory](https://github.com/databricks-eng/docs-api-ref/tree/main/content-publish/python).
 
 ## Setup
-Requirements:
-- Follow the steps in ../CONTRIBUTING.md to set up the development environment.
+
+Install `uv`: https://docs.astral.sh/uv/getting-started/installation/
 
 ## Develop the docs locally
-Once you have activated the conda environment, navigate to this directory and run:
+
+Navigate to the `docs` directory and run the make command to start a local server:
 
 ```sh
-make livehtml
+cd ~/databricks-ai-bridge/docs
+uv run --group doc make livehtml
 ```
 
 ## Build for production
+
 To build for production, run:
 
 ```sh
-make html
+uv run --group doc make html
 ```
 
 This will output a set of static files in build/.
@@ -25,5 +28,5 @@ This will output a set of static files in build/.
 To check the build, you can use a python http server:
 
 ```sh
-python3 -m http.server --directory build/html
+uv run --group doc python3 -m http.server --directory build/html
 ```

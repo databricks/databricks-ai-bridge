@@ -50,6 +50,11 @@ doc = [
   "commonmark>=0.9.1",
   "myst-parser>=4.0.0",
   "autodoc_pydantic>=2.2.0",
+  # Integration packages needed by autodoc
+  "databricks-langchain",
+  "databricks-openai",
+  "databricks-dspy",
+  "databricks-mcp",
 ]
 lint = [
   "ruff==0.14.10",
@@ -120,3 +125,9 @@ root = ["./src", "./tests"]
 
 [tool.ty.src]
 include = ["./src", "./tests"]
+
+[tool.uv.sources]
+databricks-langchain = { path = "integrations/langchain", editable = true }
+databricks-openai = { path = "integrations/openai", editable = true }
+databricks-dspy = { path = "integrations/dspy", editable = true }
+databricks-mcp = { path = "databricks_mcp", editable = true }
