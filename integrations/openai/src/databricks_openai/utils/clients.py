@@ -218,7 +218,7 @@ class DatabricksResponses(Responses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = OpenAI(
                 base_url=app_url,
-                api_key="no-token",
+                api_key=_OPENAI_API_KEY,
                 http_client=_get_authorized_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -307,7 +307,7 @@ class DatabricksOpenAI(OpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key="no-token",
+            api_key=_OPENAI_API_KEY,
             http_client=_get_authorized_http_client(workspace_client),
         )
 
@@ -365,7 +365,7 @@ class AsyncDatabricksResponses(AsyncResponses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = AsyncOpenAI(
                 base_url=app_url,
-                api_key="no-token",
+                api_key=_OPENAI_API_KEY,
                 http_client=_get_authorized_async_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -454,7 +454,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key="no-token",
+            api_key=_OPENAI_API_KEY,
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 

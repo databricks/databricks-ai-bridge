@@ -12,6 +12,7 @@ from openai.resources.responses import AsyncResponses, Responses
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.utils.clients import (
+    _OPENAI_API_KEY,
     _get_app_url,
     _get_authorized_async_http_client,
     _get_authorized_http_client,
@@ -81,7 +82,7 @@ class TestDatabricksOpenAI:
             assert isinstance(client, OpenAI)
             assert client.base_url.path == "/serving-endpoints/"
             assert "default.databricks.com" in str(client.base_url)
-            assert client.api_key == "no-token"
+            assert client.api_key == _OPENAI_API_KEY
 
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header."""
@@ -121,7 +122,7 @@ class TestAsyncDatabricksOpenAI:
             assert isinstance(client, AsyncOpenAI)
             assert client.base_url.path == "/serving-endpoints/"
             assert "default.databricks.com" in str(client.base_url)
-            assert client.api_key == "no-token"
+            assert client.api_key == _OPENAI_API_KEY
 
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header for async client."""
@@ -642,3 +643,33 @@ def _messages_with_empty_assistant_content() -> list[dict[str, Any]]:
         {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
         {"role": "tool", "content": "result", "tool_call_id": "1"},
     ]
+
+
+class TestOpenAIApiKey:
+    def test_uses_env_var_when_set(self):
+        import importlib
+
+        import databricks_openai.utils.clients as clients_module
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
+            importlib.reload(clients_module)
+            assert clients_module._OPENAI_API_KEY == "sk-test-key"
+
+    def test_falls_back_to_no_token_when_unset(self):
+        import importlib
+
+        import databricks_openai.utils.clients as clients_module
+
+        env = {k: v for k, v in __import__("os").environ.items() if k != "OPENAI_API_KEY"}
+        with patch.dict("os.environ", env, clear=True):
+            importlib.reload(clients_module)
+            assert clients_module._OPENAI_API_KEY == "no-token"
+
+    def test_falls_back_to_no_token_when_empty_string(self):
+        import importlib
+
+        import databricks_openai.utils.clients as clients_module
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            importlib.reload(clients_module)
+            assert clients_module._OPENAI_API_KEY == "no-token"
