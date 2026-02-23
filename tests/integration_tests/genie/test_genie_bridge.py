@@ -43,6 +43,13 @@ class TestGenieResponseParsing:
             assert isinstance(genie_response.query, str)
             assert len(genie_response.query) > 0
 
+    def test_text_only_response(self, genie_text_response):
+        # Text fallback path: no SQL query, just a text result
+        assert isinstance(genie_text_response.result, str)
+        assert len(genie_text_response.result) > 0
+        assert not genie_text_response.query
+        assert isinstance(genie_text_response.conversation_id, str)
+
 
 # =============================================================================
 # Pandas Response Parsing

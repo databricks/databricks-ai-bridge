@@ -84,6 +84,12 @@ def genie_continued_response(genie_instance, genie_conversation_id):
 
 
 @pytest.fixture(scope="session")
+def genie_text_response(genie_instance):
+    """Cached text-only response (no SQL query): 'Hello'"""
+    return genie_instance.ask_question("Hello")
+
+
+@pytest.fixture(scope="session")
 def genie_pandas_response(genie_pandas_instance):
     """Cached pandas-mode response: 'What is the average amount by status?'"""
     return genie_pandas_instance.ask_question("What is the average amount by status?")
