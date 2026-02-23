@@ -36,6 +36,10 @@ class TestGenieAskQuestion:
         # For a data question, Genie should generate a SQL query
         assert genie_response.query, "Expected a non-empty SQL query for a data question"
         assert genie_response.description is not None
+        assert genie_response.text_attachment_content is not None
+        assert genie_response.suggested_questions is None or isinstance(
+            genie_response.suggested_questions, list
+        )
 
     def test_conversation_id_populated(self, genie_response):
         # Validates our code correctly extracts conversation_id from API response
