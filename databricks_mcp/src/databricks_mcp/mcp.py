@@ -16,6 +16,7 @@ from mlflow.models.resources import (
     DatabricksFunction,
     DatabricksGenieSpace,
     DatabricksResource,
+    DatabricksUCConnection,
     DatabricksVectorSearchIndex,
 )
 
@@ -49,16 +50,18 @@ def _is_oauth_auth(workspace_client: WorkspaceClient) -> bool:
 UC_FUNCTIONS_MCP = "uc_functions_mcp"
 VECTOR_SEARCH_MCP = "vector_search_mcp"
 GENIE_MCP = "genie_mcp"
+EXTERNAL_MCP = "external_mcp"
 
 MCP_URL_PATTERNS = {
     UC_FUNCTIONS_MCP: r"^/api/2\.0/mcp/functions/[^/]+/[^/]+$",
     VECTOR_SEARCH_MCP: r"^/api/2\.0/mcp/vector-search/[^/]+/[^/]+$",
     GENIE_MCP: r"^/api/2\.0/mcp/genie/[^/]+$",
+    EXTERNAL_MCP: r"^/api/2\.0/mcp/external/[^/]+$",
 }
 
 
 def _handle_mcp_errors(func: Callable) -> Callable:
-    """Decorator to handle MCP connection errors for sync wrapper methods."""
+    """Decorator to handle MCP connection errors for sync and async wrapper methods."""
 
     def _process_mcp_error(client_instance, error: Exception) -> None:
         """Process and enhance MCP connection errors with better context."""
@@ -117,14 +120,26 @@ def _handle_mcp_errors(func: Callable) -> Callable:
         # If the error is not a 302 or 404, re-raise the original error
         raise error
 
-    @wraps(func)
-    def sync_wrapper(self, *args, **kwargs):
-        try:
-            return func(self, *args, **kwargs)
-        except Exception as error:
-            _process_mcp_error(self, error)
+    if asyncio.iscoroutinefunction(func):
 
-    return sync_wrapper
+        @wraps(func)
+        async def async_wrapper(self, *args, **kwargs):
+            try:
+                return await func(self, *args, **kwargs)
+            except Exception as error:
+                _process_mcp_error(self, error)
+
+        return async_wrapper
+    else:
+
+        @wraps(func)
+        def sync_wrapper(self, *args, **kwargs):
+            try:
+                return func(self, *args, **kwargs)
+            except Exception as error:
+                _process_mcp_error(self, error)
+
+        return sync_wrapper
 
 
 @experimental
@@ -197,6 +212,16 @@ class DatabricksMCPClient:
             raise ValueError(f"Genie ID not found in: {self.server_url}")
         return genie_id
 
+    def _extract_connection_name(self) -> str:
+        """Extract the connection name from an external MCP URL."""
+        path = urlparse(self.server_url).path
+        if "/external/" not in path:
+            raise ValueError(f"Missing /external/ segment in: {self.server_url}")
+        connection_name = path.split("/external/", 1)[1]
+        if not connection_name:
+            raise ValueError(f"Connection name not found in: {self.server_url}")
+        return connection_name
+
     def _normalize_tool_name(self, name: str) -> str:
         """Convert double underscores to dots for compatibility."""
         return name.replace("__", ".")
@@ -225,6 +250,32 @@ class DatabricksMCPClient:
         """
         return asyncio.run(self._call_tools_async(tool_name, arguments))
 
+    @_handle_mcp_errors
+    async def alist_tools(self) -> List[Tool]:
+        """
+        Async version of list_tools. Lists the tools for the current MCP Server.
+
+        Returns:
+            List[mcp.types.Tool]: A list of tools for the current MCP Server.
+        """
+        return await self._get_tools_async()
+
+    @_handle_mcp_errors
+    async def acall_tool(
+        self, tool_name: str, arguments: dict[str, Any] | None = None
+    ) -> CallToolResult:
+        """
+        Async version of call_tool. Calls the tool with the given name and input.
+
+        Args:
+            tool_name (str): The name of the tool to call.
+            arguments (dict[str, Any], optional): The arguments to pass to the tool. Defaults to None.
+
+        Returns:
+            mcp.types.CallToolResult: The result of the tool call.
+        """
+        return await self._call_tools_async(tool_name, arguments)
+
     def get_databricks_resources(self) -> List[DatabricksResource]:
         """
         Returns a list of dependent Databricks resources for the current MCP server URL.
@@ -241,12 +292,16 @@ class DatabricksMCPClient:
             if mcp_type is None:
                 raise ValueError(
                     "Invalid Databricks MCP URL. Please ensure the url is of the form: <host>/api/2.0/mcp/functions/<catalog>/<schema>, "
-                    "<host>/api/2.0/mcp/vector-search/<catalog>/<schema> "
-                    "or <host>/api/2.0/mcp/genie/<genie-space-id>"
+                    "<host>/api/2.0/mcp/vector-search/<catalog>/<schema>, "
+                    "<host>/api/2.0/mcp/genie/<genie-space-id>, "
+                    "or <host>/api/2.0/mcp/external/<connection-name>"
                 )
 
             if mcp_type == GENIE_MCP:
                 return [DatabricksGenieSpace(self._extract_genie_id())]
+
+            if mcp_type == EXTERNAL_MCP:
+                return [DatabricksUCConnection(self._extract_connection_name())]
 
             tools = self.list_tools()
             normalized = [self._normalize_tool_name(tool.name) for tool in tools]
