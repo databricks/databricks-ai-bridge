@@ -1,3 +1,4 @@
+import os
 from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
@@ -12,6 +13,9 @@ from typing_extensions import override
 _APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
+# Use the OPENAI_API_KEY environment variable if it exists, otherwise use "no-token"
+# Can be used for openai agents sdk tracing
+_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or "no-token"
 
 
 class BearerAuth(Auth):
