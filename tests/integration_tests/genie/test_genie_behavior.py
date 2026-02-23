@@ -33,6 +33,9 @@ class TestGenieAskQuestion:
         # Validates our ask_question() orchestration works end-to-end
         assert isinstance(genie_response.result, str)
         assert len(genie_response.result) > 0
+        # For a data question, Genie should generate a SQL query
+        assert genie_response.query, "Expected a non-empty SQL query for a data question"
+        assert genie_response.description is not None
 
     def test_conversation_id_populated(self, genie_response):
         # Validates our code correctly extracts conversation_id from API response
