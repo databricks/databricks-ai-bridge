@@ -37,9 +37,9 @@ class TestGenieAskQuestion:
         assert genie_response.query, "Expected a non-empty SQL query for a data question"
         assert genie_response.description, "Expected a non-empty description for a data question"
         assert genie_response.text_attachment_content, "Expected non-empty text attachment content"
-        assert isinstance(
-            genie_response.suggested_questions, list
-        ), "Expected suggested follow-up questions"
+        assert isinstance(genie_response.suggested_questions, list), (
+            "Expected suggested follow-up questions"
+        )
         assert len(genie_response.suggested_questions) > 0
         assert all(isinstance(q, str) and q for q in genie_response.suggested_questions)
 
