@@ -1,6 +1,6 @@
 [project]
 name = "databricks-langchain"
-version = "0.16.0"
+version = "0.16.1"
 description = "Support for Databricks AI support in LangChain"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "langchain>=1.0.0",
     "databricks-vectorsearch>=0.50",
-    "databricks-ai-bridge>=0.13.0",
+    "databricks-ai-bridge>=0.15.0",
     "mlflow>=3.0.0",
     "pydantic>2.10.0",
     "unitycatalog-langchain[databricks]>=0.3.0",
@@ -25,7 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 memory = [
   "langgraph-checkpoint-postgres>=2.0.5",
-  "databricks-ai-bridge[memory]>=0.10.0",
+  "databricks-ai-bridge[memory]>=0.14.0",
 ]
 
 [dependency-groups]
