@@ -26,10 +26,10 @@ version = importlib.metadata.version("databricks_ai_bridge")
 sys.path.insert(0, os.path.abspath("../.."))
 sys.path.insert(0, os.path.abspath("."))
 sys.path.insert(0, os.path.abspath("../../src/databricks_ai_bridge"))
-sys.path.insert(0, os.path.abspath("../../databricks_mcp/src"))
+sys.path.insert(0, os.path.abspath("../../databricks_mcp/src/databricks_mcp"))
 sys.path.insert(0, os.path.abspath("../../integrations/langchain/src/databricks_langchain"))
 sys.path.insert(0, os.path.abspath("../../integrations/openai/src/databricks_openai"))
-sys.path.insert(0, os.path.abspath("../../integrations/openai/src/databricks_dspy"))
+sys.path.insert(0, os.path.abspath("../../integrations/dspy/src/databricks_dspy"))
 
 # -- General configuration ------------------------------------------------
 
@@ -70,16 +70,10 @@ autodoc_typehints_format = "short"
 templates_path = ["_templates"]
 
 intersphinx_mapping = {
-    "mlflow": ("https://mlflow.org/docs/latest/", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
     "pyspark": ("https://spark.apache.org/docs/latest/api/python/", None),
     "python": ("https://docs.python.org/3", None),
-    "langchain": (
-        "https://api.python.langchain.com/en/latest/",
-        None,
-    ),
     "pydantic": ("https://docs.pydantic.dev/latest/", None),
-    "unitycatalog": ("https://docs.unitycatalog.io/", None),
 }
 
 extlinks = {
