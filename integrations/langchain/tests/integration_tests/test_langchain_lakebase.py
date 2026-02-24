@@ -326,6 +326,35 @@ class TestAsyncCheckpointSaver:
             assert result.checkpoint["id"] == checkpoint["id"]
 
     @pytest.mark.asyncio
+    async def test_async_checkpoint_list(self, cleanup_checkpoint_tables):
+        """Test async listing checkpoints."""
+        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+
+        from databricks_langchain import AsyncCheckpointSaver
+
+        thread_id = uuid.uuid4().hex
+
+        async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
+            await saver.setup()
+
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+
+            for i in range(3):
+                checkpoint = Checkpoint(
+                    v=1,
+                    id=uuid.uuid4().hex,
+                    ts=f"2025-01-01T00:0{i}:00+00:00",
+                    channel_values={},
+                    channel_versions={},
+                    versions_seen={},
+                    pending_sends=[],
+                )
+                await saver.aput(config, checkpoint, CheckpointMetadata(), {})
+
+            checkpoints = [c async for c in saver.alist(config)]
+            assert len(checkpoints) == 3
+
+    @pytest.mark.asyncio
     async def test_async_checkpoint_context_manager(self, cleanup_checkpoint_tables):
         """Test async with lifecycle: open/close via context manager."""
         from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
