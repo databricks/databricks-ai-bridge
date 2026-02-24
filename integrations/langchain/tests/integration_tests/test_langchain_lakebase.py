@@ -42,38 +42,36 @@ def unique_namespace() -> tuple[str, str]:
     return ("test", f"ns_{uuid.uuid4().hex[:8]}")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cleanup_store_tables():
-    """Fixture to track and clean up LangGraph store tables after tests."""
-    tables_to_cleanup: list[str] = []
+    """Module-scoped fixture to clean up LangGraph store tables after all store tests."""
+    yield
 
-    yield tables_to_cleanup
+    from databricks_ai_bridge.lakebase import LakebasePool
 
-    if tables_to_cleanup:
-        from databricks_ai_bridge.lakebase import LakebasePool
-
-        pool = LakebasePool(instance_name=get_instance_name())
-        with pool.connection() as conn:
-            for table in tables_to_cleanup:
-                conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-        pool.close()
+    pool = LakebasePool(instance_name=get_instance_name())
+    with pool.connection() as conn:
+        conn.execute("DROP TABLE IF EXISTS store CASCADE")
+    pool.close()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cleanup_checkpoint_tables():
-    """Fixture to track and clean up LangGraph checkpoint tables after tests."""
-    tables: list[str] = []
+    """Module-scoped fixture to clean up LangGraph checkpoint tables after all checkpoint tests."""
+    yield
 
-    yield tables
+    from databricks_ai_bridge.lakebase import LakebasePool
 
-    if tables:
-        from databricks_ai_bridge.lakebase import LakebasePool
-
-        pool = LakebasePool(instance_name=get_instance_name())
-        with pool.connection() as conn:
-            for table in tables:
-                conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-        pool.close()
+    pool = LakebasePool(instance_name=get_instance_name())
+    with pool.connection() as conn:
+        for table in [
+            "checkpoint_migrations",
+            "checkpoint_blobs",
+            "checkpoint_writes",
+            "checkpoints",
+        ]:
+            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+    pool.close()
 
 
 # =============================================================================
@@ -87,8 +85,6 @@ class TestDatabricksStore:
     def test_store_setup_put_and_get(self, unique_namespace, cleanup_store_tables):
         """Test core bridge path: pool creation -> _with_store -> setup + batch (put/get)."""
         from databricks_langchain import DatabricksStore
-
-        cleanup_store_tables.append("store")
 
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
@@ -106,8 +102,6 @@ class TestDatabricksStore:
         """Test search operation through bridge."""
         from databricks_langchain import DatabricksStore
 
-        cleanup_store_tables.append("store")
-
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
 
@@ -123,8 +117,6 @@ class TestDatabricksStore:
     def test_store_delete(self, unique_namespace, cleanup_store_tables):
         """Test delete operation through bridge."""
         from databricks_langchain import DatabricksStore
-
-        cleanup_store_tables.append("store")
 
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
@@ -150,8 +142,6 @@ class TestAsyncDatabricksStore:
         """Test async pool open/close/borrow cycle with put and get."""
         from databricks_langchain import AsyncDatabricksStore
 
-        cleanup_store_tables.append("store")
-
         store = AsyncDatabricksStore(instance_name=get_instance_name())
         await store._lakebase.open()
         try:
@@ -172,8 +162,6 @@ class TestAsyncDatabricksStore:
         """Test async with lifecycle (open/close via context manager)."""
         from databricks_langchain import AsyncDatabricksStore
 
-        cleanup_store_tables.append("store")
-
         async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
             await store.setup()
 
@@ -189,14 +177,6 @@ class TestAsyncDatabricksStore:
 # CheckpointSaver (Sync) Tests
 # =============================================================================
 
-CHECKPOINT_TABLES = [
-    "checkpoint_migrations",
-    "checkpoint_blobs",
-    "checkpoint_writes",
-    "checkpoints",
-]
-
-
 class TestCheckpointSaver:
     """Test synchronous CheckpointSaver against a live Lakebase instance."""
 
@@ -206,14 +186,12 @@ class TestCheckpointSaver:
 
         from databricks_langchain import CheckpointSaver
 
-        cleanup_checkpoint_tables.extend(CHECKPOINT_TABLES)
-
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(instance_name=get_instance_name()) as saver:
             saver.setup()
 
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
                 id=uuid.uuid4().hex,
@@ -237,14 +215,12 @@ class TestCheckpointSaver:
 
         from databricks_langchain import CheckpointSaver
 
-        cleanup_checkpoint_tables.extend(CHECKPOINT_TABLES)
-
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(instance_name=get_instance_name()) as saver:
             saver.setup()
 
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
             for i in range(3):
                 checkpoint = Checkpoint(
@@ -277,14 +253,12 @@ class TestAsyncCheckpointSaver:
 
         from databricks_langchain import AsyncCheckpointSaver
 
-        cleanup_checkpoint_tables.extend(CHECKPOINT_TABLES)
-
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
             await saver.setup()
 
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
                 id=uuid.uuid4().hex,
@@ -309,14 +283,12 @@ class TestAsyncCheckpointSaver:
 
         from databricks_langchain import AsyncCheckpointSaver
 
-        cleanup_checkpoint_tables.extend(CHECKPOINT_TABLES)
-
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
             await saver.setup()
 
-            config = {"configurable": {"thread_id": thread_id}}
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
                 id=uuid.uuid4().hex,
