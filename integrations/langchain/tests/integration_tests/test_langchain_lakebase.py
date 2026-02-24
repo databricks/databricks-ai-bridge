@@ -178,6 +178,7 @@ class TestAsyncDatabricksStore:
 # CheckpointSaver (Sync) Tests
 # =============================================================================
 
+
 class TestCheckpointSaver:
     """Test synchronous CheckpointSaver against a live Lakebase instance."""
 
