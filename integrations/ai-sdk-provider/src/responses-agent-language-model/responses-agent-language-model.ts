@@ -55,19 +55,6 @@ function mapResponsesFinishReason({
   return { raw: finishReason ?? undefined, unified }
 }
 
-/**
- * Extracts trace_id from a Databricks-specific databricks_output object.
- * The trace_id is nested at databricks_output.trace.info.trace_id.
- */
-function extractTraceIdFromDatabricksOutput(databricksOutput: unknown): string | undefined {
-  if (!databricksOutput || typeof databricksOutput !== 'object') return undefined
-  const trace = (databricksOutput as { trace?: unknown }).trace
-  if (!trace || typeof trace !== 'object') return undefined
-  const info = (trace as { info?: unknown }).info
-  if (!info || typeof info !== 'object') return undefined
-  const traceId = (info as { trace_id?: unknown }).trace_id
-  return typeof traceId === 'string' ? traceId : undefined
-}
 
 export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
   readonly specificationVersion = 'v3'
@@ -110,21 +97,6 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     const content = convertResponsesAgentResponseToMessagePart(response)
     const hasToolCalls = content.some((p) => p.type === 'tool-call')
 
-    // trace_id may arrive at the root level (from MLflow agent server) or nested inside
-    // databricks_output.trace.info.trace_id. Normalise it to root level for easier access.
-    // databricks_output is a Databricks extension not present in the base LanguageModelV3 response type,
-    // so we cast through unknown before accessing it.
-    let traceId: string | undefined = response.trace_id
-    if (!traceId) {
-      traceId = extractTraceIdFromDatabricksOutput(response.databricks_output as unknown)
-    }
-
-    // Create a normalized response body with trace_id at root level for easier access
-    const responseBody: Record<string, unknown> = {
-      ...response,
-      ...(traceId != null ? { trace_id: traceId } : {}),
-    }
-
     return {
       content,
       finishReason: mapResponsesFinishReason({
@@ -142,7 +114,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       },
       warnings,
       response: {
-        body: responseBody,
+        body: response,
       } as { headers?: SharedV3Headers; body?: unknown },
     }
   }
@@ -191,11 +163,6 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
     // Track tool call IDs to tool names for looking up tool names in function_call_output events
     const toolNamesByCallId = new Map<string, string>()
 
-    // Lazily populated as the stream is consumed — only valid after the stream is fully drained.
-    // trace_id may be populated from either the response.output_item.done or responses.completed event,
-    // whichever arrives first. span_id is only available in responses.completed.
-    const responseBody: Record<string, unknown> = {}
-
     return {
       stream: response
         .pipeThrough(
@@ -227,27 +194,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
                 })
                 usage.inputTokens.total = chunk.value.response.usage.input_tokens
                 usage.outputTokens.total = chunk.value.response.usage.output_tokens
-                // Capture trace_id in the responseBody object
-                if (chunk.value.response.trace_id !== undefined) {
-                  responseBody.trace_id = chunk.value.response.trace_id
-                }
                 return
-              }
-
-              // Extract trace info from response.output_item.done event.
-              // databricks_output is a Databricks extension not present in the base chunk type,
-              // so we cast through unknown before accessing it.
-              // Note: span_id is not available in output_item.done — it only appears in responses.completed.
-              if (chunk.value.type === 'response.output_item.done') {
-                const databricksOutput = (chunk.value as { databricks_output?: unknown })
-                  .databricks_output
-                const traceId = extractTraceIdFromDatabricksOutput(databricksOutput)
-                if (traceId != null) {
-                  // Normalize trace_id at root level for easier access
-                  responseBody.trace_id = traceId
-                  // Store full databricks_output structure for complete trace data
-                  responseBody.databricks_output = databricksOutput
-                }
               }
 
               // Track tool call IDs to names from response.output_item.done function_call events
@@ -366,7 +313,6 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       request: { body: networkArgs.body },
       response: {
         headers: responseHeaders,
-        body: responseBody,
       } as { headers?: SharedV3Headers; body?: unknown },
     }
   }

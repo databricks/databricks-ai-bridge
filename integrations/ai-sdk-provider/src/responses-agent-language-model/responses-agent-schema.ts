@@ -103,12 +103,8 @@ export const responsesAgentResponseSchema = z.object({
       total_tokens: z.number(),
     })
     .optional(),
-  trace_id: z.string().optional(),
-  span_id: z.string().optional(),
-  // Databricks-specific trace output - use z.any() to accept any structure
-  // We'll extract trace_id in the code rather than validating the full structure
-  databricks_output: z.any().optional(),
 })
+.passthrough()
 
 /**
  * Chunk schema
@@ -140,9 +136,6 @@ const responseOutputItemDoneSchema = z
     output_index: z.number().optional(),
     item: responsesAgentOutputItem,
     id: z.string().optional(),
-    // Databricks-specific trace output - use z.any() to accept any structure
-    // We'll extract trace_id in the code rather than validating the full structure
-    databricks_output: z.any().optional(),
   })
   .passthrough()
 
@@ -195,8 +188,6 @@ const responsesCompletedSchema = z.object({
       output_tokens: z.number(),
       total_tokens: z.number(),
     }),
-    trace_id: z.string().optional(),
-    span_id: z.string().optional(),
   }),
 })
 
