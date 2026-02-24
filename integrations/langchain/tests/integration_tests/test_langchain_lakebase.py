@@ -51,7 +51,8 @@ def cleanup_store_tables():
 
     pool = LakebasePool(instance_name=get_instance_name())
     with pool.connection() as conn:
-        conn.execute("DROP TABLE IF EXISTS store CASCADE")
+        for table in ["store_vectors", "vector_migrations", "store", "store_migrations"]:
+            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
     pool.close()
 
 

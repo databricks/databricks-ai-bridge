@@ -99,7 +99,7 @@ def create_workspace_client_with_token(token: str | None = None) -> WorkspaceCli
                 "DATABRICKS_HOST must be set when using a custom token. "
                 "Example: export DATABRICKS_HOST=https://your-workspace.databricks.com"
             )
-        return WorkspaceClient(host=host, token=token)
+        return WorkspaceClient(host=host, token=token, auth_type="pat")
     return WorkspaceClient()
 
 
