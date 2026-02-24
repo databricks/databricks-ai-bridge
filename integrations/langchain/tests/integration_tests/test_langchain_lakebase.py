@@ -174,6 +174,38 @@ class TestAsyncDatabricksStore:
             await store._lakebase.close()
 
     @pytest.mark.asyncio
+    async def test_async_store_search(self, unique_namespace, cleanup_store_tables):
+        """Test async search operation through bridge."""
+        from databricks_langchain import AsyncDatabricksStore
+
+        async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
+            await store.setup()
+
+            ns = unique_namespace
+            await store.aput(ns, "item_a", {"topic": "python"})
+            await store.aput(ns, "item_b", {"topic": "rust"})
+
+            results = await store.asearch(ns)
+            assert len(results) == 2
+            keys = {r.key for r in results}
+            assert keys == {"item_a", "item_b"}
+
+    @pytest.mark.asyncio
+    async def test_async_store_delete(self, unique_namespace, cleanup_store_tables):
+        """Test async delete operation through bridge."""
+        from databricks_langchain import AsyncDatabricksStore
+
+        async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
+            await store.setup()
+
+            ns = unique_namespace
+            await store.aput(ns, "to_delete", {"temp": True})
+            assert (await store.aget(ns, "to_delete")) is not None
+
+            await store.adelete(ns, "to_delete")
+            assert (await store.aget(ns, "to_delete")) is None
+
+    @pytest.mark.asyncio
     async def test_async_store_context_manager(self, unique_namespace, cleanup_store_tables):
         """Test async with lifecycle (open/close via context manager)."""
         from databricks_langchain import AsyncDatabricksStore
