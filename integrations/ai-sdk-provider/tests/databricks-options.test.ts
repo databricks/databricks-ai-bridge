@@ -2,14 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { callOptionsToResponsesArgs } from '../src/responses-agent-language-model/call-options-to-responses-args'
 
 describe('databricks_options support', () => {
-  it('should include databricks_options.return_trace when provided', () => {
+  it('should include databricks_options.return_trace when includeTrace is true', () => {
     const result = callOptionsToResponsesArgs({
       prompt: [],
       providerOptions: {
         databricks: {
-          databricksOptions: {
-            return_trace: true,
-          },
+          includeTrace: true,
         },
       },
     })
@@ -20,14 +18,12 @@ describe('databricks_options support', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('should support databricks_options.return_trace set to false', () => {
+  it('should support includeTrace set to false', () => {
     const result = callOptionsToResponsesArgs({
       prompt: [],
       providerOptions: {
         databricks: {
-          databricksOptions: {
-            return_trace: false,
-          },
+          includeTrace: false,
         },
       },
     })
@@ -64,9 +60,7 @@ describe('databricks_options support', () => {
         databricks: {
           parallelToolCalls: true,
           metadata: { key: 'value' },
-          databricksOptions: {
-            return_trace: true,
-          },
+          includeTrace: true,
         },
       },
     })

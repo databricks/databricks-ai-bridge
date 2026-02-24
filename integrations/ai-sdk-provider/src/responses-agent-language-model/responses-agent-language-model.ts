@@ -4,7 +4,6 @@ import type {
   LanguageModelV3FinishReason,
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
-  SharedV3Headers,
 } from '@ai-sdk/provider'
 import {
   type ParseResult,
@@ -115,7 +114,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       warnings,
       response: {
         body: response,
-      } as { headers?: SharedV3Headers; body?: unknown },
+      },
     }
   }
 
@@ -313,7 +312,7 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
       request: { body: networkArgs.body },
       response: {
         headers: responseHeaders,
-      } as { headers?: SharedV3Headers; body?: unknown },
+      },
     }
   }
 

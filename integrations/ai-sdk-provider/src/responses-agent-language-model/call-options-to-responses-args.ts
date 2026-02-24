@@ -33,9 +33,7 @@ export type DatabricksProviderOptions = {
   reasoning?: {
     effort?: 'low' | 'medium' | 'high'
   }
-  databricksOptions?: {
-    return_trace?: boolean
-  }
+  includeTrace?: boolean
 }
 
 /**
@@ -153,8 +151,8 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
     args.reasoning = databricksOptions.reasoning
   }
 
-  if (databricksOptions?.databricksOptions != null) {
-    args.databricks_options = databricksOptions.databricksOptions
+  if (databricksOptions?.includeTrace != null) {
+    args.databricks_options = { return_trace: databricksOptions.includeTrace }
   }
 
   return { args, warnings }
