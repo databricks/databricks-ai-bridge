@@ -1,4 +1,4 @@
-from typing import Any, Generator
+from typing import Any, AsyncIterator, Generator, Iterator
 
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
@@ -49,6 +49,137 @@ def _should_strip_strict(model: str | None) -> bool:
     if model is None:
         return True  # Default to stripping if model unknown
     return "gpt" not in model.lower()
+
+
+def _is_gemini_model(model: str | None) -> bool:
+    """Returns True if the model is a Gemini variant."""
+    if not model:
+        return False
+    return "gemini" in model.lower() or "gemma" in model.lower()
+
+
+def _flatten_list_content(content: list) -> str:
+    """Extract text from a list of content blocks and join into a single string."""
+    text_parts = []
+    for part in content:
+        if isinstance(part, dict) and "text" in part:
+            text_parts.append(part["text"])
+        elif isinstance(part, str):
+            text_parts.append(part)
+        elif hasattr(part, "text"):
+            text_parts.append(part.text)
+    return "".join(text_parts)
+
+
+def _flatten_list_content_in_messages(messages: Any) -> None:
+    """Request-side fix: convert list content to string in tool messages.
+
+    Gemini FMAPI rejects tool messages where content is a list of content blocks
+    (e.g. [{"type": "text", "text": "hello"}]). The Agents SDK always produces
+    this list format when using MCP tools (via chatcmpl_converter.py). We flatten
+    it to a plain string before sending to FMAPI.
+    """
+    if not messages:
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if message.get("role") == "tool" and isinstance(content, list):
+            message["content"] = _flatten_list_content(content)
+
+
+def _flatten_list_content_in_response(response: Any) -> None:
+    """Response-side fix: convert list content to string in non-streaming responses.
+
+    Gemini FMAPI sometimes returns assistant message content as a list of content
+    blocks instead of a string. The Agents SDK expects content to be a string and
+    fails with a ValidationError. We flatten it before returning to the SDK.
+    """
+    if not hasattr(response, "choices"):
+        return
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            message.content = _flatten_list_content(content)
+
+
+def _fix_gemini_stream_chunk(chunk: Any) -> Any:
+    """Fix a single streaming chunk from Gemini FMAPI.
+
+    Gemini FMAPI returns delta.content as a list of content blocks instead of a
+    string in streaming responses. The Agents SDK expects string deltas and crashes
+    with a ValidationError when parsing ResponseTextDeltaEvent.
+    """
+    if not hasattr(chunk, "choices"):
+        return chunk
+    for choice in chunk.choices:
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        content = getattr(delta, "content", None)
+        if isinstance(content, list):
+            delta.content = _flatten_list_content(content)
+    return chunk
+
+
+class _GeminiStreamWrapper:
+    """Wraps a sync Stream to fix Gemini list content in stream chunks."""
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    def __iter__(self) -> Iterator:
+        for chunk in self._stream:
+            yield _fix_gemini_stream_chunk(chunk)
+
+    def __next__(self):
+        return _fix_gemini_stream_chunk(next(self._stream))
+
+    def __enter__(self):
+        self._stream.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._stream.__exit__(*args)
+
+    def close(self):
+        self._stream.close()
+
+    @property
+    def response(self):
+        return self._stream.response
+
+
+class _AsyncGeminiStreamWrapper:
+    """Wraps an AsyncStream to fix Gemini list content in stream chunks."""
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    async def __aiter__(self) -> AsyncIterator:
+        async for chunk in self._stream:
+            yield _fix_gemini_stream_chunk(chunk)
+
+    async def __anext__(self):
+        return _fix_gemini_stream_chunk(await self._stream.__anext__())
+
+    async def __aenter__(self):
+        await self._stream.__aenter__()
+        return self
+
+    async def __aexit__(self, *args):
+        return await self._stream.__aexit__(*args)
+
+    async def close(self):
+        await self._stream.close()
+
+    @property
+    def response(self):
+        return self._stream.response
 
 
 def _is_claude_model(model: str | None) -> bool:
@@ -189,7 +320,14 @@ class DatabricksCompletions(Completions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        return super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_messages(kwargs.get("messages"))
+        response = super().create(**kwargs)
+        if _is_gemini_model(model):
+            if kwargs.get("stream"):
+                return _GeminiStreamWrapper(response)
+            _flatten_list_content_in_response(response)
+        return response
 
 
 class DatabricksChat(Chat):
@@ -336,7 +474,14 @@ class AsyncDatabricksCompletions(AsyncCompletions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        return await super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_messages(kwargs.get("messages"))
+        response = await super().create(**kwargs)
+        if _is_gemini_model(model):
+            if kwargs.get("stream"):
+                return _AsyncGeminiStreamWrapper(response)
+            _flatten_list_content_in_response(response)
+        return response
 
 
 class AsyncDatabricksChat(AsyncChat):
