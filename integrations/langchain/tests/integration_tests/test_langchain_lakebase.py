@@ -32,6 +32,33 @@ def get_instance_name() -> str:
 
 
 # =============================================================================
+# Tables managed by LangGraph that must be cleaned up between test runs.
+# Includes both data tables and migration-tracking tables; PostgresStore's
+# setup() is a no-op when the migration table already marks a version as
+# applied, so we must always drop both together.
+# =============================================================================
+
+STORE_TABLES = ["store_vectors", "vector_migrations", "store", "store_migrations"]
+CHECKPOINT_TABLES = [
+    "checkpoint_migrations",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "checkpoints",
+]
+
+
+def _drop_tables(tables: list[str]) -> None:
+    """Drop the given tables from the Lakebase instance."""
+    from databricks_ai_bridge.lakebase import LakebasePool
+
+    pool = LakebasePool(instance_name=get_instance_name())
+    with pool.connection() as conn:
+        for table in tables:
+            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+    pool.close()
+
+
+# =============================================================================
 # Fixtures
 # =============================================================================
 
@@ -44,35 +71,23 @@ def unique_namespace() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def cleanup_store_tables():
-    """Module-scoped fixture to clean up LangGraph store tables after all store tests."""
+    """Drop store tables before and after all store tests.
+
+    The setup phase removes stale migration-tracking tables left by previous
+    CI runs (PostgresStore.setup() silently skips table creation when its
+    migration tracker says the schema is already at the latest version).
+    """
+    _drop_tables(STORE_TABLES)
     yield
-
-    from databricks_ai_bridge.lakebase import LakebasePool
-
-    pool = LakebasePool(instance_name=get_instance_name())
-    with pool.connection() as conn:
-        for table in ["store_vectors", "vector_migrations", "store", "store_migrations"]:
-            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-    pool.close()
+    _drop_tables(STORE_TABLES)
 
 
 @pytest.fixture(scope="module")
 def cleanup_checkpoint_tables():
-    """Module-scoped fixture to clean up LangGraph checkpoint tables after all checkpoint tests."""
+    """Drop checkpoint tables before and after all checkpoint tests."""
+    _drop_tables(CHECKPOINT_TABLES)
     yield
-
-    from databricks_ai_bridge.lakebase import LakebasePool
-
-    pool = LakebasePool(instance_name=get_instance_name())
-    with pool.connection() as conn:
-        for table in [
-            "checkpoint_migrations",
-            "checkpoint_blobs",
-            "checkpoint_writes",
-            "checkpoints",
-        ]:
-            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-    pool.close()
+    _drop_tables(CHECKPOINT_TABLES)
 
 
 # =============================================================================
