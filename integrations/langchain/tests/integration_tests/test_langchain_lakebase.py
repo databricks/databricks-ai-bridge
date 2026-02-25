@@ -49,13 +49,11 @@ CHECKPOINT_TABLES = [
 
 def _drop_tables(tables: list[str]) -> None:
     """Drop the given tables from the Lakebase instance."""
-    from databricks_ai_bridge.lakebase import LakebasePool
+    from databricks_ai_bridge.lakebase import LakebaseClient
 
-    pool = LakebasePool(instance_name=get_instance_name())
-    with pool.connection() as conn:
+    with LakebaseClient(instance_name=get_instance_name()) as client:
         for table in tables:
-            conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
-    pool.close()
+            client.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
 
 # =============================================================================
@@ -144,6 +142,26 @@ class TestDatabricksStore:
         store.delete(ns, "to_delete")
         assert store.get(ns, "to_delete") is None
 
+    def test_store_vector_search(self, unique_namespace, cleanup_store_tables):
+        """Test vector-based search with embedding endpoint via PostgresIndexConfig."""
+        from databricks_langchain import DatabricksStore
+
+        store = DatabricksStore(
+            instance_name=get_instance_name(),
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        )
+        store.setup()
+
+        ns = unique_namespace
+        store.put(ns, "doc_python", {"text": "Python is a programming language"})
+        store.put(ns, "doc_coffee", {"text": "Coffee is a popular beverage"})
+
+        results = store.search(ns, query="programming languages")
+        assert len(results) > 0
+        # The programming-related doc should rank higher than the coffee doc
+        assert results[0].key == "doc_python"
+
 
 # =============================================================================
 # AsyncDatabricksStore Tests
@@ -155,12 +173,10 @@ class TestAsyncDatabricksStore:
 
     @pytest.mark.asyncio
     async def test_async_store_put_and_get(self, unique_namespace, cleanup_store_tables):
-        """Test async pool open/close/borrow cycle with put and get."""
+        """Test async put and get operations through bridge."""
         from databricks_langchain import AsyncDatabricksStore
 
-        store = AsyncDatabricksStore(instance_name=get_instance_name())
-        await store._lakebase.open()
-        try:
+        async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
             await store.setup()
 
             ns = unique_namespace
@@ -170,8 +186,6 @@ class TestAsyncDatabricksStore:
             assert item is not None
             assert item.value == {"data": "async hello"}
             assert item.key == "async_key"
-        finally:
-            await store._lakebase.close()
 
     @pytest.mark.asyncio
     async def test_async_store_search(self, unique_namespace, cleanup_store_tables):
@@ -243,7 +257,7 @@ class TestCheckpointSaver:
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
-                id=uuid.uuid4().hex,
+                id=uuid.uuid4().hex,  # checkpoint id
                 ts="2025-01-01T00:00:00+00:00",
                 channel_values={},
                 channel_versions={},
@@ -274,7 +288,7 @@ class TestCheckpointSaver:
             for i in range(3):
                 checkpoint = Checkpoint(
                     v=1,
-                    id=uuid.uuid4().hex,
+                    id=uuid.uuid4().hex,  # checkpoint id
                     ts=f"2025-01-01T00:0{i}:00+00:00",
                     channel_values={},
                     channel_versions={},
@@ -285,6 +299,9 @@ class TestCheckpointSaver:
 
             checkpoints = list(saver.list(config))
             assert len(checkpoints) == 3
+            # list() returns checkpoints in reverse chronological order
+            timestamps = [c.checkpoint["ts"] for c in checkpoints]
+            assert timestamps == sorted(timestamps, reverse=True)
 
 
 # =============================================================================
@@ -310,7 +327,7 @@ class TestAsyncCheckpointSaver:
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
-                id=uuid.uuid4().hex,
+                id=uuid.uuid4().hex,  # checkpoint id
                 ts="2025-01-01T00:00:00+00:00",
                 channel_values={},
                 channel_versions={},
@@ -342,7 +359,7 @@ class TestAsyncCheckpointSaver:
             for i in range(3):
                 checkpoint = Checkpoint(
                     v=1,
-                    id=uuid.uuid4().hex,
+                    id=uuid.uuid4().hex,  # checkpoint id
                     ts=f"2025-01-01T00:0{i}:00+00:00",
                     channel_values={},
                     channel_versions={},
@@ -353,6 +370,9 @@ class TestAsyncCheckpointSaver:
 
             checkpoints = [c async for c in saver.alist(config)]
             assert len(checkpoints) == 3
+            # alist() returns checkpoints in reverse chronological order
+            timestamps = [c.checkpoint["ts"] for c in checkpoints]
+            assert timestamps == sorted(timestamps, reverse=True)
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_context_manager(self, cleanup_checkpoint_tables):
@@ -369,7 +389,7 @@ class TestAsyncCheckpointSaver:
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = Checkpoint(
                 v=1,
-                id=uuid.uuid4().hex,
+                id=uuid.uuid4().hex,  # checkpoint id
                 ts="2025-01-01T00:00:00+00:00",
                 channel_values={},
                 channel_versions={},
