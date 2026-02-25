@@ -13,9 +13,13 @@ from typing_extensions import override
 _APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
-# Use the OPENAI_API_KEY environment variable if it exists, otherwise use "no-token"
-# Can be used for openai agents sdk tracing
-_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or "no-token"
+def _get_openai_api_key():
+    """Return OPENAI_API_KEY from env if set, otherwise 'no-token'.
+
+    Passed through to the OpenAI client so that the agents SDK tracing
+    client can authenticate with the OpenAI API.
+    """
+    return os.environ.get("OPENAI_API_KEY") or "no-token"
 
 
 class BearerAuth(Auth):
@@ -218,7 +222,7 @@ class DatabricksResponses(Responses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = OpenAI(
                 base_url=app_url,
-                api_key=_OPENAI_API_KEY,
+                api_key=_get_openai_api_key(),
                 http_client=_get_authorized_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -307,7 +311,7 @@ class DatabricksOpenAI(OpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key=_OPENAI_API_KEY,
+            api_key=_get_openai_api_key(),
             http_client=_get_authorized_http_client(workspace_client),
         )
 
@@ -365,7 +369,7 @@ class AsyncDatabricksResponses(AsyncResponses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = AsyncOpenAI(
                 base_url=app_url,
-                api_key=_OPENAI_API_KEY,
+                api_key=_get_openai_api_key(),
                 http_client=_get_authorized_async_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -454,7 +458,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key=_OPENAI_API_KEY,
+            api_key=_get_openai_api_key(),
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 
