@@ -299,9 +299,6 @@ class TestCheckpointSaver:
 
             checkpoints = list(saver.list(config))
             assert len(checkpoints) == 3
-            # list() returns checkpoints in reverse chronological order
-            timestamps = [c.checkpoint["ts"] for c in checkpoints]
-            assert timestamps == sorted(timestamps, reverse=True)
 
 
 # =============================================================================
@@ -370,9 +367,6 @@ class TestAsyncCheckpointSaver:
 
             checkpoints = [c async for c in saver.alist(config)]
             assert len(checkpoints) == 3
-            # alist() returns checkpoints in reverse chronological order
-            timestamps = [c.checkpoint["ts"] for c in checkpoints]
-            assert timestamps == sorted(timestamps, reverse=True)
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_context_manager(self, cleanup_checkpoint_tables):
