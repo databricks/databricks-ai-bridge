@@ -80,31 +80,32 @@ const responsesAgentOutputItem = z.discriminatedUnion('type', [
   responsesAgentMcpApprovalResponseSchema,
 ])
 
-export const responsesAgentResponseSchema = z.object({
-  id: z.string().optional(),
-  created_at: z.number().optional(),
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-    })
-    .nullish(),
-  model: z.string().optional(),
-  output: z.array(responsesAgentOutputItem),
-  incomplete_details: z
-    .object({
-      reason: z.string().nullish().optional(),
-    })
-    .nullish(),
-  usage: z
-    .object({
-      input_tokens: z.number(),
-      output_tokens: z.number(),
-      total_tokens: z.number(),
-    })
-    .optional(),
-})
-.passthrough()
+export const responsesAgentResponseSchema = z
+  .object({
+    id: z.string().optional(),
+    created_at: z.number().optional(),
+    error: z
+      .object({
+        code: z.string(),
+        message: z.string(),
+      })
+      .nullish(),
+    model: z.string().optional(),
+    output: z.array(responsesAgentOutputItem),
+    incomplete_details: z
+      .object({
+        reason: z.string().nullish().optional(),
+      })
+      .nullish(),
+    usage: z
+      .object({
+        input_tokens: z.number(),
+        output_tokens: z.number(),
+        total_tokens: z.number(),
+      })
+      .optional(),
+  })
+  .passthrough()
 
 /**
  * Chunk schema

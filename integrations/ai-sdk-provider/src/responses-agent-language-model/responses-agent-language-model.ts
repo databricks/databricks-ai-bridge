@@ -54,7 +54,6 @@ function mapResponsesFinishReason({
   return { raw: finishReason ?? undefined, unified }
 }
 
-
 export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
   readonly specificationVersion = 'v3'
 
