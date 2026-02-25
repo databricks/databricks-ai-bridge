@@ -13,6 +13,8 @@ from typing_extensions import override
 _APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
+
+
 def _get_openai_api_key():
     """Return OPENAI_API_KEY from env if set, otherwise 'no-token'.
 

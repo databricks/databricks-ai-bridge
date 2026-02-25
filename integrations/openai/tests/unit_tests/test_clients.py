@@ -69,9 +69,10 @@ class TestDatabricksOpenAI:
     def test_init_with_default_workspace_client(self):
         """Test initialization with default WorkspaceClient."""
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        with patch.dict("os.environ", env, clear=True), patch(
-            "databricks_openai.utils.clients.WorkspaceClient"
-        ) as mock_ws_client_class:
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
             mock_client = MagicMock(spec=WorkspaceClient)
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
@@ -89,9 +90,10 @@ class TestDatabricksOpenAI:
             assert client.api_key == "no-token"
 
     def test_init_uses_openai_api_key_env_var(self):
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-from-env"}), patch(
-            "databricks_openai.utils.clients.WorkspaceClient"
-        ) as mock_ws_client_class:
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-from-env"}),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
             mock_client = MagicMock(spec=WorkspaceClient)
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
@@ -127,9 +129,10 @@ class TestAsyncDatabricksOpenAI:
     def test_init_with_default_workspace_client(self):
         """Test initialization with default WorkspaceClient."""
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        with patch.dict("os.environ", env, clear=True), patch(
-            "databricks_openai.utils.clients.WorkspaceClient"
-        ) as mock_ws_client_class:
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
             mock_client = MagicMock(spec=WorkspaceClient)
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
