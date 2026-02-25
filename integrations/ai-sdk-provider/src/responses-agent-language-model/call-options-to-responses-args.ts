@@ -19,6 +19,9 @@ export type ResponsesBodyArgs = {
       | { type: 'json_object' }
       | { type: 'json_schema'; json_schema: unknown }
   }
+  databricks_options?: {
+    return_trace?: boolean
+  }
 }
 
 /**
@@ -30,6 +33,7 @@ export type DatabricksProviderOptions = {
   reasoning?: {
     effort?: 'low' | 'medium' | 'high'
   }
+  includeTrace?: boolean
 }
 
 /**
@@ -145,6 +149,10 @@ export function callOptionsToResponsesArgs(options: LanguageModelV3CallOptions):
 
   if (databricksOptions?.reasoning != null) {
     args.reasoning = databricksOptions.reasoning
+  }
+
+  if (databricksOptions?.includeTrace != null) {
+    args.databricks_options = { return_trace: databricksOptions.includeTrace }
   }
 
   return { args, warnings }

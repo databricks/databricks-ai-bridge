@@ -17,6 +17,13 @@ export const getDatabricksLanguageModelTransformStream = () => {
   )
   return new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
     transform(chunk, controller) {
+      // Raw chunks (from includeRawChunks) must be transparent to delta boundary tracking.
+      // Pass them through without running the transform or updating lastChunk.
+      if (chunk.type === 'raw') {
+        controller.enqueue(chunk)
+        return
+      }
+
       // Apply transformation functions to the incoming chunks
       const { out } = transformerStreamParts([chunk], lastChunk)
 
@@ -41,7 +48,7 @@ export const getDatabricksLanguageModelTransformStream = () => {
         controller.enqueue(transformedChunk)
       })
 
-      // Update the last chunk
+      // Update the last chunk (skip raw chunks — already handled above)
       lastChunk = out[out.length - 1] ?? lastChunk
     },
     flush(controller) {

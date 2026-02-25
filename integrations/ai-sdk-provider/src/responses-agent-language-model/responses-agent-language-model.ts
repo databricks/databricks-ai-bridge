@@ -111,6 +111,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
         outputTokens: { total: response.usage?.output_tokens ?? 0, text: 0, reasoning: 0 },
       },
       warnings,
+      response: {
+        body: response,
+      },
     }
   }
 
@@ -306,7 +309,9 @@ export class DatabricksResponsesAgentLanguageModel implements LanguageModelV3 {
         )
         .pipeThrough(getDatabricksLanguageModelTransformStream()),
       request: { body: networkArgs.body },
-      response: { headers: responseHeaders },
+      response: {
+        headers: responseHeaders,
+      },
     }
   }
 
