@@ -88,6 +88,18 @@ class TestDatabricksOpenAI:
             assert "default.databricks.com" in str(client.base_url)
             assert client.api_key == "no-token"
 
+    def test_init_uses_openai_api_key_env_var(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-from-env"}), patch(
+            "databricks_openai.utils.clients.WorkspaceClient"
+        ) as mock_ws_client_class:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://default.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws_client_class.return_value = mock_client
+
+            client = DatabricksOpenAI()
+            assert client.api_key == "sk-from-env"
+
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header."""
 
