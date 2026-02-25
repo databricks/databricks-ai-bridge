@@ -93,21 +93,58 @@ class _LakebaseBase:
     Base class for Lakebase connections: resolve host, infer username,
     token cache + minting, and conninfo building.
 
+    Supports two modes:
+    - V1 (provisioned instances): User provides ``instance_name``.
+    - V2 (autoscaling projects/branches): User provides ``project`` + ``branch``.
+
     Subclasses implement specific initialization and lifecycle methods.
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
-        self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
-        self.instance_name: str = instance_name
-        self.token_cache_duration_seconds: int = token_cache_duration_seconds
+        # --- Parameter validation ---
+        has_v1 = instance_name is not None
+        has_v2 = project is not None or branch is not None
 
-        # Resolve host from the Lakebase name
+        if has_v1 and has_v2:
+            raise ValueError(
+                "Provide either 'instance_name' (V1) or 'project'+'branch' (V2), not both."
+            )
+        if not has_v1 and not has_v2:
+            raise ValueError(
+                "Must provide either 'instance_name' (V1) or 'project'+'branch' (V2)."
+            )
+        if has_v2 and (project is None or branch is None):
+            raise ValueError("Both 'project' and 'branch' are required for V2 (autoscaling).")
+
+        self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
+        self.instance_name: str | None = instance_name
+        self.token_cache_duration_seconds: int = token_cache_duration_seconds
+        self._is_v2: bool = has_v2
+
+        # --- Host resolution ---
+        if self._is_v2:
+            self.host, self._endpoint_name = self._resolve_v2_endpoint(project, branch)
+        else:
+            self.host = self._resolve_v1_host(instance_name)
+            self._endpoint_name: str | None = None
+
+        self.username: str = self._infer_username()
+
+        self._cached_token: str | None = None
+        self._cache_ts: float | None = None
+
+    # ---- V1 host resolution ----
+
+    def _resolve_v1_host(self, instance_name: str) -> str:
+        """Resolve host from a V1 Lakebase instance name."""
         try:
             instance = self.workspace_client.database.get_database_instance(instance_name)
         except Exception as exc:
@@ -125,12 +162,56 @@ class _LakebaseBase:
                 f"Lakebase host not found for instance '{instance_name}'. "
                 "Ensure the instance is running and in AVAILABLE state."
             )
+        return resolved_host
 
-        self.host: str = resolved_host
-        self.username: str = self._infer_username()
+    # ---- V2 host resolution ----
 
-        self._cached_token: str | None = None
-        self._cache_ts: float | None = None
+    def _resolve_v2_endpoint(
+        self, project_display_name: str, branch_id: str
+    ) -> tuple[str, str]:
+        """Resolve host and endpoint resource name for V2 (autoscaling).
+
+        Returns (host, endpoint_resource_name).
+        """
+        # 1. Find the project by display_name
+        project_resource_name: str | None = None
+        for proj in self.workspace_client.postgres.list_projects():
+            if getattr(proj, "display_name", None) == project_display_name:
+                project_resource_name = proj.name
+                break
+
+        if not project_resource_name:
+            raise ValueError(
+                f"Lakebase project '{project_display_name}' not found. "
+                "Ensure the project display name is correct."
+            )
+
+        # 2. Construct the branch path and list endpoints
+        branch_path = f"{project_resource_name}/branches/{branch_id}"
+        rw_endpoint = None
+        for ep in self.workspace_client.postgres.list_endpoints(parent=branch_path):
+            if getattr(ep, "endpoint_type", None) == "READ_WRITE":
+                rw_endpoint = ep
+                break
+
+        if not rw_endpoint:
+            raise ValueError(
+                f"No READ_WRITE endpoint found for project '{project_display_name}', "
+                f"branch '{branch_id}'. Ensure the branch exists and has a READ_WRITE endpoint."
+            )
+
+        ep_host = getattr(rw_endpoint, "host", None)
+        ep_name = getattr(rw_endpoint, "name", None)
+
+        if not ep_host or not ep_name:
+            raise ValueError(
+                f"Endpoint for project '{project_display_name}', branch '{branch_id}' "
+                "is missing host or name."
+            )
+
+        return ep_host, ep_name
+
+    # ---- Token cache ----
 
     def _get_cached_token(self) -> str | None:
         """Check if the cached token is still valid."""
@@ -141,6 +222,11 @@ class _LakebaseBase:
         return None
 
     def _mint_token(self) -> str:
+        if self._is_v2:
+            return self._mint_token_v2()
+        return self._mint_token_v1()
+
+    def _mint_token_v1(self) -> str:
         try:
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
@@ -150,6 +236,22 @@ class _LakebaseBase:
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
                 f"'{self.instance_name}'. Ensure the caller has access."
+            ) from exc
+
+        if not cred.token:
+            raise RuntimeError("Failed to generate database credential: no token received")
+
+        return cred.token
+
+    def _mint_token_v2(self) -> str:
+        try:
+            cred = self.workspace_client.postgres.generate_database_credential(
+                endpoint=self._endpoint_name,
+            )
+        except Exception as exc:
+            raise ConnectionError(
+                f"Failed to obtain credential for Lakebase endpoint "
+                f"'{self._endpoint_name}'. Ensure the caller has access."
             ) from exc
 
         if not cred.token:
@@ -178,19 +280,23 @@ class _LakebaseBase:
 class LakebasePool(_LakebaseBase):
     """Sync Lakebase connection pool built on psycopg with rotating credentials.
 
-    instance_name: Name of Lakebase Instance
+    Provide either ``instance_name`` (V1) or ``project`` + ``branch`` (V2).
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -272,19 +378,23 @@ class LakebasePool(_LakebaseBase):
 class AsyncLakebasePool(_LakebaseBase):
     """Async Lakebase connection pool built on psycopg with rotating credentials.
 
-    instance_name: Name of Lakebase Instance
+    Provide either ``instance_name`` (V1) or ``project`` + ``branch`` (V2).
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
     ) -> None:
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -444,25 +554,37 @@ class LakebaseClient:
         *,
         pool: LakebasePool | None = None,
         instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """
         Initialize LakebaseClient.
 
         Provide EITHER:
-        - pool: An existing LakebasePool instance (advanced usage where multiple clients can connect to same pool)
-        - instance_name: Name of the Lakebase instance (creates pool internally)
+        - pool: An existing LakebasePool instance
+        - instance_name: Name of the Lakebase instance (V1)
+        - project + branch: V2 autoscaling project and branch
 
         :param pool: Existing LakebasePool to use for connections.
-        :param instance_name: Name of the Lakebase instance (used to create pool if pool not provided).
-        :param workspace_client: Optional WorkspaceClient (only used when creating pool internally).
+        :param instance_name: Name of the Lakebase instance (V1).
+        :param project: Display name of the Lakebase project (V2).
+        :param branch: Branch ID within the project (V2).
         :param pool_kwargs: Additional kwargs passed to LakebasePool (only used when creating pool internally).
         """
-        if pool is not None and instance_name is not None:
-            raise ValueError("Provide either 'pool' or 'instance_name', not both.")
+        has_connection_params = instance_name is not None or project is not None
 
-        if pool is None and instance_name is None:
-            raise ValueError("Must provide either 'pool' or 'instance_name'.")
+        if pool is not None and has_connection_params:
+            raise ValueError(
+                "Provide either 'pool' or connection parameters "
+                "('instance_name' or 'project'+'branch'), not both."
+            )
+
+        if pool is None and not has_connection_params:
+            raise ValueError(
+                "Must provide either 'pool' or connection parameters "
+                "('instance_name' or 'project'+'branch')."
+            )
 
         self._owns_pool = pool is None
 
@@ -470,7 +592,9 @@ class LakebaseClient:
             self._pool = pool
         else:
             self._pool = LakebasePool(
-                instance_name=instance_name,  # type: ignore[arg-type]
+                instance_name=instance_name,
+                project=project,
+                branch=branch,
                 **pool_kwargs,
             )
 
@@ -912,7 +1036,9 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
@@ -922,7 +1048,9 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         Initialize AsyncLakebaseSQLAlchemy for Databricks Lakebase.
 
         Args:
-            instance_name: Name of the Lakebase instance.
+            instance_name: Name of the Lakebase instance (V1).
+            project: Display name of the Lakebase project (V2).
+            branch: Branch ID within the project (V2).
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -934,6 +1062,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         """
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -943,9 +1073,10 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         self._pool_recycle = pool_recycle
         self._engine = self._create_engine(**engine_kwargs)
 
+        identifier = instance_name if not self._is_v2 else f"{project}/{branch}"
         logger.info(
-            "AsyncLakebaseSQLAlchemy initialized: instance=%s host=%s",
-            instance_name,
+            "AsyncLakebaseSQLAlchemy initialized: %s host=%s",
+            identifier,
             self.host,
         )
 
@@ -969,7 +1100,6 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         from sqlalchemy import URL
 
         # Create engine without password - token injected via event listener
-        # Note: empty password in URL, actual token provided on connect
         return URL.create(
             drivername="postgresql+psycopg",
             username=self.username,

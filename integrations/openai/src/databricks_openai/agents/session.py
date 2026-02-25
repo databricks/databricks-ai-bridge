@@ -98,7 +98,9 @@ class AsyncDatabricksSession(SQLAlchemySession):
         self,
         session_id: str,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: Optional[WorkspaceClient] = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         create_tables: bool = True,
@@ -112,7 +114,9 @@ class AsyncDatabricksSession(SQLAlchemySession):
 
         Args:
             session_id: Unique identifier for the conversation session.
-            instance_name: Name of the Lakebase instance.
+            instance_name: Name of the Lakebase instance (V1).
+            project: Display name of the Lakebase project (V2).
+            branch: Branch ID within the project (V2).
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -124,8 +128,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
             messages_table: Name of the messages table.
                 Defaults to "agent_messages".
             use_cached_engine: Whether to reuse a cached engine for the same
-                instance_name and engine_kwargs combination. Set to False to
-                always create a new engine. Defaults to True.
+                instance/project configuration and engine_kwargs combination.
+                Set to False to always create a new engine. Defaults to True.
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
@@ -137,6 +141,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
 
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=engine_kwargs.pop("pool_recycle", DEFAULT_POOL_RECYCLE_SECONDS),
@@ -153,24 +159,35 @@ class AsyncDatabricksSession(SQLAlchemySession):
             messages_table=messages_table,
         )
 
+        identifier = instance_name if instance_name else f"{project}/{branch}"
         logger.info(
-            "AsyncDatabricksSession initialized: instance=%s session_id=%s",
-            instance_name,
+            "AsyncDatabricksSession initialized: %s session_id=%s",
+            identifier,
             session_id,
         )
 
     @classmethod
-    def _build_cache_key(cls, instance_name: str, **engine_kwargs: Any) -> str:
-        """Build a cache key from instance_name and engine_kwargs."""
+    def _build_cache_key(
+        cls,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
+        **engine_kwargs: Any,
+    ) -> str:
+        """Build a cache key from connection params and engine_kwargs."""
         # Sort kwargs for deterministic key; use JSON for serializable values
         kwargs_key = json.dumps(engine_kwargs, sort_keys=True, default=str)
+        if project is not None:
+            return f"{project}:{branch}::{kwargs_key}"
         return f"{instance_name}::{kwargs_key}"
 
     @classmethod
     def _get_or_create_lakebase(
         cls,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: Optional[WorkspaceClient],
         token_cache_duration_seconds: int,
         pool_recycle: int,
@@ -178,9 +195,15 @@ class AsyncDatabricksSession(SQLAlchemySession):
         **engine_kwargs,
     ) -> AsyncLakebaseSQLAlchemy:
         """Get cached AsyncLakebaseSQLAlchemy or create a new one.
-        The cache key uses both instance_name and engine_kwargs
+        The cache key uses connection params and engine_kwargs.
         """
-        cache_key = cls._build_cache_key(instance_name, pool_recycle=pool_recycle, **engine_kwargs)
+        cache_key = cls._build_cache_key(
+            instance_name=instance_name,
+            project=project,
+            branch=branch,
+            pool_recycle=pool_recycle,
+            **engine_kwargs,
+        )
 
         if use_cached_engine:
             with cls._lakebase_sql_alchemy_cache_lock:
@@ -190,6 +213,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
 
         lakebase = AsyncLakebaseSQLAlchemy(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=pool_recycle,

@@ -33,7 +33,9 @@ class DatabricksStore(BaseStore):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -44,7 +46,9 @@ class DatabricksStore(BaseStore):
         """Initialize DatabricksStore with embedding support.
 
         Args:
-            instance_name: The name of the Lakebase instance to connect to.
+            instance_name: The name of the Lakebase instance to connect to (V1).
+            project: Display name of the Lakebase project (V2).
+            branch: Branch ID within the project (V2).
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -64,6 +68,8 @@ class DatabricksStore(BaseStore):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )
@@ -148,7 +154,9 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -159,7 +167,9 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         """Initialize AsyncDatabricksStore with embedding support.
 
         Args:
-            instance_name: The name of the Lakebase instance to connect to.
+            instance_name: The name of the Lakebase instance to connect to (V1).
+            project: Display name of the Lakebase project (V2).
+            branch: Branch ID within the project (V2).
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -181,6 +191,8 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )

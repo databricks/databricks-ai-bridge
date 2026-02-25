@@ -444,7 +444,7 @@ class TestLakebaseClientInit:
 
     def test_client_requires_pool_or_instance_name(self):
         """Client must be given either pool or instance_name."""
-        with pytest.raises(ValueError, match="Must provide either 'pool' or 'instance_name'"):
+        with pytest.raises(ValueError, match="Must provide either 'pool' or connection parameters"):
             LakebaseClient()
 
 
@@ -1294,3 +1294,291 @@ def test_async_lakebase_sqlalchemy_invalid_instance_raises():
                 instance_name="bad-instance",
                 workspace_client=workspace,
             )
+
+
+# =============================================================================
+# V2 (autoscaling) Tests
+# =============================================================================
+
+
+def _make_v2_workspace(
+    *,
+    user_name: str = "test@databricks.com",
+    credential_token: str = "v2-token-1",
+    project_display_name: str = "my-project",
+    project_resource_name: str = "projects/proj-123",
+    branch_id: str = "branch-456",
+    endpoint_host: str = "v2.host",
+    endpoint_name: str = "projects/proj-123/branches/branch-456/endpoints/ep-789",
+):
+    """Create a mock workspace for V2 (autoscaling) tests."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name=user_name)
+
+    # Mock postgres.list_projects()
+    project = MagicMock()
+    project.display_name = project_display_name
+    project.name = project_resource_name
+    workspace.postgres.list_projects.return_value = [project]
+
+    # Mock postgres.list_endpoints()
+    endpoint = MagicMock()
+    endpoint.endpoint_type = "READ_WRITE"
+    endpoint.host = endpoint_host
+    endpoint.name = endpoint_name
+    workspace.postgres.list_endpoints.return_value = [endpoint]
+
+    # Mock postgres.generate_database_credential()
+    workspace.postgres.generate_database_credential.return_value = MagicMock(
+        token=credential_token
+    )
+
+    return workspace
+
+
+class TestV2Validation:
+    """Tests for V2 parameter validation."""
+
+    def test_both_v1_and_v2_raises(self):
+        """Providing both instance_name and project/branch should raise."""
+        workspace = _make_workspace()
+        with pytest.raises(ValueError, match="not both"):
+            LakebasePool(
+                instance_name="my-instance",
+                project="my-project",
+                branch="branch-1",
+                workspace_client=workspace,
+            )
+
+    def test_neither_v1_nor_v2_raises(self):
+        """Providing neither instance_name nor project/branch should raise."""
+        with pytest.raises(ValueError, match="Must provide"):
+            LakebasePool(workspace_client=MagicMock())
+
+    def test_v2_project_without_branch_raises(self):
+        """V2 requires both project and branch."""
+        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+            LakebasePool(project="my-project", workspace_client=MagicMock())
+
+    def test_v2_branch_without_project_raises(self):
+        """V2 requires both project and branch."""
+        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+            LakebasePool(branch="branch-1", workspace_client=MagicMock())
+
+
+class TestV2Pool:
+    """Tests for V2 LakebasePool."""
+
+    def test_v2_pool_resolves_host(self, monkeypatch):
+        """V2 pool resolves host from endpoint."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace(endpoint_host="v2.lakebase.host")
+        pool = LakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        assert pool.host == "v2.lakebase.host"
+
+    def test_v2_pool_conninfo_uses_uri_format(self, monkeypatch):
+        """V2 conninfo should use URI format with URL-encoded username."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace(
+            user_name="user@databricks.com",
+            endpoint_host="v2.host",
+        )
+        pool = LakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        expected = "dbname=databricks_postgres user=user@databricks.com host=v2.host port=5432 sslmode=require"
+        assert pool.pool.conninfo == expected
+
+    def test_v2_pool_mints_token_via_postgres_service(self, monkeypatch):
+        """V2 pool mints token via postgres.generate_database_credential."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace(credential_token="v2-secret")
+        pool = LakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        token = pool._get_token()
+        assert token == "v2-secret"
+        workspace.postgres.generate_database_credential.assert_called_once_with(
+            endpoint="projects/proj-123/branches/branch-456/endpoints/ep-789",
+        )
+
+    def test_v2_pool_project_not_found_raises(self, monkeypatch):
+        """V2 pool raises ValueError when project not found."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace()
+        workspace.postgres.list_projects.return_value = []
+
+        with pytest.raises(ValueError, match="not found"):
+            LakebasePool(
+                project="nonexistent-project",
+                branch="branch-456",
+                workspace_client=workspace,
+            )
+
+    def test_v2_pool_no_rw_endpoint_raises(self, monkeypatch):
+        """V2 pool raises ValueError when no READ_WRITE endpoint found."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace()
+        # Return a READ_ONLY endpoint instead of READ_WRITE
+        ro_endpoint = MagicMock()
+        ro_endpoint.endpoint_type = "READ_ONLY"
+        ro_endpoint.host = "ro.host"
+        ro_endpoint.name = "ep-ro"
+        workspace.postgres.list_endpoints.return_value = [ro_endpoint]
+
+        with pytest.raises(ValueError, match="No READ_WRITE endpoint"):
+            LakebasePool(
+                project="my-project",
+                branch="branch-456",
+                workspace_client=workspace,
+            )
+
+    def test_v2_pool_token_cache_and_refresh(self, monkeypatch):
+        """V2 pool: cached token is reused, expired token is re-minted."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        token_call_count = []
+
+        def mock_generate_credential(**kwargs):
+            token_call_count.append(1)
+            return MagicMock(token=f"v2-token-{len(token_call_count)}")
+
+        workspace = _make_v2_workspace()
+        workspace.postgres.generate_database_credential = mock_generate_credential
+
+        pool = LakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+            token_cache_duration_seconds=1,
+        )
+
+        import time
+
+        test_time = [100.0]
+
+        def mock_time():
+            return test_time[0]
+
+        monkeypatch.setattr(time, "time", mock_time)
+
+        # First call mints
+        token1 = pool._get_token()
+        assert token1 == "v2-token-1"
+        assert len(token_call_count) == 1
+
+        # Within cache window - reuses
+        test_time[0] = 100.5
+        token2 = pool._get_token()
+        assert token2 == "v2-token-1"
+        assert len(token_call_count) == 1
+
+        # After expiry - re-mints
+        test_time[0] = 101.5
+        token3 = pool._get_token()
+        assert token3 == "v2-token-2"
+        assert len(token_call_count) == 2
+
+
+class TestV2AsyncPool:
+    """Tests for V2 AsyncLakebasePool."""
+
+    @pytest.mark.asyncio
+    async def test_v2_async_pool_resolves_host(self, monkeypatch):
+        TestAsyncConnectionPool = _make_async_connection_pool_class()
+        monkeypatch.setattr(
+            "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+        )
+
+        workspace = _make_v2_workspace(endpoint_host="v2-async.host")
+        pool = AsyncLakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        assert pool.host == "v2-async.host"
+
+    @pytest.mark.asyncio
+    async def test_v2_async_pool_conninfo_uses_uri_format(self, monkeypatch):
+        TestAsyncConnectionPool = _make_async_connection_pool_class()
+        monkeypatch.setattr(
+            "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+        )
+
+        workspace = _make_v2_workspace(user_name="user@databricks.com")
+        pool = AsyncLakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        expected = "dbname=databricks_postgres user=user@databricks.com host=v2.host port=5432 sslmode=require"
+        assert pool.pool.conninfo == expected
+
+    @pytest.mark.asyncio
+    async def test_v2_async_pool_mints_token_via_postgres_service(self, monkeypatch):
+        TestAsyncConnectionPool = _make_async_connection_pool_class()
+        monkeypatch.setattr(
+            "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+        )
+
+        workspace = _make_v2_workspace(credential_token="v2-async-token")
+        pool = AsyncLakebasePool(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        token = await pool._get_token_async()
+        assert token == "v2-async-token"
+        workspace.postgres.generate_database_credential.assert_called_once_with(
+            endpoint="projects/proj-123/branches/branch-456/endpoints/ep-789",
+        )
+
+
+class TestV2LakebaseClient:
+    """Tests for V2 LakebaseClient."""
+
+    def test_v2_client_creates_pool_with_v2_params(self, monkeypatch):
+        """V2 client creates an internal pool with project+branch."""
+        TestConnectionPool = _make_connection_pool_class()
+        monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+        workspace = _make_v2_workspace()
+        client = LakebaseClient(
+            project="my-project",
+            branch="branch-456",
+            workspace_client=workspace,
+        )
+
+        assert client.pool.host == "v2.host"
+        assert client.pool._is_v2 is True
+
+    def test_client_pool_and_project_raises(self):
+        """Providing both pool and project should raise."""
+        pool = MagicMock(spec=LakebasePool)
+        with pytest.raises(ValueError, match="not both"):
+            LakebaseClient(pool=pool, project="my-project", branch="b1")

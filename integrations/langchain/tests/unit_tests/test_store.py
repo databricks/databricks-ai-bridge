@@ -426,3 +426,65 @@ async def test_async_databricks_store_connection(monkeypatch):
     ) as store:
         async with store._lakebase.connection() as conn:
             assert conn == mock_conn
+
+
+# =============================================================================
+# V2 (autoscaling) Tests
+# =============================================================================
+
+
+def _create_v2_mock_workspace():
+    """Create a mock workspace for V2 tests."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+    project = MagicMock()
+    project.display_name = "my-project"
+    project.name = "projects/proj-123"
+    workspace.postgres.list_projects.return_value = [project]
+
+    endpoint = MagicMock()
+    endpoint.endpoint_type = "READ_WRITE"
+    endpoint.host = "v2.host"
+    endpoint.name = "projects/proj-123/branches/branch-456/endpoints/ep-789"
+    workspace.postgres.list_endpoints.return_value = [endpoint]
+
+    workspace.postgres.generate_database_credential.return_value = MagicMock(token="v2-token")
+    return workspace
+
+
+def test_databricks_store_v2_configures_lakebase(monkeypatch):
+    """V2 DatabricksStore creates pool with URI conninfo."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_v2_mock_workspace()
+    store = DatabricksStore(
+        project="my-project",
+        branch="branch-456",
+        workspace_client=workspace,
+    )
+
+    expected = "dbname=databricks_postgres user=test@databricks.com host=v2.host port=5432 sslmode=require"
+    assert test_pool.conninfo == expected
+    assert store._lakebase._is_v2 is True
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_v2_configures_lakebase(monkeypatch):
+    """V2 AsyncDatabricksStore creates pool with URI conninfo."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_v2_mock_workspace()
+    store = AsyncDatabricksStore(
+        project="my-project",
+        branch="branch-456",
+        workspace_client=workspace,
+    )
+
+    expected = "dbname=databricks_postgres user=test@databricks.com host=v2.host port=5432 sslmode=require"
+    assert test_pool.conninfo == expected
+    assert store._lakebase._is_v2 is True

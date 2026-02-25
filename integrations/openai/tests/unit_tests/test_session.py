@@ -855,3 +855,157 @@ class TestAsyncDatabricksSessionAsyncOnly:
             assert inspect.iscoroutinefunction(session.add_items)
             assert inspect.iscoroutinefunction(session.pop_item)
             assert inspect.iscoroutinefunction(session.clear_session)
+
+
+# =============================================================================
+# V2 (autoscaling) Tests
+# =============================================================================
+
+
+@pytest.fixture
+def mock_v2_workspace_client():
+    """Create a mock WorkspaceClient for V2 tests."""
+    mock_client = MagicMock()
+    mock_client.config.host = "https://test.databricks.com"
+
+    # Mock current_user.me() for username inference
+    mock_user = MagicMock()
+    mock_user.user_name = "test_user@databricks.com"
+    mock_client.current_user.me.return_value = mock_user
+
+    # Mock postgres.list_projects()
+    project = MagicMock()
+    project.display_name = "my-project"
+    project.name = "projects/proj-123"
+    mock_client.postgres.list_projects.return_value = [project]
+
+    # Mock postgres.list_endpoints()
+    endpoint = MagicMock()
+    endpoint.endpoint_type = "READ_WRITE"
+    endpoint.host = "v2-instance.lakebase.databricks.com"
+    endpoint.name = "projects/proj-123/branches/branch-456/endpoints/ep-789"
+    mock_client.postgres.list_endpoints.return_value = [endpoint]
+
+    # Mock postgres.generate_database_credential()
+    mock_credential = MagicMock()
+    mock_credential.token = "v2-oauth-token"
+    mock_client.postgres.generate_database_credential.return_value = mock_credential
+
+    return mock_client
+
+
+class TestAsyncDatabricksSessionV2:
+    """Tests for V2 AsyncDatabricksSession."""
+
+    def test_v2_init_creates_engine_with_correct_url(
+        self, mock_v2_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that V2 initialization creates engine with URL-encoded username."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_v2_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            AsyncDatabricksSession(
+                session_id="test-session-v2",
+                project="my-project",
+                branch="branch-456",
+                workspace_client=mock_v2_workspace_client,
+            )
+
+            # Verify engine was created
+            call_args = mock_create_engine.call_args
+            url = call_args[0][0]
+            assert url.drivername == "postgresql+psycopg"
+            assert url.username == "test_user@databricks.com"
+            assert url.host == "v2-instance.lakebase.databricks.com"
+            assert url.port == 5432
+            assert url.database == "databricks_postgres"
+
+    def test_v2_sessions_share_engine_for_same_project(
+        self, mock_v2_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that V2 sessions with same project+branch share an engine."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_v2_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                project="my-project",
+                branch="branch-456",
+                workspace_client=mock_v2_workspace_client,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                project="my-project",
+                branch="branch-456",
+                workspace_client=mock_v2_workspace_client,
+            )
+
+            assert mock_create_engine.call_count == 1
+            assert session1._engine is session2._engine
+
+    def test_v2_do_connect_injects_token(self, mock_v2_workspace_client, mock_engine):
+        """Test that V2 do_connect injects token from postgres service."""
+        captured_handler = None
+
+        def capture_handler(engine, event_name):
+            def decorator(fn):
+                nonlocal captured_handler
+                captured_handler = fn
+                return fn
+
+            return decorator
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_v2_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=capture_handler,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            AsyncDatabricksSession(
+                session_id="test-session-v2",
+                project="my-project",
+                branch="branch-456",
+                workspace_client=mock_v2_workspace_client,
+            )
+
+            assert captured_handler is not None
+            cparams = {}
+            captured_handler(None, None, None, cparams)
+
+            assert cparams["password"] == "v2-oauth-token"
