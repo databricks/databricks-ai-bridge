@@ -81,9 +81,7 @@ from databricks_ai_bridge.lakebase import (
 )
 
 
-def create_workspace_client_with_oauth(
-    client_id: str, client_secret: str
-) -> WorkspaceClient:
+def create_workspace_client_with_oauth(client_id: str, client_secret: str) -> WorkspaceClient:
     """
     Create a WorkspaceClient using OAuth M2M (service principal) credentials.
 
