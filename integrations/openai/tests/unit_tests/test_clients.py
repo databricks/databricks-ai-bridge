@@ -1,3 +1,4 @@
+import os
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,7 @@ from databricks_openai.utils.clients import (
     _get_app_url,
     _get_authorized_async_http_client,
     _get_authorized_http_client,
+    _get_openai_api_key,
     _should_strip_strict,
     _strip_strict_from_tools,
     _validate_oauth_for_apps,
@@ -66,7 +68,11 @@ class TestDatabricksOpenAI:
 
     def test_init_with_default_workspace_client(self):
         """Test initialization with default WorkspaceClient."""
-        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class:
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
             mock_client = MagicMock(spec=WorkspaceClient)
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
@@ -82,6 +88,19 @@ class TestDatabricksOpenAI:
             assert client.base_url.path == "/serving-endpoints/"
             assert "default.databricks.com" in str(client.base_url)
             assert client.api_key == "no-token"
+
+    def test_init_uses_openai_api_key_env_var(self):
+        with (
+            patch.dict("os.environ", {"OPENAI_API_KEY": "sk-from-env"}),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://default.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws_client_class.return_value = mock_client
+
+            client = DatabricksOpenAI()
+            assert client.api_key == "sk-from-env"
 
     def test_bearer_auth_flow(self, mock_workspace_client):
         """Test that BearerAuth correctly adds Authorization header."""
@@ -109,7 +128,11 @@ class TestAsyncDatabricksOpenAI:
 
     def test_init_with_default_workspace_client(self):
         """Test initialization with default WorkspaceClient."""
-        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class:
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws_client_class,
+        ):
             mock_client = MagicMock(spec=WorkspaceClient)
             mock_client.config.host = "https://default.databricks.com"
             mock_client.config.authenticate.return_value = {"Authorization": "Bearer default-token"}
@@ -642,3 +665,18 @@ def _messages_with_empty_assistant_content() -> list[dict[str, Any]]:
         {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
         {"role": "tool", "content": "result", "tool_call_id": "1"},
     ]
+
+
+class TestOpenAIApiKey:
+    def test_uses_env_var_when_set(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test-key"}):
+            assert _get_openai_api_key() == "sk-test-key"
+
+    def test_falls_back_to_no_token_when_unset(self):
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        with patch.dict("os.environ", env, clear=True):
+            assert _get_openai_api_key() == "no-token"
+
+    def test_falls_back_to_no_token_when_empty_string(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            assert _get_openai_api_key() == "no-token"
