@@ -5,16 +5,15 @@ Tests McpServerToolkit (vanilla OpenAI SDK) and McpServer (OpenAI Agents SDK)
 against a live Databricks MCP server backed by a UC function (echo_message).
 
 Prerequisites:
-    Run databricks_mcp/tests/integration_tests/setup_workspace.py once to create
-    the test UC function.
+    The test UC function must exist in the workspace.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import pytest
+from mcp.shared.exceptions import McpError
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_MCP_INTEGRATION_TESTS") != "1",
@@ -56,12 +55,13 @@ def toolkit(workspace_client):
 def toolkit_tools(toolkit):
     """Cache get_tools() result to minimize API calls."""
     try:
-        return toolkit.get_tools()
+        tools = toolkit.get_tools()
     except Exception as e:
         pytest.skip(
-            f"Could not get tools from MCP server — is the test function set up? "
-            f"Run setup_workspace.py first. Error: {e}"
+            f"Could not get tools from MCP server — is the test function set up? Error: {e}"
         )
+    assert tools, "get_tools() returned no tools — is the test function set up?"
+    return tools
 
 
 # =============================================================================
@@ -142,7 +142,7 @@ class TestMcpServerToolkitUCFunctions:
         )
         try:
             tools = toolkit.get_tools()
-        except Exception as e:
+        except ValueError as e:
             pytest.skip(f"Schema-level listing failed: {e}")
         assert len(tools) >= 1, "Schema-level listing should return at least one tool"
 
@@ -232,7 +232,7 @@ class TestMcpServerToolkitVectorSearch:
         )
         try:
             tools = toolkit.get_tools()
-        except Exception as e:
+        except ValueError as e:
             pytest.skip(f"VS MCP endpoint not available: {e}")
         assert len(tools) > 0
         for tool in tools:
@@ -260,7 +260,7 @@ class TestMcpServerToolkitVectorSearch:
         )
         try:
             tools = toolkit.get_tools()
-        except Exception as e:
+        except ValueError as e:
             pytest.skip(f"VS schema-level MCP endpoint not available: {e}")
         assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
         for tool in tools:
@@ -278,47 +278,44 @@ class TestMcpServerAgentsUCFunctions:
 
     # -- Listing --
 
-    def test_server_lists_tools(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_server_lists_tools(self, workspace_client):
         from databricks_openai.agents import McpServer
 
-        async def _test():
-            async with McpServer.from_uc_function(
-                catalog=CATALOG,
-                schema=SCHEMA,
-                function_name=FUNCTION_NAME,
-                workspace_client=workspace_client,
-            ) as server:
-                tools = await server.list_tools()
-                assert len(tools) > 0
-
-        asyncio.run(_test())
+        async with McpServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=workspace_client,
+        ) as server:
+            tools = await server.list_tools()
+            assert len(tools) > 0
 
     # -- Execution --
 
-    def test_call_tool_returns_result_with_content(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_call_tool_returns_result_with_content(self, workspace_client):
         from mcp.types import CallToolResult
 
         from databricks_openai.agents import McpServer
 
-        async def _test():
-            async with McpServer.from_uc_function(
-                catalog=CATALOG,
-                schema=SCHEMA,
-                function_name=FUNCTION_NAME,
-                workspace_client=workspace_client,
-            ) as server:
-                tools = await server.list_tools()
-                tool_name = tools[0].name
-                result = await server.call_tool(tool_name, {"message": "hello"})
-                assert isinstance(result, CallToolResult)
-                assert result.content, "call_tool result should have content"
-                assert len(result.content) > 0
-
-        asyncio.run(_test())
+        async with McpServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=workspace_client,
+        ) as server:
+            tools = await server.list_tools()
+            tool_name = tools[0].name
+            result = await server.call_tool(tool_name, {"message": "hello"})
+            assert isinstance(result, CallToolResult)
+            assert result.content, "call_tool result should have content"
+            assert len(result.content) > 0
 
     # -- Auth paths --
 
-    def test_pat_auth_agents_sdk(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_pat_auth_agents_sdk(self, workspace_client):
         """McpServer with PAT-authenticated WorkspaceClient lists tools."""
         from databricks.sdk import WorkspaceClient
 
@@ -330,19 +327,17 @@ class TestMcpServerAgentsUCFunctions:
 
         pat_wc = WorkspaceClient(host=workspace_client.config.host, token=token, auth_type="pat")
 
-        async def _test():
-            async with McpServer.from_uc_function(
-                catalog=CATALOG,
-                schema=SCHEMA,
-                function_name=FUNCTION_NAME,
-                workspace_client=pat_wc,
-            ) as server:
-                tools = await server.list_tools()
-                assert len(tools) > 0
+        async with McpServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=pat_wc,
+        ) as server:
+            tools = await server.list_tools()
+            assert len(tools) > 0
 
-        asyncio.run(_test())
-
-    def test_oauth_m2m_auth_agents_sdk(self):
+    @pytest.mark.asyncio
+    async def test_oauth_m2m_auth_agents_sdk(self):
         """McpServer with OAuth M2M WorkspaceClient lists tools."""
         from databricks.sdk import WorkspaceClient
 
@@ -363,50 +358,45 @@ class TestMcpServerAgentsUCFunctions:
             client_secret=client_secret,
         )
 
-        async def _test():
-            async with McpServer.from_uc_function(
-                catalog=CATALOG,
-                schema=SCHEMA,
-                function_name=FUNCTION_NAME,
-                workspace_client=oauth_wc,
-            ) as server:
-                tools = await server.list_tools()
-                assert len(tools) > 0
-
-        asyncio.run(_test())
+        async with McpServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=oauth_wc,
+        ) as server:
+            tools = await server.list_tools()
+            assert len(tools) > 0
 
     # -- MLflow tracing --
 
-    def test_call_tool_creates_mlflow_trace(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_call_tool_creates_mlflow_trace(self, workspace_client):
         """McpServer.call_tool() creates an MLflow trace with SpanType.TOOL."""
         import mlflow
         from mlflow.entities import SpanType
 
         from databricks_openai.agents import McpServer
 
-        async def _test():
-            async with McpServer.from_uc_function(
-                catalog=CATALOG,
-                schema=SCHEMA,
-                function_name=FUNCTION_NAME,
-                workspace_client=workspace_client,
-            ) as server:
-                tools = await server.list_tools()
-                tool_name = tools[0].name
-                await server.call_tool(tool_name, {"message": "tracing-test"})
+        async with McpServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=workspace_client,
+        ) as server:
+            tools = await server.list_tools()
+            tool_name = tools[0].name
+            await server.call_tool(tool_name, {"message": "tracing-test"})
 
-            trace_id = mlflow.get_last_active_trace_id()
-            assert trace_id is not None, "call_tool should produce an MLflow trace"
-            trace = mlflow.get_trace(trace_id)
-            assert trace is not None, "Should be able to retrieve the trace by ID"
-            spans = trace.data.spans
-            assert len(spans) > 0, "Trace should contain at least one span"
-            root_span = spans[0]
-            assert root_span.span_type == SpanType.TOOL, (
-                f"Expected span_type={SpanType.TOOL}, got: {root_span.span_type}"
-            )
-
-        asyncio.run(_test())
+        trace_id = mlflow.get_last_active_trace_id()
+        assert trace_id is not None, "call_tool should produce an MLflow trace"
+        trace = mlflow.get_trace(trace_id)
+        assert trace is not None, "Should be able to retrieve the trace by ID"
+        spans = trace.data.spans
+        assert len(spans) > 0, "Trace should contain at least one span"
+        root_span = spans[0]
+        assert root_span.span_type == SpanType.TOOL, (
+            f"Expected span_type={SpanType.TOOL}, got: {root_span.span_type}"
+        )
 
     # -- Timeout kwargs --
 
@@ -445,48 +435,154 @@ class TestMcpServerAgentsUCFunctions:
 class TestMcpServerAgentsVectorSearch:
     """Test McpServer.from_vector_search() via Agents SDK (index-level + schema-level)."""
 
-    def test_from_vector_search_call_tool(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_from_vector_search_call_tool(self, workspace_client):
         """List tools and call_tool on a VS tool via Agents SDK context manager."""
         from mcp.types import CallToolResult
 
         from databricks_openai.agents import McpServer
 
-        async def _test():
-            async with McpServer.from_vector_search(
-                catalog=CATALOG,
-                schema=VS_SCHEMA,
-                index_name=VS_INDEX,
-                workspace_client=workspace_client,
-            ) as server:
-                try:
-                    tools = await server.list_tools()
-                except Exception as e:
-                    pytest.skip(f"VS MCP endpoint not available: {e}")
-                assert len(tools) > 0
-                tool = tools[0]
-                # Dynamically extract first param from tool's inputSchema
-                properties = tool.inputSchema.get("properties", {})
-                param_name = next(iter(properties), "query")
-                result = await server.call_tool(tool.name, {param_name: "test"})
-                assert isinstance(result, CallToolResult)
-                assert result.content, "VS call_tool result should have content"
+        async with McpServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            workspace_client=workspace_client,
+        ) as server:
+            try:
+                tools = await server.list_tools()
+            except McpError as e:
+                pytest.skip(f"VS MCP endpoint not available: {e}")
+            assert len(tools) > 0
+            tool = tools[0]
+            # Dynamically extract first param from tool's inputSchema
+            properties = tool.inputSchema.get("properties", {})
+            param_name = next(iter(properties), "query")
+            result = await server.call_tool(tool.name, {param_name: "test"})
+            assert isinstance(result, CallToolResult)
+            assert result.content, "VS call_tool result should have content"
 
-        asyncio.run(_test())
-
-    def test_from_vector_search_schema_level_lists_tools(self, workspace_client):
+    @pytest.mark.asyncio
+    async def test_from_vector_search_schema_level_lists_tools(self, workspace_client):
         """Schema-level VS listing via Agents SDK context manager returns ≥1 tool."""
         from databricks_openai.agents import McpServer
 
-        async def _test():
-            async with McpServer.from_vector_search(
+        async with McpServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            workspace_client=workspace_client,
+        ) as server:
+            try:
+                tools = await server.list_tools()
+            except McpError as e:
+                pytest.skip(f"VS schema-level MCP endpoint not available: {e}")
+            assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
+
+
+# =============================================================================
+# Error Paths
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMcpServerToolkitErrorPaths:
+    """Test error handling in McpServerToolkit wrapper."""
+
+    def test_nonexistent_function_raises_value_error(self, workspace_client):
+        """get_tools() on a nonexistent function wraps the error in ValueError with server name."""
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name="nonexistent_fn_xyz",
+            name="error-test",
+            workspace_client=workspace_client,
+        )
+        with pytest.raises(ValueError, match="Error listing tools from error-test MCP Server"):
+            toolkit.get_tools()
+
+    def test_execute_nonexistent_tool_raises_error(self, workspace_client):
+        """call_tool with a nonexistent tool name raises ExceptionGroup > McpError(BAD_REQUEST)."""
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=workspace_client,
+        )
+        with pytest.raises(ExceptionGroup) as exc_info:  # ty: ignore[unresolved-reference]
+            toolkit.databricks_mcp_client.call_tool("nonexistent_tool_xyz", {"message": "test"})
+
+        # Unwrap to find McpError
+        def find_mcp_error(eg):
+            for exc in eg.exceptions:
+                if isinstance(exc, McpError):
+                    return exc
+                if isinstance(exc, ExceptionGroup):  # ty: ignore[unresolved-reference]
+                    found = find_mcp_error(exc)
+                    if found:
+                        return found
+            return None
+
+        mcp_error = find_mcp_error(exc_info.value)
+        assert mcp_error is not None, f"Expected McpError, got: {exc_info.value}"
+        assert "BAD_REQUEST" in str(mcp_error), f"Expected BAD_REQUEST, got: {mcp_error}"
+
+    def test_execute_wrong_arguments_raises_error(self, toolkit_tools):
+        """execute() with wrong arguments raises ExceptionGroup > McpError(BAD_REQUEST)."""
+        tool = toolkit_tools[0]
+        # echo_message expects "message", we pass "wrong_arg"
+        with pytest.raises(ExceptionGroup):  # ty: ignore[unresolved-reference]
+            tool.execute(wrong_arg="test")
+
+
+@pytest.mark.integration
+class TestMcpServerAgentsErrorPaths:
+    """Test error handling in McpServer (Agents SDK) wrapper."""
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_function_raises_mcp_error(self, workspace_client):
+        """McpServer with a nonexistent function raises McpError(BAD_REQUEST: ... not found)."""
+        from databricks_openai.agents import McpServer
+
+        with pytest.raises(McpError, match="BAD_REQUEST"):
+            async with McpServer.from_uc_function(
                 catalog=CATALOG,
-                schema=VS_SCHEMA,
+                schema=SCHEMA,
+                function_name="nonexistent_fn_xyz",
                 workspace_client=workspace_client,
             ) as server:
-                try:
-                    tools = await server.list_tools()
-                except Exception as e:
-                    pytest.skip(f"VS schema-level MCP endpoint not available: {e}")
-                assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
+                await server.list_tools()
 
-        asyncio.run(_test())
+    @pytest.mark.asyncio
+    async def test_call_tool_nonexistent_tool_raises_mcp_error(self, workspace_client):
+        """call_tool() with a malformed tool name raises McpError(BAD_REQUEST: ... malformed)."""
+        from databricks_openai.agents import McpServer
+
+        with pytest.raises(McpError, match="BAD_REQUEST"):
+            async with McpServer.from_uc_function(
+                catalog=CATALOG,
+                schema=SCHEMA,
+                function_name=FUNCTION_NAME,
+                workspace_client=workspace_client,
+            ) as server:
+                await server.call_tool("nonexistent_tool_xyz", {"message": "test"})
+
+    @pytest.mark.asyncio
+    async def test_call_tool_wrong_arguments_raises_user_error(self, workspace_client):
+        """call_tool() with wrong arguments raises UserError about missing parameters."""
+        from agents.exceptions import UserError
+
+        from databricks_openai.agents import McpServer
+
+        with pytest.raises(UserError, match="missing required parameters"):
+            async with McpServer.from_uc_function(
+                catalog=CATALOG,
+                schema=SCHEMA,
+                function_name=FUNCTION_NAME,
+                workspace_client=workspace_client,
+            ) as server:
+                tools = await server.list_tools()
+                tool_name = tools[0].name
+                await server.call_tool(tool_name, {"wrong_arg": "test"})
