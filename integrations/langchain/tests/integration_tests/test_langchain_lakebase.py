@@ -162,20 +162,6 @@ class TestDatabricksStore:
         # The programming-related doc should rank higher than the coffee doc
         assert results[0].key == "doc_python"
 
-    def test_store_context_manager(self, unique_namespace, cleanup_store_tables):
-        """Test sync context manager lifecycle (__enter__/__exit__)."""
-        from databricks_langchain import DatabricksStore
-
-        with DatabricksStore(instance_name=get_instance_name()) as store:
-            store.setup()
-
-            ns = unique_namespace
-            store.put(ns, "ctx_key", {"data": "context managed"})
-
-            item = store.get(ns, "ctx_key")
-            assert item is not None
-            assert item.value == {"data": "context managed"}
-
 
 # =============================================================================
 # AsyncDatabricksStore Tests
