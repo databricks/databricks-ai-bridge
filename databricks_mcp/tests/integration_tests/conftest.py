@@ -5,7 +5,7 @@ These tests require a live Databricks workspace with a pre-created UC function.
 They are NOT run by default — set RUN_MCP_INTEGRATION_TESTS=1 to enable.
 
 Prerequisites:
-    Run setup_workspace.py once to create the test UC function.
+    The test UC function must exist in the workspace.
 
 Environment Variables:
 ======================
@@ -21,20 +21,35 @@ from __future__ import annotations
 import os
 
 import pytest
+from mcp.shared.exceptions import McpError
 
 from databricks_mcp import DatabricksMCPClient
 
-# =============================================================================
-# Env var gate — skip entire module if not enabled
-# =============================================================================
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("RUN_MCP_INTEGRATION_TESTS") != "1",
-    reason="MCP integration tests disabled. Set RUN_MCP_INTEGRATION_TESTS=1 to enable.",
-)
+def _find_mcp_error(exc_group: ExceptionGroup) -> McpError | None:  # ty: ignore[unresolved-reference]
+    """Recursively unwrap nested ExceptionGroups to find a McpError."""
+    for exc in exc_group.exceptions:
+        if isinstance(exc, McpError):
+            return exc
+        if isinstance(exc, ExceptionGroup):  # ty: ignore[unresolved-reference]
+            found = _find_mcp_error(exc)
+            if found:
+                return found
+    return None
+
+
+def _skip_if_not_found(exc_group: ExceptionGroup, context: str) -> None:  # ty: ignore[unresolved-reference]
+    """Skip the test if the McpError indicates a missing resource, otherwise re-raise."""
+    mcp_error = _find_mcp_error(exc_group)
+    if mcp_error:
+        msg = str(mcp_error)
+        if "NOT_FOUND" in msg or "not found" in msg.lower():
+            pytest.skip(f"{context}: {mcp_error}")
+    raise exc_group
+
 
 # =============================================================================
-# Constants (must match setup_workspace.py)
+# Constants
 # =============================================================================
 
 CATALOG = "integration_testing"
@@ -97,11 +112,8 @@ def cached_tools_list(mcp_client):
     """
     try:
         tools = mcp_client.list_tools()
-    except Exception as e:
-        pytest.skip(
-            f"Could not list tools from MCP server — is the test function set up? "
-            f"Run setup_workspace.py first. Error: {e}"
-        )
+    except ExceptionGroup as e:  # ty: ignore[unresolved-reference]
+        _skip_if_not_found(e, "UC function not found in workspace")
     return tools
 
 
@@ -152,8 +164,8 @@ def cached_vs_tools_list(vs_mcp_client):
     """Cache the VS list_tools() result; skip if VS MCP endpoint unavailable."""
     try:
         return vs_mcp_client.list_tools()
-    except Exception as e:
-        pytest.skip(f"VS MCP endpoint not available: {e}")
+    except ExceptionGroup as e:  # ty: ignore[unresolved-reference]
+        _skip_if_not_found(e, "VS MCP endpoint not available in workspace")
 
 
 @pytest.fixture(scope="session")
@@ -197,8 +209,8 @@ def cached_genie_tools_list(genie_mcp_client):
     """Cache the Genie list_tools() result; skip if Genie MCP endpoint unavailable."""
     try:
         return genie_mcp_client.list_tools()
-    except Exception as e:
-        pytest.skip(f"Genie MCP endpoint not available: {e}")
+    except ExceptionGroup as e:  # ty: ignore[unresolved-reference]
+        _skip_if_not_found(e, "Genie MCP endpoint not available in workspace")
 
 
 @pytest.fixture(scope="session")

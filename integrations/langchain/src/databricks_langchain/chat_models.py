@@ -471,21 +471,21 @@ class ChatDatabricks(BaseChatModel):
 
         for item in response.output:
             if item.type == "message":
-                if item.content is not None:  # ty:ignore
-                    for content in item.content:  # ty:ignore
+                if item.content is not None:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    for content in item.content:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                         if content.type == "output_text":
                             annotations = []
-                            if content.annotations:  # ty:ignore
+                            if content.annotations:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 # Convert annotation objects to dictionaries
                                 annotations = [
                                     ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                    for ann in content.annotations  # ty:ignore
+                                    for ann in content.annotations  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 ]
 
                             content_blocks.append(
                                 {
                                     "type": "text",
-                                    "text": content.text,  # ty:ignore
+                                    "text": content.text,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                     "annotations": annotations,
                                     "id": getattr(content, "id", None),
                                 }
@@ -494,7 +494,7 @@ class ChatDatabricks(BaseChatModel):
                             content_blocks.append(
                                 {
                                     "type": "refusal",
-                                    "refusal": content.refusal,  # ty:ignore
+                                    "refusal": content.refusal,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                     "id": getattr(content, "id", None),
                                 }
                             )
@@ -502,34 +502,34 @@ class ChatDatabricks(BaseChatModel):
                 # Convert to dict for content_blocks to maintain backward compatibility
                 item_dict = {
                     "type": "function_call",
-                    "name": item.name,  # ty:ignore
-                    "arguments": item.arguments,  # ty:ignore
-                    "call_id": item.call_id,  # ty:ignore
+                    "name": item.name,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    "arguments": item.arguments,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    "call_id": item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                 }
                 content_blocks.append(item_dict)
 
                 try:
-                    args = json.loads(item.arguments, strict=False)  # ty:ignore
+                    args = json.loads(item.arguments, strict=False)  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                     error = None
                 except json.JSONDecodeError as e:
                     error = str(e)
-                    args = item.arguments  # ty:ignore
+                    args = item.arguments  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                 if error is None:
                     tool_calls.append(
                         {
                             "type": "tool_call",
-                            "name": item.name,  # ty:ignore
+                            "name": item.name,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                             "args": args,
-                            "id": item.call_id,  # ty:ignore
+                            "id": item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                         }
                     )
                 else:
                     invalid_tool_calls.append(
                         {
                             "type": "invalid_tool_call",
-                            "name": item.name,  # ty:ignore
+                            "name": item.name,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                             "args": args,
-                            "id": item.call_id,  # ty:ignore
+                            "id": item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                             "error": error,
                         }
                     )
@@ -1660,23 +1660,23 @@ def _convert_responses_api_chunk_to_lc_chunk(
         content.append(
             {
                 "type": "text",
-                "text": chunk.delta,  # ty:ignore
+                "text": chunk.delta,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
             }
         )
     elif chunk.type == "response.output_item.done":
-        item = chunk.item  # ty:ignore
+        item = chunk.item  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
         if item.type == "function_call_output":
             lc_chunk = ToolMessageChunk(
                 content=item.output,
                 tool_call_id=item.call_id,
             )
         elif item.type == "function_call":
-            id = item.call_id  # ty:ignore
+            id = item.call_id  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
             tool_call_chunks.append(
                 tool_call_chunk(
-                    name=item.name,  # ty:ignore
-                    args=item.arguments,  # ty:ignore
-                    id=item.call_id,  # ty:ignore
+                    name=item.name,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    args=item.arguments,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    id=item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                 )
             )
         elif item.type == "message":
@@ -1687,30 +1687,30 @@ def _convert_responses_api_chunk_to_lc_chunk(
             skip_duplicate_text = (
                 previous_chunk and prev_type == "response.output_text.delta" and id == prev_item_id
             )
-            if item.content is not None:  # ty:ignore
-                for content_item in item.content:  # ty:ignore
+            if item.content is not None:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                for content_item in item.content:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                     if content_item.type == "output_text":
                         if skip_duplicate_text:
-                            if content_item.annotations:  # ty:ignore
+                            if content_item.annotations:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 # Convert annotation objects to dictionaries
                                 annotations = [
                                     ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                    for ann in content_item.annotations  # ty:ignore
+                                    for ann in content_item.annotations  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 ]
                                 content.append({"annotations": annotations})
                         else:
                             annotations = []
-                            if content_item.annotations:  # ty:ignore
+                            if content_item.annotations:  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 # Convert annotation objects to dictionaries
                                 annotations = [
                                     ann.model_dump() if hasattr(ann, "model_dump") else ann
-                                    for ann in content_item.annotations  # ty:ignore
+                                    for ann in content_item.annotations  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                 ]
 
                             content.append(
                                 {
                                     "type": "text",
-                                    "text": content_item.text,  # ty:ignore
+                                    "text": content_item.text,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                                     "annotations": annotations,
                                 }
                             )
@@ -1718,7 +1718,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
                         content.append(
                             {
                                 "type": "refusal",
-                                "refusal": content_item.refusal,  # ty:ignore
+                                "refusal": content_item.refusal,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                             }
                         )
         elif item.type in (
@@ -1738,13 +1738,13 @@ def _convert_responses_api_chunk_to_lc_chunk(
             else:
                 content.append(item)
     elif chunk.type == "response.created":
-        id = chunk.response.id if chunk.response else None  # ty:ignore
+        id = chunk.response.id if chunk.response else None  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
         lc_chunk = AIMessageChunk(content="", id=id)
     elif chunk.type == "response.completed":
         # This indicates the response is done
         return None
     elif chunk.type == "error":
-        raise ValueError(chunk.message)  # ty:ignore
+        raise ValueError(chunk.message)  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
     else:
         # Return None for unknown chunk types
         return None

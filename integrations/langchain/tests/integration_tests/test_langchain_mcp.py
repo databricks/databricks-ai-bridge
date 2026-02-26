@@ -5,8 +5,7 @@ Tests DatabricksMCPServer, DatabricksMultiServerMCPClient against a live
 Databricks MCP server backed by a UC function (echo_message).
 
 Prerequisites:
-    Run databricks_mcp/tests/integration_tests/setup_workspace.py once to create
-    the test UC function.
+    The test UC function must exist in the workspace.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ def cached_langchain_tools(mcp_server):
     except Exception as e:
         pytest.skip(
             f"Could not get tools from MCP server — is the test function set up? "
-            f"Run setup_workspace.py first. Error: {e}"
+            f"Is the test function set up? Error: {e}"
         )
 
 
@@ -395,16 +394,121 @@ class TestDatabricksMCPServerVectorSearch:
 
 
 # =============================================================================
-# DatabricksMcpHttpClientFactory Token Refresh Tests
+# DatabricksMultiServerMCPClient — Multiple Servers
 # =============================================================================
 
 
 @pytest.mark.integration
-class TestDatabricksMcpHttpClientFactoryTokenRefresh:
-    """Verify DatabricksMcpHttpClientFactory re-creates auth providers for token refresh."""
+class TestDatabricksMultiServerMCPClientMultipleServers:
+    """Test DatabricksMultiServerMCPClient with UC + VS servers loaded together."""
 
-    def test_sequential_invocations_succeed(self, workspace_client):
-        """Two sequential get_tools() calls succeed — proves token refresh works."""
+    def test_multi_server_lists_and_invokes_tools_from_all_servers(self, workspace_client):
+        """Loading UC + VS servers returns tools from both, and each is invocable."""
+        from langchain_core.tools import BaseTool
+
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        uc_server = DatabricksMCPServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            name="multi-uc",
+            workspace_client=workspace_client,
+        )
+        vs_server = DatabricksMCPServer.from_vector_search(
+            catalog=CATALOG,
+            schema=VS_SCHEMA,
+            index_name=VS_INDEX,
+            name="multi-vs",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([uc_server, vs_server])
+            tools = await client.get_tools()
+            assert len(tools) >= 2, f"Expected tools from both servers, got {len(tools)}"
+            for tool in tools:
+                assert isinstance(tool, BaseTool), f"Expected BaseTool, got {type(tool)}"
+
+            # Verify tools from both servers are present (names are fully-qualified)
+            tool_names = [t.name for t in tools]
+            uc_tools = [t for t in tools if FUNCTION_NAME in t.name]
+            vs_tools = [t for t in tools if VS_INDEX in t.name]
+            assert uc_tools, f"Expected UC tools containing '{FUNCTION_NAME}', got: {tool_names}"
+            assert vs_tools, f"Expected VS tools containing '{VS_INDEX}', got: {tool_names}"
+
+            # Invoke UC echo tool
+            uc_result = await uc_tools[0].ainvoke({"message": "multi-server-test"})
+            assert "multi-server-test" in str(uc_result), (
+                f"Echo should return 'multi-server-test', got: {uc_result}"
+            )
+
+            # Invoke VS tool
+            raw_schema = vs_tools[0].args_schema
+            if isinstance(raw_schema, dict):
+                schema = raw_schema
+            elif raw_schema is not None and hasattr(raw_schema, "schema"):
+                schema = raw_schema.schema()
+            else:
+                schema = {}
+            properties = schema.get("properties", {})
+            param_name = next(iter(properties), "query")
+            vs_result = await vs_tools[0].ainvoke({param_name: "test"})
+            assert vs_result is not None
+
+        asyncio.run(_test())
+
+
+# =============================================================================
+# Error Paths
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMCPServerErrorPaths:
+    """Test error handling through LangChain MCP wrappers."""
+
+    def test_nonexistent_function_raises_error(self, workspace_client):
+        """get_tools() on a nonexistent function raises McpError(BAD_REQUEST: ... not found)."""
+        from mcp.shared.exceptions import McpError
+
+        from databricks_langchain import (
+            DatabricksMCPServer,
+            DatabricksMultiServerMCPClient,
+        )
+
+        server = DatabricksMCPServer.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name="nonexistent_fn_xyz",
+            name="error-test",
+            workspace_client=workspace_client,
+        )
+
+        async def _test():
+            client = DatabricksMultiServerMCPClient([server])
+            await client.get_tools()
+
+        with pytest.raises(ExceptionGroup) as exc_info:
+            asyncio.run(_test())
+
+        # Unwrap nested ExceptionGroups to find McpError
+        errors = exc_info.value.exceptions
+        while errors and isinstance(errors[0], ExceptionGroup):
+            errors = errors[0].exceptions
+        assert len(errors) == 1 and isinstance(errors[0], McpError), (
+            f"Expected McpError, got: {errors}"
+        )
+        assert "BAD_REQUEST" in str(errors[0]), f"Expected BAD_REQUEST, got: {errors[0]}"
+        assert "not found" in str(errors[0]).lower(), f"Expected 'not found', got: {errors[0]}"
+
+    def test_tool_invoke_wrong_arguments_raises_error(self, workspace_client):
+        """ainvoke() with wrong arguments raises McpError(BAD_REQUEST: Missing parameter)."""
+        from mcp.shared.exceptions import McpError
+
         from databricks_langchain import (
             DatabricksMCPServer,
             DatabricksMultiServerMCPClient,
@@ -414,21 +518,41 @@ class TestDatabricksMcpHttpClientFactoryTokenRefresh:
             catalog=CATALOG,
             schema=SCHEMA,
             function_name=FUNCTION_NAME,
-            name="token-refresh-test",
+            name="error-args-test",
             workspace_client=workspace_client,
         )
 
         async def _test():
             client = DatabricksMultiServerMCPClient([server])
-            tools_1 = await client.get_tools()
-            assert len(tools_1) > 0
-            tools_2 = await client.get_tools()
-            assert len(tools_2) > 0
+            tools = await client.get_tools()
+            assert len(tools) > 0
+            await tools[0].ainvoke({"wrong_arg": "test"})
 
-        asyncio.run(_test())
+        with pytest.raises(McpError, match="BAD_REQUEST"):
+            asyncio.run(_test())
 
-    def test_factory_creates_new_oauth_provider(self, workspace_client):
-        """DatabricksMcpHttpClientFactory re-creates DatabricksOAuthClientProvider when called."""
+
+# =============================================================================
+# DatabricksMcpHttpClientFactory Auth Test
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestDatabricksMcpHttpClientFactoryAuth:
+    """Verify DatabricksMcpHttpClientFactory creates fresh auth providers per request.
+
+    The factory creates a brand new DatabricksOAuthClientProvider on every request, so there is never
+    a cached token that could go stale. Each get_tools() / tool invocation gets
+    a fresh provider that calls workspace_client.config.authenticate() for a new
+    token. This test verifies that mechanism by asserting provider identity.
+    """
+
+    def test_factory_creates_new_oauth_provider_per_request(self, workspace_client):
+        """Each factory call creates a distinct DatabricksOAuthClientProvider instance.
+
+        This guarantees token freshness: since providers are never reused, each
+        request calls workspace_client.config.authenticate() independently.
+        """
         import httpx
         from databricks_mcp import DatabricksOAuthClientProvider
 
@@ -436,13 +560,13 @@ class TestDatabricksMcpHttpClientFactoryTokenRefresh:
             DatabricksMcpHttpClientFactory,
         )
 
+        # A user would never import this factory directly, but still tests the internal factory logic
         factory = DatabricksMcpHttpClientFactory()
         original_auth = DatabricksOAuthClientProvider(workspace_client)
 
         client_1 = factory(timeout=httpx.Timeout(10), auth=original_auth)
         client_2 = factory(timeout=httpx.Timeout(10), auth=original_auth)
 
-        # Each call should produce a client with a *different* auth provider instance
         assert client_1.auth is not original_auth, (
             "Factory should create a new DatabricksOAuthClientProvider, not reuse the original"
         )

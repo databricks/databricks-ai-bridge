@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult
 
 from databricks_mcp import DatabricksMCPClient
@@ -122,6 +123,86 @@ class TestMCPClientGenie:
         assert isinstance(cached_genie_call_result, CallToolResult)
         assert cached_genie_call_result.content, "call_tool result should have content"
         assert len(cached_genie_call_result.content) > 0
+
+
+# =============================================================================
+# Error paths
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMCPClientErrorPaths:
+    """Verify DatabricksMCPClient returns helpful errors for invalid inputs.
+
+    Tests the 3-layer customer journey: bad function → bad tool → bad arguments.
+    Each test constructs its own client inline (no shared fixtures).
+    """
+
+    def test_nonexistent_function_raises_error(self, workspace_client):
+        """list_tools() on a nonexistent function raises McpError(BAD_REQUEST: ... not found)."""
+        host = workspace_client.config.host
+        bad_url = f"{host}/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}/nonexistent_fn_xyz"
+        client = DatabricksMCPClient(bad_url, workspace_client)
+
+        with pytest.raises(ExceptionGroup) as exc_info:  # ty: ignore[unresolved-reference]
+            client.list_tools()
+
+        # McpError is nested inside ExceptionGroup(s) from asyncio.run + TaskGroup
+        mcp_errors = exc_info.value.exceptions
+        while mcp_errors and isinstance(mcp_errors[0], ExceptionGroup):  # ty: ignore[unresolved-reference]
+            mcp_errors = mcp_errors[0].exceptions
+        assert len(mcp_errors) == 1 and isinstance(mcp_errors[0], McpError), (
+            f"Expected McpError, got: {mcp_errors}"
+        )
+        assert "BAD_REQUEST" in str(mcp_errors[0]), f"Expected BAD_REQUEST, got: {mcp_errors[0]}"
+        assert "not found" in str(mcp_errors[0]).lower(), (
+            f"Expected 'not found', got: {mcp_errors[0]}"
+        )
+
+    def test_nonexistent_tool_name_raises_error(self, workspace_client):
+        """call_tool() with a malformed tool name raises McpError(BAD_REQUEST: ... malformed)."""
+        host = workspace_client.config.host
+        url = f"{host}/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}/{FUNCTION_NAME}"
+        client = DatabricksMCPClient(url, workspace_client)
+
+        with pytest.raises(ExceptionGroup) as exc_info:  # ty: ignore[unresolved-reference]
+            client.call_tool("nonexistent_tool_xyz", {"message": "test"})
+
+        mcp_errors = exc_info.value.exceptions
+        while mcp_errors and isinstance(mcp_errors[0], ExceptionGroup):  # ty: ignore[unresolved-reference]
+            mcp_errors = mcp_errors[0].exceptions
+        assert len(mcp_errors) == 1 and isinstance(mcp_errors[0], McpError), (
+            f"Expected McpError, got: {mcp_errors}"
+        )
+        assert "BAD_REQUEST" in str(mcp_errors[0]), f"Expected BAD_REQUEST, got: {mcp_errors[0]}"
+        assert "malformed" in str(mcp_errors[0]).lower(), (
+            f"Expected 'malformed', got: {mcp_errors[0]}"
+        )
+
+    def test_wrong_arguments_raises_error(self, workspace_client):
+        """call_tool() with wrong arguments raises McpError(BAD_REQUEST: Missing parameter)."""
+        host = workspace_client.config.host
+        url = f"{host}/api/2.0/mcp/functions/{CATALOG}/{SCHEMA}/{FUNCTION_NAME}"
+        client = DatabricksMCPClient(url, workspace_client)
+
+        tools = client.list_tools()
+        assert len(tools) > 0
+        tool_name = tools[0].name
+
+        # echo_message expects "message", we pass "completely_wrong_arg"
+        with pytest.raises(ExceptionGroup) as exc_info:  # ty: ignore[unresolved-reference]
+            client.call_tool(tool_name, {"completely_wrong_arg": "test"})
+
+        mcp_errors = exc_info.value.exceptions
+        while mcp_errors and isinstance(mcp_errors[0], ExceptionGroup):  # ty: ignore[unresolved-reference]
+            mcp_errors = mcp_errors[0].exceptions
+        assert len(mcp_errors) == 1 and isinstance(mcp_errors[0], McpError), (
+            f"Expected McpError, got: {mcp_errors}"
+        )
+        assert "BAD_REQUEST" in str(mcp_errors[0]), f"Expected BAD_REQUEST, got: {mcp_errors[0]}"
+        assert "missing parameter value" in str(mcp_errors[0]).lower(), (
+            f"Expected 'Missing parameter value', got: {mcp_errors[0]}"
+        )
 
 
 # =============================================================================

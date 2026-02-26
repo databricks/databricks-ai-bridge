@@ -5,8 +5,7 @@ Tests McpServerToolkit (vanilla OpenAI SDK) and McpServer (OpenAI Agents SDK)
 against a live Databricks MCP server backed by a UC function (echo_message).
 
 Prerequisites:
-    Run databricks_mcp/tests/integration_tests/setup_workspace.py once to create
-    the test UC function.
+    The test UC function must exist in the workspace.
 """
 
 from __future__ import annotations
@@ -60,7 +59,7 @@ def toolkit_tools(toolkit):
     except Exception as e:
         pytest.skip(
             f"Could not get tools from MCP server — is the test function set up? "
-            f"Run setup_workspace.py first. Error: {e}"
+            f"Is the test function set up? Error: {e}"
         )
 
 
@@ -490,3 +489,125 @@ class TestMcpServerAgentsVectorSearch:
                 assert len(tools) >= 1, "Schema-level VS listing should return at least one tool"
 
         asyncio.run(_test())
+
+
+# =============================================================================
+# Error Paths
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestMcpServerToolkitErrorPaths:
+    """Test error handling in McpServerToolkit wrapper."""
+
+    def test_nonexistent_function_raises_value_error(self, workspace_client):
+        """get_tools() on a nonexistent function wraps the error in ValueError with server name."""
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name="nonexistent_fn_xyz",
+            name="error-test",
+            workspace_client=workspace_client,
+        )
+        with pytest.raises(ValueError, match="Error listing tools from error-test MCP Server"):
+            toolkit.get_tools()
+
+    def test_execute_nonexistent_tool_raises_error(self, workspace_client):
+        """call_tool with a nonexistent tool name raises ExceptionGroup > McpError(BAD_REQUEST)."""
+        from mcp.shared.exceptions import McpError
+
+        from databricks_openai import McpServerToolkit
+
+        toolkit = McpServerToolkit.from_uc_function(
+            catalog=CATALOG,
+            schema=SCHEMA,
+            function_name=FUNCTION_NAME,
+            workspace_client=workspace_client,
+        )
+        with pytest.raises(ExceptionGroup) as exc_info:  # ty: ignore[unresolved-reference]
+            toolkit.databricks_mcp_client.call_tool("nonexistent_tool_xyz", {"message": "test"})
+
+        # Unwrap to find McpError
+        def find_mcp_error(eg):
+            for exc in eg.exceptions:
+                if isinstance(exc, McpError):
+                    return exc
+                if isinstance(exc, ExceptionGroup):  # ty: ignore[unresolved-reference]
+                    found = find_mcp_error(exc)
+                    if found:
+                        return found
+            return None
+
+        mcp_error = find_mcp_error(exc_info.value)
+        assert mcp_error is not None, f"Expected McpError, got: {exc_info.value}"
+        assert "BAD_REQUEST" in str(mcp_error), f"Expected BAD_REQUEST, got: {mcp_error}"
+
+    def test_execute_wrong_arguments_raises_error(self, toolkit_tools):
+        """execute() with wrong arguments raises ExceptionGroup > McpError(BAD_REQUEST)."""
+        tool = toolkit_tools[0]
+        # echo_message expects "message", we pass "wrong_arg"
+        with pytest.raises(ExceptionGroup):  # ty: ignore[unresolved-reference]
+            tool.execute(wrong_arg="test")
+
+
+@pytest.mark.integration
+class TestMcpServerAgentsErrorPaths:
+    """Test error handling in McpServer (Agents SDK) wrapper."""
+
+    def test_nonexistent_function_raises_mcp_error(self, workspace_client):
+        """McpServer with a nonexistent function raises McpError(BAD_REQUEST: ... not found)."""
+        from mcp.shared.exceptions import McpError
+
+        from databricks_openai.agents import McpServer
+
+        async def _test():
+            async with McpServer.from_uc_function(
+                catalog=CATALOG,
+                schema=SCHEMA,
+                function_name="nonexistent_fn_xyz",
+                workspace_client=workspace_client,
+            ) as server:
+                await server.list_tools()
+
+        with pytest.raises(McpError, match="BAD_REQUEST"):
+            asyncio.run(_test())
+
+    def test_call_tool_nonexistent_tool_raises_mcp_error(self, workspace_client):
+        """call_tool() with a malformed tool name raises McpError(BAD_REQUEST: ... malformed)."""
+        from mcp.shared.exceptions import McpError
+
+        from databricks_openai.agents import McpServer
+
+        async def _test():
+            async with McpServer.from_uc_function(
+                catalog=CATALOG,
+                schema=SCHEMA,
+                function_name=FUNCTION_NAME,
+                workspace_client=workspace_client,
+            ) as server:
+                await server.call_tool("nonexistent_tool_xyz", {"message": "test"})
+
+        with pytest.raises(McpError, match="BAD_REQUEST"):
+            asyncio.run(_test())
+
+    def test_call_tool_wrong_arguments_raises_user_error(self, workspace_client):
+        """call_tool() with wrong arguments raises UserError about missing parameters."""
+        from agents.exceptions import UserError
+
+        from databricks_openai.agents import McpServer
+
+        async def _test():
+            async with McpServer.from_uc_function(
+                catalog=CATALOG,
+                schema=SCHEMA,
+                function_name=FUNCTION_NAME,
+                workspace_client=workspace_client,
+            ) as server:
+                tools = await server.list_tools()
+                tool_name = tools[0].name
+                await server.call_tool(tool_name, {"wrong_arg": "test"})
+
+        with pytest.raises(UserError, match="missing required parameters"):
+            asyncio.run(_test())
