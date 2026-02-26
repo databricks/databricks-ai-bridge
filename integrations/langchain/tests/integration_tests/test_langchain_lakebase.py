@@ -162,6 +162,20 @@ class TestDatabricksStore:
         # The programming-related doc should rank higher than the coffee doc
         assert results[0].key == "doc_python"
 
+    def test_store_context_manager(self, unique_namespace, cleanup_store_tables):
+        """Test sync context manager lifecycle (__enter__/__exit__)."""
+        from databricks_langchain import DatabricksStore
+
+        with DatabricksStore(instance_name=get_instance_name()) as store:
+            store.setup()
+
+            ns = unique_namespace
+            store.put(ns, "ctx_key", {"data": "context managed"})
+
+            item = store.get(ns, "ctx_key")
+            assert item is not None
+            assert item.value == {"data": "context managed"}
+
 
 # =============================================================================
 # AsyncDatabricksStore Tests
@@ -172,7 +186,7 @@ class TestAsyncDatabricksStore:
     """Test asynchronous AsyncDatabricksStore against a live Lakebase instance."""
 
     @pytest.mark.asyncio
-    async def test_async_store_put_and_get(self, unique_namespace, cleanup_store_tables):
+    async def test_async_store_setup_put_and_get(self, unique_namespace, cleanup_store_tables):
         """Test async put and get operations through bridge."""
         from databricks_langchain import AsyncDatabricksStore
 
@@ -218,6 +232,27 @@ class TestAsyncDatabricksStore:
 
             await store.adelete(ns, "to_delete")
             assert (await store.aget(ns, "to_delete")) is None
+
+    @pytest.mark.asyncio
+    async def test_async_store_vector_search(self, unique_namespace, cleanup_store_tables):
+        """Test async vector-based search with embedding endpoint via PostgresIndexConfig."""
+        from databricks_langchain import AsyncDatabricksStore
+
+        async with AsyncDatabricksStore(
+            instance_name=get_instance_name(),
+            embedding_endpoint="databricks-bge-large-en",
+            embedding_dims=1024,
+        ) as store:
+            await store.setup()
+
+            ns = unique_namespace
+            await store.aput(ns, "doc_python", {"text": "Python is a programming language"})
+            await store.aput(ns, "doc_coffee", {"text": "Coffee is a popular beverage"})
+
+            results = await store.asearch(ns, query="programming languages")
+            assert len(results) > 0
+            # The programming-related doc should rank higher than the coffee doc
+            assert results[0].key == "doc_python"
 
     @pytest.mark.asyncio
     async def test_async_store_context_manager(self, unique_namespace, cleanup_store_tables):
@@ -299,6 +334,34 @@ class TestCheckpointSaver:
 
             checkpoints = list(saver.list(config))
             assert len(checkpoints) == 3
+
+    def test_checkpoint_context_manager(self, cleanup_checkpoint_tables):
+        """Test sync context manager lifecycle (__enter__/__exit__)."""
+        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+
+        from databricks_langchain import CheckpointSaver
+
+        thread_id = uuid.uuid4().hex
+
+        with CheckpointSaver(instance_name=get_instance_name()) as saver:
+            saver.setup()
+
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            checkpoint = Checkpoint(
+                v=1,
+                id=uuid.uuid4().hex,  # checkpoint id
+                ts="2025-01-01T00:00:00+00:00",
+                channel_values={},
+                channel_versions={},
+                versions_seen={},
+                pending_sends=[],
+            )
+
+            saver.put(config, checkpoint, CheckpointMetadata(), {})
+
+            result = saver.get_tuple(config)
+            assert result is not None
+            assert result.checkpoint["id"] == checkpoint["id"]
 
 
 # =============================================================================
