@@ -20,6 +20,7 @@ from unitycatalog.ai.openai.toolkit import UCFunctionToolkit
 
 from databricks_openai.mcp_server_toolkit import McpServerToolkit, ToolInfo
 from databricks_openai.utils.clients import AsyncDatabricksOpenAI, DatabricksOpenAI
+from databricks_openai.uc_volume_tool import UCVolumeTool
 from databricks_openai.vector_search_retriever_tool import VectorSearchRetrieverTool
 
 # Disable the OpenAI Agents SDK's built-in tracer by default since databricks_openai
@@ -36,6 +37,7 @@ except ImportError:
 
 # Expose all integrations to users under databricks-openai
 __all__ = [
+    "UCVolumeTool",
     "VectorSearchRetrieverTool",
     "UCFunctionToolkit",
     "DatabricksFunctionClient",
