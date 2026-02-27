@@ -51,6 +51,60 @@ def _should_strip_strict(model: str | None) -> bool:
     return "gpt" not in model.lower()
 
 
+def _is_gemini_model(model: str | None) -> bool:
+    """Returns True if the model is a Gemini variant."""
+    if not model:
+        return False
+    return "gemini" in model.lower() or "gemma" in model.lower()
+
+
+def _flatten_list_content(content: Any) -> str:
+    """Extract text from a list of content blocks and join into a single string."""
+    text_parts = []
+    for part in content:
+        if isinstance(part, dict) and "text" in part:
+            text_parts.append(part["text"])
+        elif isinstance(part, str):
+            text_parts.append(part)
+        elif hasattr(part, "text"):
+            text_parts.append(part.text)
+    return "".join(text_parts)
+
+
+def _flatten_list_content_in_response(response: Any) -> None:
+    """Convert list content to string in assistant messages.
+
+    Gemini FMAPI returns content as a list of content blocks instead of a string
+    in assistant messages. The Agents SDK expects content to be a string, so we
+    flatten it here.
+    """
+    if not hasattr(response, "choices"):
+        return
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            message.content = _flatten_list_content(content)
+
+
+def _flatten_list_content_in_messages(messages: Any) -> None:
+    """Convert list content to string in tool messages.
+
+    Gemini FMAPI rejects tool messages where content is a list of content blocks.
+    The Agents SDK may produce these when converting tool results from its internal
+    format to chat completions format.
+    """
+    if not messages:
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool" and isinstance(message.get("content"), list):
+            message["content"] = _flatten_list_content(message["content"])
+
+
 def _is_claude_model(model: str | None) -> bool:
     """Returns True if the model is a Claude variant."""
     if not model:
@@ -189,7 +243,12 @@ class DatabricksCompletions(Completions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        return super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_messages(kwargs.get("messages"))
+        response = super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_response(response)
+        return response
 
 
 class DatabricksChat(Chat):
@@ -336,7 +395,12 @@ class AsyncDatabricksCompletions(AsyncCompletions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        return await super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_messages(kwargs.get("messages"))
+        response = await super().create(**kwargs)
+        if _is_gemini_model(model):
+            _flatten_list_content_in_response(response)
+        return response
 
 
 class AsyncDatabricksChat(AsyncChat):

@@ -37,11 +37,11 @@ pytestmark = pytest.mark.skipif(
 _SKIP_MODELS = {
     "databricks-gpt-5-nano",  # too small for reliable tool calling
     "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
+    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
     "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
-    "databricks-gemini-3-flash",  # rejects tool result content format in agent loop
-    "databricks-gemini-3-pro",  # rejects tool result content format in agent loop
-    "databricks-gemini-3-1-pro",  # rejects tool result content format in agent loop
-    "databricks-gemma-3-12b",  # doesn't include echoed message in final output
+    "databricks-gemini-3-flash",  # requires thought_signature on function calls
+    "databricks-gemini-3-pro",  # requires thought_signature on function calls
+    "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
 }
 
 # Max retries for flaky models (e.g. transient FMAPI errors, model non-determinism)
