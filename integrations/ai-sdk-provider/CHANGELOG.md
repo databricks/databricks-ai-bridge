@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-02-26
+
+### Added
+
+- Added `includeTrace` provider option to request Databricks trace data in the response (`databricks_options.return_trace`)
+- Raw response body is now passed through in `doGenerate` results, allowing callers to access `trace_id` and `databricks_output` fields directly
+
+### Fixed
+
+- Made `annotations` field optional in responses agent message schema to handle endpoints that omit it
+- Made `output_index` and `id` optional in `response.output_item.done` stream event schema
+- `raw` stream chunks are now passed through the Databricks stream transformer without modification
+- Added `.passthrough()` to response and stream event schemas to preserve unknown fields (e.g. trace data)
+- Fixed tsdown `fixedExtension: true` to correctly emit `.mjs`/`.cjs` files matching `package.json` exports
+
 ## [0.4.1] - 2026-01-30
 
 ### Fixed
