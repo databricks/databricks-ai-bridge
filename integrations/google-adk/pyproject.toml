@@ -1,0 +1,70 @@
+[project]
+name = "databricks-google-adk"
+version = "0.1.0.dev0"
+description = "Databricks AI support for Google Agent Development Kit (ADK)"
+authors = [
+    { name="Databricks", email="feedback@databricks.com" },
+]
+readme = "README.md"
+license = { text="Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    "databricks-vectorsearch>=0.40",
+    "databricks-ai-bridge>=0.4.0",
+    "databricks-mcp>=0.5.0",
+    "google-adk>=1.0.0",
+    "pydantic>=2.10.0",
+]
+
+[project.optional-dependencies]
+deployment = [
+    "google-cloud-aiplatform[agent_engines,adk]>=1.112",
+]
+
+[dependency-groups]
+dev = [
+    "typing_extensions>=4.15.0",
+    "databricks-sdk>=0.34.0",
+    "ruff==0.14.10",
+    "ty>=0.0.11",
+    { include-group = "tests" },
+]
+
+tests = [
+    "pytest>=9.0.0",
+    "pytest-timeout>=2.3.1",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+databricks-ai-bridge = { path = "../../", editable = true }
+
+[tool.hatch.build]
+include = [
+    "src/databricks_google_adk/*"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_google_adk"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+extend = "../../pyproject.toml"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::Warning",
+    "default::Warning:databricks_google_adk",
+    "default::Warning:tests",
+]
+asyncio_mode = "auto"
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]
