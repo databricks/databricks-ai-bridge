@@ -875,14 +875,14 @@ def mock_v2_workspace_client():
 
     # Mock postgres.list_projects()
     project = MagicMock()
-    project.display_name = "my-project"
+    project.status.display_name = "my-project"
     project.name = "projects/proj-123"
     mock_client.postgres.list_projects.return_value = [project]
 
     # Mock postgres.list_endpoints()
     endpoint = MagicMock()
-    endpoint.endpoint_type = "READ_WRITE"
-    endpoint.host = "v2-instance.lakebase.databricks.com"
+    endpoint.status.endpoint_type = "ENDPOINT_TYPE_READ_WRITE"
+    endpoint.status.hosts.host = "v2-instance.lakebase.databricks.com"
     endpoint.name = "projects/proj-123/branches/branch-456/endpoints/ep-789"
     mock_client.postgres.list_endpoints.return_value = [endpoint]
 

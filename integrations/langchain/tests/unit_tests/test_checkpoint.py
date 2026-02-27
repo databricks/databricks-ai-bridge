@@ -181,13 +181,13 @@ def _make_v2_workspace():
     workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
     project = MagicMock()
-    project.display_name = "my-project"
+    project.status.display_name = "my-project"
     project.name = "projects/proj-123"
     workspace.postgres.list_projects.return_value = [project]
 
     endpoint = MagicMock()
-    endpoint.endpoint_type = "READ_WRITE"
-    endpoint.host = "v2.host"
+    endpoint.status.endpoint_type = "ENDPOINT_TYPE_READ_WRITE"
+    endpoint.status.hosts.host = "v2.host"
     endpoint.name = "projects/proj-123/branches/branch-456/endpoints/ep-789"
     workspace.postgres.list_endpoints.return_value = [endpoint]
 

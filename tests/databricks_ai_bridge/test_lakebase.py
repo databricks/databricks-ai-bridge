@@ -1311,20 +1311,24 @@ def _make_v2_workspace(
     endpoint_host: str = "v2.host",
     endpoint_name: str = "projects/proj-123/branches/branch-456/endpoints/ep-789",
 ):
-    """Create a mock workspace for V2 (autoscaling) tests."""
+    """Create a mock workspace for V2 (autoscaling) tests.
+
+    Mirrors real SDK structure where display_name is on proj.status,
+    endpoint_type is on ep.status, and host is on ep.status.hosts.host.
+    """
     workspace = MagicMock()
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
 
-    # Mock postgres.list_projects()
+    # Mock postgres.list_projects() — display_name is on proj.status
     project = MagicMock()
-    project.display_name = project_display_name
+    project.status.display_name = project_display_name
     project.name = project_resource_name
     workspace.postgres.list_projects.return_value = [project]
 
-    # Mock postgres.list_endpoints()
+    # Mock postgres.list_endpoints() — endpoint_type and host are on ep.status
     endpoint = MagicMock()
-    endpoint.endpoint_type = "READ_WRITE"
-    endpoint.host = endpoint_host
+    endpoint.status.endpoint_type = "ENDPOINT_TYPE_READ_WRITE"
+    endpoint.status.hosts.host = endpoint_host
     endpoint.name = endpoint_name
     workspace.postgres.list_endpoints.return_value = [endpoint]
 
@@ -1442,8 +1446,8 @@ class TestV2Pool:
         workspace = _make_v2_workspace()
         # Return a READ_ONLY endpoint instead of READ_WRITE
         ro_endpoint = MagicMock()
-        ro_endpoint.endpoint_type = "READ_ONLY"
-        ro_endpoint.host = "ro.host"
+        ro_endpoint.status.endpoint_type = "ENDPOINT_TYPE_READ_ONLY"
+        ro_endpoint.status.hosts.host = "ro.host"
         ro_endpoint.name = "ep-ro"
         workspace.postgres.list_endpoints.return_value = [ro_endpoint]
 

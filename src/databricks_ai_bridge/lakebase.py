@@ -173,10 +173,11 @@ class _LakebaseBase:
 
         Returns (host, endpoint_resource_name).
         """
-        # 1. Find the project by display_name
+        # 1. Find the project by display_name (nested under proj.status)
         project_resource_name: str | None = None
         for proj in self.workspace_client.postgres.list_projects():
-            if getattr(proj, "display_name", None) == project_display_name:
+            status = getattr(proj, "status", None)
+            if status and getattr(status, "display_name", None) == project_display_name:
                 project_resource_name = proj.name
                 break
 
@@ -190,7 +191,10 @@ class _LakebaseBase:
         branch_path = f"{project_resource_name}/branches/{branch_id}"
         rw_endpoint = None
         for ep in self.workspace_client.postgres.list_endpoints(parent=branch_path):
-            if getattr(ep, "endpoint_type", None) == "READ_WRITE":
+            ep_status = getattr(ep, "status", None)
+            ep_type = getattr(ep_status, "endpoint_type", None) if ep_status else None
+            # endpoint_type is an enum: ENDPOINT_TYPE_READ_WRITE
+            if ep_type and "READ_WRITE" in str(ep_type):
                 rw_endpoint = ep
                 break
 
@@ -200,7 +204,10 @@ class _LakebaseBase:
                 f"branch '{branch_id}'. Ensure the branch exists and has a READ_WRITE endpoint."
             )
 
-        ep_host = getattr(rw_endpoint, "host", None)
+        # Host is at ep.status.hosts.host
+        ep_status = rw_endpoint.status
+        hosts = getattr(ep_status, "hosts", None)
+        ep_host = getattr(hosts, "host", None) if hosts else None
         ep_name = getattr(rw_endpoint, "name", None)
 
         if not ep_host or not ep_name:
