@@ -56,7 +56,10 @@ from langchain_core.output_parsers.openai_tools import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.function_calling import (
+    convert_to_openai_tool,
+    convert_to_openai_function,
+)
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -1317,12 +1320,11 @@ class ChatDatabricks(BaseChatModel):
                 raise ValueError(
                     "schema must be specified when method is 'json_schema'. Received None."
                 )
+            function = convert_to_openai_function(schema, strict=True)
+            function["schema"] = function.pop("parameters")
             response_format = {
                 "type": "json_schema",
-                "json_schema": {
-                    "strict": True,
-                    "schema": (pydantic_schema.model_json_schema() if pydantic_schema else schema),
-                },
+                "json_schema": function,
             }
             llm = self.bind(response_format=response_format)
             output_parser = (
