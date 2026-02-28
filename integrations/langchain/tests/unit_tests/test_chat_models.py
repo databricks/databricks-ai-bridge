@@ -610,22 +610,24 @@ class AnswerWithJustification(BaseModel):
 
 # Raw JSON schema
 JSON_SCHEMA = {
-    "title": "AnswerWithJustification",
+    "name": "AnswerWithJustification",
     "description": "An answer to the user question along with justification for the answer.",
-    "type": "object",
-    "properties": {
-        "answer": {
-            "type": "string",
-            "title": "Answer",
-            "description": "The answer to the user question.",
+    "strict": True,
+    "schema": {
+        "properties": {
+            "answer": {
+                "type": "string",
+                "description": "The answer to the user question.",
+            },
+            "justification": {
+                "type": "string",
+                "description": "The justification for the answer.",
+            },
         },
-        "justification": {
-            "type": "string",
-            "title": "Justification",
-            "description": "The justification for the answer.",
-        },
-    },
-    "required": ["answer", "justification"],
+        "type": "object",
+        "required": ["answer", "justification"],
+        "additionalProperties": False
+    }
 }
 
 
@@ -641,7 +643,7 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
     if method == "function_calling":
         assert bind["tool_choice"]["function"]["name"] == "AnswerWithJustification"
     elif method == "json_schema":
-        assert bind["response_format"]["json_schema"]["schema"] == JSON_SCHEMA
+        assert bind["response_format"]["json_schema"] == JSON_SCHEMA
     else:
         assert bind["response_format"] == {"type": "json_object"}
 
