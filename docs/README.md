@@ -1,6 +1,6 @@
 # Databricks AI Bridge Documentation
 
-We generate our API docs with Sphinx, and they get published to [this directory](https://github.com/databricks-eng/docs-api-ref/tree/main/content-publish/python).
+We generate our API docs with Sphinx, and they get published to the [Databricks AI Bridge docs](https://docs.databricks.com/en/ai/databricks-ai-bridge/index.html).
 
 ## Setup
 
