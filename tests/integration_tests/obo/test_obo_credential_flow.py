@@ -56,7 +56,9 @@ def _call_whoami(client: WorkspaceClient, warehouse_id: str) -> str:
         warehouse_id=warehouse_id,
         wait_timeout="30s",
     )
+    assert result.status is not None and result.status.state is not None
     assert result.status.state.value == "SUCCEEDED", f"SQL statement failed: {result.status}"
+    assert result.result is not None and result.result.data_array is not None
     return result.result.data_array[0][0]
 
 
