@@ -601,11 +601,18 @@ def test_chat_model_bind_tolls_with_invalid_choices(llm: ChatDatabricks) -> None
 
 
 # Pydantic-based schema
+class Justification(BaseModel):
+    """A justification  to the answer including step-by-step reasoning and supporting sources."""
+
+    reasoning: str = Field(description="Step-by-step reasoning.")
+    sources: list[str] = Field(description="Supporting sources")
+
+
 class AnswerWithJustification(BaseModel):
     """An answer to the user question along with justification for the answer."""
 
     answer: str = Field(description="The answer to the user question.")
-    justification: str = Field(description="The justification for the answer.")
+    justification: Justification = Field(description="The justification for the answer.")
 
 
 # Raw JSON schema
@@ -620,9 +627,25 @@ JSON_SCHEMA = {
             "description": "The answer to the user question.",
         },
         "justification": {
-            "type": "string",
+            "type": "object",
             "title": "Justification",
             "description": "The justification for the answer.",
+            "properties": {
+                "reasoning": {
+                    "type": "string",
+                    "title": "Reasoning",
+                    "description": "Step-by-step reasoning.",
+                },
+                "sources": {
+                    "type": "array",
+                    "title": "Sources",
+                    "description": "Supporting sources",
+                    "items": {
+                        "type": "string"
+                    },
+                }
+            },
+            "required": ["reasoning", "sources"],
         },
     },
     "required": ["answer", "justification"],
@@ -641,7 +664,13 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
     if method == "function_calling":
         assert bind["tool_choice"]["function"]["name"] == "AnswerWithJustification"
     elif method == "json_schema":
-        assert bind["response_format"]["json_schema"]["schema"] == JSON_SCHEMA
+        js = bind["response_format"]["json_schema"]
+        assert js["name"] == "AnswerWithJustification"
+        assert js["strict"] is True
+        assert js["schema"]["additionalProperties"] is False
+        assert js["schema"]["justification"]["properties"]["additionalProperties"] is False
+        assert set(js["schema"]["required"]) == set(js["schema"]["properties"].keys())
+        assert set(js["schema"]["justification"]["required"]) == set(js["schema"]["justification"]["properties"].keys())
     else:
         assert bind["response_format"] == {"type": "json_object"}
 
