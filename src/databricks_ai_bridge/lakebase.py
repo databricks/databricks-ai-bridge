@@ -93,26 +93,72 @@ class _LakebaseBase:
     Base class for Lakebase connections: resolve host, infer username,
     token cache + minting, and conninfo building.
 
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
+
+    - **Provisioned**: Pass ``instance_name``.
+    - **Autoscaling**: Pass ``project`` and ``branch``.
+
+    When both ``instance_name`` *and* ``project``/``branch`` are provided, the
+    autoscaling path takes precedence.
+
     Subclasses implement specific initialization and lifecycle methods.
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
         self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
-        self.instance_name: str = instance_name
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
 
-        # Resolve host from the Lakebase name
+        # --- Parameter validation ---
+        is_autoscaling = project is not None or branch is not None
+        if is_autoscaling and not (project and branch):
+            raise ValueError(
+                "Both 'project' and 'branch' are required to use a Lakebase "
+                "autoscaling instance. Please specify both parameters."
+            )
+
+        if not is_autoscaling and instance_name is None:
+            raise ValueError(
+                "Must provide either 'instance_name' (provisioned) or both "
+                "'project' and 'branch' (autoscaling)."
+            )
+
+        # Autoscaling takes precedence when both are provided
+        self._is_autoscaling: bool = is_autoscaling
+
+        self.instance_name: str | None = instance_name
+        self.project: str | None = project
+        self.branch: str | None = branch
+
+        if self._is_autoscaling:
+            self._endpoint_name: str | None = None
+            self.host = self._resolve_autoscaling_host()
+        else:
+            self._endpoint_name = None
+            self.host = self._resolve_provisioned_host()
+
+        self.username: str = self._infer_username()
+
+        self._cached_token: str | None = None
+        self._cache_ts: float | None = None
+
+    # --- Host resolution ---
+
+    def _resolve_provisioned_host(self) -> str:
+        """Resolve host via the Lakebase provisioned database API."""
         try:
-            instance = self.workspace_client.database.get_database_instance(instance_name)
+            instance = self.workspace_client.database.get_database_instance(self.instance_name)
         except Exception as exc:
             raise ValueError(
-                f"Unable to resolve Lakebase instance '{instance_name}'. "
+                f"Unable to resolve Lakebase instance '{self.instance_name}'. "
                 "Ensure the instance name is correct."
             ) from exc
 
@@ -122,15 +168,58 @@ class _LakebaseBase:
 
         if not resolved_host:
             raise ValueError(
-                f"Lakebase host not found for instance '{instance_name}'. "
+                f"Lakebase host not found for instance '{self.instance_name}'. "
                 "Ensure the instance is running and in AVAILABLE state."
             )
 
-        self.host: str = resolved_host
-        self.username: str = self._infer_username()
+        return resolved_host
 
-        self._cached_token: str | None = None
-        self._cache_ts: float | None = None
+    def _resolve_autoscaling_host(self) -> str:
+        """Resolve host via the Lakebase autoscaling postgres API.
+
+        Constructs the branch parent path, lists endpoints, finds the
+        READ_WRITE endpoint, and extracts the host and endpoint name.
+        """
+        branch_parent = f"projects/{self.project}/branches/{self.branch}"
+
+        try:
+            endpoints = list(self.workspace_client.postgres.list_endpoints(parent=branch_parent))
+        except Exception as exc:
+            raise ValueError(
+                f"Unable to list endpoints for '{branch_parent}'. "
+                "Ensure the project and branch names are correct."
+            ) from exc
+
+        # Find the READ_WRITE endpoint
+        rw_endpoint = None
+        for ep in endpoints:
+            ep_status = getattr(ep, "status", None)
+            ep_type = getattr(ep_status, "endpoint_type", None)
+            if ep_type and "READ_WRITE" in str(ep_type):
+                rw_endpoint = ep
+                break
+
+        if rw_endpoint is None:
+            raise ValueError(
+                f"No READ_WRITE endpoint found for '{branch_parent}'. "
+                "Ensure the branch has an active READ_WRITE endpoint."
+            )
+
+        # Extract host from endpoint status
+        ep_status = rw_endpoint.status
+        hosts = getattr(ep_status, "hosts", None)
+        resolved_host = getattr(hosts, "host", None) if hosts else None
+
+        if not resolved_host:
+            raise ValueError(
+                f"Host not found on READ_WRITE endpoint for '{branch_parent}'. "
+                "Ensure the endpoint is in AVAILABLE state."
+            )
+
+        self._endpoint_name = rw_endpoint.name
+        return resolved_host
+
+    # --- Token caching ---
 
     def _get_cached_token(self) -> str | None:
         """Check if the cached token is still valid."""
@@ -141,6 +230,11 @@ class _LakebaseBase:
         return None
 
     def _mint_token(self) -> str:
+        if self._is_autoscaling:
+            return self._mint_token_autoscaling()
+        return self._mint_token_provisioned()
+
+    def _mint_token_provisioned(self) -> str:
         try:
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
@@ -150,6 +244,22 @@ class _LakebaseBase:
             raise ConnectionError(
                 f"Failed to obtain credential for Lakebase instance "
                 f"'{self.instance_name}'. Ensure the caller has access."
+            ) from exc
+
+        if not cred.token:
+            raise RuntimeError("Failed to generate database credential: no token received")
+
+        return cred.token
+
+    def _mint_token_autoscaling(self) -> str:
+        try:
+            cred = self.workspace_client.postgres.generate_database_credential(
+                endpoint=self._endpoint_name,
+            )
+        except Exception as exc:
+            raise ConnectionError(
+                f"Failed to obtain credential for Lakebase autoscaling endpoint "
+                f"'{self._endpoint_name}'. Ensure the caller has access."
             ) from exc
 
         if not cred.token:
@@ -178,19 +288,27 @@ class _LakebaseBase:
 class LakebasePool(_LakebaseBase):
     """Sync Lakebase connection pool built on psycopg with rotating credentials.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
+
+    - **Provisioned**: Pass ``instance_name``.
+    - **Autoscaling**: Pass ``project`` and ``branch``.
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -272,19 +390,27 @@ class LakebasePool(_LakebaseBase):
 class AsyncLakebasePool(_LakebaseBase):
     """Async Lakebase connection pool built on psycopg with rotating credentials.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
+
+    - **Provisioned**: Pass ``instance_name``.
+    - **Autoscaling**: Pass ``project`` and ``branch``.
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
     ) -> None:
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -444,6 +570,8 @@ class LakebaseClient:
         *,
         pool: LakebasePool | None = None,
         instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """
@@ -451,18 +579,27 @@ class LakebaseClient:
 
         Provide EITHER:
         - pool: An existing LakebasePool instance (advanced usage where multiple clients can connect to same pool)
-        - instance_name: Name of the Lakebase instance (creates pool internally)
+        - instance_name: Name of the Lakebase provisioned instance
+        - project + branch: Lakebase autoscaling project and branch names
 
         :param pool: Existing LakebasePool to use for connections.
-        :param instance_name: Name of the Lakebase instance (used to create pool if pool not provided).
-        :param workspace_client: Optional WorkspaceClient (only used when creating pool internally).
+        :param instance_name: Name of the Lakebase provisioned instance.
+        :param project: Lakebase autoscaling project name. Also requires ``branch``.
+        :param branch: Lakebase autoscaling branch name. Also requires ``project``.
         :param pool_kwargs: Additional kwargs passed to LakebasePool (only used when creating pool internally).
         """
-        if pool is not None and instance_name is not None:
-            raise ValueError("Provide either 'pool' or 'instance_name', not both.")
+        has_connection_params = instance_name is not None or project is not None or branch is not None
+        if pool is not None and has_connection_params:
+            raise ValueError(
+                "Provide either 'pool' or connection parameters "
+                "('instance_name' or 'project'/'branch'), not both."
+            )
 
-        if pool is None and instance_name is None:
-            raise ValueError("Must provide either 'pool' or 'instance_name'.")
+        if pool is None and not has_connection_params:
+            raise ValueError(
+                "Must provide 'pool', 'instance_name' (provisioned), "
+                "or both 'project' and 'branch' (autoscaling)."
+            )
 
         self._owns_pool = pool is None
 
@@ -470,7 +607,9 @@ class LakebaseClient:
             self._pool = pool
         else:
             self._pool = LakebasePool(
-                instance_name=instance_name,  # type: ignore[arg-type]
+                instance_name=instance_name,
+                project=project,
+                branch=branch,
                 **pool_kwargs,
             )
 
@@ -912,7 +1051,9 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
@@ -922,7 +1063,9 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         Initialize AsyncLakebaseSQLAlchemy for Databricks Lakebase.
 
         Args:
-            instance_name: Name of the Lakebase instance.
+            instance_name: Name of the Lakebase provisioned instance.
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -934,6 +1077,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         """
         super().__init__(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -944,8 +1089,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         self._engine = self._create_engine(**engine_kwargs)
 
         logger.info(
-            "AsyncLakebaseSQLAlchemy initialized: instance=%s host=%s",
-            instance_name,
+            "AsyncLakebaseSQLAlchemy initialized: host=%s",
             self.host,
         )
 

@@ -21,13 +21,16 @@ class CheckpointSaver(PostgresSaver):
     """
     LangGraph PostgresSaver using a Lakebase connection pool.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: Any,
     ) -> None:
@@ -40,6 +43,8 @@ class CheckpointSaver(PostgresSaver):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )
@@ -59,13 +64,16 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
     """
     Async LangGraph PostgresSaver using a Lakebase connection pool.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: Any,
     ) -> None:
@@ -78,6 +86,8 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )

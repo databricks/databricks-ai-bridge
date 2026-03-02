@@ -855,3 +855,294 @@ class TestAsyncDatabricksSessionAsyncOnly:
             assert inspect.iscoroutinefunction(session.add_items)
             assert inspect.iscoroutinefunction(session.pop_item)
             assert inspect.iscoroutinefunction(session.clear_session)
+
+
+# =============================================================================
+# Autoscaling (project/branch) Tests
+# =============================================================================
+
+
+@pytest.fixture
+def mock_autoscaling_workspace_client():
+    """Create a mock WorkspaceClient for autoscaling mode."""
+    mock_client = MagicMock()
+    mock_client.config.host = "https://test.databricks.com"
+
+    # Mock current_user.me() for username inference
+    mock_user = MagicMock()
+    mock_user.user_name = "test_user@databricks.com"
+    mock_client.current_user.me.return_value = mock_user
+
+    # Mock postgres.list_endpoints → returns one READ_WRITE endpoint
+    rw_endpoint = MagicMock()
+    rw_endpoint.name = "projects/my-project/branches/my-branch/endpoints/rw-ep"
+    rw_endpoint.status.endpoint_type = "READ_WRITE"
+    rw_endpoint.status.hosts.host = "autoscaling-instance.lakebase.databricks.com"
+    mock_client.postgres.list_endpoints.return_value = [rw_endpoint]
+
+    # Mock postgres.generate_database_credential for autoscaling token minting
+    mock_credential = MagicMock()
+    mock_credential.token = "autoscaling-oauth-token"
+    mock_client.postgres.generate_database_credential.return_value = mock_credential
+
+    return mock_client
+
+
+class TestAsyncDatabricksSessionAutoscaling:
+    """Tests for AsyncDatabricksSession with autoscaling (project/branch)."""
+
+    def test_init_autoscaling_resolves_host(
+        self, mock_autoscaling_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that initialization with project/branch resolves host via autoscaling API."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_autoscaling_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session = AsyncDatabricksSession(
+                session_id="test-session-123",
+                project="my-project",
+                branch="my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            # Verify engine URL uses autoscaling host
+            call_args = mock_create_engine.call_args
+            url = call_args[0][0]
+            assert url.host == "autoscaling-instance.lakebase.databricks.com"
+
+            # Verify autoscaling API was called
+            mock_autoscaling_workspace_client.postgres.list_endpoints.assert_called_once_with(
+                parent="projects/my-project/branches/my-branch"
+            )
+
+    def test_init_autoscaling_injects_correct_token(
+        self, mock_autoscaling_workspace_client, mock_engine
+    ):
+        """Test that do_connect injects autoscaling token."""
+        captured_handler = None
+
+        def capture_handler(engine, event_name):
+            def decorator(fn):
+                nonlocal captured_handler
+                captured_handler = fn
+                return fn
+
+            return decorator
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_autoscaling_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=capture_handler,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            AsyncDatabricksSession(
+                session_id="test-session-123",
+                project="my-project",
+                branch="my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            # Simulate do_connect event
+            assert captured_handler is not None
+            cparams = {}
+            captured_handler(None, None, None, cparams)
+
+            # Verify autoscaling token was injected
+            assert cparams["password"] == "autoscaling-oauth-token"
+            mock_autoscaling_workspace_client.postgres.generate_database_credential.assert_called()
+
+    def test_autoscaling_sessions_share_engine(
+        self, mock_autoscaling_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that autoscaling sessions with same project/branch share an engine."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_autoscaling_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                project="my-project",
+                branch="my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                project="my-project",
+                branch="my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            # Engine should only be created once
+            assert mock_create_engine.call_count == 1
+            assert session1._engine is session2._engine
+
+    def test_different_branches_get_different_engines(
+        self, mock_autoscaling_workspace_client, mock_event_listens_for
+    ):
+        """Test that sessions with different branches get different engines."""
+        engine1 = MagicMock()
+        engine1.sync_engine = MagicMock()
+        engine2 = MagicMock()
+        engine2.sync_engine = MagicMock()
+
+        engines = [engine1, engine2]
+        engine_iter = iter(engines)
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_autoscaling_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=lambda *args, **kwargs: next(engine_iter),
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                project="my-project",
+                branch="branch-a",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                project="my-project",
+                branch="branch-b",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            assert mock_create_engine.call_count == 2
+            assert session1._engine is not session2._engine
+
+    def test_provisioned_and_autoscaling_get_different_engines(
+        self, mock_workspace_client, mock_autoscaling_workspace_client, mock_event_listens_for
+    ):
+        """Test that a provisioned session and an autoscaling session get different engines."""
+        engine1 = MagicMock()
+        engine1.sync_engine = MagicMock()
+        engine2 = MagicMock()
+        engine2.sync_engine = MagicMock()
+
+        engines = [engine1, engine2]
+        engine_iter = iter(engines)
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=lambda *args, **kwargs: next(engine_iter),
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session_provisioned = AsyncDatabricksSession(
+                session_id="session-prov",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+            )
+            session_autoscaling = AsyncDatabricksSession(
+                session_id="session-auto",
+                project="my-project",
+                branch="my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            assert mock_create_engine.call_count == 2
+            assert session_provisioned._engine is not session_autoscaling._engine
+
+
+# =============================================================================
+# Validation: missing parameters
+# =============================================================================
+
+
+class TestAsyncDatabricksSessionValidation:
+    """Tests for parameter validation in AsyncDatabricksSession."""
+
+    def test_no_params_raises_error(self):
+        """AsyncDatabricksSession with no connection parameters raises ValueError."""
+        from databricks_openai.agents.session import AsyncDatabricksSession
+
+        workspace = MagicMock()
+        workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+        with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+            AsyncDatabricksSession(
+                session_id="test-session",
+                workspace_client=workspace,
+            )
+
+    def test_only_project_raises_error(self):
+        """AsyncDatabricksSession with only project (no branch) raises ValueError."""
+        from databricks_openai.agents.session import AsyncDatabricksSession
+
+        workspace = MagicMock()
+        workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+            AsyncDatabricksSession(
+                session_id="test-session",
+                project="my-project",
+                workspace_client=workspace,
+            )
+
+    def test_only_branch_raises_error(self):
+        """AsyncDatabricksSession with only branch (no project) raises ValueError."""
+        from databricks_openai.agents.session import AsyncDatabricksSession
+
+        workspace = MagicMock()
+        workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+
+        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+            AsyncDatabricksSession(
+                session_id="test-session",
+                branch="my-branch",
+                workspace_client=workspace,
+            )

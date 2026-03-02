@@ -444,7 +444,10 @@ class TestLakebaseClientInit:
 
     def test_client_requires_pool_or_instance_name(self):
         """Client must be given either pool or instance_name."""
-        with pytest.raises(ValueError, match="Must provide either 'pool' or 'instance_name'"):
+        with pytest.raises(
+            ValueError,
+            match="Must provide 'pool', 'instance_name' .provisioned., or both 'project' and 'branch' .autoscaling.",
+        ):
             LakebaseClient()
 
 
@@ -1294,3 +1297,361 @@ def test_async_lakebase_sqlalchemy_invalid_instance_raises():
                 instance_name="bad-instance",
                 workspace_client=workspace,
             )
+
+
+# =============================================================================
+# Autoscaling (project/branch) Tests
+# =============================================================================
+
+
+def _make_autoscaling_workspace(
+    *,
+    user_name: str = "test@databricks.com",
+    credential_token: str = "autoscaling-token-1",
+    host: str = "autoscaling.db.host",
+    endpoint_name: str = "projects/my-project/branches/my-branch/endpoints/rw-ep",
+):
+    """Create a mock workspace client for autoscaling (project/branch) mode."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name=user_name)
+
+    # Mock postgres.generate_database_credential
+    workspace.postgres.generate_database_credential.return_value = MagicMock(
+        token=credential_token
+    )
+
+    # Mock postgres.list_endpoints → returns one READ_WRITE endpoint
+    rw_endpoint = MagicMock()
+    rw_endpoint.name = endpoint_name
+    rw_endpoint.status.endpoint_type = "READ_WRITE"
+    rw_endpoint.status.hosts.host = host
+    workspace.postgres.list_endpoints.return_value = [rw_endpoint]
+
+    return workspace
+
+
+# --- Parameter validation tests ---
+
+
+def test_autoscaling_requires_both_project_and_branch():
+    """Passing only project without branch raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+        LakebasePool(
+            project="my-project",
+            workspace_client=workspace,
+        )
+
+
+def test_autoscaling_requires_both_branch_and_project():
+    """Passing only branch without project raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+        LakebasePool(
+            branch="my-branch",
+            workspace_client=workspace,
+        )
+
+
+def test_no_params_raises_error():
+    """Passing no connection parameters raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+        LakebasePool(workspace_client=workspace)
+
+
+def test_async_pool_no_params_raises_error():
+    """AsyncLakebasePool with no connection parameters raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+        AsyncLakebasePool(workspace_client=workspace)
+
+
+def test_async_pool_only_project_raises_error():
+    """AsyncLakebasePool with only project raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+        AsyncLakebasePool(project="my-project", workspace_client=workspace)
+
+
+def test_lakebase_client_no_params_raises_error():
+    """LakebaseClient with no pool or connection parameters raises ValueError."""
+    with pytest.raises(
+        ValueError,
+        match="Must provide 'pool', 'instance_name' .provisioned., or both 'project' and 'branch' .autoscaling.",
+    ):
+        LakebaseClient()
+
+
+def test_lakebase_client_only_branch_raises_error(monkeypatch):
+    """LakebaseClient with only branch (no project) raises ValueError."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace()
+    with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+        LakebaseClient(branch="my-branch", workspace_client=workspace)
+
+
+def test_async_sqlalchemy_no_params_raises_error():
+    """AsyncLakebaseSQLAlchemy with no connection parameters raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+            AsyncLakebaseSQLAlchemy(workspace_client=workspace)
+
+
+def test_async_sqlalchemy_only_project_raises_error():
+    """AsyncLakebaseSQLAlchemy with only project (no branch) raises ValueError."""
+    workspace = _make_autoscaling_workspace()
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+            AsyncLakebaseSQLAlchemy(project="my-project", workspace_client=workspace)
+
+
+def test_autoscaling_takes_precedence_over_provisioned(monkeypatch):
+    """When both instance_name and project/branch are provided, autoscaling takes precedence."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace(host="autoscaling.db.host")
+    # Also set up provisioned mocks (should NOT be used)
+    instance = MagicMock()
+    instance.read_write_dns = "provisioned.db.host"
+    workspace.database.get_database_instance.return_value = instance
+
+    pool = LakebasePool(
+        instance_name="my-instance",
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    # Should use autoscaling host, not provisioned
+    assert pool.host == "autoscaling.db.host"
+    assert pool._is_autoscaling is True
+    # Provisioned API should NOT have been called
+    workspace.database.get_database_instance.assert_not_called()
+
+
+# --- LakebasePool autoscaling tests ---
+
+
+def test_lakebase_pool_autoscaling_configures_connection_pool(monkeypatch):
+    """LakebasePool with project/branch resolves host via autoscaling API."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace(host="auto.db.host")
+
+    pool = LakebasePool(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    assert pool.host == "auto.db.host"
+    assert pool._is_autoscaling is True
+    assert pool.username == "test@databricks.com"
+    assert "host=auto.db.host" in pool.pool.conninfo
+
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+def test_lakebase_pool_autoscaling_mints_token(monkeypatch):
+    """Autoscaling pool uses postgres.generate_database_credential for tokens."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace(credential_token="auto-token")
+
+    pool = LakebasePool(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    token = pool._get_token()
+    assert token == "auto-token"
+    workspace.postgres.generate_database_credential.assert_called_once_with(
+        endpoint="projects/my-project/branches/my-branch/endpoints/rw-ep"
+    )
+    # Provisioned credential API should NOT be called
+    workspace.database.generate_database_credential.assert_not_called()
+
+
+def test_lakebase_pool_provisioned_mints_token(monkeypatch):
+    """Provisioned pool uses database.generate_database_credential for tokens."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_workspace(credential_token="provisioned-token")
+
+    pool = LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+    )
+
+    token = pool._get_token()
+    assert token == "provisioned-token"
+    workspace.database.generate_database_credential.assert_called_once()
+    # Autoscaling credential API should NOT be called
+    workspace.postgres.generate_database_credential.assert_not_called()
+
+
+def test_lakebase_pool_autoscaling_no_rw_endpoint_raises(monkeypatch):
+    """Raises ValueError when no READ_WRITE endpoint is found."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace()
+    # Return only a READ_ONLY endpoint
+    ro_endpoint = MagicMock()
+    ro_endpoint.status.endpoint_type = "READ_ONLY"
+    ro_endpoint.status.hosts.host = "ro.host"
+    workspace.postgres.list_endpoints.return_value = [ro_endpoint]
+
+    with pytest.raises(ValueError, match="No READ_WRITE endpoint found"):
+        LakebasePool(
+            project="my-project",
+            branch="my-branch",
+            workspace_client=workspace,
+        )
+
+
+def test_lakebase_pool_autoscaling_list_endpoints_fails_raises(monkeypatch):
+    """Raises ValueError when list_endpoints fails."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace()
+    workspace.postgres.list_endpoints.side_effect = Exception("Not found")
+
+    with pytest.raises(ValueError, match="Unable to list endpoints"):
+        LakebasePool(
+            project="my-project",
+            branch="my-branch",
+            workspace_client=workspace,
+        )
+
+
+# --- AsyncLakebasePool autoscaling tests ---
+
+
+@pytest.mark.asyncio
+async def test_async_lakebase_pool_autoscaling_configures_pool(monkeypatch):
+    """AsyncLakebasePool with project/branch resolves host via autoscaling API."""
+    TestAsyncConnectionPool = _make_async_connection_pool_class()
+    monkeypatch.setattr(
+        "databricks_ai_bridge.lakebase.AsyncConnectionPool", TestAsyncConnectionPool
+    )
+
+    workspace = _make_autoscaling_workspace(host="async-auto.db.host")
+
+    pool = AsyncLakebasePool(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    assert pool.host == "async-auto.db.host"
+    assert pool._is_autoscaling is True
+    assert "host=async-auto.db.host" in pool.pool.conninfo
+
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+# --- LakebaseClient autoscaling tests ---
+
+
+def test_lakebase_client_autoscaling_creates_pool(monkeypatch):
+    """LakebaseClient with project/branch creates an autoscaling pool internally."""
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+
+    workspace = _make_autoscaling_workspace(host="client-auto.db.host")
+
+    client = LakebaseClient(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    assert client.pool.host == "client-auto.db.host"
+    assert client.pool._is_autoscaling is True
+    assert client._owns_pool is True
+
+
+def test_lakebase_client_rejects_pool_plus_autoscaling_params(monkeypatch):
+    """LakebaseClient rejects passing both pool and project/branch."""
+    pool = MagicMock(spec=LakebasePool)
+
+    with pytest.raises(ValueError, match="Provide either 'pool' or connection parameters"):
+        LakebaseClient(
+            pool=pool,
+            project="my-project",
+            branch="my-branch",
+        )
+
+
+# --- AsyncLakebaseSQLAlchemy autoscaling tests ---
+
+
+def test_async_lakebase_sqlalchemy_autoscaling_resolves_host():
+    """AsyncLakebaseSQLAlchemy with project/branch resolves via autoscaling API."""
+    workspace = _make_autoscaling_workspace(host="sa-auto.db.host")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            project="my-project",
+            branch="my-branch",
+            workspace_client=workspace,
+        )
+
+    assert sa.host == "sa-auto.db.host"
+    assert sa._is_autoscaling is True
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+def test_async_lakebase_sqlalchemy_autoscaling_mints_correct_token():
+    """AsyncLakebaseSQLAlchemy in autoscaling mode uses postgres credential API."""
+    workspace = _make_autoscaling_workspace(credential_token="sa-auto-token")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            project="my-project",
+            branch="my-branch",
+            workspace_client=workspace,
+        )
+
+    token = sa.get_token()
+    assert token == "sa-auto-token"
+    workspace.postgres.generate_database_credential.assert_called_once()
+
+
+def test_async_lakebase_sqlalchemy_provisioned_mints_correct_token():
+    """AsyncLakebaseSQLAlchemy in provisioned mode uses database credential API."""
+    workspace = _make_workspace(credential_token="sa-prov-token")
+    patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
+
+    with patch_engine, patch_event:
+        sa = AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    token = sa.get_token()
+    assert token == "sa-prov-token"
+    workspace.database.generate_database_credential.assert_called_once()
