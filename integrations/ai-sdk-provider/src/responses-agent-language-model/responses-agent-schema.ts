@@ -12,17 +12,19 @@ const responsesAgentMessageSchema = z.object({
       type: z.literal('output_text'),
       text: z.string(),
       logprobs: z.unknown().nullish(),
-      annotations: z.array(
-        z.discriminatedUnion('type', [
-          z.object({
-            type: z.literal('url_citation'),
-            start_index: z.number(),
-            end_index: z.number(),
-            url: z.string(),
-            title: z.string(),
-          }),
-        ])
-      ),
+      annotations: z
+        .array(
+          z.discriminatedUnion('type', [
+            z.object({
+              type: z.literal('url_citation'),
+              start_index: z.number(),
+              end_index: z.number(),
+              url: z.string(),
+              title: z.string(),
+            }),
+          ])
+        )
+        .optional(),
     })
   ),
 })
@@ -78,30 +80,32 @@ const responsesAgentOutputItem = z.discriminatedUnion('type', [
   responsesAgentMcpApprovalResponseSchema,
 ])
 
-export const responsesAgentResponseSchema = z.object({
-  id: z.string().optional(),
-  created_at: z.number().optional(),
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-    })
-    .nullish(),
-  model: z.string().optional(),
-  output: z.array(responsesAgentOutputItem),
-  incomplete_details: z
-    .object({
-      reason: z.string().nullish().optional(),
-    })
-    .nullish(),
-  usage: z
-    .object({
-      input_tokens: z.number(),
-      output_tokens: z.number(),
-      total_tokens: z.number(),
-    })
-    .optional(),
-})
+export const responsesAgentResponseSchema = z
+  .object({
+    id: z.string().optional(),
+    created_at: z.number().optional(),
+    error: z
+      .object({
+        code: z.string(),
+        message: z.string(),
+      })
+      .nullish(),
+    model: z.string().optional(),
+    output: z.array(responsesAgentOutputItem),
+    incomplete_details: z
+      .object({
+        reason: z.string().nullish().optional(),
+      })
+      .nullish(),
+    usage: z
+      .object({
+        input_tokens: z.number(),
+        output_tokens: z.number(),
+        total_tokens: z.number(),
+      })
+      .optional(),
+  })
+  .passthrough()
 
 /**
  * Chunk schema
@@ -127,11 +131,14 @@ export const simpleErrorChunkSchema = z.object({
   error: z.string(),
 })
 
-const responseOutputItemDoneSchema = z.object({
-  type: z.literal('response.output_item.done'),
-  output_index: z.number(),
-  item: responsesAgentOutputItem,
-})
+const responseOutputItemDoneSchema = z
+  .object({
+    type: z.literal('response.output_item.done'),
+    output_index: z.number().optional(),
+    item: responsesAgentOutputItem,
+    id: z.string().optional(),
+  })
+  .passthrough()
 
 const responseAnnotationAddedSchema = z.object({
   type: z.literal('response.output_text.annotation.added'),
