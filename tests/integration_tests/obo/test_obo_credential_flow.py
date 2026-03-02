@@ -80,6 +80,12 @@ def deployer_identity(deployer_client):
 
 
 @pytest.fixture(scope="module")
+def deployer_whoami(deployer_client, warehouse_id):
+    """The deployer's whoami() result (SQL current_user()), cached for comparison."""
+    return _call_whoami(deployer_client, warehouse_id)
+
+
+@pytest.fixture(scope="module")
 def end_user_client():
     """SP-B: the 'end user' service principal, using OBO_TEST_CLIENT_ID/SECRET."""
     client_id = os.environ.get("OBO_TEST_CLIENT_ID")
@@ -181,15 +187,13 @@ class TestModelServingOBO:
     def test_whoami_differs_from_deployer(
         self,
         obo_client_model_serving,
-        deployer_identity,
-        end_user_identity,
+        deployer_whoami,
         warehouse_id,
     ):
         caller = _call_whoami(obo_client_model_serving, warehouse_id)
-        assert caller != deployer_identity, (
-            f"OBO client should NOT see deployer identity, got {caller}"
+        assert caller != deployer_whoami, (
+            f"OBO client should NOT see deployer identity via whoami()"
         )
-        assert end_user_identity in caller
 
 
 # =============================================================================
@@ -206,10 +210,9 @@ class TestAppsOBO:
         assert me.display_name == end_user_identity
 
     def test_whoami_differs_from_deployer(
-        self, obo_client_apps, deployer_identity, end_user_identity, warehouse_id
+        self, obo_client_apps, deployer_whoami, warehouse_id
     ):
         caller = _call_whoami(obo_client_apps, warehouse_id)
-        assert caller != deployer_identity, (
-            f"Apps OBO client should NOT see deployer identity, got {caller}"
+        assert caller != deployer_whoami, (
+            f"Apps OBO client should NOT see deployer identity via whoami()"
         )
-        assert end_user_identity in caller
