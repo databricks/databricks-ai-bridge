@@ -30,8 +30,7 @@ import time
 import pytest
 from databricks.sdk import WorkspaceClient
 
-databricks_openai = pytest.importorskip("databricks_openai")
-DatabricksOpenAI = databricks_openai.DatabricksOpenAI
+from databricks_openai import DatabricksOpenAI  # ty:ignore[unresolved-import]
 
 log = logging.getLogger(__name__)
 
