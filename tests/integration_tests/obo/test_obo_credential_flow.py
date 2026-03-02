@@ -56,9 +56,7 @@ def _call_whoami(client: WorkspaceClient, warehouse_id: str) -> str:
         warehouse_id=warehouse_id,
         wait_timeout="30s",
     )
-    assert result.status.state.value == "SUCCEEDED", (
-        f"SQL statement failed: {result.status}"
-    )
+    assert result.status.state.value == "SUCCEEDED", f"SQL statement failed: {result.status}"
     return result.result.data_array[0][0]
 
 
@@ -92,9 +90,7 @@ def end_user_client():
     client_secret = os.environ.get("OBO_TEST_CLIENT_SECRET")
     host = os.environ.get("DATABRICKS_HOST")
     if not all([client_id, client_secret, host]):
-        pytest.skip(
-            "OBO_TEST_CLIENT_ID, OBO_TEST_CLIENT_SECRET, and DATABRICKS_HOST must be set"
-        )
+        pytest.skip("OBO_TEST_CLIENT_ID, OBO_TEST_CLIENT_SECRET, and DATABRICKS_HOST must be set")
     return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
 
 
@@ -132,9 +128,7 @@ def obo_client_model_serving(end_user_token, monkeypatch):
     would populate in a real serving environment).
     """
     monkeypatch.setenv("IS_IN_DB_MODEL_SERVING_ENV", "true")
-    monkeypatch.setenv(
-        "DB_MODEL_SERVING_HOST_URL", os.environ.get("DATABRICKS_HOST", "")
-    )
+    monkeypatch.setenv("DB_MODEL_SERVING_HOST_URL", os.environ.get("DATABRICKS_HOST", ""))
     # Prevent the SDK from picking up SP-A's credentials
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "/dev/null")
     monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
@@ -175,10 +169,7 @@ class TestModelServingOBO:
     """Verify identity forwarding through the ModelServingUserCredentials path."""
 
     def test_auth_type(self, obo_client_model_serving):
-        assert (
-            obo_client_model_serving.config.auth_type
-            == "model_serving_user_credentials"
-        )
+        assert obo_client_model_serving.config.auth_type == "model_serving_user_credentials"
 
     def test_identity_is_end_user(self, obo_client_model_serving, end_user_identity):
         me = obo_client_model_serving.current_user.me()
@@ -209,9 +200,7 @@ class TestAppsOBO:
         me = obo_client_apps.current_user.me()
         assert me.display_name == end_user_identity
 
-    def test_whoami_differs_from_deployer(
-        self, obo_client_apps, deployer_whoami, warehouse_id
-    ):
+    def test_whoami_differs_from_deployer(self, obo_client_apps, deployer_whoami, warehouse_id):
         caller = _call_whoami(obo_client_apps, warehouse_id)
         assert caller != deployer_whoami, (
             f"Apps OBO client should NOT see deployer identity via whoami()"
