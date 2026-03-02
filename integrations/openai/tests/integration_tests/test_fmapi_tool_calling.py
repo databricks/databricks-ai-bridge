@@ -18,6 +18,7 @@ Prerequisites:
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import pytest
@@ -76,17 +77,16 @@ def _supports_tool_calling(client: DatabricksOpenAI, model: str) -> bool:
         return False
 
 
+log = logging.getLogger(__name__)
+
+
 def _discover_foundation_models() -> list:
     """Discover all FMAPI chat models that support tool calling.
 
     1. List all serving endpoints with databricks- prefix and llm/v1/chat task
     2. Probe each model with a minimal tool call to check if tools are supported
-    3. Models in _XFAIL_MODELS are included but marked as expected failures
+    3. Models in _SKIP_MODELS are excluded entirely
     """
-    import logging
-
-    log = logging.getLogger(__name__)
-
     try:
         w = WorkspaceClient()
         endpoints = list(w.serving_endpoints.list())
@@ -141,11 +141,7 @@ def retry(fn, retries=_MAX_RETRIES):
         except Exception as exc:
             last_exc = exc
             if attempt < retries - 1:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc
-                )
+                log.warning("Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc)
     raise last_exc  # type: ignore[misc]
 
 
@@ -158,11 +154,7 @@ async def async_retry(fn, retries=_MAX_RETRIES):
         except Exception as exc:
             last_exc = exc
             if attempt < retries - 1:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc
-                )
+                log.warning("Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc)
     raise last_exc  # type: ignore[misc]
 
 
