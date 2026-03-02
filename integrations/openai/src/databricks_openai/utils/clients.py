@@ -1,4 +1,5 @@
 import os
+from collections.abc import AsyncIterator, Iterator
 from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
