@@ -159,7 +159,7 @@ class ModelServingUserCredentials(CredentialsStrategy):
     In any other environments, the class defaults to the DefaultCredentialStrategy.
     To use this credential strategy, instantiate the WorkspaceClient with the ModelServingUserCredentials strategy as follows:
 
-    user_client = WorkspaceClient(credential_strategy = ModelServingUserCredentials())
+    user_client = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
     """
 
     def __init__(self):

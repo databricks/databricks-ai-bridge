@@ -28,7 +28,6 @@ import threading
 
 import pytest
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.core import Config
 
 from databricks_ai_bridge.model_serving_obo_credential_strategy import (
     ModelServingUserCredentials,
@@ -139,8 +138,7 @@ def obo_client_model_serving(end_user_token, monkeypatch):
     main_thread = threading.main_thread()
     main_thread.__dict__["invokers_token"] = end_user_token
 
-    cfg = Config(credentials_strategy=ModelServingUserCredentials())
-    wc = WorkspaceClient(config=cfg)
+    wc = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
     yield wc
 
     main_thread.__dict__.pop("invokers_token", None)
