@@ -29,27 +29,32 @@ SYSTEM_PROMPT = (
 MODEL = "databricks-claude-sonnet-4-6"
 
 
-def create_whoami_agent() -> Agent:
-    """Create an agent with a whoami tool authenticated as the requesting user."""
-    user_wc = get_user_workspace_client()
+def _make_whoami_tool(user_wc):
+    """Create a whoami tool that uses the given workspace client."""
 
     @function_tool
     def whoami() -> str:
         """Returns the identity of the current user."""
         me = user_wc.current_user.me()
-        return me.user_name
+        return me.display_name or me.user_name or str(me.id)
 
+    return whoami
+
+
+def create_agent(tools) -> Agent:
     return Agent(
         name=NAME,
         instructions=SYSTEM_PROMPT,
         model=MODEL,
-        tools=[whoami],
+        tools=tools,
     )
 
 
 @invoke()
 async def invoke(request: ResponsesAgentRequest) -> ResponsesAgentResponse:
-    agent = create_whoami_agent()
+    user_wc = get_user_workspace_client()
+    whoami_tool = _make_whoami_tool(user_wc)
+    agent = create_agent([whoami_tool])
     messages = [i.model_dump() for i in request.input]
     result = await Runner.run(agent, messages)
     return ResponsesAgentResponse(output=[item.to_input_item() for item in result.new_items])
@@ -57,7 +62,9 @@ async def invoke(request: ResponsesAgentRequest) -> ResponsesAgentResponse:
 
 @stream()
 async def stream(request: dict) -> AsyncGenerator[ResponsesAgentStreamEvent, None]:
-    agent = create_whoami_agent()
+    user_wc = get_user_workspace_client()
+    whoami_tool = _make_whoami_tool(user_wc)
+    agent = create_agent([whoami_tool])
     messages = [i.model_dump() for i in request.input]
     result = Runner.run_streamed(agent, input=messages)
 

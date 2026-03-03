@@ -1,96 +1,96 @@
 """
-Deploy the whoami OBO agent to a Model Serving endpoint.
+Deploy a minimal whoami agent to a Model Serving endpoint with OBO enabled.
 
-Run manually or on a weekly schedule to keep the endpoint on the latest SDK.
+This script logs an MLflow ChatModel that uses ModelServingUserCredentials
+to return the calling user's identity, then deploys it to a serving endpoint.
+
+Run manually or on a schedule to keep the endpoint on the latest SDK version.
 
 Environment Variables:
     DATABRICKS_HOST           - Workspace URL
     DATABRICKS_CLIENT_ID      - Service principal client ID
     DATABRICKS_CLIENT_SECRET  - Service principal client secret
-    OBO_TEST_SERVING_ENDPOINT - Target serving endpoint name (optional override)
-    OBO_TEST_WAREHOUSE_ID     - SQL warehouse ID
+    OBO_TEST_SERVING_ENDPOINT - Target serving endpoint name
+    MLFLOW_EXPERIMENT_NAME    - (optional) MLflow experiment name
 """
 
-import logging
 import os
-import tempfile
-from pathlib import Path
+import sys
 
 import mlflow
 from databricks.sdk import WorkspaceClient
-from mlflow.models.auth_policy import AuthPolicy, SystemAuthPolicy, UserAuthPolicy
-from mlflow.models.resources import DatabricksServingEndpoint, DatabricksSQLWarehouse
+from mlflow.models import set_model
+from mlflow.models.resources import DatabricksFunction
+from mlflow.pyfunc import ChatModel
 
-log = logging.getLogger(__name__)
 
-# Must match the constants in whoami_serving_agent.py
-LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
-SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
+class WhoAmIAgent(ChatModel):
+    """Minimal agent that returns the calling user's identity via OBO."""
 
-UC_CATALOG = "integration_testing"
-UC_SCHEMA = "databricks_ai_bridge_mcp_test"
-UC_MODEL_NAME_SHORT = "obo_test_endpoint"
-UC_MODEL_NAME = f"{UC_CATALOG}.{UC_SCHEMA}.{UC_MODEL_NAME_SHORT}"
+    def predict(self, context, messages, params):
+        from databricks.sdk import WorkspaceClient
+
+        from databricks_ai_bridge import ModelServingUserCredentials
+
+        wc = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
+        me = wc.current_user.me()
+        identity = me.display_name or me.user_name or str(me.id)
+        return {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": identity},
+                }
+            ]
+        }
 
 
 def main():
+    endpoint_name = os.environ.get("OBO_TEST_SERVING_ENDPOINT")
+    if not endpoint_name:
+        print("ERROR: OBO_TEST_SERVING_ENDPOINT must be set")
+        sys.exit(1)
+
     w = WorkspaceClient()
-    log.info("Workspace: %s", w.config.host)
+    print(f"Deploying whoami agent to endpoint: {endpoint_name}")
+    print(f"Workspace: {w.config.host}")
 
-    mlflow.set_registry_uri("databricks-uc")
-
-    experiment_name = f"/Users/{w.current_user.me().user_name}/obo-serving-agent-deploy"
+    # Set up experiment
+    experiment_name = os.environ.get(
+        "MLFLOW_EXPERIMENT_NAME",
+        f"/Users/{w.current_user.me().user_name}/obo-test-serving-agent",
+    )
     mlflow.set_experiment(experiment_name)
 
-    # Copy agent file to a temp dir, injecting the warehouse ID
-    agent_source = Path(__file__).parent / "model_serving_fixture" / "whoami_serving_agent.py"
-    with tempfile.TemporaryDirectory() as tmp:
-        agent_file = Path(tmp) / "agent.py"
-        content = agent_source.read_text()
-        content = content.replace(
-            'SQL_WAREHOUSE_ID = ""  # Injected by deploy_serving_agent.py at log time',
-            f'SQL_WAREHOUSE_ID = "{SQL_WAREHOUSE_ID}"',
+    # Log model
+    with mlflow.start_run():
+        model_info = mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=WhoAmIAgent(),
+            pip_requirements=[
+                "databricks-ai-bridge",
+                "databricks-sdk",
+                "mlflow",
+            ],
         )
-        agent_file.write_text(content)
+        print(f"Logged model: {model_info.model_uri}")
 
-        system_policy = SystemAuthPolicy(
-            resources=[
-                DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT_NAME),
-                DatabricksSQLWarehouse(warehouse_id=SQL_WAREHOUSE_ID),
-            ]
-        )
-        user_policy = UserAuthPolicy(
-            api_scopes=[
-                "sql",
-                "model-serving",
-            ]
-        )
+    # Register in UC
+    uc_model_name = f"integration_testing.databricks_ai_bridge_mcp_test.obo_whoami_agent"
+    registered = mlflow.register_model(model_info.model_uri, uc_model_name)
+    print(f"Registered model version: {registered.version}")
 
-        with mlflow.start_run():
-            logged_agent_info = mlflow.pyfunc.log_model(
-                name="agent",
-                python_model=str(agent_file),
-                auth_policy=AuthPolicy(
-                    system_auth_policy=system_policy,
-                    user_auth_policy=user_policy,
-                ),
-                pip_requirements=[
-                    "databricks-openai",
-                    "databricks-ai-bridge",
-                    "databricks-sdk",
-                ],
-            )
-        log.info("Logged model: %s", logged_agent_info.model_uri)
-
-    registered = mlflow.register_model(logged_agent_info.model_uri, UC_MODEL_NAME)
-    log.info("Registered: %s version %s", UC_MODEL_NAME, registered.version)
-
+    # Deploy
     from databricks import agents
 
-    agents.deploy(UC_MODEL_NAME, registered.version, scale_to_zero=True)
-    log.info("Deployment initiated (scale_to_zero=True)")
+    agents.deploy(
+        model_name=uc_model_name,
+        model_version=registered.version,
+        endpoint_name=endpoint_name,
+        scale_to_zero=True,
+    )
+    print(f"Deployment initiated for endpoint: {endpoint_name}")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
