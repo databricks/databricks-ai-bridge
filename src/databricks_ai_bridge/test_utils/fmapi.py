@@ -6,7 +6,6 @@ Used by both databricks-openai and databricks-langchain test suites.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from databricks.sdk import WorkspaceClient
 
@@ -64,8 +63,8 @@ FALLBACK_MODELS = [
 def has_function_calling(w: WorkspaceClient, endpoint_name: str) -> bool:
     """Check if an endpoint supports function calling via the capabilities API."""
     try:
-        resp: dict[str, Any] = w.api_client.do("GET", f"/api/2.0/serving-endpoints/{endpoint_name}")
-        return resp.get("capabilities", {}).get("function_calling", False)
+        resp = w.api_client.do("GET", f"/api/2.0/serving-endpoints/{endpoint_name}")
+        return resp.get("capabilities", {}).get("function_calling", False)  # type: ignore[invalid-assignment]
     except Exception:
         return False
 
