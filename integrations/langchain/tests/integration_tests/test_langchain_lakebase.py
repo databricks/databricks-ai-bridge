@@ -187,6 +187,9 @@ class TestAsyncDatabricksStore:
             assert item.value == {"data": "async hello"}
             assert item.key == "async_key"
 
+        # Pool should be closed after exiting the context manager
+        assert store._lakebase.pool.closed
+
     @pytest.mark.asyncio
     async def test_async_store_search(self, unique_namespace, cleanup_store_tables):
         """Test async search operation through bridge."""
@@ -239,21 +242,6 @@ class TestAsyncDatabricksStore:
             assert len(results) > 0
             # The programming-related doc should rank higher than the coffee doc
             assert results[0].key == "doc_python"
-
-    @pytest.mark.asyncio
-    async def test_async_store_context_manager(self, unique_namespace, cleanup_store_tables):
-        """Test async with lifecycle (open/close via context manager)."""
-        from databricks_langchain import AsyncDatabricksStore
-
-        async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
-            await store.setup()
-
-            ns = unique_namespace
-            await store.aput(ns, "ctx_key", {"data": "context managed"})
-
-            item = await store.aget(ns, "ctx_key")
-            assert item is not None
-            assert item.value == {"data": "context managed"}
 
 
 # =============================================================================
