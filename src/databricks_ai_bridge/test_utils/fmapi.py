@@ -27,6 +27,10 @@ COMMON_SKIP_MODELS = {
     "databricks-gemini-3-flash",  # requires thought_signature on function calls
     "databricks-gemini-3-pro",  # requires thought_signature on function calls
     "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
+    "databricks-gpt-5-1-codex-max",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-1-codex-mini",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-2-codex",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-3-codex",  # Responses API only, no Chat Completions support
 }
 
 # Additional models skipped only in LangChain tests

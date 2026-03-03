@@ -62,6 +62,11 @@ def _should_strip_strict(model: str | None) -> bool:
     return "gpt" not in model.lower()
 
 
+# Gemini FMAPI compat: rejects list content in tool messages (request side)
+# and returns list content in responses (response side). We flatten both.
+# Note: Gemini 3.x requires thought_signature which is an Agents SDK issue, not fixable here.
+
+
 def _is_gemini_model(model: str | None) -> bool:
     """Returns True if the model is a Gemini variant."""
     if not model:
@@ -69,128 +74,63 @@ def _is_gemini_model(model: str | None) -> bool:
     return "gemini" in model.lower() or "gemma" in model.lower()
 
 
-def _flatten_list_content(content: list) -> str:
-    """Extract text from a list of content blocks and join into a single string."""
-    text_parts = []
-    for part in content:
-        if isinstance(part, dict) and "text" in part:
-            text_parts.append(part["text"])
-        elif isinstance(part, str):
-            text_parts.append(part)
-        elif hasattr(part, "text"):
-            text_parts.append(part.text)
-    return "".join(text_parts)
-
-
-def _flatten_list_content_in_messages(messages: Any) -> None:
-    """Request-side fix: convert list content to string in tool messages.
-
-    Gemini FMAPI rejects tool messages where content is a list of content blocks
-    (e.g. [{"type": "text", "text": "hello"}]). The Agents SDK always produces
-    this list format when using MCP tools (via chatcmpl_converter.py). We flatten
-    it to a plain string before sending to FMAPI.
-    """
+def _fix_gemini_messages(messages: Any) -> None:
+    """Flatten list content in outbound tool messages for Gemini."""
     if not messages:
         return
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if message.get("role") == "tool" and isinstance(content, list):
-            message["content"] = _flatten_list_content(content)
+    for msg in messages:
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") == "tool"
+            and isinstance(msg.get("content"), list)
+        ):
+            msg["content"] = "".join(
+                p.get("text", "") if isinstance(p, dict) else getattr(p, "text", p)
+                for p in msg["content"]
+            )
 
 
-def _flatten_list_content_in_response(response: Any) -> None:
-    """Response-side fix: convert list content to string in non-streaming responses.
-
-    Gemini FMAPI sometimes returns assistant message content as a list of content
-    blocks instead of a string. The Agents SDK expects content to be a string and
-    fails with a ValidationError. We flatten it before returning to the SDK.
-    """
+def _fix_gemini_content(response: Any) -> None:
+    """Flatten list content in response messages/deltas for Gemini."""
     if not hasattr(response, "choices"):
         return
     for choice in response.choices:
-        message = getattr(choice, "message", None)
-        if message is None:
-            continue
-        content = getattr(message, "content", None)
-        if isinstance(content, list):
-            message.content = _flatten_list_content(content)
-
-
-def _fix_gemini_stream_chunk(chunk: Any) -> Any:
-    """Fix a single streaming chunk from Gemini FMAPI.
-
-    Gemini FMAPI returns delta.content as a list of content blocks instead of a
-    string in streaming responses. The Agents SDK expects string deltas and crashes
-    with a ValidationError when parsing ResponseTextDeltaEvent.
-    """
-    if not hasattr(chunk, "choices"):
-        return chunk
-    for choice in chunk.choices:
-        delta = getattr(choice, "delta", None)
-        if delta is None:
-            continue
-        content = getattr(delta, "content", None)
-        if isinstance(content, list):
-            delta.content = _flatten_list_content(content)
-    return chunk
+        obj = getattr(choice, "message", None) or getattr(choice, "delta", None)
+        if obj is not None and isinstance(getattr(obj, "content", None), list):
+            obj.content = "".join(
+                p.get("text", "") if isinstance(p, dict) else getattr(p, "text", p)
+                for p in obj.content
+            )
 
 
 class _GeminiStreamWrapper:
-    """Wraps a sync Stream to fix Gemini list content in stream chunks."""
+    """Wraps a sync Stream, flattening list content in each chunk."""
 
     def __init__(self, stream: Any):
         self._stream = stream
 
     def __iter__(self) -> Iterator:
         for chunk in self._stream:
-            yield _fix_gemini_stream_chunk(chunk)
+            _fix_gemini_content(chunk)
+            yield chunk
 
-    def __next__(self):
-        return _fix_gemini_stream_chunk(next(self._stream))
-
-    def __enter__(self):
-        self._stream.__enter__()
-        return self
-
-    def __exit__(self, *args):
-        return self._stream.__exit__(*args)
-
-    def close(self):
-        self._stream.close()
-
-    @property
-    def response(self):
-        return self._stream.response
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
 
 
 class _AsyncGeminiStreamWrapper:
-    """Wraps an AsyncStream to fix Gemini list content in stream chunks."""
+    """Wraps an AsyncStream, flattening list content in each chunk."""
 
     def __init__(self, stream: Any):
         self._stream = stream
 
     async def __aiter__(self) -> AsyncIterator:
         async for chunk in self._stream:
-            yield _fix_gemini_stream_chunk(chunk)
+            _fix_gemini_content(chunk)
+            yield chunk
 
-    async def __anext__(self):
-        return _fix_gemini_stream_chunk(await self._stream.__anext__())
-
-    async def __aenter__(self):
-        await self._stream.__aenter__()
-        return self
-
-    async def __aexit__(self, *args):
-        return await self._stream.__aexit__(*args)
-
-    async def close(self):
-        await self._stream.close()
-
-    @property
-    def response(self):
-        return self._stream.response
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
 
 
 def _is_claude_model(model: str | None) -> bool:
@@ -332,13 +272,12 @@ class DatabricksCompletions(Completions):
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         if _is_gemini_model(model):
-            _flatten_list_content_in_messages(kwargs.get("messages"))
+            _fix_gemini_messages(kwargs.get("messages"))
         response = super().create(**kwargs)
         if _is_gemini_model(model):
             if kwargs.get("stream"):
                 return _GeminiStreamWrapper(response)
-            # TODO: re-enable if non-streaming list content issues surface
-            # _flatten_list_content_in_response(response)
+            _fix_gemini_content(response)
         return response
 
 
@@ -487,13 +426,12 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         if _is_gemini_model(model):
-            _flatten_list_content_in_messages(kwargs.get("messages"))
+            _fix_gemini_messages(kwargs.get("messages"))
         response = await super().create(**kwargs)
         if _is_gemini_model(model):
             if kwargs.get("stream"):
                 return _AsyncGeminiStreamWrapper(response)
-            # TODO: re-enable if non-streaming list content issues surface
-            # _flatten_list_content_in_response(response)
+            _fix_gemini_content(response)
         return response
 
 
