@@ -19,6 +19,18 @@ import uuid
 
 import pytest
 
+# Skip the entire module if the memory extra (langgraph) is not installed
+pytest.importorskip("langgraph", reason="langgraph not installed (requires memory extra)")
+
+from databricks_ai_bridge.lakebase import LakebaseClient
+from databricks_langchain import (
+    AsyncCheckpointSaver,
+    AsyncDatabricksStore,
+    CheckpointSaver,
+    DatabricksStore,
+)
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+
 # Skip all tests if LAKEBASE_INSTANCE_NAME is not set
 pytestmark = pytest.mark.skipif(
     not os.environ.get("LAKEBASE_INSTANCE_NAME"),
@@ -49,8 +61,6 @@ CHECKPOINT_TABLES = [
 
 def _drop_tables(tables: list[str]) -> None:
     """Drop the given tables from the Lakebase instance."""
-    from databricks_ai_bridge.lakebase import LakebaseClient
-
     with LakebaseClient(instance_name=get_instance_name()) as client:
         for table in tables:
             client.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
@@ -71,9 +81,11 @@ def unique_namespace() -> tuple[str, str]:
 def cleanup_store_tables():
     """Drop store tables before and after all store tests.
 
-    The setup phase removes stale migration-tracking tables left by previous
-    CI runs (PostgresStore.setup() silently skips table creation when its
-    migration tracker says the schema is already at the latest version).
+    scope="module" means tables are dropped once at the start of the module and
+    once at the end — NOT before/after each individual test. This keeps tests
+    fast while still cleaning up stale migration-tracking tables left by
+    previous CI runs (PostgresStore.setup() silently skips table creation when
+    its migration tracker says the schema is already at the latest version).
     """
     _drop_tables(STORE_TABLES)
     yield
@@ -82,10 +94,27 @@ def cleanup_store_tables():
 
 @pytest.fixture(scope="module")
 def cleanup_checkpoint_tables():
-    """Drop checkpoint tables before and after all checkpoint tests."""
+    """Drop checkpoint tables before and after all checkpoint tests.
+
+    scope="module" means tables are dropped once at the start of the module and
+    once at the end — NOT before/after each individual test.
+    """
     _drop_tables(CHECKPOINT_TABLES)
     yield
     _drop_tables(CHECKPOINT_TABLES)
+
+
+def _make_checkpoint(ts: str = "2025-01-01T00:00:00+00:00") -> Checkpoint:
+    """Build a Checkpoint with a random ID and the given timestamp."""
+    return Checkpoint(
+        v=1,
+        id=uuid.uuid4().hex,
+        ts=ts,
+        channel_values={},
+        channel_versions={},
+        versions_seen={},
+        pending_sends=[],
+    )
 
 
 # =============================================================================
@@ -98,8 +127,6 @@ class TestDatabricksStore:
 
     def test_store_setup_put_and_get(self, unique_namespace, cleanup_store_tables):
         """Test core bridge path: pool creation -> _with_store -> setup + batch (put/get)."""
-        from databricks_langchain import DatabricksStore
-
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
 
@@ -114,8 +141,6 @@ class TestDatabricksStore:
 
     def test_store_search(self, unique_namespace, cleanup_store_tables):
         """Test search operation through bridge."""
-        from databricks_langchain import DatabricksStore
-
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
 
@@ -130,8 +155,6 @@ class TestDatabricksStore:
 
     def test_store_delete(self, unique_namespace, cleanup_store_tables):
         """Test delete operation through bridge."""
-        from databricks_langchain import DatabricksStore
-
         store = DatabricksStore(instance_name=get_instance_name())
         store.setup()
 
@@ -144,8 +167,6 @@ class TestDatabricksStore:
 
     def test_store_vector_search(self, unique_namespace, cleanup_store_tables):
         """Test vector-based search with embedding endpoint via PostgresIndexConfig."""
-        from databricks_langchain import DatabricksStore
-
         store = DatabricksStore(
             instance_name=get_instance_name(),
             embedding_endpoint="databricks-bge-large-en",
@@ -174,8 +195,6 @@ class TestAsyncDatabricksStore:
     @pytest.mark.asyncio
     async def test_async_store_setup_put_and_get(self, unique_namespace, cleanup_store_tables):
         """Test async put and get operations through bridge."""
-        from databricks_langchain import AsyncDatabricksStore
-
         async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
             await store.setup()
 
@@ -193,8 +212,6 @@ class TestAsyncDatabricksStore:
     @pytest.mark.asyncio
     async def test_async_store_search(self, unique_namespace, cleanup_store_tables):
         """Test async search operation through bridge."""
-        from databricks_langchain import AsyncDatabricksStore
-
         async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
             await store.setup()
 
@@ -210,8 +227,6 @@ class TestAsyncDatabricksStore:
     @pytest.mark.asyncio
     async def test_async_store_delete(self, unique_namespace, cleanup_store_tables):
         """Test async delete operation through bridge."""
-        from databricks_langchain import AsyncDatabricksStore
-
         async with AsyncDatabricksStore(instance_name=get_instance_name()) as store:
             await store.setup()
 
@@ -225,8 +240,6 @@ class TestAsyncDatabricksStore:
     @pytest.mark.asyncio
     async def test_async_store_vector_search(self, unique_namespace, cleanup_store_tables):
         """Test async vector-based search with embedding endpoint via PostgresIndexConfig."""
-        from databricks_langchain import AsyncDatabricksStore
-
         async with AsyncDatabricksStore(
             instance_name=get_instance_name(),
             embedding_endpoint="databricks-bge-large-en",
@@ -254,25 +267,13 @@ class TestCheckpointSaver:
 
     def test_checkpoint_write_and_read(self, cleanup_checkpoint_tables):
         """Test pool handoff to PostgresSaver: setup, put, get_tuple, and pool cleanup."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import CheckpointSaver
-
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(instance_name=get_instance_name()) as saver:
             saver.setup()
 
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            checkpoint = Checkpoint(
-                v=1,
-                id=uuid.uuid4().hex,  # checkpoint id
-                ts="2025-01-01T00:00:00+00:00",
-                channel_values={},
-                channel_versions={},
-                versions_seen={},
-                pending_sends=[],
-            )
+            checkpoint = _make_checkpoint()
             metadata = CheckpointMetadata()
 
             saver.put(config, checkpoint, metadata, {})
@@ -286,10 +287,6 @@ class TestCheckpointSaver:
 
     def test_checkpoint_list(self, cleanup_checkpoint_tables):
         """Test listing checkpoints."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import CheckpointSaver
-
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(instance_name=get_instance_name()) as saver:
@@ -298,15 +295,7 @@ class TestCheckpointSaver:
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
             for i in range(3):
-                checkpoint = Checkpoint(
-                    v=1,
-                    id=uuid.uuid4().hex,  # checkpoint id
-                    ts=f"2025-01-01T00:0{i}:00+00:00",
-                    channel_values={},
-                    channel_versions={},
-                    versions_seen={},
-                    pending_sends=[],
-                )
+                checkpoint = _make_checkpoint(ts=f"2025-01-01T00:0{i}:00+00:00")
                 saver.put(config, checkpoint, CheckpointMetadata(), {})
 
             checkpoints = list(saver.list(config))
@@ -324,25 +313,13 @@ class TestAsyncCheckpointSaver:
     @pytest.mark.asyncio
     async def test_async_checkpoint_write_and_read(self, cleanup_checkpoint_tables):
         """Test async pool lifecycle: setup, put, get_tuple, and pool cleanup."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import AsyncCheckpointSaver
-
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
             await saver.setup()
 
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            checkpoint = Checkpoint(
-                v=1,
-                id=uuid.uuid4().hex,  # checkpoint id
-                ts="2025-01-01T00:00:00+00:00",
-                channel_values={},
-                channel_versions={},
-                versions_seen={},
-                pending_sends=[],
-            )
+            checkpoint = _make_checkpoint()
             metadata = CheckpointMetadata()
 
             await saver.aput(config, checkpoint, metadata, {})
@@ -357,10 +334,6 @@ class TestAsyncCheckpointSaver:
     @pytest.mark.asyncio
     async def test_async_checkpoint_list(self, cleanup_checkpoint_tables):
         """Test async listing checkpoints."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import AsyncCheckpointSaver
-
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
@@ -369,15 +342,7 @@ class TestAsyncCheckpointSaver:
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
             for i in range(3):
-                checkpoint = Checkpoint(
-                    v=1,
-                    id=uuid.uuid4().hex,  # checkpoint id
-                    ts=f"2025-01-01T00:0{i}:00+00:00",
-                    channel_values={},
-                    channel_versions={},
-                    versions_seen={},
-                    pending_sends=[],
-                )
+                checkpoint = _make_checkpoint(ts=f"2025-01-01T00:0{i}:00+00:00")
                 await saver.aput(config, checkpoint, CheckpointMetadata(), {})
 
             checkpoints = [c async for c in saver.alist(config)]
