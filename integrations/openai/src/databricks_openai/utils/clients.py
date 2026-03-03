@@ -337,7 +337,8 @@ class DatabricksCompletions(Completions):
         if _is_gemini_model(model):
             if kwargs.get("stream"):
                 return _GeminiStreamWrapper(response)
-            _flatten_list_content_in_response(response)
+            # TODO: re-enable if non-streaming list content issues surface
+            # _flatten_list_content_in_response(response)
         return response
 
 
@@ -491,7 +492,8 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         if _is_gemini_model(model):
             if kwargs.get("stream"):
                 return _AsyncGeminiStreamWrapper(response)
-            _flatten_list_content_in_response(response)
+            # TODO: re-enable if non-streaming list content issues surface
+            # _flatten_list_content_in_response(response)
         return response
 
 

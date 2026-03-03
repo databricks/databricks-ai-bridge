@@ -1,9 +1,5 @@
 """
-End-to-end FMAPI tool calling tests for LangGraph agents mirroring app-templates CUJs.
-
-These tests replicate the exact user code patterns from app-templates
-(agent-langgraph, agent-langgraph-short-term-memory) to verify that
-single-turn, multi-turn, and streaming conversations don't break.
+End-to-end FMAPI tool calling tests for ChatDatabricks via LangGraph.
 
 Prerequisites:
 - FMAPI endpoints must be available on the test workspace
@@ -11,17 +7,20 @@ Prerequisites:
 
 from __future__ import annotations
 
-import logging
 import os
 
 import pytest
-from databricks.sdk import WorkspaceClient
-from databricks_openai import DatabricksOpenAI
+from databricks_ai_bridge.test_utils.fmapi import (
+    LANGCHAIN_SKIP_MODELS,
+    async_retry,
+    discover_foundation_models,
+    max_tokens_for_model,
+    retry,
+)
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
-from openai.types.chat import ChatCompletionToolParam
 
 from databricks_langchain import ChatDatabricks
 
@@ -30,144 +29,7 @@ pytestmark = pytest.mark.skipif(
     reason="FMAPI tool calling tests disabled. Set RUN_FMAPI_TOOL_CALLING_TESTS=1 to enable.",
 )
 
-# Models that pass the tool calling probe but have known issues in agent/test flows.
-# These are skipped entirely to keep CI green. When a new model is added to FMAPI,
-# it will be discovered and tested automatically — add it here only if it fails.
-_SKIP_MODELS = {
-    "databricks-gpt-5-nano",  # too small for reliable tool calling
-    "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
-    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
-    "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
-    "databricks-gemini-3-flash",  # requires thought_signature on function calls
-    "databricks-gemini-3-pro",  # requires thought_signature on function calls
-    "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
-    "databricks-gemma-3-12b",  # outputs raw tool call text instead of executing tools
-}
-
-# Max retries for flaky models (e.g. transient FMAPI errors, model non-determinism)
-_MAX_RETRIES = 3
-
-# Reasoning models (e.g. Gemini 2.5 Pro) consume reasoning tokens from the max_tokens
-# budget. With 2 tools they need 200-600 reasoning tokens, so 200 is too small.
-_MODEL_MAX_TOKENS: dict[str, int] = {
-    "databricks-gemini-2-5-pro": 1000,
-}
-_DEFAULT_MAX_TOKENS = 200
-
-
-def _max_tokens(model: str) -> int:
-    return _MODEL_MAX_TOKENS.get(model, _DEFAULT_MAX_TOKENS)
-
-
-# Minimal tool definition used to probe whether a model supports tool calling
-_PROBE_TOOL: ChatCompletionToolParam = {
-    "type": "function",
-    "function": {
-        "name": "probe",
-        "description": "probe",
-        "parameters": {
-            "type": "object",
-            "properties": {"x": {"type": "string"}},
-            "required": ["x"],
-        },
-    },
-}
-
-
-def _supports_tool_calling(client: DatabricksOpenAI, model: str) -> bool:
-    """Send a minimal tool call request to check if the model supports tools."""
-    try:
-        client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "call probe with x=test"}],
-            tools=[_PROBE_TOOL],
-            max_tokens=10,
-        )
-        return True
-    except Exception:
-        return False
-
-
-log = logging.getLogger(__name__)
-
-
-def _discover_foundation_models() -> list:
-    """Discover all FMAPI chat models that support tool calling.
-
-    1. List all serving endpoints with databricks- prefix and llm/v1/chat task
-    2. Probe each model with a minimal tool call to check if tools are supported
-    3. Models in _SKIP_MODELS are excluded entirely
-    """
-
-    try:
-        w = WorkspaceClient()
-        endpoints = list(w.serving_endpoints.list())
-    except Exception as exc:
-        log.warning("Could not discover FMAPI models, using fallback list: %s", exc)
-        return _FALLBACK_MODELS
-
-    # Filter to FMAPI chat endpoints
-    chat_endpoints = [
-        e
-        for e in endpoints
-        if e.name and e.name.startswith("databricks-") and e.task == "llm/v1/chat"
-    ]
-
-    # Probe each model to check if it accepts tool definitions
-    client = DatabricksOpenAI(workspace_client=w)
-
-    models = []
-    for e in sorted(chat_endpoints, key=lambda e: e.name or ""):
-        name = e.name or ""
-        if not _supports_tool_calling(client, name):
-            log.info("Skipping %s: does not support tool calling", name)
-            continue
-        if name in _SKIP_MODELS:
-            log.info("Skipping %s: in skip list", name)
-            continue
-        models.append(name)
-
-    log.info("Discovered %d FMAPI models with tool calling support", len(models))
-    return models
-
-
-# Fallback list if dynamic discovery fails (e.g. auth not configured at collection time)
-_FALLBACK_MODELS = [
-    "databricks-claude-sonnet-4-6",
-    "databricks-claude-opus-4-6",
-    "databricks-meta-llama-3-3-70b-instruct",
-    "databricks-gpt-5-2",
-    "databricks-gpt-5-1",
-    "databricks-qwen3-next-80b-a3b-instruct",
-]
-
-_FOUNDATION_MODELS = _discover_foundation_models()
-
-
-def retry(fn, retries=_MAX_RETRIES):
-    """Retry a test function up to `retries` times. Only fails if all attempts fail."""
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            return fn()
-        except Exception as exc:
-            last_exc = exc
-            if attempt < retries - 1:
-                log.warning("Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc)
-    raise last_exc  # type: ignore[misc]
-
-
-async def async_retry(fn, retries=_MAX_RETRIES):
-    """Retry an async test function up to `retries` times."""
-    last_exc = None
-    for attempt in range(retries):
-        try:
-            return await fn()
-        except Exception as exc:
-            last_exc = exc
-            if attempt < retries - 1:
-                log.warning("Attempt %d/%d failed: %s — retrying", attempt + 1, retries, exc)
-    raise last_exc  # type: ignore[misc]
+_FOUNDATION_MODELS = discover_foundation_models(LANGCHAIN_SKIP_MODELS)
 
 
 @tool
@@ -200,20 +62,13 @@ def multiply(a: int, b: int) -> int:
 @pytest.mark.integration
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 class TestLangGraphSync:
-    """Sync LangGraph agent tests mirroring app-templates/agent-langgraph.
-
-    Each test follows the pattern:
-      ChatDatabricks -> create_react_agent -> agent.invoke / agent.stream
-    """
+    """Sync LangGraph agent tests using ChatDatabricks + create_react_agent."""
 
     def test_single_turn(self, model):
-        """Single-turn: agent calls tools and produces a final answer.
-
-        Mirrors the basic app-template @invoke() handler.
-        """
+        """Single-turn: agent calls tools and produces a final answer."""
 
         def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply])
 
             response = agent.invoke(
@@ -238,14 +93,10 @@ class TestLangGraphSync:
         retry(_run)
 
     def test_multi_turn(self, model):
-        """Multi-turn: agent maintains conversation context across turns.
-
-        Mirrors app-templates/agent-langgraph-short-term-memory with MemorySaver
-        checkpointer and thread_id for session continuity.
-        """
+        """Multi-turn: agent maintains conversation context across turns."""
 
         def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply], checkpointer=MemorySaver())
             config = {"configurable": {"thread_id": f"test-sync-multi-turn-{model}"}}
 
@@ -262,13 +113,10 @@ class TestLangGraphSync:
         retry(_run)
 
     def test_streaming(self, model):
-        """Streaming: agent streams node updates and tool execution events.
-
-        Mirrors the app-template @stream() handler pattern using agent.stream().
-        """
+        """Streaming: agent streams node updates and tool execution events."""
 
         def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply])
 
             events = list(
@@ -311,17 +159,13 @@ class TestLangGraphSync:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 class TestLangGraphAsync:
-    """Async LangGraph agent tests mirroring the app-templates @stream() handler.
-
-    Each test follows the exact async pattern deployed in production:
-      ChatDatabricks -> create_react_agent -> agent.ainvoke / agent.astream
-    """
+    """Async LangGraph agent tests using ChatDatabricks + create_react_agent."""
 
     async def test_single_turn(self, model):
         """Single-turn via ainvoke."""
 
         async def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply])
 
             response = await agent.ainvoke(
@@ -349,7 +193,7 @@ class TestLangGraphAsync:
         """Multi-turn via ainvoke with MemorySaver checkpointer."""
 
         async def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply], checkpointer=MemorySaver())
             config = {"configurable": {"thread_id": f"test-async-multi-turn-{model}"}}
 
@@ -370,14 +214,10 @@ class TestLangGraphAsync:
         await async_retry(_run)
 
     async def test_streaming(self, model):
-        """Streaming via astream — mirrors the exact app-templates production path.
-
-        Uses agent.astream(stream_mode=["updates", "messages"]) which is the
-        pattern in agent-langgraph and agent-langgraph-short-term-memory.
-        """
+        """Streaming via astream with updates + messages stream modes."""
 
         async def _run():
-            llm = ChatDatabricks(model=model, max_tokens=_max_tokens(model))
+            llm = ChatDatabricks(model=model, max_tokens=max_tokens_for_model(model))
             agent = create_react_agent(llm, [add, multiply])
 
             nodes_seen = set()
