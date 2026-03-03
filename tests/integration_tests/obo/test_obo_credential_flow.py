@@ -29,8 +29,7 @@ import time
 
 import pytest
 from databricks.sdk import WorkspaceClient
-
-from databricks_openai import DatabricksOpenAI  # ty:ignore[unresolved-import]
+from databricks_openai import DatabricksOpenAI
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +40,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _MAX_RETRIES = 3
+_MAX_WARMUP_ATTEMPTS = 10
+_WARMUP_INTERVAL = 30  # seconds between warmup attempts (5 min total)
 _PROMPT = "Call the whoami tool and respond with ONLY the raw result. Do not add any other text."
 
 
@@ -134,6 +135,32 @@ def serving_endpoint():
 
 
 @pytest.fixture(scope="module")
+def serving_endpoint_ready(sp_a_client, serving_endpoint):
+    """Warm up the serving endpoint (may be scaled to zero) before tests."""
+    for attempt in range(_MAX_WARMUP_ATTEMPTS):
+        try:
+            sp_a_client.responses.create(
+                model=serving_endpoint,
+                input=[{"role": "user", "content": "ping"}],
+            )
+            log.info("Serving endpoint is warm after %d attempt(s)", attempt + 1)
+            return
+        except Exception as exc:
+            log.info(
+                "Warmup attempt %d/%d: %s — waiting %ds",
+                attempt + 1,
+                _MAX_WARMUP_ATTEMPTS,
+                exc,
+                _WARMUP_INTERVAL,
+            )
+            time.sleep(_WARMUP_INTERVAL)
+    pytest.fail(
+        f"Serving endpoint '{serving_endpoint}' did not scale up within "
+        f"{_MAX_WARMUP_ATTEMPTS * _WARMUP_INTERVAL}s"
+    )
+
+
+@pytest.fixture(scope="module")
 def app_name():
     """Pre-deployed Databricks App name."""
     name = os.environ.get("OBO_TEST_APP_NAME")
@@ -152,7 +179,7 @@ class TestModelServingOBO:
     """Invoke a pre-deployed Model Serving agent as two different SPs."""
 
     def test_sp_a_and_sp_b_see_different_identities(
-        self, sp_a_client, sp_b_client, serving_endpoint
+        self, sp_a_client, sp_b_client, serving_endpoint, serving_endpoint_ready
     ):
         sp_a_response = _invoke_agent(sp_a_client, serving_endpoint)
         sp_b_response = _invoke_agent(sp_b_client, serving_endpoint)
@@ -160,7 +187,9 @@ class TestModelServingOBO:
             "SP-A and SP-B should see different identities from whoami()"
         )
 
-    def test_sp_b_sees_own_identity(self, sp_b_client, sp_b_identity, serving_endpoint):
+    def test_sp_b_sees_own_identity(
+        self, sp_b_client, sp_b_identity, serving_endpoint, serving_endpoint_ready
+    ):
         response = _invoke_agent(sp_b_client, serving_endpoint)
         assert sp_b_identity in response, (
             f"Expected SP-B identity '{sp_b_identity}' in response, got: {response}"
