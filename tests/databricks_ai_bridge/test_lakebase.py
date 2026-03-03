@@ -1413,29 +1413,23 @@ def test_async_sqlalchemy_only_project_raises_error():
             AsyncLakebaseSQLAlchemy(project="my-project", workspace_client=workspace)
 
 
-def test_autoscaling_takes_precedence_over_provisioned(monkeypatch):
-    """When both instance_name and project/branch are provided, autoscaling takes precedence."""
+def test_both_provisioned_and_autoscaling_raises_error(monkeypatch):
+    """Providing both instance_name and project/branch raises ValueError."""
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
 
     workspace = _make_autoscaling_workspace(host="autoscaling.db.host")
-    # Also set up provisioned mocks (should NOT be used)
-    instance = MagicMock()
-    instance.read_write_dns = "provisioned.db.host"
-    workspace.database.get_database_instance.return_value = instance
 
-    pool = LakebasePool(
-        instance_name="my-instance",
-        project="my-project",
-        branch="my-branch",
-        workspace_client=workspace,
-    )
-
-    # Should use autoscaling host, not provisioned
-    assert pool.host == "autoscaling.db.host"
-    assert pool._is_autoscaling is True
-    # Provisioned API should NOT have been called
-    workspace.database.get_database_instance.assert_not_called()
+    with pytest.raises(
+        ValueError,
+        match="Cannot provide both 'instance_name' .provisioned. and 'project'/'branch' .autoscaling.",
+    ):
+        LakebasePool(
+            instance_name="my-instance",
+            project="my-project",
+            branch="my-branch",
+            workspace_client=workspace,
+        )
 
 
 # --- LakebasePool autoscaling tests ---
@@ -1457,7 +1451,7 @@ def test_lakebase_pool_autoscaling_configures_connection_pool(monkeypatch):
     assert pool.host == "auto.db.host"
     assert pool._is_autoscaling is True
     assert pool.username == "test@databricks.com"
-    assert "host=auto.db.host" in pool.pool.conninfo
+    assert "host=auto.db.host" in str(pool.pool.conninfo)
 
     workspace.postgres.list_endpoints.assert_called_once_with(
         parent="projects/my-project/branches/my-branch"
@@ -1562,7 +1556,7 @@ async def test_async_lakebase_pool_autoscaling_configures_pool(monkeypatch):
 
     assert pool.host == "async-auto.db.host"
     assert pool._is_autoscaling is True
-    assert "host=async-auto.db.host" in pool.pool.conninfo
+    assert "host=async-auto.db.host" in str(pool.pool.conninfo)
 
     workspace.postgres.list_endpoints.assert_called_once_with(
         parent="projects/my-project/branches/my-branch"

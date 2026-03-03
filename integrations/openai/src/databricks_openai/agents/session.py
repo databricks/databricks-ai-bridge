@@ -151,6 +151,12 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 "Must provide either 'instance_name' (provisioned) or both "
                 "'project' and 'branch' (autoscaling)."
             )
+        if is_autoscaling and instance_name is not None:
+            raise ValueError(
+                "Cannot provide both 'instance_name' (provisioned) and "
+                "'project'/'branch' (autoscaling). Pass in the set of parameters "
+                "that correspond to your Lakebase instance."
+            )
 
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,

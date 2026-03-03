@@ -99,8 +99,8 @@ class _LakebaseBase:
     - **Provisioned**: Pass ``instance_name``.
     - **Autoscaling**: Pass ``project`` and ``branch``.
 
-    When both ``instance_name`` *and* ``project``/``branch`` are provided, the
-    autoscaling path takes precedence.
+    Providing both ``instance_name`` *and* ``project``/``branch`` raises a
+    ``ValueError``; choose one mode.
 
     Subclasses implement specific initialization and lifecycle methods.
     """
@@ -131,7 +131,12 @@ class _LakebaseBase:
                 "'project' and 'branch' (autoscaling)."
             )
 
-        # Autoscaling takes precedence when both are provided
+        if is_autoscaling and instance_name is not None:
+            raise ValueError(
+                "Cannot provide both 'instance_name' (provisioned) and "
+                "'project'/'branch' (autoscaling). Choose one mode."
+            )
+
         self._is_autoscaling: bool = is_autoscaling
 
         self.instance_name: str | None = instance_name
@@ -236,6 +241,7 @@ class _LakebaseBase:
 
     def _mint_token_provisioned(self) -> str:
         try:
+            assert self.instance_name is not None
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
                 instance_names=[self.instance_name],
@@ -253,6 +259,7 @@ class _LakebaseBase:
 
     def _mint_token_autoscaling(self) -> str:
         try:
+            assert self._endpoint_name is not None
             cred = self.workspace_client.postgres.generate_database_credential(
                 endpoint=self._endpoint_name,
             )
