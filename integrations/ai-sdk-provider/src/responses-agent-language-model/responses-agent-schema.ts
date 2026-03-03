@@ -209,7 +209,7 @@ export const responsesAgentChunkSchema = z.union([
  */
 export const looseResponseAgentChunkSchema = z.union([
   responsesAgentChunkSchema,
-  z.object({ type: z.string() }).loose(), // fallback for unknown chunks
+  z.object({}).loose(), // fallback for unknown chunks (e.g. {"trace_id":"..."} without a type field)
 ])
 
 // Exported types for type-only imports in other modules
