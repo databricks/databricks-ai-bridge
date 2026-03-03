@@ -265,7 +265,7 @@ class TestCheckpointSaver:
     """Test synchronous CheckpointSaver against a live Lakebase instance."""
 
     def test_checkpoint_write_and_read(self, cleanup_checkpoint_tables):
-        """Test pool handoff to PostgresSaver: setup, put, get_tuple."""
+        """Test pool handoff to PostgresSaver: setup, put, get_tuple, and pool cleanup."""
         from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
         from databricks_langchain import CheckpointSaver
@@ -292,6 +292,9 @@ class TestCheckpointSaver:
             result = saver.get_tuple(config)
             assert result is not None
             assert result.checkpoint["id"] == checkpoint["id"]
+
+        # Pool should be closed after exiting the context manager
+        assert saver._lakebase.pool.closed
 
     def test_checkpoint_list(self, cleanup_checkpoint_tables):
         """Test listing checkpoints."""
@@ -321,34 +324,6 @@ class TestCheckpointSaver:
             checkpoints = list(saver.list(config))
             assert len(checkpoints) == 3
 
-    def test_checkpoint_context_manager(self, cleanup_checkpoint_tables):
-        """Test sync context manager lifecycle (__enter__/__exit__)."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import CheckpointSaver
-
-        thread_id = uuid.uuid4().hex
-
-        with CheckpointSaver(instance_name=get_instance_name()) as saver:
-            saver.setup()
-
-            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            checkpoint = Checkpoint(
-                v=1,
-                id=uuid.uuid4().hex,  # checkpoint id
-                ts="2025-01-01T00:00:00+00:00",
-                channel_values={},
-                channel_versions={},
-                versions_seen={},
-                pending_sends=[],
-            )
-
-            saver.put(config, checkpoint, CheckpointMetadata(), {})
-
-            result = saver.get_tuple(config)
-            assert result is not None
-            assert result.checkpoint["id"] == checkpoint["id"]
-
 
 # =============================================================================
 # AsyncCheckpointSaver Tests
@@ -360,7 +335,7 @@ class TestAsyncCheckpointSaver:
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_write_and_read(self, cleanup_checkpoint_tables):
-        """Test async pool lifecycle: setup, put, get_tuple."""
+        """Test async pool lifecycle: setup, put, get_tuple, and pool cleanup."""
         from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
         from databricks_langchain import AsyncCheckpointSaver
@@ -387,6 +362,9 @@ class TestAsyncCheckpointSaver:
             result = await saver.aget_tuple(config)
             assert result is not None
             assert result.checkpoint["id"] == checkpoint["id"]
+
+        # Pool should be closed after exiting the context manager
+        assert saver._lakebase.pool.closed
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_list(self, cleanup_checkpoint_tables):
@@ -416,32 +394,3 @@ class TestAsyncCheckpointSaver:
 
             checkpoints = [c async for c in saver.alist(config)]
             assert len(checkpoints) == 3
-
-    @pytest.mark.asyncio
-    async def test_async_checkpoint_context_manager(self, cleanup_checkpoint_tables):
-        """Test async with lifecycle: open/close via context manager."""
-        from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
-
-        from databricks_langchain import AsyncCheckpointSaver
-
-        thread_id = uuid.uuid4().hex
-
-        async with AsyncCheckpointSaver(instance_name=get_instance_name()) as saver:
-            await saver.setup()
-
-            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-            checkpoint = Checkpoint(
-                v=1,
-                id=uuid.uuid4().hex,  # checkpoint id
-                ts="2025-01-01T00:00:00+00:00",
-                channel_values={},
-                channel_versions={},
-                versions_seen={},
-                pending_sends=[],
-            )
-
-            await saver.aput(config, checkpoint, CheckpointMetadata(), {})
-
-            result = await saver.aget_tuple(config)
-            assert result is not None
-            assert result.checkpoint["id"] == checkpoint["id"]
