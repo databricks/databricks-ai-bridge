@@ -2,9 +2,12 @@
 """Simplified start script for CI deployment (backend only, no UI)."""
 
 import argparse
+import os
 import subprocess
 import sys
 import threading
+import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,7 +24,7 @@ def main():
 
     def monitor():
         for line in iter(proc.stdout.readline, ""):
-            print(line.rstrip())  # noqa: T201
+            print(line.rstrip())
 
     thread = threading.Thread(target=monitor, daemon=True)
     thread.start()
