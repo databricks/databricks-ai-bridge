@@ -23,13 +23,14 @@ import pytest
 pytest.importorskip("langgraph", reason="langgraph not installed (requires memory extra)")
 
 from databricks_ai_bridge.lakebase import LakebaseClient
+from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
+
 from databricks_langchain import (
     AsyncCheckpointSaver,
     AsyncDatabricksStore,
     CheckpointSaver,
     DatabricksStore,
 )
-from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata
 
 # Skip all tests if LAKEBASE_INSTANCE_NAME is not set
 pytestmark = pytest.mark.skipif(
