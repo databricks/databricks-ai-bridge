@@ -160,6 +160,7 @@ class _LakebaseBase:
     def _resolve_provisioned_host(self) -> str:
         """Resolve host via the Lakebase provisioned database API."""
         try:
+            assert self.instance_name is not None
             instance = self.workspace_client.database.get_database_instance(self.instance_name)
         except Exception as exc:
             raise ValueError(
@@ -595,7 +596,9 @@ class LakebaseClient:
         :param branch: Lakebase autoscaling branch name. Also requires ``project``.
         :param pool_kwargs: Additional kwargs passed to LakebasePool (only used when creating pool internally).
         """
-        has_connection_params = instance_name is not None or project is not None or branch is not None
+        has_connection_params = (
+            instance_name is not None or project is not None or branch is not None
+        )
         if pool is not None and has_connection_params:
             raise ValueError(
                 "Provide either 'pool' or connection parameters "

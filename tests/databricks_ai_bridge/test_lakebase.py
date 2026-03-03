@@ -1316,9 +1316,7 @@ def _make_autoscaling_workspace(
     workspace.current_user.me.return_value = MagicMock(user_name=user_name)
 
     # Mock postgres.generate_database_credential
-    workspace.postgres.generate_database_credential.return_value = MagicMock(
-        token=credential_token
-    )
+    workspace.postgres.generate_database_credential.return_value = MagicMock(token=credential_token)
 
     # Mock postgres.list_endpoints → returns one READ_WRITE endpoint
     rw_endpoint = MagicMock()
