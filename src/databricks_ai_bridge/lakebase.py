@@ -164,8 +164,10 @@ class _LakebaseBase:
             instance = self.workspace_client.database.get_database_instance(self.instance_name)
         except Exception as exc:
             raise ValueError(
-                f"Unable to resolve Lakebase instance '{self.instance_name}'. "
-                "Ensure the instance name is correct."
+                f"Unable to resolve Lakebase provisioned instance '{self.instance_name}'. "
+                "Verify the instance name is correct.\n"
+                "To list available instances, use:\n"
+                "  workspace_client.database.list_database_instances()"
             ) from exc
 
         resolved_host = getattr(instance, "read_write_dns", None) or getattr(
@@ -192,8 +194,11 @@ class _LakebaseBase:
             endpoints = list(self.workspace_client.postgres.list_endpoints(parent=branch_parent))
         except Exception as exc:
             raise ValueError(
-                f"Unable to list endpoints for '{branch_parent}'. "
-                "Ensure the project and branch names are correct."
+                f"Unable to list endpoints for project='{self.project}', "
+                f"branch='{self.branch}'. Verify your project and branch names.\n"
+                "To find available projects and branches, use:\n"
+                "  workspace_client.postgres.list_projects()\n"
+                '  workspace_client.postgres.list_branches(parent="projects/<project_name>")'
             ) from exc
 
         # Find the READ_WRITE endpoint
@@ -207,8 +212,10 @@ class _LakebaseBase:
 
         if rw_endpoint is None:
             raise ValueError(
-                f"No READ_WRITE endpoint found for '{branch_parent}'. "
-                "Ensure the branch has an active READ_WRITE endpoint."
+                f"No READ_WRITE endpoint found for project='{self.project}', "
+                f"branch='{self.branch}'. Ensure the branch has an active endpoint.\n"
+                "To check endpoints, use:\n"
+                f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")'
             )
 
         # Extract host from endpoint status
@@ -218,8 +225,8 @@ class _LakebaseBase:
 
         if not resolved_host:
             raise ValueError(
-                f"Host not found on READ_WRITE endpoint for '{branch_parent}'. "
-                "Ensure the endpoint is in AVAILABLE state."
+                f"Host not found on READ_WRITE endpoint for project='{self.project}', "
+                f"branch='{self.branch}'. Ensure the endpoint is in AVAILABLE state."
             )
 
         self._endpoint_name = rw_endpoint.name

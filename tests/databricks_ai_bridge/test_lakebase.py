@@ -1292,7 +1292,7 @@ def test_async_lakebase_sqlalchemy_invalid_instance_raises():
     patch_engine, patch_event, _ = _make_sqlalchemy_patches(workspace)
 
     with patch_engine, patch_event:
-        with pytest.raises(ValueError, match="Unable to resolve Lakebase instance"):
+        with pytest.raises(ValueError, match="Unable to resolve Lakebase provisioned instance"):
             AsyncLakebaseSQLAlchemy(
                 instance_name="bad-instance",
                 workspace_client=workspace,

@@ -220,7 +220,7 @@ class TestAsyncLakebaseSQLAlchemy:
         ):
             from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 
-            with pytest.raises(ValueError, match="Unable to resolve Lakebase instance"):
+            with pytest.raises(ValueError, match="Unable to resolve Lakebase provisioned instance"):
                 AsyncLakebaseSQLAlchemy(
                     instance_name="invalid-instance",
                     workspace_client=mock_workspace_client,
