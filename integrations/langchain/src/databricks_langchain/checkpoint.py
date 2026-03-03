@@ -51,7 +51,8 @@ class CheckpointSaver(PostgresSaver):
         super().__init__(self._lakebase.pool)
 
     def __enter__(self):
-        """Enter context manager."""
+        """Enter context manager and create checkpoint tables."""
+        self.setup()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -66,6 +67,8 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
     Supports two modes: Lakebase Provisioned VS Autoscaling
     https://docs.databricks.com/aws/en/oltp/#feature-comparison
+
+    Checkpoint tables are created automatically when entering the context manager.
     """
 
     def __init__(
@@ -94,8 +97,9 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         super().__init__(self._lakebase.pool)
 
     async def __aenter__(self):
-        """Enter async context manager and open the connection pool."""
+        """Enter async context manager, open the connection pool, and create checkpoint tables."""
         await self._lakebase.open()
+        await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
