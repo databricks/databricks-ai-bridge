@@ -36,7 +36,7 @@ def _make_whoami_tool(user_wc):
     def whoami() -> str:
         """Returns the identity of the current user."""
         me = user_wc.current_user.me()
-        return me.display_name or me.user_name or str(me.id)
+        return me.user_name
 
     return whoami
 
