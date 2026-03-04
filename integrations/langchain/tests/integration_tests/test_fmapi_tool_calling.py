@@ -271,12 +271,10 @@ class TestLangGraphResponsesAPI:
     def test_single_turn(self, model):
         """Single-turn: agent calls tools and produces a final answer via Responses API."""
         llm = ChatDatabricks(model=model, use_responses_api=True)
-        agent = create_react_agent(llm, [_echo_message, _get_weather])
+        agent = create_react_agent(llm, [add, multiply])
 
         def _run():
-            response = agent.invoke(
-                {"messages": [("human", "Echo the message 'responses API test'")]}
-            )
+            response = agent.invoke({"messages": [("human", "Use the add tool to compute 10 + 5")]})
             tool_msgs = [m for m in response["messages"] if isinstance(m, ToolMessage)]
             assert len(tool_msgs) >= 1, "Agent should have called at least one tool"
             last = response["messages"][-1]
@@ -288,15 +286,19 @@ class TestLangGraphResponsesAPI:
         """Multi-turn: agent maintains context across turns via Responses API."""
         llm = ChatDatabricks(model=model, use_responses_api=True)
         checkpointer = MemorySaver()
-        agent = create_react_agent(llm, [_echo_message, _get_weather], checkpointer=checkpointer)
+        agent = create_react_agent(llm, [add, multiply], checkpointer=checkpointer)
         config = {"configurable": {"thread_id": "responses-api-test"}}
 
         def _run():
-            r1 = agent.invoke({"messages": [("human", "Echo 'first turn'")]}, config=config)
+            r1 = agent.invoke(
+                {"messages": [("human", "Use the add tool to compute 10 + 5")]}, config=config
+            )
             tool_msgs_1 = [m for m in r1["messages"] if isinstance(m, ToolMessage)]
             assert len(tool_msgs_1) >= 1
 
-            r2 = agent.invoke({"messages": [("human", "Echo 'second turn'")]}, config=config)
+            r2 = agent.invoke(
+                {"messages": [("human", "Now multiply the result by 3")]}, config=config
+            )
             assert len(r2["messages"]) > len(r1["messages"]), "History should grow across turns"
 
         retry(_run)
