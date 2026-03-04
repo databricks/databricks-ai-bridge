@@ -8,11 +8,12 @@ Environment Variables:
     DATABRICKS_CLIENT_ID      - Service principal client ID
     DATABRICKS_CLIENT_SECRET  - Service principal client secret
     OBO_TEST_SERVING_ENDPOINT - Target serving endpoint name (optional override)
+    OBO_TEST_WAREHOUSE_ID     - SQL warehouse ID
 """
 
+import logging
 import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
@@ -20,6 +21,8 @@ import mlflow
 from databricks.sdk import WorkspaceClient
 from mlflow.models.auth_policy import AuthPolicy, SystemAuthPolicy, UserAuthPolicy
 from mlflow.models.resources import DatabricksServingEndpoint, DatabricksSQLWarehouse
+
+log = logging.getLogger(__name__)
 
 # Must match the constants in whoami_serving_agent.py
 LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
@@ -33,7 +36,7 @@ UC_MODEL_NAME = f"{UC_CATALOG}.{UC_SCHEMA}.{UC_MODEL_NAME_SHORT}"
 
 def main():
     w = WorkspaceClient()
-    print(f"Workspace: {w.config.host}")
+    log.info("Workspace: %s", w.config.host)
 
     mlflow.set_registry_uri("databricks-uc")
 
@@ -46,7 +49,6 @@ def main():
         agent_file = Path(tmp) / "agent.py"
         shutil.copy(agent_source, agent_file)
 
-        # Auth policies
         system_policy = SystemAuthPolicy(
             resources=[
                 DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT_NAME),
@@ -75,13 +77,11 @@ def main():
                     "databricks-sdk",
                 ],
             )
-        print(f"Logged model: {logged_agent_info.model_uri}")
+        log.info("Logged model: %s", logged_agent_info.model_uri)
 
-    # Register in UC
     registered = mlflow.register_model(logged_agent_info.model_uri, UC_MODEL_NAME)
-    print(f"Registered: {UC_MODEL_NAME} version {registered.version}")
+    log.info("Registered: %s version %s", UC_MODEL_NAME, registered.version)
 
-    # Deploy
     from databricks import agents
 
     endpoint_name = os.environ.get("OBO_TEST_SERVING_ENDPOINT")
@@ -94,8 +94,9 @@ def main():
         deploy_kwargs["endpoint_name"] = endpoint_name
 
     agents.deploy(**deploy_kwargs)
-    print(f"Deployment initiated (scale_to_zero=True)")
+    log.info("Deployment initiated (scale_to_zero=True)")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

@@ -61,18 +61,12 @@ async def process_agent_stream_events(
             if event_data["type"] == "response.output_item.added":
                 curr_item_id = str(uuid4())
                 event_data["item"]["id"] = curr_item_id
-            elif (
-                event_data.get("item") is not None
-                and event_data["item"].get("id") is not None
-            ):
+            elif event_data.get("item") is not None and event_data["item"].get("id") is not None:
                 event_data["item"]["id"] = curr_item_id
             elif event_data.get("item_id") is not None:
                 event_data["item_id"] = curr_item_id
             yield event_data
-        elif (
-            event.type == "run_item_stream_event"
-            and event.item.type == "tool_call_output_item"
-        ):
+        elif event.type == "run_item_stream_event" and event.item.type == "tool_call_output_item":
             output = event.item.to_input_item()
             if not isinstance(output.get("output"), str):
                 try:
