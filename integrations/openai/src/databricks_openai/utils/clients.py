@@ -1,5 +1,3 @@
-import os
-from collections.abc import AsyncIterator, Iterator
 from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
@@ -14,15 +12,6 @@ from typing_extensions import override
 _APPS_ENDPOINT_PREFIX = "apps/"
 # Domain pattern indicating a Databricks App URL
 _DATABRICKS_APPS_DOMAIN = "databricksapps"
-
-
-def _get_openai_api_key():
-    """Return OPENAI_API_KEY from env if set, otherwise 'no-token'.
-
-    Passed through to the OpenAI client so that the agents SDK tracing
-    client can authenticate with the OpenAI API.
-    """
-    return os.environ.get("OPENAI_API_KEY") or "no-token"
 
 
 class BearerAuth(Auth):
@@ -60,77 +49,6 @@ def _should_strip_strict(model: str | None) -> bool:
     if model is None:
         return True  # Default to stripping if model unknown
     return "gpt" not in model.lower()
-
-
-# Gemini FMAPI compat: rejects list content in tool messages (request side)
-# and returns list content in responses (response side). We flatten both.
-# Note: Gemini 3.x requires thought_signature which is an Agents SDK issue, not fixable here.
-
-
-def _is_gemini_model(model: str | None) -> bool:
-    """Returns True if the model is a Gemini variant."""
-    if not model:
-        return False
-    return "gemini" in model.lower() or "gemma" in model.lower()
-
-
-def _fix_gemini_messages(messages: Any) -> None:
-    """Flatten list content in outbound tool messages for Gemini."""
-    if not messages:
-        return
-    for msg in messages:
-        if (
-            isinstance(msg, dict)
-            and msg.get("role") == "tool"
-            and isinstance(msg.get("content"), list)
-        ):
-            msg["content"] = "".join(
-                p.get("text", "") if isinstance(p, dict) else getattr(p, "text", p)
-                for p in msg["content"]
-            )
-
-
-def _fix_gemini_content(response: Any) -> None:
-    """Flatten list content in response messages/deltas for Gemini."""
-    if not hasattr(response, "choices"):
-        return
-    for choice in response.choices:
-        obj = getattr(choice, "message", None) or getattr(choice, "delta", None)
-        if obj is not None and isinstance(getattr(obj, "content", None), list):
-            obj.content = "".join(
-                p.get("text", "") if isinstance(p, dict) else getattr(p, "text", p)
-                for p in obj.content
-            )
-
-
-class _GeminiStreamWrapper:
-    """Wraps a sync Stream, flattening list content in each chunk."""
-
-    def __init__(self, stream: Any):
-        self._stream = stream
-
-    def __iter__(self) -> Iterator:
-        for chunk in self._stream:
-            _fix_gemini_content(chunk)
-            yield chunk
-
-    def __getattr__(self, name: str):
-        return getattr(self._stream, name)
-
-
-class _AsyncGeminiStreamWrapper:
-    """Wraps an AsyncStream, flattening list content in each chunk."""
-
-    def __init__(self, stream: Any):
-        self._stream = stream
-
-    async def __aiter__(self) -> AsyncIterator:
-        async for chunk in self._stream:
-            _fix_gemini_content(chunk)
-            yield chunk
-
-    def __getattr__(self, name: str):
-        return getattr(self._stream, name)
 
 
 def _is_claude_model(model: str | None) -> bool:
@@ -271,14 +189,7 @@ class DatabricksCompletions(Completions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        if _is_gemini_model(model):
-            _fix_gemini_messages(kwargs.get("messages"))
-        response = super().create(**kwargs)
-        if _is_gemini_model(model):
-            if kwargs.get("stream"):
-                return _GeminiStreamWrapper(response)
-            _fix_gemini_content(response)
-        return response
+        return super().create(**kwargs)
 
 
 class DatabricksChat(Chat):
@@ -303,7 +214,7 @@ class DatabricksResponses(Responses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = OpenAI(
                 base_url=app_url,
-                api_key=_get_openai_api_key(),
+                api_key="no-token",
                 http_client=_get_authorized_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -392,7 +303,7 @@ class DatabricksOpenAI(OpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key=_get_openai_api_key(),
+            api_key="no-token",
             http_client=_get_authorized_http_client(workspace_client),
         )
 
@@ -425,14 +336,7 @@ class AsyncDatabricksCompletions(AsyncCompletions):
             _strip_strict_from_tools(kwargs.get("tools"))
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
-        if _is_gemini_model(model):
-            _fix_gemini_messages(kwargs.get("messages"))
-        response = await super().create(**kwargs)
-        if _is_gemini_model(model):
-            if kwargs.get("stream"):
-                return _AsyncGeminiStreamWrapper(response)
-            _fix_gemini_content(response)
-        return response
+        return await super().create(**kwargs)
 
 
 class AsyncDatabricksChat(AsyncChat):
@@ -457,7 +361,7 @@ class AsyncDatabricksResponses(AsyncResponses):
             # Authentication is handled via http_client, not api_key
             self._app_clients_cache[app_name] = AsyncOpenAI(
                 base_url=app_url,
-                api_key=_get_openai_api_key(),
+                api_key="no-token",
                 http_client=_get_authorized_async_http_client(self._workspace_client),
             )
         return self._app_clients_cache[app_name]
@@ -546,7 +450,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
-            api_key=_get_openai_api_key(),
+            api_key="no-token",
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 
