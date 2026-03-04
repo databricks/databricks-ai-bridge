@@ -43,11 +43,16 @@ def main():
     experiment_name = f"/Users/{w.current_user.me().user_name}/obo-serving-agent-deploy"
     mlflow.set_experiment(experiment_name)
 
-    # Copy agent file to a temp dir so mlflow logs it as a standalone artifact
+    # Copy agent file to a temp dir, injecting the warehouse ID
     agent_source = Path(__file__).parent / "model_serving_fixture" / "whoami_serving_agent.py"
     with tempfile.TemporaryDirectory() as tmp:
         agent_file = Path(tmp) / "agent.py"
-        shutil.copy(agent_source, agent_file)
+        content = agent_source.read_text()
+        content = content.replace(
+            'SQL_WAREHOUSE_ID = ""  # Injected by deploy_serving_agent.py at log time',
+            f'SQL_WAREHOUSE_ID = "{SQL_WAREHOUSE_ID}"',
+        )
+        agent_file.write_text(content)
 
         system_policy = SystemAuthPolicy(
             resources=[

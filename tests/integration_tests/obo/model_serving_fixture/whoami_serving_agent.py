@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from databricks_ai_bridge import ModelServingUserCredentials
 
 LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
-SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
+SQL_WAREHOUSE_ID = ""  # Injected by deploy_serving_agent.py at log time
 
 
 class ToolInfo(BaseModel):
