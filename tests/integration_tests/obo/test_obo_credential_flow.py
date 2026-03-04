@@ -29,7 +29,8 @@ import time
 
 import pytest
 from databricks.sdk import WorkspaceClient
-from databricks_openai import DatabricksOpenAI
+
+DatabricksOpenAI = pytest.importorskip("databricks_openai").DatabricksOpenAI
 
 log = logging.getLogger(__name__)
 

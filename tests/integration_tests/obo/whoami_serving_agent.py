@@ -16,7 +16,6 @@ from uuid import uuid4
 import mlflow
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import StatementState
-from databricks_ai_bridge import ModelServingUserCredentials
 from mlflow.entities import SpanType
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
@@ -28,6 +27,8 @@ from mlflow.types.responses import (
 )
 from openai import OpenAI
 from pydantic import BaseModel
+
+from databricks_ai_bridge import ModelServingUserCredentials
 
 LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
 SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
