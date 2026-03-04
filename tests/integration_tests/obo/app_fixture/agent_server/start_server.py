@@ -13,5 +13,6 @@ try:
 except Exception:
     pass
 
+
 def main():
     agent_server.run(app_import_string="agent_server.start_server:app")
