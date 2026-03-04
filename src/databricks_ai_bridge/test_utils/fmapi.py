@@ -17,8 +17,8 @@ MAX_RETRIES = 3
 # Default max_tokens for test requests
 DEFAULT_MAX_TOKENS = 200
 
-# Models shared across both OpenAI and LangChain skip lists
-COMMON_SKIP_MODELS = {
+# Models skipped from Chat Completions tests (behavioral issues, not API limitations)
+CHAT_SKIP_MODELS = {
     "databricks-gpt-5-nano",  # too small for reliable tool calling
     "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
     "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
@@ -26,15 +26,19 @@ COMMON_SKIP_MODELS = {
     "databricks-gemini-3-flash",  # requires thought_signature on function calls
     "databricks-gemini-3-pro",  # requires thought_signature on function calls
     "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
-    "databricks-gpt-5-1-codex-max",  # Responses API only, no Chat Completions support
-    "databricks-gpt-5-1-codex-mini",  # Responses API only, no Chat Completions support
-    "databricks-gpt-5-2-codex",  # Responses API only, no Chat Completions support
-    "databricks-gpt-5-3-codex",  # Responses API only, no Chat Completions support
 }
 
-# Additional models skipped only in LangChain tests
-LANGCHAIN_SKIP_MODELS = COMMON_SKIP_MODELS | {
+# Additional models skipped only in LangChain Chat Completions tests
+LANGCHAIN_CHAT_SKIP_MODELS = CHAT_SKIP_MODELS | {
     "databricks-gemma-3-12b",  # outputs raw tool call text instead of executing tools
+}
+
+# Responses API only models — skip from Chat Completions, include in Responses API tests
+RESPONSES_ONLY_MODELS = {
+    "databricks-gpt-5-1-codex-max",
+    "databricks-gpt-5-1-codex-mini",
+    "databricks-gpt-5-2-codex",
+    "databricks-gpt-5-3-codex",
 }
 
 # Reasoning models consume reasoning tokens from the max_tokens budget.
@@ -50,13 +54,20 @@ def max_tokens_for_model(model: str) -> int:
 
 
 # Fallback list if dynamic discovery fails (e.g. auth not configured at collection time)
-FALLBACK_MODELS = [
+FALLBACK_CHAT_MODELS = [
     "databricks-claude-sonnet-4-6",
     "databricks-claude-opus-4-6",
     "databricks-meta-llama-3-3-70b-instruct",
     "databricks-gpt-5-2",
     "databricks-gpt-5-1",
     "databricks-qwen3-next-80b-a3b-instruct",
+]
+
+FALLBACK_RESPONSES_MODELS = [
+    "databricks-gpt-5-2",
+    "databricks-gpt-5-1",
+    "databricks-gpt-5-2-codex",
+    "databricks-gpt-5-3-codex",
 ]
 
 
@@ -69,19 +80,22 @@ def has_function_calling(w: WorkspaceClient, endpoint_name: str) -> bool:
         return False
 
 
-def discover_foundation_models(skip_models: set[str]) -> list[str]:
-    """Discover all FMAPI chat models that support tool calling.
+def _is_gpt_model(name: str) -> bool:
+    """Only GPT models support the Responses API on Databricks FMAPI."""
+    return "gpt" in name.lower()
 
-    1. List all serving endpoints with databricks- prefix and llm/v1/chat task
-    2. Check capabilities.function_calling via the serving-endpoints API
-    3. Models in skip_models are excluded entirely
+
+def discover_chat_models(skip_models: set[str]) -> list[str]:
+    """Discover FMAPI models for Chat Completions tests.
+
+    Excludes Responses API-only models (codex) and models in skip_models.
     """
     try:
         w = WorkspaceClient()
         endpoints = list(w.serving_endpoints.list())
     except Exception as exc:
         log.warning("Could not discover FMAPI models, using fallback list: %s", exc)
-        return FALLBACK_MODELS
+        return FALLBACK_CHAT_MODELS
 
     chat_endpoints = [
         e
@@ -92,6 +106,9 @@ def discover_foundation_models(skip_models: set[str]) -> list[str]:
     models = []
     for e in sorted(chat_endpoints, key=lambda e: e.name or ""):
         name = e.name or ""
+        if name in RESPONSES_ONLY_MODELS:
+            log.info("Skipping %s from chat tests: Responses API only", name)
+            continue
         if not has_function_calling(w, name):
             log.info("Skipping %s: does not support function calling", name)
             continue
@@ -100,7 +117,43 @@ def discover_foundation_models(skip_models: set[str]) -> list[str]:
             continue
         models.append(name)
 
-    log.info("Discovered %d FMAPI models with function calling support", len(models))
+    log.info("Discovered %d chat completions models", len(models))
+    return models
+
+
+def discover_responses_models() -> list[str]:
+    """Discover FMAPI models for Responses API tests.
+
+    Only GPT models support the Responses API on Databricks.
+    Includes both codex (Responses-only) and regular GPT models.
+    """
+    try:
+        w = WorkspaceClient()
+        endpoints = list(w.serving_endpoints.list())
+    except Exception as exc:
+        log.warning("Could not discover FMAPI models, using fallback list: %s", exc)
+        return FALLBACK_RESPONSES_MODELS
+
+    chat_endpoints = [
+        e
+        for e in endpoints
+        if e.name and e.name.startswith("databricks-") and e.task == "llm/v1/chat"
+    ]
+
+    models = []
+    for e in sorted(chat_endpoints, key=lambda e: e.name or ""):
+        name = e.name or ""
+        if not _is_gpt_model(name):
+            continue
+        if not has_function_calling(w, name):
+            log.info("Skipping %s: does not support function calling", name)
+            continue
+        # Skip nano — too small for reliable tool calling in any API
+        if "nano" in name:
+            continue
+        models.append(name)
+
+    log.info("Discovered %d responses API models", len(models))
     return models
 
 
