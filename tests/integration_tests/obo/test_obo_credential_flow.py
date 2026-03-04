@@ -109,9 +109,9 @@ def sp_a_identity(sp_a_workspace_client):
 
 
 @pytest.fixture(scope="module")
-def sp_b_identity(sp_b_workspace_client):
-    """SP-B's display name."""
-    return sp_b_workspace_client.current_user.me().display_name
+def sp_b_identity():
+    """SP-B's client ID — the value whoami()/current_user() returns for an SP."""
+    return os.environ["OBO_TEST_CLIENT_ID"]
 
 
 @pytest.fixture(scope="module")
