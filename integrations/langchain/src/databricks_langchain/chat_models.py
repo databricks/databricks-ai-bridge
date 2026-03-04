@@ -57,8 +57,8 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import (
-    convert_to_openai_tool,
     convert_to_openai_function,
+    convert_to_openai_tool,
 )
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream

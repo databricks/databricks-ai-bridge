@@ -640,10 +640,8 @@ JSON_SCHEMA = {
                     "type": "array",
                     "title": "Sources",
                     "description": "Supporting sources",
-                    "items": {
-                        "type": "string"
-                    },
-                }
+                    "items": {"type": "string"},
+                },
             },
             "required": ["reasoning", "sources"],
         },
@@ -670,7 +668,9 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
         assert js["schema"]["additionalProperties"] is False
         assert js["schema"]["justification"]["properties"]["additionalProperties"] is False
         assert set(js["schema"]["required"]) == set(js["schema"]["properties"].keys())
-        assert set(js["schema"]["justification"]["required"]) == set(js["schema"]["justification"]["properties"].keys())
+        assert set(js["schema"]["justification"]["required"]) == set(
+            js["schema"]["justification"]["properties"].keys()
+        )
     else:
         assert bind["response_format"] == {"type": "json_object"}
 
