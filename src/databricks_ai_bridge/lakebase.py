@@ -97,10 +97,10 @@ class _LakebaseBase:
     https://docs.databricks.com/aws/en/oltp/#feature-comparison
 
     - **Provisioned**: Pass ``instance_name``.
-    - **Autoscaling**: Pass ``endpoint``, ``parent``, or ``project`` and ``branch``.
+    - **Autoscaling**: Pass ``endpoint``, or ``project`` and ``branch``.
 
     Provisioned and autoscaling are mutually exclusive.
-    Within autoscaling, priority is: ``endpoint`` > ``parent`` > ``project``/``branch``.
+    Within autoscaling, priority is: ``endpoint`` > ``project``/``branch``.
 
     Subclasses implement specific initialization and lifecycle methods.
     """
@@ -110,7 +110,6 @@ class _LakebaseBase:
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -120,22 +119,16 @@ class _LakebaseBase:
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
 
         # --- Parameter validation ---
-        # Autoscaling priority: endpoint > parent > project+branch
+        # Autoscaling priority: endpoint > project+branch
         is_autoscaling_branch = project is not None or branch is not None
-        is_autoscaling_parent = parent is not None
         is_autoscaling_endpoint = endpoint is not None
-        is_autoscaling = is_autoscaling_endpoint or is_autoscaling_parent or is_autoscaling_branch
+        is_autoscaling = is_autoscaling_endpoint or is_autoscaling_branch
 
         # Log when multiple autoscaling params given (higher priority wins)
-        if is_autoscaling_endpoint and (is_autoscaling_parent or is_autoscaling_branch):
+        if is_autoscaling_endpoint and is_autoscaling_branch:
             logger.info(
-                "endpoint given alongside other autoscaling parameters "
+                "project, branch, and endpoint given for autoscaling instance "
                 "- using endpoint value"
-            )
-        elif is_autoscaling_parent and is_autoscaling_branch:
-            logger.info(
-                "parent given alongside project/branch "
-                "- using parent value"
             )
 
         # Autoscaling vs provisioned conflicts
@@ -145,13 +138,7 @@ class _LakebaseBase:
                 "Use 'endpoint' for autoscaling or 'instance_name' for provisioned."
             )
 
-        if is_autoscaling_parent and instance_name is not None:
-            raise ValueError(
-                "Cannot provide both 'parent' and 'instance_name'. "
-                "Use 'parent' for autoscaling or 'instance_name' for provisioned."
-            )
-
-        if is_autoscaling_branch and not is_autoscaling_endpoint and not is_autoscaling_parent:
+        if is_autoscaling_branch and not is_autoscaling_endpoint:
             if not (project and branch):
                 raise ValueError(
                     "Both 'project' and 'branch' are required to use a Lakebase "
@@ -161,10 +148,10 @@ class _LakebaseBase:
         if not is_autoscaling and instance_name is None:
             raise ValueError(
                 "Must provide either 'instance_name' (provisioned), "
-                "'endpoint', 'parent', or both 'project' and 'branch' (autoscaling)."
+                "'endpoint', or both 'project' and 'branch' (autoscaling)."
             )
 
-        if is_autoscaling_branch and instance_name is not None and not is_autoscaling_endpoint and not is_autoscaling_parent:
+        if is_autoscaling_branch and instance_name is not None and not is_autoscaling_endpoint:
             raise ValueError(
                 "Cannot provide both 'instance_name' (provisioned) and "
                 "'project'/'branch' (autoscaling). Choose one mode."
@@ -175,12 +162,11 @@ class _LakebaseBase:
         self.instance_name: str | None = instance_name
         self.project: str | None = project
         self.branch: str | None = branch
-        self.parent: str | None = parent
 
         if is_autoscaling_endpoint:
             self._endpoint_name: str | None = endpoint
             self.host = self._resolve_endpoint_host()
-        elif is_autoscaling_parent or is_autoscaling_branch:
+        elif is_autoscaling_branch:
             self._endpoint_name = None
             self.host = self._resolve_autoscaling_host()
         else:
@@ -222,16 +208,12 @@ class _LakebaseBase:
     def _resolve_autoscaling_host(self) -> str:
         """Resolve host via the Lakebase autoscaling postgres API.
 
-        Uses ``self.parent`` directly if set, otherwise constructs the branch
-        parent path from ``self.project`` and ``self.branch``. Lists endpoints,
-        finds the READ_WRITE endpoint, and extracts the host and endpoint name.
+        Constructs the branch parent path from ``self.project`` and ``self.branch``,
+        lists endpoints, finds the READ_WRITE endpoint, and extracts the host and endpoint name.
 
         See https://databricks-sdk-py.readthedocs.io/en/latest/workspace/postgres/postgres.html#databricks.sdk.service.postgres.PostgresAPI.list_endpoints
         """
-        if self.parent:
-            branch_parent = self.parent
-        else:
-            branch_parent = f"projects/{self.project}/branches/{self.branch}"
+        branch_parent = f"projects/{self.project}/branches/{self.branch}"
 
         try:
             endpoints = list(self.workspace_client.postgres.list_endpoints(parent=branch_parent))
@@ -376,7 +358,7 @@ class LakebasePool(_LakebaseBase):
     https://docs.databricks.com/aws/en/oltp/#feature-comparison
 
     - **Provisioned**: Pass ``instance_name``.
-    - **Autoscaling**: Pass ``endpoint``, ``parent``, or ``project`` and ``branch``.
+    - **Autoscaling**: Pass ``endpoint``, or ``project`` and ``branch``.
     """
 
     def __init__(
@@ -384,7 +366,6 @@ class LakebasePool(_LakebaseBase):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -394,7 +375,6 @@ class LakebasePool(_LakebaseBase):
         super().__init__(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
@@ -482,7 +462,7 @@ class AsyncLakebasePool(_LakebaseBase):
     https://docs.databricks.com/aws/en/oltp/#feature-comparison
 
     - **Provisioned**: Pass ``instance_name``.
-    - **Autoscaling**: Pass ``endpoint``, ``parent``, or ``project`` and ``branch``.
+    - **Autoscaling**: Pass ``endpoint``, or ``project`` and ``branch``.
     """
 
     def __init__(
@@ -490,7 +470,6 @@ class AsyncLakebasePool(_LakebaseBase):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -500,7 +479,6 @@ class AsyncLakebasePool(_LakebaseBase):
         super().__init__(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
@@ -663,7 +641,6 @@ class LakebaseClient:
         pool: LakebasePool | None = None,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         **pool_kwargs: Any,
@@ -674,14 +651,12 @@ class LakebaseClient:
         Provide EITHER:
         - pool: An existing LakebasePool instance (advanced usage where multiple clients can connect to same pool)
         - instance_name: Name of the Lakebase provisioned instance
-        - endpoint, parent, or project + branch: Lakebase autoscaling
+        - endpoint, or project + branch: Lakebase autoscaling
 
         :param pool: Existing LakebasePool to use for connections.
         :param instance_name: Name of the Lakebase provisioned instance.
         :param endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
-        :param parent: Lakebase autoscaling branch parent path (e.g., ``"projects/{project}/branches/{branch}"``).
-                See https://databricks-sdk-py.readthedocs.io/en/latest/workspace/postgres/postgres.html#databricks.sdk.service.postgres.PostgresAPI.list_endpoints
         :param project: Lakebase autoscaling project name. Also requires ``branch``.
         :param branch: Lakebase autoscaling branch name. Also requires ``project``.
         :param pool_kwargs: Additional kwargs passed to LakebasePool (only used when creating pool internally).
@@ -691,18 +666,17 @@ class LakebaseClient:
             or project is not None
             or branch is not None
             or endpoint is not None
-            or parent is not None
         )
         if pool is not None and has_connection_params:
             raise ValueError(
                 "Provide either 'pool' or connection parameters "
-                "('instance_name', 'endpoint', 'parent', or 'project'/'branch'), not both."
+                "('instance_name', 'endpoint', or 'project'/'branch'), not both."
             )
 
         if pool is None and not has_connection_params:
             raise ValueError(
                 "Must provide 'pool', 'instance_name' (provisioned), "
-                "'endpoint', 'parent', or both 'project' and 'branch' (autoscaling)."
+                "'endpoint', or both 'project' and 'branch' (autoscaling)."
             )
 
         self._owns_pool = pool is None
@@ -713,7 +687,6 @@ class LakebaseClient:
             self._pool = LakebasePool(
                 instance_name=instance_name,
                 endpoint=endpoint,
-                parent=parent,
                 project=project,
                 branch=branch,
                 **pool_kwargs,
@@ -1159,7 +1132,6 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -1174,8 +1146,6 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             instance_name: Name of the Lakebase provisioned instance.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
-            parent: Lakebase autoscaling branch parent path (e.g., ``"projects/{project}/branches/{branch}"``).
-                See https://databricks-sdk-py.readthedocs.io/en/latest/workspace/postgres/postgres.html#databricks.sdk.service.postgres.PostgresAPI.list_endpoints
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional WorkspaceClient for authentication.
@@ -1190,7 +1160,6 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         super().__init__(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,

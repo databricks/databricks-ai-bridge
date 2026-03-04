@@ -30,7 +30,6 @@ class CheckpointSaver(PostgresSaver):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -46,7 +45,6 @@ class CheckpointSaver(PostgresSaver):
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
@@ -80,7 +78,6 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -96,7 +93,6 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,

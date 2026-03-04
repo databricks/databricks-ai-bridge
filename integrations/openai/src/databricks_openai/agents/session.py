@@ -100,7 +100,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         *,
         instance_name: Optional[str] = None,
         endpoint: Optional[str] = None,
-        parent: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
         workspace_client: Optional[WorkspaceClient] = None,
@@ -119,8 +118,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
             instance_name: Name of the Lakebase provisioned instance.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
-            parent: Lakebase autoscaling branch parent string
-                (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional WorkspaceClient for authentication.
@@ -147,45 +144,27 @@ class AsyncDatabricksSession(SQLAlchemySession):
 
         # Validate connection parameters early (before cache key creation)
         is_autoscaling_branch = project is not None or branch is not None
-        is_autoscaling_parent = parent is not None
         is_autoscaling_endpoint = endpoint is not None
 
-        # Log when multiple autoscaling params given (higher priority wins)
-        if is_autoscaling_endpoint and (is_autoscaling_parent or is_autoscaling_branch):
+        if is_autoscaling_endpoint and is_autoscaling_branch:
             logger.info(
-                "endpoint given alongside other autoscaling parameters "
+                "project, branch, and endpoint given for autoscaling instance "
                 "- using endpoint value"
-            )
-        elif is_autoscaling_parent and is_autoscaling_branch:
-            logger.info(
-                "parent given alongside project/branch "
-                "- using parent value"
             )
         if is_autoscaling_endpoint and instance_name is not None:
             raise ValueError(
                 "Cannot provide both 'endpoint' and 'instance_name'. "
                 "Use 'endpoint' for autoscaling or 'instance_name' for provisioned."
             )
-        if is_autoscaling_parent and instance_name is not None:
-            raise ValueError(
-                "Cannot provide both 'parent' and 'instance_name'. "
-                "Use 'parent' for autoscaling or 'instance_name' for provisioned."
-            )
         if is_autoscaling_branch and not (project and branch):
             raise ValueError(
                 "Both 'project' and 'branch' are required to use a Lakebase "
                 "autoscaling instance. Please specify both parameters."
             )
-        if (
-            not is_autoscaling_branch
-            and not is_autoscaling_parent
-            and not is_autoscaling_endpoint
-            and instance_name is None
-        ):
+        if not is_autoscaling_branch and not is_autoscaling_endpoint and instance_name is None:
             raise ValueError(
                 "Must provide either 'instance_name' (provisioned), both "
-                "'project' and 'branch' (autoscaling), 'parent' (autoscaling), "
-                "or 'endpoint' (autoscaling)."
+                "'project' and 'branch' (autoscaling), or 'endpoint' (autoscaling)."
             )
         if is_autoscaling_branch and instance_name is not None:
             raise ValueError(
@@ -197,7 +176,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
@@ -226,7 +204,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         cls,
         instance_name: Optional[str] = None,
         endpoint: Optional[str] = None,
-        parent: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
         **engine_kwargs: Any,
@@ -236,8 +213,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         kwargs_key = json.dumps(engine_kwargs, sort_keys=True, default=str)
         if endpoint:
             return f"endpoint::{endpoint}::{kwargs_key}"
-        if parent:
-            return f"parent::{parent}::{kwargs_key}"
         if project and branch:
             return f"autoscaling::{project}::{branch}::{kwargs_key}"
         return f"provisioned::{instance_name}::{kwargs_key}"
@@ -248,7 +223,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         *,
         instance_name: Optional[str],
         endpoint: Optional[str] = None,
-        parent: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
         workspace_client: Optional[WorkspaceClient],
@@ -263,7 +237,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         cache_key = cls._build_cache_key(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             pool_recycle=pool_recycle,
@@ -279,7 +252,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         lakebase = AsyncLakebaseSQLAlchemy(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,

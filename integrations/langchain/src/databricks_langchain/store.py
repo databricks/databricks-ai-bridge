@@ -35,7 +35,6 @@ class DatabricksStore(BaseStore):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -51,8 +50,6 @@ class DatabricksStore(BaseStore):
             instance_name: The name of the Lakebase provisioned instance.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
-            parent: Lakebase autoscaling branch parent string
-                (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
@@ -75,7 +72,6 @@ class DatabricksStore(BaseStore):
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
@@ -164,7 +160,6 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         *,
         instance_name: str | None = None,
         endpoint: str | None = None,
-        parent: str | None = None,
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
@@ -180,8 +175,6 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
             instance_name: The name of the Lakebase provisioned instance.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
-            parent: Lakebase autoscaling branch parent string
-                (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
@@ -206,7 +199,6 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
             endpoint=endpoint,
-            parent=parent,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
