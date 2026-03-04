@@ -287,6 +287,25 @@ class DatabricksChat(Chat):
     completions: DatabricksCompletions
 
 
+_FMAPI_MAX_ID_LENGTH = 64
+
+
+def _truncate_response_ids(response: Any) -> None:
+    """Truncate ids that exceed FMAPI's 64-char input limit.
+
+    FMAPI returns response and output item ids longer than 64 chars, but rejects
+    them on the next turn's input. We truncate to prevent multi-turn failures.
+    """
+    if hasattr(response, "id") and response.id and len(response.id) > _FMAPI_MAX_ID_LENGTH:
+        response.id = response.id[:_FMAPI_MAX_ID_LENGTH]
+    if not hasattr(response, "output"):
+        return
+    for item in response.output:
+        item_id = getattr(item, "id", None)
+        if item_id and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+            item.id = item_id[:_FMAPI_MAX_ID_LENGTH]
+
+
 class DatabricksResponses(Responses):
     """Responses resource that handles apps/ prefix routing."""
 
@@ -319,7 +338,9 @@ class DatabricksResponses(Responses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        return super().create(**kwargs)
+        response = super().create(**kwargs)
+        _truncate_response_ids(response)
+        return response
 
 
 class DatabricksOpenAI(OpenAI):
@@ -473,7 +494,9 @@ class AsyncDatabricksResponses(AsyncResponses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        return await super().create(**kwargs)
+        response = await super().create(**kwargs)
+        _truncate_response_ids(response)
+        return response
 
 
 class AsyncDatabricksOpenAI(AsyncOpenAI):
