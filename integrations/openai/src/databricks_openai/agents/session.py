@@ -142,37 +142,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 "Please install with: pip install databricks-openai[memory]"
             )
 
-        # Validate connection parameters early (before cache key creation)
-        is_autoscaling_branch = project is not None or branch is not None
-        is_autoscaling_endpoint = endpoint is not None
-
-        if is_autoscaling_endpoint and is_autoscaling_branch:
-            logger.info(
-                "project, branch, and endpoint given for autoscaling instance "
-                "- using endpoint value"
-            )
-        if is_autoscaling_endpoint and instance_name is not None:
-            raise ValueError(
-                "Cannot provide both 'endpoint' and 'instance_name'. "
-                "Use 'endpoint' for autoscaling or 'instance_name' for provisioned."
-            )
-        if is_autoscaling_branch and not (project and branch):
-            raise ValueError(
-                "Both 'project' and 'branch' are required to use a Lakebase "
-                "autoscaling instance. Please specify both parameters."
-            )
-        if not is_autoscaling_branch and not is_autoscaling_endpoint and instance_name is None:
-            raise ValueError(
-                "Must provide either 'instance_name' (provisioned), both "
-                "'project' and 'branch' (autoscaling), or 'endpoint' (autoscaling)."
-            )
-        if is_autoscaling_branch and instance_name is not None:
-            raise ValueError(
-                "Cannot provide both 'instance_name' (provisioned) and "
-                "'project'/'branch' (autoscaling). Pass in the set of parameters "
-                "that correspond to your Lakebase instance."
-            )
-
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             endpoint=endpoint,

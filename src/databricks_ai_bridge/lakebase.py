@@ -124,18 +124,19 @@ class _LakebaseBase:
         is_autoscaling_endpoint = endpoint is not None
         is_autoscaling = is_autoscaling_endpoint or is_autoscaling_branch
 
+        # instance_name is mutually exclusive with all autoscaling parameters
+        if instance_name is not None and is_autoscaling:
+            raise ValueError(
+                "Cannot provide 'instance_name' (provisioned) together with "
+                "autoscaling parameters ('endpoint', 'project', 'branch'). "
+                "Choose one mode."
+            )
+
         # Log when multiple autoscaling params given (higher priority wins)
         if is_autoscaling_endpoint and is_autoscaling_branch:
             logger.info(
                 "project, branch, and endpoint given for autoscaling instance "
                 "- using endpoint value"
-            )
-
-        # Autoscaling vs provisioned conflicts
-        if is_autoscaling_endpoint and instance_name is not None:
-            raise ValueError(
-                "Cannot provide both 'endpoint' and 'instance_name'. "
-                "Use 'endpoint' for autoscaling or 'instance_name' for provisioned."
             )
 
         if is_autoscaling_branch and not is_autoscaling_endpoint:
@@ -149,12 +150,6 @@ class _LakebaseBase:
             raise ValueError(
                 "Must provide either 'instance_name' (provisioned), "
                 "'endpoint', or both 'project' and 'branch' (autoscaling)."
-            )
-
-        if is_autoscaling_branch and instance_name is not None and not is_autoscaling_endpoint:
-            raise ValueError(
-                "Cannot provide both 'instance_name' (provisioned) and "
-                "'project'/'branch' (autoscaling). Choose one mode."
             )
 
         self._is_autoscaling: bool = is_autoscaling
@@ -183,7 +178,8 @@ class _LakebaseBase:
     def _resolve_provisioned_host(self) -> str:
         """Resolve host via the Lakebase provisioned database API."""
         try:
-            assert self.instance_name is not None
+            if self.instance_name is None:
+                raise RuntimeError("instance_name is required for provisioned mode")
             instance = self.workspace_client.database.get_database_instance(self.instance_name)
         except Exception as exc:
             raise ValueError(
@@ -263,7 +259,8 @@ class _LakebaseBase:
         Calls ``get_endpoint(name=...)`` and extracts the top-level ``host`` field.
         """
         try:
-            assert self._endpoint_name is not None
+            if self._endpoint_name is None:
+                raise RuntimeError("endpoint name is required for autoscaling endpoint mode")
             ep = self.workspace_client.postgres.get_endpoint(name=self._endpoint_name)
         except Exception as exc:
             raise ValueError(
@@ -300,7 +297,8 @@ class _LakebaseBase:
 
     def _mint_token_provisioned(self) -> str:
         try:
-            assert self.instance_name is not None
+            if self.instance_name is None:
+                raise RuntimeError("instance_name is required for provisioned mode")
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
                 instance_names=[self.instance_name],
@@ -318,7 +316,8 @@ class _LakebaseBase:
 
     def _mint_token_autoscaling(self) -> str:
         try:
-            assert self._endpoint_name is not None
+            if self._endpoint_name is None:
+                raise RuntimeError("endpoint name is required for autoscaling mode")
             cred = self.workspace_client.postgres.generate_database_credential(
                 endpoint=self._endpoint_name,
             )

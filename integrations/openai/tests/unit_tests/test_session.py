@@ -1186,7 +1186,7 @@ class TestAsyncDatabricksSessionValidation:
         workspace = MagicMock()
         workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
-        with pytest.raises(ValueError, match="Cannot provide both 'endpoint' and 'instance_name'"):
+        with pytest.raises(ValueError, match="Cannot provide 'instance_name' .provisioned. together with autoscaling parameters"):
             AsyncDatabricksSession(
                 session_id="test-session",
                 endpoint="projects/p/branches/b/endpoints/rw",

@@ -1420,7 +1420,7 @@ def test_both_provisioned_and_autoscaling_raises_error(monkeypatch):
 
     with pytest.raises(
         ValueError,
-        match="Cannot provide both 'instance_name' .provisioned. and 'project'/'branch' .autoscaling.",
+        match="Cannot provide 'instance_name' .provisioned. together with autoscaling parameters",
     ):
         LakebasePool(
             instance_name="my-instance",
@@ -1840,7 +1840,7 @@ def test_endpoint_plus_instance_name_raises_error():
     workspace = _make_endpoint_workspace()
     with pytest.raises(
         ValueError,
-        match="Cannot provide both 'endpoint' and 'instance_name'",
+        match="Cannot provide 'instance_name' .provisioned. together with autoscaling parameters",
     ):
         LakebasePool(
             endpoint="projects/p/branches/b/endpoints/rw",
