@@ -6,14 +6,11 @@ using ModelServingUserCredentials to act as the invoking user.
 
 This file gets logged as an MLflow model artifact via:
     mlflow.pyfunc.log_model(python_model="whoami_serving_agent.py", ...)
-
-Required API scopes (for the calling user via OBO):
-    - model-serving: invoke the LLM endpoint (chat completions)
-    - sql: run ``SELECT whoami()`` on the configured warehouse
 """
 
 import json
-from typing import Any, Callable, Generator, Optional
+import os
+from typing import Any, Callable, Generator
 from uuid import uuid4
 
 import mlflow
@@ -34,7 +31,7 @@ from pydantic import BaseModel
 from databricks_ai_bridge import ModelServingUserCredentials
 
 LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
-SQL_WAREHOUSE_ID = ""  # Injected by deploy_serving_agent.py at log time
+SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
 
 
 class ToolInfo(BaseModel):
@@ -50,7 +47,7 @@ def create_whoami_tool(user_client: WorkspaceClient) -> ToolInfo:
             response = user_client.statement_execution.execute_statement(
                 warehouse_id=SQL_WAREHOUSE_ID,
                 statement="SELECT integration_testing.databricks_ai_bridge_mcp_test.whoami() as result",
-                wait_timeout="50s",
+                wait_timeout="30s",
             )
             if response.status.state == StatementState.SUCCEEDED:
                 if response.result and response.result.data_array:
@@ -143,7 +140,7 @@ class ToolCallingAgent(ResponsesAgent):
         return ResponsesAgentResponse(output=outputs)
 
     def predict_stream(
-        self, request: ResponsesAgentRequest, user_client: Optional[WorkspaceClient] = None
+        self, request: ResponsesAgentRequest, user_client: WorkspaceClient = None
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
         if user_client is None:
             user_client = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
