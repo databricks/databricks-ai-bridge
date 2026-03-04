@@ -101,6 +101,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
         instance_name: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        parent: Optional[str] = None,
         workspace_client: Optional[WorkspaceClient] = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         create_tables: bool = True,
@@ -117,6 +119,10 @@ class AsyncDatabricksSession(SQLAlchemySession):
             instance_name: Name of the Lakebase provisioned instance.
             project: Lakebase autoscaling project name. Also requires ``branch``.
             branch: Lakebase autoscaling branch name. Also requires ``project``.
+            endpoint: Lakebase autoscaling endpoint name.
+                See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
+            parent: Lakebase autoscaling branch parent string
+                (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -140,18 +146,48 @@ class AsyncDatabricksSession(SQLAlchemySession):
             )
 
         # Validate connection parameters early (before cache key creation)
-        is_autoscaling = project is not None or branch is not None
-        if is_autoscaling and not (project and branch):
+        is_autoscaling_branch = project is not None or branch is not None
+        is_autoscaling_parent = parent is not None
+        is_autoscaling_endpoint = endpoint is not None
+
+        # Log when multiple autoscaling params given (higher priority wins)
+        if is_autoscaling_endpoint and (is_autoscaling_parent or is_autoscaling_branch):
+            logger.info(
+                "endpoint given alongside other autoscaling parameters "
+                "- using endpoint value"
+            )
+        elif is_autoscaling_parent and is_autoscaling_branch:
+            logger.info(
+                "parent given alongside project/branch "
+                "- using parent value"
+            )
+        if is_autoscaling_endpoint and instance_name is not None:
+            raise ValueError(
+                "Cannot provide both 'endpoint' and 'instance_name'. "
+                "Use 'endpoint' for autoscaling or 'instance_name' for provisioned."
+            )
+        if is_autoscaling_parent and instance_name is not None:
+            raise ValueError(
+                "Cannot provide both 'parent' and 'instance_name'. "
+                "Use 'parent' for autoscaling or 'instance_name' for provisioned."
+            )
+        if is_autoscaling_branch and not (project and branch):
             raise ValueError(
                 "Both 'project' and 'branch' are required to use a Lakebase "
                 "autoscaling instance. Please specify both parameters."
             )
-        if not is_autoscaling and instance_name is None:
+        if (
+            not is_autoscaling_branch
+            and not is_autoscaling_parent
+            and not is_autoscaling_endpoint
+            and instance_name is None
+        ):
             raise ValueError(
-                "Must provide either 'instance_name' (provisioned) or both "
-                "'project' and 'branch' (autoscaling)."
+                "Must provide either 'instance_name' (provisioned), both "
+                "'project' and 'branch' (autoscaling), 'parent' (autoscaling), "
+                "or 'endpoint' (autoscaling)."
             )
-        if is_autoscaling and instance_name is not None:
+        if is_autoscaling_branch and instance_name is not None:
             raise ValueError(
                 "Cannot provide both 'instance_name' (provisioned) and "
                 "'project'/'branch' (autoscaling). Pass in the set of parameters "
@@ -162,6 +198,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
             instance_name=instance_name,
             project=project,
             branch=branch,
+            endpoint=endpoint,
+            parent=parent,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=engine_kwargs.pop("pool_recycle", DEFAULT_POOL_RECYCLE_SECONDS),
@@ -189,11 +227,17 @@ class AsyncDatabricksSession(SQLAlchemySession):
         instance_name: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        parent: Optional[str] = None,
         **engine_kwargs: Any,
     ) -> str:
         """Build a cache key from connection parameters and engine_kwargs."""
         # Sort kwargs for deterministic key; use JSON for serializable values
         kwargs_key = json.dumps(engine_kwargs, sort_keys=True, default=str)
+        if endpoint:
+            return f"endpoint::{endpoint}::{kwargs_key}"
+        if parent:
+            return f"parent::{parent}::{kwargs_key}"
         if project and branch:
             return f"autoscaling::{project}::{branch}::{kwargs_key}"
         return f"provisioned::{instance_name}::{kwargs_key}"
@@ -205,6 +249,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
         instance_name: Optional[str],
         project: Optional[str],
         branch: Optional[str],
+        endpoint: Optional[str] = None,
+        parent: Optional[str] = None,
         workspace_client: Optional[WorkspaceClient],
         token_cache_duration_seconds: int,
         pool_recycle: int,
@@ -218,6 +264,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
             instance_name=instance_name,
             project=project,
             branch=branch,
+            endpoint=endpoint,
+            parent=parent,
             pool_recycle=pool_recycle,
             **engine_kwargs,
         )
@@ -232,6 +280,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
             instance_name=instance_name,
             project=project,
             branch=branch,
+            endpoint=endpoint,
+            parent=parent,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=pool_recycle,

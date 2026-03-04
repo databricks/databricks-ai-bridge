@@ -292,3 +292,130 @@ async def test_async_checkpoint_saver_no_params_raises_error(monkeypatch):
 
     with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
         AsyncCheckpointSaver(workspace_client=workspace)
+
+
+# =============================================================================
+# Autoscaling (direct endpoint) Tests
+# =============================================================================
+
+
+def _create_endpoint_workspace():
+    """Helper to create a mock workspace client for direct endpoint mode."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace.postgres.generate_database_credential.return_value = MagicMock(
+        token="endpoint-token"
+    )
+    ep = MagicMock()
+    ep.host = "ep-db-host"
+    workspace.postgres.get_endpoint.return_value = ep
+    return workspace
+
+
+def test_checkpoint_saver_endpoint_configures_lakebase(monkeypatch):
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    saver = CheckpointSaver(
+        endpoint="projects/p/branches/b/endpoints/rw",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+    workspace.postgres.get_endpoint.assert_called_once_with(
+        name="projects/p/branches/b/endpoints/rw"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_endpoint_configures_lakebase(monkeypatch):
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    saver = AsyncCheckpointSaver(
+        endpoint="projects/p/branches/b/endpoints/rw",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_endpoint_context_manager(monkeypatch):
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
+
+    workspace = _create_endpoint_workspace()
+
+    async with AsyncCheckpointSaver(
+        endpoint="projects/p/branches/b/endpoints/rw",
+        workspace_client=workspace,
+    ) as saver:
+        assert test_pool._opened
+        assert saver._lakebase._is_autoscaling is True
+
+    assert test_pool._closed
+
+
+# =============================================================================
+# Autoscaling (parent) Tests
+# =============================================================================
+
+
+def test_checkpoint_saver_parent_configures_lakebase(monkeypatch):
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    saver = CheckpointSaver(
+        parent="projects/p/branches/b",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/p/branches/b"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_parent_configures_lakebase(monkeypatch):
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    saver = AsyncCheckpointSaver(
+        parent="projects/p/branches/b",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_parent_context_manager(monkeypatch):
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
+
+    workspace = _create_autoscaling_workspace()
+
+    async with AsyncCheckpointSaver(
+        parent="projects/p/branches/b",
+        workspace_client=workspace,
+    ) as saver:
+        assert test_pool._opened
+        assert saver._lakebase._is_autoscaling is True
+
+    assert test_pool._closed
