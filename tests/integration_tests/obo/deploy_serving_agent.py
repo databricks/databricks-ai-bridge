@@ -68,10 +68,15 @@ def main():
             ]
         )
 
+        input_example = {
+            "input": [{"role": "user", "content": "Who am I?"}],
+        }
+
         with mlflow.start_run():
             logged_agent_info = mlflow.pyfunc.log_model(
                 name="agent",
                 python_model=str(agent_file),
+                input_example=input_example,
                 auth_policy=AuthPolicy(
                     system_auth_policy=system_policy,
                     user_auth_policy=user_policy,
@@ -89,16 +94,7 @@ def main():
 
     from databricks import agents
 
-    endpoint_name = os.environ.get("OBO_TEST_SERVING_ENDPOINT")
-    deploy_kwargs = {
-        "model_name": UC_MODEL_NAME,
-        "model_version": registered.version,
-        "scale_to_zero": True,
-    }
-    if endpoint_name:
-        deploy_kwargs["endpoint_name"] = endpoint_name
-
-    agents.deploy(**deploy_kwargs)
+    agents.deploy(UC_MODEL_NAME, registered.version, scale_to_zero=True)
     log.info("Deployment initiated (scale_to_zero=True)")
 
 
