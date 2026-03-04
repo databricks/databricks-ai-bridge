@@ -80,9 +80,9 @@ def has_function_calling(w: WorkspaceClient, endpoint_name: str) -> bool:
         return False
 
 
-def _is_gpt_model(name: str) -> bool:
-    """Only GPT models support the Responses API on Databricks FMAPI."""
-    return "gpt" in name.lower()
+def _supports_responses_api(name: str) -> bool:
+    """Only OpenAI GPT models (not OSS) support the Responses API on Databricks FMAPI."""
+    return "gpt" in name.lower() and "oss" not in name.lower()
 
 
 def discover_chat_models(skip_models: set[str]) -> list[str]:
@@ -143,7 +143,7 @@ def discover_responses_models() -> list[str]:
     models = []
     for e in sorted(chat_endpoints, key=lambda e: e.name or ""):
         name = e.name or ""
-        if not _is_gpt_model(name):
+        if not _supports_responses_api(name):
             continue
         if not has_function_calling(w, name):
             log.info("Skipping %s: does not support function calling", name)
