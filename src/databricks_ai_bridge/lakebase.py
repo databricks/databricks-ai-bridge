@@ -177,9 +177,9 @@ class _LakebaseBase:
 
     def _resolve_provisioned_host(self) -> str:
         """Resolve host via the Lakebase provisioned database API."""
+        if self.instance_name is None:
+            raise RuntimeError("instance_name is required for provisioned mode")
         try:
-            if self.instance_name is None:
-                raise RuntimeError("instance_name is required for provisioned mode")
             instance = self.workspace_client.database.get_database_instance(self.instance_name)
         except Exception as exc:
             raise ValueError(
@@ -258,9 +258,9 @@ class _LakebaseBase:
 
         Calls ``get_endpoint(name=...)`` and extracts the top-level ``host`` field.
         """
+        if self._endpoint_name is None:
+            raise RuntimeError("endpoint name is required for autoscaling endpoint mode")
         try:
-            if self._endpoint_name is None:
-                raise RuntimeError("endpoint name is required for autoscaling endpoint mode")
             ep = self.workspace_client.postgres.get_endpoint(name=self._endpoint_name)
         except Exception as exc:
             raise ValueError(
@@ -296,9 +296,9 @@ class _LakebaseBase:
         return self._mint_token_provisioned()
 
     def _mint_token_provisioned(self) -> str:
+        if self.instance_name is None:
+            raise RuntimeError("instance_name is required for provisioned mode")
         try:
-            if self.instance_name is None:
-                raise RuntimeError("instance_name is required for provisioned mode")
             cred = self.workspace_client.database.generate_database_credential(
                 request_id=str(uuid.uuid4()),
                 instance_names=[self.instance_name],
@@ -315,9 +315,9 @@ class _LakebaseBase:
         return cred.token
 
     def _mint_token_autoscaling(self) -> str:
+        if self._endpoint_name is None:
+            raise RuntimeError("endpoint name is required for autoscaling mode")
         try:
-            if self._endpoint_name is None:
-                raise RuntimeError("endpoint name is required for autoscaling mode")
             cred = self.workspace_client.postgres.generate_database_credential(
                 endpoint=self._endpoint_name,
             )
