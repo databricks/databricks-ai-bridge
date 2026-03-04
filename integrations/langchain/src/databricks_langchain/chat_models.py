@@ -441,6 +441,19 @@ class ChatDatabricks(BaseChatModel):
             # Responses API only supports temperature, not max_tokens, stop, or n
             if self.temperature is not None:
                 data["temperature"] = self.temperature
+            # Convert tools from Chat Completions format to Responses API format
+            if "tools" in data:
+                data["tools"] = [
+                    {
+                        "type": "function",
+                        "name": t["function"]["name"],
+                        "description": t["function"].get("description", ""),
+                        "parameters": t["function"].get("parameters", {}),
+                    }
+                    if "function" in t
+                    else t
+                    for t in data["tools"]
+                ]
         else:
             # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
@@ -1420,6 +1433,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
             cc_msg.pop("name")
         role = cc_msg["role"]
         if role == "assistant":
+            has_function_calls_in_content = False
             if isinstance(cc_msg.get("content"), list):
                 for block in cc_msg["content"]:
                     if isinstance(block, dict) and (block_type := block.get("type")):
@@ -1463,7 +1477,20 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             "mcp_list_tools",
                             "mcp_approval_request",
                         ):
-                            input_items.append(block | {"id": lc_msg.id})
+                            if block_type == "function_call":
+                                has_function_calls_in_content = True
+                            # Strip null values that FMAPI rejects as unknown params.
+                            # Use the block's own id if present; fall back to call_id
+                            # for function_call blocks. Avoid lc_msg.id which can
+                            # exceed FMAPI's 64-char limit for input item ids.
+                            cleaned = {
+                                k: v for k, v in block.items() if v is not None
+                            }
+                            if "id" not in cleaned:
+                                # function_call items need an id starting with "fc"
+                                call_id = cleaned.get("call_id", "")
+                                cleaned["id"] = f"fc_{call_id}" if call_id else lc_msg.id
+                            input_items.append(cleaned)
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
                     {
@@ -1474,19 +1501,21 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                     }
                 )
 
-            if tool_calls := cc_msg.get("tool_calls"):
-                input_items.extend(
-                    [
-                        {
-                            "type": "function_call",
-                            "id": lc_msg.id,
-                            "call_id": tool_call["id"],
-                            "name": tool_call["function"]["name"],
-                            "arguments": tool_call["function"]["arguments"],
-                        }
-                        for tool_call in tool_calls
-                    ]
-                )
+            # Only add tool_calls if they weren't already included from content blocks
+            if not has_function_calls_in_content:
+                if tool_calls := cc_msg.get("tool_calls"):
+                    input_items.extend(
+                        [
+                            {
+                                "type": "function_call",
+                                "id": f"fc_{tool_call['id']}",
+                                "call_id": tool_call["id"],
+                                "name": tool_call["function"]["name"],
+                                "arguments": tool_call["function"]["arguments"],
+                            }
+                            for tool_call in tool_calls
+                        ]
+                    )
         elif role == "tool":
             input_items.append(
                 {
