@@ -109,10 +109,10 @@ class _LakebaseBase:
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
     ) -> None:
@@ -383,20 +383,20 @@ class LakebasePool(_LakebaseBase):
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
             instance_name=instance_name,
-            project=project,
-            branch=branch,
             endpoint=endpoint,
             parent=parent,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -489,20 +489,20 @@ class AsyncLakebasePool(_LakebaseBase):
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         **pool_kwargs: object,
     ) -> None:
         super().__init__(
             instance_name=instance_name,
-            project=project,
-            branch=branch,
             endpoint=endpoint,
             parent=parent,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )
@@ -662,10 +662,10 @@ class LakebaseClient:
         *,
         pool: LakebasePool | None = None,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """
@@ -678,12 +678,12 @@ class LakebaseClient:
 
         :param pool: Existing LakebasePool to use for connections.
         :param instance_name: Name of the Lakebase provisioned instance.
-        :param project: Lakebase autoscaling project name. Also requires ``branch``.
-        :param branch: Lakebase autoscaling branch name. Also requires ``project``.
         :param endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
         :param parent: Lakebase autoscaling branch parent path (e.g., ``"projects/{project}/branches/{branch}"``).
                 See https://databricks-sdk-py.readthedocs.io/en/latest/workspace/postgres/postgres.html#databricks.sdk.service.postgres.PostgresAPI.list_endpoints
+        :param project: Lakebase autoscaling project name. Also requires ``branch``.
+        :param branch: Lakebase autoscaling branch name. Also requires ``project``.
         :param pool_kwargs: Additional kwargs passed to LakebasePool (only used when creating pool internally).
         """
         has_connection_params = (
@@ -712,10 +712,10 @@ class LakebaseClient:
         else:
             self._pool = LakebasePool(
                 instance_name=instance_name,
-                project=project,
-                branch=branch,
                 endpoint=endpoint,
                 parent=parent,
+                project=project,
+                branch=branch,
                 **pool_kwargs,
             )
 
@@ -1158,10 +1158,10 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
@@ -1172,12 +1172,12 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
 
         Args:
             instance_name: Name of the Lakebase provisioned instance.
-            project: Lakebase autoscaling project name. Also requires ``branch``.
-            branch: Lakebase autoscaling branch name. Also requires ``project``.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
             parent: Lakebase autoscaling branch parent path (e.g., ``"projects/{project}/branches/{branch}"``).
                 See https://databricks-sdk-py.readthedocs.io/en/latest/workspace/postgres/postgres.html#databricks.sdk.service.postgres.PostgresAPI.list_endpoints
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional WorkspaceClient for authentication.
                 If not provided, a default client will be created.
             token_cache_duration_seconds: How long to cache OAuth tokens.
@@ -1189,10 +1189,10 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         """
         super().__init__(
             instance_name=instance_name,
-            project=project,
-            branch=branch,
             endpoint=endpoint,
             parent=parent,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
         )

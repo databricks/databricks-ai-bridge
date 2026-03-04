@@ -34,10 +34,10 @@ class DatabricksStore(BaseStore):
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -49,12 +49,12 @@ class DatabricksStore(BaseStore):
 
         Args:
             instance_name: The name of the Lakebase provisioned instance.
-            project: Lakebase autoscaling project name. Also requires ``branch``.
-            branch: Lakebase autoscaling branch name. Also requires ``project``.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
             parent: Lakebase autoscaling branch parent string
                 (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -74,10 +74,10 @@ class DatabricksStore(BaseStore):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
-            project=project,
-            branch=branch,
             endpoint=endpoint,
             parent=parent,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )
@@ -163,10 +163,10 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         self,
         *,
         instance_name: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
         endpoint: str | None = None,
         parent: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -178,12 +178,12 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         Args:
             instance_name: The name of the Lakebase provisioned instance.
-            project: Lakebase autoscaling project name. Also requires ``branch``.
-            branch: Lakebase autoscaling branch name. Also requires ``project``.
             endpoint: Lakebase autoscaling endpoint name.
                 See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
             parent: Lakebase autoscaling branch parent string
                 (e.g., ``"projects/{project_id}/branches/{branch_id}"``).
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -205,10 +205,10 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
-            project=project,
-            branch=branch,
             endpoint=endpoint,
             parent=parent,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )
