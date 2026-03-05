@@ -666,10 +666,10 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
         assert js["name"] == "AnswerWithJustification"
         assert js["strict"] is True
         assert js["schema"]["additionalProperties"] is False
-        assert js["schema"]["justification"]["properties"]["additionalProperties"] is False
+        assert js["schema"]["properties"]["justification"]["additionalProperties"] is False
         assert set(js["schema"]["required"]) == set(js["schema"]["properties"].keys())
-        assert set(js["schema"]["justification"]["required"]) == set(
-            js["schema"]["justification"]["properties"].keys()
+        assert set(js["schema"]["properties"]["justification"]["required"]) == set(
+            js["schema"]["properties"]["justification"]["properties"].keys()
         )
     else:
         assert bind["response_format"] == {"type": "json_object"}
