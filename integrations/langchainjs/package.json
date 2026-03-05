@@ -54,7 +54,7 @@
   "dependencies": {
     "@ai-sdk/provider": "^3.0.0",
     "@ai-sdk/provider-utils": "^4.0.0",
-    "@databricks/ai-sdk-provider": "^0.3.0",
+    "@databricks/ai-sdk-provider": "^0.5.1",
     "@databricks/sdk-experimental": "^0.15.0",
     "@langchain/core": "^1.1.8",
     "@langchain/mcp-adapters": "^1.1.1",
