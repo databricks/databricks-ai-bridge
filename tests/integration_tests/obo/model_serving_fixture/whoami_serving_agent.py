@@ -9,7 +9,6 @@ This file gets logged as an MLflow model artifact via:
 """
 
 import json
-import os
 from typing import Any, Callable, Generator
 from uuid import uuid4
 
