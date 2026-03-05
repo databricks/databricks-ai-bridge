@@ -824,10 +824,6 @@ def test_chat_databricks_custom_outputs_stream():
 
 
 def test_chat_databricks_token_count():
-    import mlflow
-
-    mlflow.set_experiment("4435237072766312")
-    mlflow.langchain.autolog()
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
     assert response.content is not None
@@ -840,7 +836,8 @@ def test_chat_databricks_token_count():
         + response.response_metadata["completion_tokens"]
     )
 
-    chunks = list(llm.stream("What is the 100th fibonacci number?"))
+    llm_with_usage = ChatDatabricks(model="databricks-gpt-oss-120b", stream_usage=True)
+    chunks = list(llm_with_usage.stream("What is the 100th fibonacci number?"))
     last_chunk = chunks[-1]
     assert last_chunk.usage_metadata is not None
     assert last_chunk.usage_metadata["input_tokens"] > 0
@@ -874,14 +871,8 @@ def test_chat_databricks_gpt5_stream_with_usage():
         )
     )
     """
-    from databricks.sdk import WorkspaceClient
-
-    # Use dogfood profile to access GPT-5
-    workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
-
     llm = ChatDatabricks(
-        endpoint="gpt-5",
-        workspace_client=workspace_client,
+        endpoint="databricks-gpt-5",
         max_tokens=100,
         stream_usage=True,
     )
@@ -1030,7 +1021,7 @@ def _verify_responses_usage_metadata_keys(lc_usage, openai_usage):
     if openai_usage.output_tokens_details is not None:
         assert "output_token_details" in lc_usage
         if openai_usage.output_tokens_details.reasoning_tokens is not None:
-            assert "reasoning_tokens" in lc_usage["output_token_details"]
+            assert "reasoning" in lc_usage["output_token_details"]
 
 
 @pytest.mark.foundation_models
