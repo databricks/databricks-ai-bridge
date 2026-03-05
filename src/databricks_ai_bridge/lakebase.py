@@ -124,9 +124,7 @@ class _LakebaseBase:
 
         # --- Parameter validation ---
         is_autoscaling = (
-            autoscaling_endpoint is not None
-            or project is not None
-            or branch is not None
+            autoscaling_endpoint is not None or project is not None or branch is not None
         )
 
         # instance_name is mutually exclusive with all autoscaling parameters
@@ -284,7 +282,7 @@ class _LakebaseBase:
         if rw_endpoint is None:
             raise ValueError(
                 f"No READ_WRITE endpoint found for parent='{branch_parent}'. "
-                "Ensure the branch has an active endpoint.\n"
+                "Ensure the branch has an active endpoint with compute running.\n"
                 "To check endpoints, use:\n"
                 f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")'
             )

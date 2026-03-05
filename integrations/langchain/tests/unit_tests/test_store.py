@@ -574,9 +574,7 @@ def _create_endpoint_workspace():
     """Helper to create a mock workspace client for autoscaling_endpoint mode."""
     workspace = MagicMock()
     workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-    workspace.postgres.generate_database_credential.return_value = MagicMock(
-        token="endpoint-token"
-    )
+    workspace.postgres.generate_database_credential.return_value = MagicMock(token="endpoint-token")
     ep = MagicMock()
     ep.host = "ep-db-host"
     workspace.postgres.get_endpoint.return_value = ep

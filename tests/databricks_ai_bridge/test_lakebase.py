@@ -1854,7 +1854,9 @@ def test_autoscaling_endpoint_with_project_raises_error():
 def test_autoscaling_endpoint_with_instance_name_raises_error():
     """autoscaling_endpoint + instance_name raises ValueError."""
     workspace = _make_endpoint_workspace()
-    with pytest.raises(ValueError, match="Cannot provide 'instance_name' .provisioned. together with"):
+    with pytest.raises(
+        ValueError, match="Cannot provide 'instance_name' .provisioned. together with"
+    ):
         LakebasePool(
             autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
             instance_name="my-instance",
@@ -1881,4 +1883,3 @@ def test_branch_plain_name_without_project_raises_error():
             branch="my-branch",
             workspace_client=workspace,
         )
-

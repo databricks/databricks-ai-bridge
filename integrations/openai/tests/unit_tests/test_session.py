@@ -1287,4 +1287,3 @@ class TestAsyncDatabricksSessionBranchResourcePath:
             mock_autoscaling_workspace_client.postgres.list_endpoints.assert_called_once_with(
                 parent="projects/my-project/branches/my-branch"
             )
-
