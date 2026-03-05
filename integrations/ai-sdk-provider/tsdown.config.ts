@@ -9,6 +9,9 @@ export default defineConfig({
   // Output formats
   format: ['esm', 'cjs'],
 
+  // Required so tsdown emits .mjs/.cjs files matching the explicit extensions in package.json "exports"
+  fixedExtension: true,
+
   // Generate TypeScript declarations
   dts: true,
 
