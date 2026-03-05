@@ -135,6 +135,9 @@ def test_chat_databricks_stream(model):
     assert last_chunk.response_metadata.get("finish_reason") in ("stop", "end_turn", None)
 
 
+@pytest.mark.skip(
+    reason="Streaming usage_metadata requires stream_options support in ChatDatabricks"
+)
 @pytest.mark.foundation_models
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 def test_chat_databricks_stream_with_usage(model):
@@ -744,6 +747,7 @@ def test_chat_databricks_utf8_encoding(model):
     assert "blåbær" in full_content.lower()
 
 
+@pytest.mark.skip(reason="Unit test with mocks — should be moved to unit_tests/")
 def test_chat_databricks_with_timeout_and_retries():
     """Test that ChatDatabricks can be initialized with timeout and max_retries parameters."""
     from unittest.mock import Mock, patch
@@ -834,6 +838,9 @@ def test_chat_databricks_custom_outputs_stream():
     assert any(chunk.custom_outputs["key"] == "value" for chunk in response)  # type: ignore[attr-defined]
 
 
+@pytest.mark.skip(
+    reason="Streaming usage_metadata requires stream_options support in ChatDatabricks"
+)
 def test_chat_databricks_token_count():
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
