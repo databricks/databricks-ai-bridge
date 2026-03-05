@@ -292,3 +292,98 @@ async def test_async_checkpoint_saver_no_params_raises_error(monkeypatch):
 
     with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
         AsyncCheckpointSaver(workspace_client=workspace)
+
+
+# =============================================================================
+# Autoscaling: autoscaling_endpoint Tests
+# =============================================================================
+
+
+def _create_endpoint_workspace():
+    """Helper to create a mock workspace client for autoscaling_endpoint mode."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace.postgres.generate_database_credential.return_value = MagicMock(
+        token="endpoint-token"
+    )
+    ep = MagicMock()
+    ep.host = "ep-db-host"
+    workspace.postgres.get_endpoint.return_value = ep
+    return workspace
+
+
+def test_checkpoint_saver_autoscaling_endpoint(monkeypatch):
+    """CheckpointSaver with autoscaling_endpoint resolves host via get_endpoint."""
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    saver = CheckpointSaver(
+        autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+    workspace.postgres.get_endpoint.assert_called_once_with(
+        name="projects/p/branches/b/endpoints/ep1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_autoscaling_endpoint(monkeypatch):
+    """AsyncCheckpointSaver with autoscaling_endpoint resolves host via get_endpoint."""
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    saver = AsyncCheckpointSaver(
+        autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+
+
+# =============================================================================
+# Autoscaling: branch as resource path Tests
+# =============================================================================
+
+
+def test_checkpoint_saver_branch_resource_path(monkeypatch):
+    """CheckpointSaver with branch as full resource path (no project needed)."""
+    test_pool = TestConnectionPool(connection_value="lake-conn")
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    saver = CheckpointSaver(
+        branch="projects/my-project/branches/my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_checkpoint_saver_branch_resource_path(monkeypatch):
+    """AsyncCheckpointSaver with branch as full resource path (no project needed)."""
+    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    saver = AsyncCheckpointSaver(
+        branch="projects/my-project/branches/my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert saver._lakebase._is_autoscaling is True

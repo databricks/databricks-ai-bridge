@@ -1140,10 +1140,151 @@ class TestAsyncDatabricksSessionValidation:
         workspace = MagicMock()
         workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
 
-        with pytest.raises(ValueError, match="Both 'project' and 'branch' are required"):
+        with pytest.raises(ValueError, match="'project' is required"):
             AsyncDatabricksSession(
                 session_id="test-session",
                 branch="my-branch",
                 workspace_client=workspace,
+            )
+
+
+# =============================================================================
+# Autoscaling: autoscaling_endpoint Tests
+# =============================================================================
+
+
+@pytest.fixture
+def mock_endpoint_workspace_client():
+    """Create a mock WorkspaceClient for autoscaling_endpoint mode."""
+    mock_client = MagicMock()
+    mock_client.config.host = "https://test.databricks.com"
+
+    mock_user = MagicMock()
+    mock_user.user_name = "test_user@databricks.com"
+    mock_client.current_user.me.return_value = mock_user
+
+    ep = MagicMock()
+    ep.host = "endpoint-instance.lakebase.databricks.com"
+    mock_client.postgres.get_endpoint.return_value = ep
+
+    mock_credential = MagicMock()
+    mock_credential.token = "endpoint-oauth-token"
+    mock_client.postgres.generate_database_credential.return_value = mock_credential
+
+    return mock_client
+
+
+class TestAsyncDatabricksSessionAutoscalingEndpoint:
+    """Tests for AsyncDatabricksSession with autoscaling_endpoint."""
+
+    def test_init_autoscaling_endpoint_resolves_host(
+        self, mock_endpoint_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that initialization with autoscaling_endpoint resolves host via get_endpoint."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_endpoint_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session = AsyncDatabricksSession(
+                session_id="test-session-123",
+                autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+                workspace_client=mock_endpoint_workspace_client,
+            )
+
+            call_args = mock_create_engine.call_args
+            url = call_args[0][0]
+            assert url.host == "endpoint-instance.lakebase.databricks.com"
+
+            mock_endpoint_workspace_client.postgres.get_endpoint.assert_called_once_with(
+                name="projects/p/branches/b/endpoints/ep1"
+            )
+
+    def test_autoscaling_endpoint_sessions_share_engine(
+        self, mock_endpoint_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that sessions with same autoscaling_endpoint share an engine."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_endpoint_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+                workspace_client=mock_endpoint_workspace_client,
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+                workspace_client=mock_endpoint_workspace_client,
+            )
+
+            assert mock_create_engine.call_count == 1
+            assert session1._engine is session2._engine
+
+
+# =============================================================================
+# Autoscaling: branch as resource path Tests
+# =============================================================================
+
+
+class TestAsyncDatabricksSessionBranchResourcePath:
+    """Tests for AsyncDatabricksSession with branch as full resource path."""
+
+    def test_init_branch_resource_path_resolves_host(
+        self, mock_autoscaling_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Test that branch as full resource path resolves host correctly."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_autoscaling_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session = AsyncDatabricksSession(
+                session_id="test-session-123",
+                branch="projects/my-project/branches/my-branch",
+                workspace_client=mock_autoscaling_workspace_client,
+            )
+
+            call_args = mock_create_engine.call_args
+            url = call_args[0][0]
+            assert url.host == "autoscaling-instance.lakebase.databricks.com"
+
+            mock_autoscaling_workspace_client.postgres.list_endpoints.assert_called_once_with(
+                parent="projects/my-project/branches/my-branch"
             )
 
