@@ -1164,7 +1164,7 @@ def mock_endpoint_workspace_client():
     mock_client.current_user.me.return_value = mock_user
 
     ep = MagicMock()
-    ep.host = "endpoint-instance.lakebase.databricks.com"
+    ep.status.hosts.host = "endpoint-instance.lakebase.databricks.com"
     mock_client.postgres.get_endpoint.return_value = ep
 
     mock_credential = MagicMock()

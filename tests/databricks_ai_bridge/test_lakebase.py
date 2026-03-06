@@ -1667,7 +1667,7 @@ def _make_endpoint_workspace(
     workspace.postgres.generate_database_credential.return_value = MagicMock(token=credential_token)
 
     ep = MagicMock()
-    ep.host = host
+    ep.status.hosts.host = host
     workspace.postgres.get_endpoint.return_value = ep
 
     return workspace
