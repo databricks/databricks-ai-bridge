@@ -265,6 +265,46 @@ class TestRawStreamableHttpClient:
 
         asyncio.run(_test())
 
+    def test_genie_list_and_call(self, genie_mcp_url, workspace_client):
+        """list_tools + call_tool via raw streamable_http_client for Genie."""
+        import asyncio
+
+        import httpx
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        from databricks_mcp import DatabricksOAuthClientProvider
+
+        async def _test():
+            async with httpx.AsyncClient(
+                auth=DatabricksOAuthClientProvider(workspace_client),
+                follow_redirects=True,
+                timeout=httpx.Timeout(120.0, read=120.0),
+            ) as http_client:
+                async with streamable_http_client(genie_mcp_url, http_client=http_client) as (
+                    read_stream,
+                    write_stream,
+                    _,
+                ):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+
+                        tools_response = await session.list_tools()
+                        tools = tools_response.tools
+                        assert len(tools) > 0
+
+                        # Call the first tool (query_space_*)
+                        tool = tools[0]
+                        properties = tool.inputSchema.get("properties", {})
+                        param_name = next(iter(properties), "query")
+                        result = await session.call_tool(
+                            tool.name, {param_name: "How many rows are there?"}
+                        )
+                        assert result.content
+                        assert len(result.content) > 0
+
+        asyncio.run(_test())
+
 
 # =============================================================================
 # Error paths
