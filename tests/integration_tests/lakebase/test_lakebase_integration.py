@@ -6,11 +6,17 @@ They are NOT run in CI by default - set LAKEBASE_INTEGRATION_TESTS=1 to enable.
 
 Environment Variables:
 ======================
-Required for all tests:
+Required for provisioned instance tests:
     LAKEBASE_INSTANCE_NAME    - Name of your Lakebase instance
     TEST_SERVICE_PRINCIPAL    - A REAL service principal UUID from your workspace
                                 (find in Admin Console > Identity and access > Service principals)
     LAKEBASE_INTEGRATION_TESTS - Set to "1" to enable integration tests
+
+Optional for autoscaling tests (tests skip if not set):
+    LAKEBASE_PROJECT          - Autoscaling project name
+    LAKEBASE_BRANCH           - Autoscaling branch name
+    LAKEBASE_AUTOSCALING_ENDPOINT - Full endpoint resource path
+                                    (e.g. projects/{id}/branches/{id}/endpoints/{id})
 
 Optional for authenticating as different users:
     DATABRICKS_HOST           - Workspace URL (e.g., https://your-workspace.databricks.com)
@@ -165,6 +171,71 @@ def client(instance_name, workspace_client):
     """
     pool = LakebasePool(
         instance_name=instance_name,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def autoscaling_project():
+    name = os.environ.get("LAKEBASE_PROJECT")
+    if not name:
+        pytest.skip("LAKEBASE_PROJECT not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_branch():
+    name = os.environ.get("LAKEBASE_BRANCH")
+    if not name:
+        pytest.skip("LAKEBASE_BRANCH not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_endpoint():
+    name = os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT")
+    if not name:
+        pytest.skip("LAKEBASE_AUTOSCALING_ENDPOINT not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_client(autoscaling_project, autoscaling_branch, workspace_client):
+    """LakebaseClient using project+branch autoscaling mode."""
+    pool = LakebasePool(
+        project=autoscaling_project,
+        branch=autoscaling_branch,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def endpoint_client(autoscaling_endpoint, workspace_client):
+    """LakebaseClient using autoscaling_endpoint mode."""
+    pool = LakebasePool(
+        autoscaling_endpoint=autoscaling_endpoint,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def branch_resource_path_client(autoscaling_project, autoscaling_branch, workspace_client):
+    """LakebaseClient using branch as full resource path."""
+    branch_path = f"projects/{autoscaling_project}/branches/{autoscaling_branch}"
+    pool = LakebasePool(
+        branch=branch_path,
         workspace_client=workspace_client,
     )
     client = LakebaseClient(pool=pool)
@@ -945,5 +1016,135 @@ class TestEndToEndPermissionSetup:
                 SequencePrivilege.SELECT,
                 SequencePrivilege.UPDATE,
             ],
+            schemas=["public"],
+        )
+
+
+# =============================================================================
+# Autoscaling Integration Tests
+# =============================================================================
+
+
+class TestAutoscalingProjectBranch:
+    """Test connectivity and basic operations using project+branch autoscaling mode."""
+
+    def test_connect_and_execute(self, autoscaling_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = autoscaling_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, autoscaling_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, autoscaling_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, autoscaling_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, autoscaling_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public"],
+        )
+
+
+class TestAutoscalingEndpoint:
+    """Test connectivity and basic operations using autoscaling_endpoint mode."""
+
+    def test_connect_and_execute(self, endpoint_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = endpoint_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, endpoint_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, endpoint_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, endpoint_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, endpoint_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public"],
+        )
+
+
+class TestAutoscalingBranchResourcePath:
+    """Test connectivity and basic operations using branch-as-resource-path mode."""
+
+    def test_connect_and_execute(self, branch_resource_path_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = branch_resource_path_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, branch_resource_path_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = branch_resource_path_client.create_role(
+            test_service_principal, "SERVICE_PRINCIPAL"
+        )
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, branch_resource_path_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, branch_resource_path_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, branch_resource_path_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
             schemas=["public"],
         )

@@ -222,7 +222,8 @@ class _LakebaseBase:
     def _resolve_endpoint_host(self) -> str:
         """Resolve host via endpoint name using the Lakebase autoscaling API.
 
-        Calls ``get_endpoint(name=...)`` and extracts the top-level ``host`` field.
+        Calls ``get_endpoint(name=...)`` and extracts the host from
+        ``endpoint.status.hosts.host``.
         """
         if self._endpoint_name is None:
             raise RuntimeError("endpoint name is required for autoscaling endpoint mode")
@@ -236,7 +237,9 @@ class _LakebaseBase:
                 '  workspace_client.postgres.list_endpoints(parent="projects/<project>/branches/<branch>")'
             ) from exc
 
-        resolved_host = getattr(ep, "host", None)
+        ep_status = getattr(ep, "status", None)
+        hosts = getattr(ep_status, "hosts", None)
+        resolved_host = getattr(hosts, "host", None) if hosts else None
 
         if not resolved_host:
             raise ValueError(
