@@ -838,7 +838,7 @@ def test_convert_response_to_chat_result_llm_output(llm: ChatDatabricks) -> None
 
 def test_convert_lc_messages_to_responses_api_basic():
     """Test _convert_lc_messages_to_responses_api with basic messages."""
-    messages = [
+    messages: list[BaseMessage] = [
         SystemMessage(content="You are a helpful assistant."),
         HumanMessage(content="Hello!"),
         AIMessage(content="Hi there!"),
@@ -860,7 +860,7 @@ def test_convert_lc_messages_to_responses_api_basic():
 
 def test_convert_lc_messages_to_responses_api_with_tool_calls():
     """Test _convert_lc_messages_to_responses_api with tool calls."""
-    messages = [
+    messages: list[BaseMessage] = [
         SystemMessage(content="You are a helpful assistant."),
         HumanMessage(content="Hello!"),
         AIMessage(
@@ -908,7 +908,7 @@ def test_convert_lc_messages_to_responses_api_with_tool_calls():
 
 def test_convert_lc_messages_to_responses_api_with_complex_content():
     """Test _convert_lc_messages_to_responses_api with complex content."""
-    messages = [
+    messages: list[BaseMessage] = [
         AIMessage(
             content=[
                 {"type": "text", "text": "Here's the answer:", "annotations": [{"key": "value"}]},
@@ -1348,7 +1348,7 @@ def test_chat_databricks_client_field_sets_client():
 def test_prepare_inputs_basic():
     llm = ChatDatabricks(model="test-model", temperature=0.7, max_tokens=100, stop=["stop"], n=2)
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
 
     expected = {
@@ -1366,7 +1366,7 @@ def test_prepare_inputs_basic():
 def test_prepare_inputs_with_responses_api():
     llm = ChatDatabricks(model="test-model", use_responses_api=True, temperature=0.5)
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages)
     expected = {
         "model": "test-model",
@@ -1382,7 +1382,7 @@ def test_prepare_inputs_override_stop():
     """Test _prepare_inputs method with stop parameter override."""
     llm = ChatDatabricks(model="test-model", stop=["default_stop"])
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, stop=["override_stop"])
 
     # The implementation uses "self.stop or stop" which means if self.stop is truthy, it uses self.stop
@@ -1394,7 +1394,7 @@ def test_prepare_inputs_with_kwargs():
     """Test _prepare_inputs method with additional kwargs."""
     llm = ChatDatabricks(model="test-model")
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, custom_param="value")
 
     assert result["custom_param"] == "value"
@@ -1404,7 +1404,7 @@ def test_prepare_inputs_with_extra_params():
     """Test _prepare_inputs method with extra_params."""
     llm = ChatDatabricks(model="test-model", extra_params={"param1": "value1"})
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     result = llm._prepare_inputs(messages, param2="value2")
 
     assert result["param1"] == "value1"
@@ -1434,7 +1434,7 @@ def test_convert_dict_to_message_with_non_string_content():
 def test_prepare_inputs_with_custom_inputs():
     llm = ChatDatabricks(model="test-model")
 
-    messages = [HumanMessage(content="Hello")]
+    messages: list[BaseMessage] = [HumanMessage(content="Hello")]
     custom_inputs = {"user_id": "123", "session_id": "abc"}
     result = llm._prepare_inputs(messages, custom_inputs=custom_inputs)
 
@@ -1464,7 +1464,7 @@ def test_generate_with_custom_inputs():
         mock_client.chat.completions.create.return_value = mock_response
 
         llm = ChatDatabricks(model="test-model")
-        messages = [HumanMessage(content="Hello")]
+        messages: list[BaseMessage] = [HumanMessage(content="Hello")]
         custom_inputs = {"user_id": "123"}
 
         # Call _generate with custom_inputs

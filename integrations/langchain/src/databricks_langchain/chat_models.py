@@ -1372,7 +1372,7 @@ class ChatDatabricks(BaseChatModel):
 
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
-    message_dict = {"content": message.content}
+    message_dict: Dict[str, Any] = {"content": message.content}
 
     # NB: We don't propagate 'name' field from input message to the endpoint because
     #  FMAPI doesn't support it. We should update the endpoints to be compatible with
