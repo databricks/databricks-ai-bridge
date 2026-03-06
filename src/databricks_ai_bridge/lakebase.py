@@ -44,6 +44,9 @@ DEFAULT_TIMEOUT = 30.0
 DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
+# Documentation links for error messages
+_INSTANCE_NAME_DOC = "https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/database.html#databricks.sdk.service.database.DatabaseInstance.name"
+_AUTOSCALING_ENDPOINT_DOC = "https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint.name"
 
 # Valid identity types for create_role
 IdentityType = Literal["USER", "SERVICE_PRINCIPAL", "GROUP"]
@@ -132,18 +135,22 @@ class _LakebaseBase:
             raise ValueError(
                 "Cannot provide 'instance_name' (provisioned) together with "
                 "autoscaling parameters ('autoscaling_endpoint', 'project', 'branch'). "
-                "Choose one mode."
+                "Choose one mode.\n"
+                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
+                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         # autoscaling_endpoint is mutually exclusive with project/branch
         if autoscaling_endpoint is not None and (project is not None or branch is not None):
             raise ValueError(
                 "Cannot provide 'autoscaling_endpoint' together with "
-                "'project' or 'branch'. Use one autoscaling method."
+                "'project' or 'branch'. Use either 'project' and 'branch' or "
+                "'autoscaling_endpoint' to identify an autoscaling database.\n"
+                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
-        # project without branch (and no autoscaling_endpoint) is invalid
-        if project is not None and branch is None and autoscaling_endpoint is None:
+        # project without branch is invalid
+        if project is not None and branch is None:
             raise ValueError(
                 "Both 'project' and 'branch' are required to use a Lakebase "
                 "autoscaling instance. Please specify both parameters."
@@ -167,7 +174,9 @@ class _LakebaseBase:
         if not is_autoscaling and instance_name is None:
             raise ValueError(
                 "Must provide either 'instance_name' (provisioned), "
-                "'autoscaling_endpoint', or 'branch' (autoscaling)."
+                "'autoscaling_endpoint', or 'branch' (autoscaling).\n"
+                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
+                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         self._is_autoscaling: bool = is_autoscaling
@@ -204,7 +213,8 @@ class _LakebaseBase:
                 f"Unable to resolve Lakebase provisioned instance '{self.instance_name}'. "
                 "Verify the instance name is correct.\n"
                 "To list available instances, use:\n"
-                "  workspace_client.database.list_database_instances()"
+                "  workspace_client.database.list_database_instances()\n"
+                f"See: {_INSTANCE_NAME_DOC}"
             ) from exc
 
         resolved_host = getattr(instance, "read_write_dns", None) or getattr(
@@ -214,7 +224,8 @@ class _LakebaseBase:
         if not resolved_host:
             raise ValueError(
                 f"Lakebase host not found for instance '{self.instance_name}'. "
-                "Ensure the instance is running and in AVAILABLE state."
+                "Ensure the instance is running and in AVAILABLE state.\n"
+                f"See: {_INSTANCE_NAME_DOC}"
             )
 
         return resolved_host
@@ -234,7 +245,8 @@ class _LakebaseBase:
                 f"Unable to resolve Lakebase autoscaling endpoint '{self._endpoint_name}'. "
                 "Verify the endpoint name is correct.\n"
                 "To list available endpoints, use:\n"
-                '  workspace_client.postgres.list_endpoints(parent="projects/<project>/branches/<branch>")'
+                '  workspace_client.postgres.list_endpoints(parent="projects/<project>/branches/<branch>")\n'
+                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
             ) from exc
 
         ep_status = getattr(ep, "status", None)
@@ -244,7 +256,8 @@ class _LakebaseBase:
         if not resolved_host:
             raise ValueError(
                 f"Host not found on endpoint '{self._endpoint_name}'. "
-                "Ensure the endpoint is in AVAILABLE state."
+                "Ensure the endpoint is in AVAILABLE state.\n"
+                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         return resolved_host
@@ -270,7 +283,8 @@ class _LakebaseBase:
                 "Verify the parent path is correct.\n"
                 "To find available projects and branches, use:\n"
                 "  workspace_client.postgres.list_projects()\n"
-                '  workspace_client.postgres.list_branches(parent="projects/<project_name>")'
+                '  workspace_client.postgres.list_branches(parent="projects/<project_name>")\n'
+                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
             ) from exc
 
         # Find the READ_WRITE endpoint
@@ -287,7 +301,8 @@ class _LakebaseBase:
                 f"No READ_WRITE endpoint found for parent='{branch_parent}'. "
                 "Ensure the branch has an active endpoint with compute running.\n"
                 "To check endpoints, use:\n"
-                f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")'
+                f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")\n'
+                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         # Extract host from endpoint status
@@ -297,8 +312,9 @@ class _LakebaseBase:
 
         if not resolved_host:
             raise ValueError(
-                f"Host not found on READ_WRITE endpoint for project='{self.project}', "
-                f"branch='{self.branch}'. Ensure the endpoint is in AVAILABLE state."
+                f"Host not found on READ_WRITE endpoint for branch='{branch_parent}'. "
+                "Ensure the endpoint is in AVAILABLE state.\n"
+                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         self._endpoint_name = rw_endpoint.name
@@ -693,13 +709,17 @@ class LakebaseClient:
         if pool is not None and has_connection_params:
             raise ValueError(
                 "Provide either 'pool' or connection parameters "
-                "('instance_name', 'autoscaling_endpoint', or 'project'/'branch'), not both."
+                "('instance_name', 'autoscaling_endpoint', or 'project'/'branch'), not both.\n"
+                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
+                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         if pool is None and not has_connection_params:
             raise ValueError(
                 "Must provide 'pool', 'instance_name' (provisioned), "
-                "'autoscaling_endpoint', or 'branch' (autoscaling)."
+                "'autoscaling_endpoint', or 'branch' (autoscaling).\n"
+                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
+                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
             )
 
         self._owns_pool = pool is None
@@ -862,7 +882,7 @@ class LakebaseClient:
         if "ALL" in privilege_values:
             return sql.SQL("ALL PRIVILEGES")
         # Privileges are SQL keywords, so use sql.SQL for each
-        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)
+        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)  # type: ignore[invalid-argument-type]
 
     def _execute_composed(self, query: sql.Composed) -> List[Any] | None:
         """Execute a composed SQL query safely."""
