@@ -44,9 +44,6 @@ DEFAULT_TIMEOUT = 30.0
 DEFAULT_SSLMODE = "require"
 DEFAULT_PORT = 5432
 DEFAULT_DATABASE = "databricks_postgres"
-# Documentation links for error messages
-_INSTANCE_NAME_DOC = "https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/database.html#databricks.sdk.service.database.DatabaseInstance.name"
-_AUTOSCALING_ENDPOINT_DOC = "https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint.name"
 
 # Valid identity types for create_role
 IdentityType = Literal["USER", "SERVICE_PRINCIPAL", "GROUP"]
@@ -135,22 +132,18 @@ class _LakebaseBase:
             raise ValueError(
                 "Cannot provide 'instance_name' (provisioned) together with "
                 "autoscaling parameters ('autoscaling_endpoint', 'project', 'branch'). "
-                "Choose one mode.\n"
-                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
-                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
+                "Choose one mode."
             )
 
         # autoscaling_endpoint is mutually exclusive with project/branch
         if autoscaling_endpoint is not None and (project is not None or branch is not None):
             raise ValueError(
                 "Cannot provide 'autoscaling_endpoint' together with "
-                "'project' or 'branch'. Use either 'project' and 'branch' or "
-                "'autoscaling_endpoint' to identify an autoscaling database.\n"
-                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
+                "'project' or 'branch'. Use one autoscaling method."
             )
 
-        # project without branch is invalid
-        if project is not None and branch is None:
+        # project without branch (and no autoscaling_endpoint) is invalid
+        if project is not None and branch is None and autoscaling_endpoint is None:
             raise ValueError(
                 "Both 'project' and 'branch' are required to use a Lakebase "
                 "autoscaling instance. Please specify both parameters."
@@ -174,9 +167,7 @@ class _LakebaseBase:
         if not is_autoscaling and instance_name is None:
             raise ValueError(
                 "Must provide either 'instance_name' (provisioned), "
-                "'autoscaling_endpoint', or 'branch' (autoscaling).\n"
-                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
-                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
+                "'autoscaling_endpoint', or 'branch' (autoscaling)."
             )
 
         self._is_autoscaling: bool = is_autoscaling
@@ -213,8 +204,7 @@ class _LakebaseBase:
                 f"Unable to resolve Lakebase provisioned instance '{self.instance_name}'. "
                 "Verify the instance name is correct.\n"
                 "To list available instances, use:\n"
-                "  workspace_client.database.list_database_instances()\n"
-                f"See: {_INSTANCE_NAME_DOC}"
+                "  workspace_client.database.list_database_instances()"
             ) from exc
 
         resolved_host = getattr(instance, "read_write_dns", None) or getattr(
@@ -224,8 +214,7 @@ class _LakebaseBase:
         if not resolved_host:
             raise ValueError(
                 f"Lakebase host not found for instance '{self.instance_name}'. "
-                "Ensure the instance is running and in AVAILABLE state.\n"
-                f"See: {_INSTANCE_NAME_DOC}"
+                "Ensure the instance is running and in AVAILABLE state."
             )
 
         return resolved_host
@@ -245,8 +234,7 @@ class _LakebaseBase:
                 f"Unable to resolve Lakebase autoscaling endpoint '{self._endpoint_name}'. "
                 "Verify the endpoint name is correct.\n"
                 "To list available endpoints, use:\n"
-                '  workspace_client.postgres.list_endpoints(parent="projects/<project>/branches/<branch>")\n'
-                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
+                '  workspace_client.postgres.list_endpoints(parent="projects/<project>/branches/<branch>")'
             ) from exc
 
         ep_status = getattr(ep, "status", None)
@@ -256,8 +244,7 @@ class _LakebaseBase:
         if not resolved_host:
             raise ValueError(
                 f"Host not found on endpoint '{self._endpoint_name}'. "
-                "Ensure the endpoint is in AVAILABLE state.\n"
-                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
+                "Ensure the endpoint is in AVAILABLE state."
             )
 
         return resolved_host
@@ -283,8 +270,7 @@ class _LakebaseBase:
                 "Verify the parent path is correct.\n"
                 "To find available projects and branches, use:\n"
                 "  workspace_client.postgres.list_projects()\n"
-                '  workspace_client.postgres.list_branches(parent="projects/<project_name>")\n'
-                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
+                '  workspace_client.postgres.list_branches(parent="projects/<project_name>")'
             ) from exc
 
         # Find the READ_WRITE endpoint
@@ -301,8 +287,7 @@ class _LakebaseBase:
                 f"No READ_WRITE endpoint found for parent='{branch_parent}'. "
                 "Ensure the branch has an active endpoint with compute running.\n"
                 "To check endpoints, use:\n"
-                f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")\n'
-                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
+                f'  workspace_client.postgres.list_endpoints(parent="{branch_parent}")'
             )
 
         # Extract host from endpoint status
@@ -312,9 +297,8 @@ class _LakebaseBase:
 
         if not resolved_host:
             raise ValueError(
-                f"Host not found on READ_WRITE endpoint for branch='{branch_parent}'. "
-                "Ensure the endpoint is in AVAILABLE state.\n"
-                f"See: {_AUTOSCALING_ENDPOINT_DOC}"
+                f"Host not found on READ_WRITE endpoint for project='{self.project}', "
+                f"branch='{self.branch}'. Ensure the endpoint is in AVAILABLE state."
             )
 
         self._endpoint_name = rw_endpoint.name
@@ -430,7 +414,16 @@ class LakebasePool(_LakebaseBase):
         class RotatingConnection(psycopg.Connection):
             @classmethod
             def connect(cls, conninfo: str = "", **kwargs):
-                kwargs["password"] = pool._get_token()
+                token = pool._get_token()
+                kwargs["password"] = token
+                logger.debug(
+                    "Connecting to Lakebase: user=%s, host=%s, token=%s...%s (len=%d)",
+                    pool.username,
+                    pool.host,
+                    token[:10],
+                    token[-5:],
+                    len(token),
+                )
                 # Call the superclass's connect method with updated kwargs
                 return super().connect(conninfo, **kwargs)
 
@@ -533,7 +526,16 @@ class AsyncLakebasePool(_LakebaseBase):
         class AsyncRotatingConnection(psycopg.AsyncConnection):
             @classmethod
             async def connect(cls, conninfo: str = "", **kwargs):
-                kwargs["password"] = await pool._get_token_async()
+                token = await pool._get_token_async()
+                kwargs["password"] = token
+                logger.debug(
+                    "Connecting to Lakebase (async): user=%s, host=%s, token=%s...%s (len=%d)",
+                    pool.username,
+                    pool.host,
+                    token[:10],
+                    token[-5:],
+                    len(token),
+                )
                 # Call the superclass's connect method with updated kwargs
                 return await super().connect(conninfo, **kwargs)
 
@@ -709,17 +711,13 @@ class LakebaseClient:
         if pool is not None and has_connection_params:
             raise ValueError(
                 "Provide either 'pool' or connection parameters "
-                "('instance_name', 'autoscaling_endpoint', or 'project'/'branch'), not both.\n"
-                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
-                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
+                "('instance_name', 'autoscaling_endpoint', or 'project'/'branch'), not both."
             )
 
         if pool is None and not has_connection_params:
             raise ValueError(
                 "Must provide 'pool', 'instance_name' (provisioned), "
-                "'autoscaling_endpoint', or 'branch' (autoscaling).\n"
-                f"  instance_name docs: {_INSTANCE_NAME_DOC}\n"
-                f"  autoscaling_endpoint docs: {_AUTOSCALING_ENDPOINT_DOC}"
+                "'autoscaling_endpoint', or 'branch' (autoscaling)."
             )
 
         self._owns_pool = pool is None
@@ -882,7 +880,7 @@ class LakebaseClient:
         if "ALL" in privilege_values:
             return sql.SQL("ALL PRIVILEGES")
         # Privileges are SQL keywords, so use sql.SQL for each
-        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)  # type: ignore[invalid-argument-type]
+        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)
 
     def _execute_composed(self, query: sql.Composed) -> List[Any] | None:
         """Execute a composed SQL query safely."""
@@ -1268,7 +1266,15 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         # Lakebase docs https://docs.databricks.com/aws/en/oltp/projects/authentication?language=Python%3A+SQLAlchemy
         @event.listens_for(engine.sync_engine, "do_connect")
         def inject_token(dialect, conn_rec, cargs, cparams):
-            cparams["password"] = self.get_token()
-            logger.debug("Injected Lakebase token for connection")
+            token = self.get_token()
+            cparams["password"] = token
+            logger.debug(
+                "Injected Lakebase token for connection: user=%s, host=%s, token=%s...%s (len=%d)",
+                self.username,
+                self.host,
+                token[:10],
+                token[-5:],
+                len(token),
+            )
 
         return engine
