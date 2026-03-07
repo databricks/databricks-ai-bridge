@@ -880,7 +880,7 @@ class LakebaseClient:
         if "ALL" in privilege_values:
             return sql.SQL("ALL PRIVILEGES")
         # Privileges are SQL keywords, so use sql.SQL for each
-        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)
+        return sql.SQL(", ").join(sql.SQL(p) for p in privilege_values)  # type: ignore[invalid-argument-type]
 
     def _execute_composed(self, query: sql.Composed) -> List[Any] | None:
         """Execute a composed SQL query safely."""
