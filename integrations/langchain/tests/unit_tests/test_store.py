@@ -426,3 +426,237 @@ async def test_async_databricks_store_connection(monkeypatch):
     ) as store:
         async with store._lakebase.connection() as conn:
             assert conn == mock_conn
+
+
+# =============================================================================
+# Autoscaling (project/branch) Tests
+# =============================================================================
+
+
+def _create_autoscaling_workspace():
+    """Helper to create a mock workspace client for autoscaling mode."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace.postgres.generate_database_credential.return_value = MagicMock(
+        token="autoscaling-token"
+    )
+    rw_endpoint = MagicMock()
+    rw_endpoint.name = "projects/p/branches/b/endpoints/rw"
+    rw_endpoint.status.endpoint_type = "READ_WRITE"
+    rw_endpoint.status.hosts.host = "auto-db-host"
+    workspace.postgres.list_endpoints.return_value = [rw_endpoint]
+    return workspace
+
+
+def test_databricks_store_autoscaling_configures_lakebase(monkeypatch):
+    """Test that DatabricksStore with project/branch uses autoscaling path."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    store = DatabricksStore(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+def test_databricks_store_provisioned_uses_provisioned_path(monkeypatch):
+    """Test that DatabricksStore with instance_name uses provisioned path."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    store = DatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+    )
+
+    assert "host=db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is False
+    workspace.database.get_database_instance.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_autoscaling_configures_lakebase(monkeypatch):
+    """Test that AsyncDatabricksStore with project/branch uses autoscaling path."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    store = AsyncDatabricksStore(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_autoscaling_context_manager(monkeypatch):
+    """Test autoscaling async store context manager opens and closes the pool."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    async with AsyncDatabricksStore(
+        project="my-project",
+        branch="my-branch",
+        workspace_client=workspace,
+    ) as store:
+        assert test_pool._opened
+        assert store._lakebase._is_autoscaling is True
+
+    assert test_pool._closed
+
+
+# =============================================================================
+# Validation: missing parameters
+# =============================================================================
+
+
+def test_databricks_store_no_params_raises_error(monkeypatch):
+    """DatabricksStore with no connection parameters raises ValueError."""
+    test_pool = TestConnectionPool()
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+        DatabricksStore(workspace_client=workspace)
+
+
+def test_databricks_store_only_branch_raises_error(monkeypatch):
+    """DatabricksStore with only branch (no project) raises ValueError."""
+    test_pool = TestConnectionPool()
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with pytest.raises(ValueError, match="'project' is required"):
+        DatabricksStore(branch="my-branch", workspace_client=workspace)
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_no_params_raises_error(monkeypatch):
+    """AsyncDatabricksStore with no connection parameters raises ValueError."""
+    test_pool = TestAsyncConnectionPool()
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_mock_workspace()
+
+    with pytest.raises(ValueError, match="Must provide either 'instance_name'"):
+        AsyncDatabricksStore(workspace_client=workspace)
+
+
+# =============================================================================
+# Autoscaling: autoscaling_endpoint Tests
+# =============================================================================
+
+
+def _create_endpoint_workspace():
+    """Helper to create a mock workspace client for autoscaling_endpoint mode."""
+    workspace = MagicMock()
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace.postgres.generate_database_credential.return_value = MagicMock(token="endpoint-token")
+    ep = MagicMock()
+    ep.status.hosts.host = "ep-db-host"
+    workspace.postgres.get_endpoint.return_value = ep
+    return workspace
+
+
+def test_databricks_store_autoscaling_endpoint(monkeypatch):
+    """DatabricksStore with autoscaling_endpoint resolves host via get_endpoint."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    store = DatabricksStore(
+        autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True
+    workspace.postgres.get_endpoint.assert_called_once_with(
+        name="projects/p/branches/b/endpoints/ep1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_autoscaling_endpoint(monkeypatch):
+    """AsyncDatabricksStore with autoscaling_endpoint resolves host via get_endpoint."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_endpoint_workspace()
+
+    store = AsyncDatabricksStore(
+        autoscaling_endpoint="projects/p/branches/b/endpoints/ep1",
+        workspace_client=workspace,
+    )
+
+    assert "host=ep-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True
+
+
+# =============================================================================
+# Autoscaling: branch as resource path Tests
+# =============================================================================
+
+
+def test_databricks_store_branch_resource_path(monkeypatch):
+    """DatabricksStore with branch as full resource path (no project needed)."""
+    mock_conn = MagicMock()
+    test_pool = TestConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    store = DatabricksStore(
+        branch="projects/my-project/branches/my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True
+    workspace.postgres.list_endpoints.assert_called_once_with(
+        parent="projects/my-project/branches/my-branch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_branch_resource_path(monkeypatch):
+    """AsyncDatabricksStore with branch as full resource path (no project needed)."""
+    mock_conn = MagicMock()
+    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    workspace = _create_autoscaling_workspace()
+
+    store = AsyncDatabricksStore(
+        branch="projects/my-project/branches/my-branch",
+        workspace_client=workspace,
+    )
+
+    assert "host=auto-db-host" in test_pool.conninfo
+    assert store._lakebase._is_autoscaling is True

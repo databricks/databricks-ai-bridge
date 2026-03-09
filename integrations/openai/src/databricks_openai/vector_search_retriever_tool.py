@@ -109,7 +109,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             raise ValueError(
                 f"Index name {self.index_name} is not in the expected format 'catalog.schema.index'."
             )
-        client_args = {
+        client_args: Dict[str, Any] = {
             "disable_notice": True,
         }
         if self.workspace_client is not None:

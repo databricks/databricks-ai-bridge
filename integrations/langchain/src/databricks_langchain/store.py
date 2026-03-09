@@ -33,7 +33,10 @@ class DatabricksStore(BaseStore):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        autoscaling_endpoint: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -44,7 +47,11 @@ class DatabricksStore(BaseStore):
         """Initialize DatabricksStore with embedding support.
 
         Args:
-            instance_name: The name of the Lakebase instance to connect to.
+            instance_name: The name of the Lakebase provisioned instance.
+            autoscaling_endpoint: Lakebase autoscaling endpoint resource path.
+                See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -64,6 +71,9 @@ class DatabricksStore(BaseStore):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            autoscaling_endpoint=autoscaling_endpoint,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )
@@ -148,7 +158,10 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        autoscaling_endpoint: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         embedding_endpoint: str | None = None,
         embedding_dims: int | None = None,
@@ -159,7 +172,11 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         """Initialize AsyncDatabricksStore with embedding support.
 
         Args:
-            instance_name: The name of the Lakebase instance to connect to.
+            instance_name: The name of the Lakebase provisioned instance.
+            autoscaling_endpoint: Lakebase autoscaling endpoint resource path.
+                See https://databricks-sdk-py.readthedocs.io/en/latest/dbdataclasses/postgres.html#databricks.sdk.service.postgres.Endpoint
+            project: Lakebase autoscaling project name. Also requires ``branch``.
+            branch: Lakebase autoscaling branch name. Also requires ``project``.
             workspace_client: Optional Databricks WorkspaceClient for authentication.
             embedding_endpoint: Name of the Databricks Model Serving endpoint for embeddings
                 (e.g., "databricks-gte-large-en"). If provided, enables semantic search.
@@ -181,6 +198,9 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
+            autoscaling_endpoint=autoscaling_endpoint,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **pool_kwargs,
         )

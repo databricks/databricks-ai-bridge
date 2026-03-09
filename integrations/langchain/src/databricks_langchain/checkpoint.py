@@ -21,13 +21,17 @@ class CheckpointSaver(PostgresSaver):
     """
     LangGraph PostgresSaver using a Lakebase connection pool.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        autoscaling_endpoint: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: Any,
     ) -> None:
@@ -40,13 +44,17 @@ class CheckpointSaver(PostgresSaver):
 
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
+            autoscaling_endpoint=autoscaling_endpoint,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )
         super().__init__(self._lakebase.pool)
 
     def __enter__(self):
-        """Enter context manager."""
+        """Enter context manager and create checkpoint tables."""
+        self.setup()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -59,13 +67,19 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
     """
     Async LangGraph PostgresSaver using a Lakebase connection pool.
 
-    instance_name: Name of Lakebase Instance
+    Supports two modes: Lakebase Provisioned VS Autoscaling
+    https://docs.databricks.com/aws/en/oltp/#feature-comparison
+
+    Checkpoint tables are created automatically when entering the context manager.
     """
 
     def __init__(
         self,
         *,
-        instance_name: str,
+        instance_name: str | None = None,
+        autoscaling_endpoint: str | None = None,
+        project: str | None = None,
+        branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         **pool_kwargs: Any,
     ) -> None:
@@ -78,14 +92,18 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
+            autoscaling_endpoint=autoscaling_endpoint,
+            project=project,
+            branch=branch,
             workspace_client=workspace_client,
             **dict(pool_kwargs),
         )
         super().__init__(self._lakebase.pool)
 
     async def __aenter__(self):
-        """Enter async context manager and open the connection pool."""
+        """Enter async context manager, open the connection pool, and create checkpoint tables."""
         await self._lakebase.open()
+        await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

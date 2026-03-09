@@ -328,8 +328,10 @@ class DatabricksMultiServerMCPClient(MultiServerMCPClient):
         self._server_configs = {server.name: server for server in servers}
 
         # Create connections dict (excluding tool-level params like handle_tool_errors)
-        connections = {server.name: server.to_connection_dict() for server in servers}
-        super().__init__(connections=connections, **kwargs)
+        connections: dict[str, StreamableHttpConnection] = {
+            server.name: server.to_connection_dict() for server in servers
+        }
+        super().__init__(connections=connections, **kwargs)  # type: ignore[arg-type]
 
     async def get_tools(self, server_name: str | None = None):
         """
