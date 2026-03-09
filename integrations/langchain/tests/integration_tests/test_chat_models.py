@@ -770,10 +770,6 @@ def test_chat_databricks_with_gpt_oss():
 
 
 @pytest.mark.st_endpoints
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 def test_chat_databricks_custom_outputs():
     llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
     response = llm.invoke(
@@ -784,10 +780,6 @@ def test_chat_databricks_custom_outputs():
 
 
 @pytest.mark.st_endpoints
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 def test_chat_databricks_custom_outputs_stream():
     llm = ChatDatabricks(model="agents_ml-bbqiu-mcp-openai", use_responses_api=True)
     response = llm.stream(
@@ -998,10 +990,6 @@ def _verify_responses_usage_metadata_keys(lc_usage, openai_usage):
 
 
 @pytest.mark.foundation_models
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 @pytest.mark.parametrize(
     ("model", "message_builder"),
     [
@@ -1033,10 +1021,6 @@ def test_chat_databricks_usage_metadata_keys(model, message_builder):
 
 
 @pytest.mark.foundation_models
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 @pytest.mark.parametrize(
     ("model", "message_builder"),
     [
@@ -1082,10 +1066,6 @@ def test_chat_databricks_stream_usage_metadata_keys(model, message_builder):
 
 
 @pytest.mark.foundation_models
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 def test_chat_databricks_responses_api_usage_metadata_keys():
     """
     Test that ChatDatabricks responses API usage_metadata has the same keys as OpenAI client.
@@ -1113,10 +1093,6 @@ def test_chat_databricks_responses_api_usage_metadata_keys():
 
 
 @pytest.mark.foundation_models
-@pytest.mark.skipif(
-    os.environ.get("RUN_DOGFOOD_TESTS", "").lower() != "true",
-    reason="Requires dogfood CLI profile. Set RUN_DOGFOOD_TESTS=true to run.",
-)
 def test_chat_databricks_responses_api_stream_usage_metadata_keys():
     """
     Test that ChatDatabricks responses API streaming usage_metadata has the same keys as OpenAI client.
