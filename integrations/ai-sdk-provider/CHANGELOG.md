@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-03
+
+### Fixed
+
+- Fixed `looseResponseAgentChunkSchema` fallback to accept SSE chunks without a `type` field (e.g. `{"trace_id":"..."}` events emitted by MLflow AgentServer), preventing spurious stream errors
+
 ## [0.5.0] - 2026-02-26
 
 ### Added

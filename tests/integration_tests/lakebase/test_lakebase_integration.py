@@ -6,24 +6,29 @@ They are NOT run in CI by default - set LAKEBASE_INTEGRATION_TESTS=1 to enable.
 
 Environment Variables:
 ======================
-Required for all tests:
+Required for provisioned instance tests:
     LAKEBASE_INSTANCE_NAME    - Name of your Lakebase instance
     TEST_SERVICE_PRINCIPAL    - A REAL service principal UUID from your workspace
                                 (find in Admin Console > Identity and access > Service principals)
     LAKEBASE_INTEGRATION_TESTS - Set to "1" to enable integration tests
+
+Optional for autoscaling tests (tests skip if not set):
+    LAKEBASE_PROJECT          - Autoscaling project name
+    LAKEBASE_BRANCH           - Autoscaling branch name
+    LAKEBASE_AUTOSCALING_ENDPOINT - Full endpoint resource path
+                                    (e.g. projects/{id}/branches/{id}/endpoints/{id})
 
 Optional for authenticating as different users:
     DATABRICKS_HOST           - Workspace URL (e.g., https://your-workspace.databricks.com)
     DATABRICKS_TOKEN          - OAuth token for the main test user (should have 'CAN MANAGE')
 
 Optional for testing permission errors (tests will be SKIPPED if not set):
-    NO_ROLE_USER_TOKEN        - OAuth token for a user who has NO PostgreSQL role in Lakebase.
-                                This user can authenticate to Databricks but create_role() was
-                                never called for them. Tests verify "role does not exist" errors.
+    LAKEBASE_NO_ROLE_SP_CLIENT_ID     - Client ID of a service principal with NO PostgreSQL role.
+    LAKEBASE_NO_ROLE_SP_CLIENT_SECRET - Client secret for the above SP.
+                                        Tests verify "role does not exist" errors.
 
-    LIMITED_PERMISSION_USER_TOKEN - OAuth token for a user who HAS a PostgreSQL role but lacks
-                                    GRANT permissions. This user can connect but cannot grant
-                                    privileges to others. Tests verify PermissionError handling.
+    LAKEBASE_LIMITED_SP_CLIENT_ID     - Client ID of a SP that HAS a PostgreSQL role but lacks
+    LAKEBASE_LIMITED_SP_CLIENT_SECRET   GRANT permissions. Tests verify PermissionError handling.
 
 Basic test run:
     export LAKEBASE_INSTANCE_NAME=your-lakebase-instance
@@ -31,24 +36,24 @@ Basic test run:
     export LAKEBASE_INTEGRATION_TESTS=1
     pytest tests/integration_tests/lakebase/test_lakebase_integration.py -v
 
-Test with specific OAuth token:
-    export DATABRICKS_HOST=https://your-workspace.databricks.com
-    export DATABRICKS_TOKEN=your-oauth-token
-    pytest tests/integration_tests/lakebase/test_lakebase_integration.py -v
-
 Test "no role" error scenario:
-    export NO_ROLE_USER_TOKEN=oauth-token-for-user-without-database-role
+    export LAKEBASE_NO_ROLE_SP_CLIENT_ID=<client-id>
+    export LAKEBASE_NO_ROLE_SP_CLIENT_SECRET=<client-secret>
     pytest tests/integration_tests/lakebase/test_lakebase_integration.py::TestNoRoleUserErrors -v
 
 Test "limited permission" error scenario:
-    export LIMITED_PERMISSION_USER_TOKEN=oauth-token-for-user-with-role-but-no-grant
+    export LAKEBASE_LIMITED_SP_CLIENT_ID=<client-id>
+    export LAKEBASE_LIMITED_SP_CLIENT_SECRET=<client-secret>
     pytest tests/integration_tests/lakebase/test_lakebase_integration.py::TestLimitedPermissionUserErrors -v
 
 Example to run all tests:
     export DATABRICKS_HOST=[host]
-    export DATABRICKS_TOKEN=[super-user-manage-oauth-token]
-    export LIMITED_PERMISSION_USER_TOKEN=[role-no-permission-oauth-token]
-    export NO_ROLE_USER_TOKEN=[no-role-oauth-token]
+    export DATABRICKS_CLIENT_ID=[main-sp-client-id]
+    export DATABRICKS_CLIENT_SECRET=[main-sp-client-secret]
+    export LAKEBASE_NO_ROLE_SP_CLIENT_ID=[no-role-sp-client-id]
+    export LAKEBASE_NO_ROLE_SP_CLIENT_SECRET=[no-role-sp-client-secret]
+    export LAKEBASE_LIMITED_SP_CLIENT_ID=[limited-sp-client-id]
+    export LAKEBASE_LIMITED_SP_CLIENT_SECRET=[limited-sp-client-secret]
     export LAKEBASE_INSTANCE_NAME=[lakebase]
     export TEST_SERVICE_PRINCIPAL=[sp-uuid]
     export LAKEBASE_INTEGRATION_TESTS=1
@@ -82,25 +87,23 @@ from databricks_ai_bridge.lakebase import (
 )
 
 
-def create_workspace_client_with_token(token: str | None = None) -> WorkspaceClient:
+def create_workspace_client_with_oauth(client_id: str, client_secret: str) -> WorkspaceClient:
     """
-    Create a WorkspaceClient, optionally with a specific OAuth token.
+    Create a WorkspaceClient using OAuth M2M (service principal) credentials.
 
-    If token is provided, creates a client using that token.
-    Otherwise, uses default credential chain (env vars, .databrickscfg, etc.)
+    DATABRICKS_HOST must be set in the environment.
 
-    :param token: Optional OAuth token to authenticate with.
+    :param client_id: Service principal application (client) ID.
+    :param client_secret: Service principal client secret.
     :return: Configured WorkspaceClient.
     """
-    if token:
-        host = os.environ.get("DATABRICKS_HOST")
-        if not host:
-            raise ValueError(
-                "DATABRICKS_HOST must be set when using a custom token. "
-                "Example: export DATABRICKS_HOST=https://your-workspace.databricks.com"
-            )
-        return WorkspaceClient(host=host, token=token)
-    return WorkspaceClient()
+    host = os.environ.get("DATABRICKS_HOST")
+    if not host:
+        raise ValueError(
+            "DATABRICKS_HOST must be set. "
+            "Example: export DATABRICKS_HOST=https://your-workspace.databricks.com"
+        )
+    return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
 
 
 @pytest.fixture(scope="module")
@@ -139,20 +142,10 @@ def workspace_client():
     """
     Create a WorkspaceClient for testing.
 
-    Uses DATABRICKS_TOKEN if set, otherwise uses default credential chain.
-    This allows testing as different users by passing different OAuth tokens.
-
-    Usage:
-        # Test with default credentials
-        pytest tests/...
-
-        # Test as a specific user
-        export DATABRICKS_HOST=https://your-workspace.databricks.com
-        export DATABRICKS_TOKEN=dapi_your_oauth_token
-        pytest tests/...
+    Uses default credential chain (DATABRICKS_CLIENT_ID/SECRET for OAuth M2M,
+    or .databrickscfg profile, etc.).
     """
-    token = os.environ.get("DATABRICKS_TOKEN")
-    return create_workspace_client_with_token(token)
+    return WorkspaceClient()
 
 
 @pytest.fixture(scope="module")
@@ -165,6 +158,71 @@ def client(instance_name, workspace_client):
     """
     pool = LakebasePool(
         instance_name=instance_name,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def autoscaling_project():
+    name = os.environ.get("LAKEBASE_PROJECT")
+    if not name:
+        pytest.skip("LAKEBASE_PROJECT not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_branch():
+    name = os.environ.get("LAKEBASE_BRANCH")
+    if not name:
+        pytest.skip("LAKEBASE_BRANCH not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_endpoint():
+    name = os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT")
+    if not name:
+        pytest.skip("LAKEBASE_AUTOSCALING_ENDPOINT not set")
+    return name
+
+
+@pytest.fixture(scope="module")
+def autoscaling_client(autoscaling_project, autoscaling_branch, workspace_client):
+    """LakebaseClient using project+branch autoscaling mode."""
+    pool = LakebasePool(
+        project=autoscaling_project,
+        branch=autoscaling_branch,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def endpoint_client(autoscaling_endpoint, workspace_client):
+    """LakebaseClient using autoscaling_endpoint mode."""
+    pool = LakebasePool(
+        autoscaling_endpoint=autoscaling_endpoint,
+        workspace_client=workspace_client,
+    )
+    client = LakebaseClient(pool=pool)
+    yield client
+    client.close()
+    pool.close()
+
+
+@pytest.fixture(scope="module")
+def branch_resource_path_client(autoscaling_project, autoscaling_branch, workspace_client):
+    """LakebaseClient using branch as full resource path."""
+    branch_path = f"projects/{autoscaling_project}/branches/{autoscaling_branch}"
+    pool = LakebasePool(
+        branch=branch_path,
         workspace_client=workspace_client,
     )
     client = LakebaseClient(pool=pool)
@@ -578,38 +636,40 @@ class TestNoRoleUserErrors:
 
     REQUIRED ENVIRONMENT VARIABLE:
     ==============================
-    Tests in this class require NO_ROLE_USER_TOKEN to be set. This should be an
-    OAuth token for a Databricks user who does NOT have a PostgreSQL role created
+    Tests in this class require LAKEBASE_NO_ROLE_SP_CLIENT_ID and
+    LAKEBASE_NO_ROLE_SP_CLIENT_SECRET to be set. These should be OAuth M2M
+    credentials for a service principal that does NOT have a PostgreSQL role
     in the Lakebase database (i.e., create_role() was never called for them).
 
     Example:
-        export NO_ROLE_USER_TOKEN=<oauth-token-for-user-without-database-role>
+        export LAKEBASE_NO_ROLE_SP_CLIENT_ID=<sp-client-id>
+        export LAKEBASE_NO_ROLE_SP_CLIENT_SECRET=<sp-client-secret>
 
     Expected behavior: Connection attempts fail with PoolTimeout. The underlying
     PostgreSQL error is "role does not exist" but the connection pool retries
     until timeout, so tests catch PoolTimeout rather than the raw PostgreSQL error.
 
-    This is different from LIMITED_PERMISSION_USER_TOKEN where the user HAS a role
+    This is different from LAKEBASE_LIMITED_SP where the user HAS a role
     but lacks specific GRANT permissions.
     """
 
     @pytest.fixture
     def no_role_client(self, instance_name):
         """
-        Create a client for a user who has no role in the Lakebase database.
+        Create a client for a SP who has no role in the Lakebase database.
 
-        This user can authenticate to Databricks but has never had create_role()
+        This SP can authenticate to Databricks but has never had create_role()
         called for them, so PostgreSQL connection will fail.
         """
-        no_role_token = os.environ.get("NO_ROLE_USER_TOKEN")
-        if not no_role_token:
+        client_id = os.environ.get("LAKEBASE_NO_ROLE_SP_CLIENT_ID")
+        client_secret = os.environ.get("LAKEBASE_NO_ROLE_SP_CLIENT_SECRET")
+        if not client_id or not client_secret:
             pytest.skip(
-                "NO_ROLE_USER_TOKEN not set. "
-                "Set this to an OAuth token for a user who has NO role in the Lakebase database. "
-                "Example: export NO_ROLE_USER_TOKEN=<oauth-token>"
+                "LAKEBASE_NO_ROLE_SP_CLIENT_ID/SECRET not set. "
+                "Set these to OAuth credentials for a SP with no database role."
             )
 
-        workspace_client = create_workspace_client_with_token(no_role_token)
+        workspace_client = create_workspace_client_with_oauth(client_id, client_secret)
         pool = LakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
@@ -623,7 +683,7 @@ class TestNoRoleUserErrors:
         """
         User without a database role should fail to connect OR get permission denied.
 
-        NOTE: Requires NO_ROLE_USER_TOKEN env var. Skipped if not set.
+        NOTE: Requires LAKEBASE_NO_ROLE_SP_CLIENT_ID/SECRET env vars. Skipped if not set.
 
         When a user has no PostgreSQL role in Lakebase, connection attempts fail
         with PoolTimeout. The underlying PostgreSQL error "role does not exist"
@@ -649,7 +709,7 @@ class TestNoRoleUserErrors:
                 # both a role AND grant permissions, which is NOT what we expect
                 # for a "no role" user. Fail the test.
                 pytest.fail(
-                    "NO_ROLE_USER_TOKEN user was able to grant privileges! "
+                    "No-role SP was able to grant privileges! "
                     "This user appears to have a database role with GRANT permissions. "
                     "Please use a token for a user/SP that truly has no role in Lakebase."
                 )
@@ -674,7 +734,7 @@ class TestNoRoleUserErrors:
         """
         User without a database role (or without CAN MANAGE) cannot create roles.
 
-        NOTE: Requires NO_ROLE_USER_TOKEN env var. Skipped if not set.
+        NOTE: Requires LAKEBASE_NO_ROLE_SP_CLIENT_ID/SECRET env vars. Skipped if not set.
 
         The operation should fail either because:
         1. User has no role -> PoolTimeout with "role does not exist" in logs
@@ -691,7 +751,7 @@ class TestNoRoleUserErrors:
                 )
                 # If we get here, the create succeeded - this is NOT expected. Fail the test.
                 pytest.fail(
-                    "NO_ROLE_USER_TOKEN user was able to create a role! "
+                    "No-role SP was able to create a role! "
                     "This user appears to have CAN MANAGE permission. "
                     "Please use a token for a user/SP without this permission."
                 )
@@ -711,41 +771,42 @@ class TestLimitedPermissionUserErrors:
 
     REQUIRED ENVIRONMENT VARIABLE:
     ==============================
-    Tests in this class require LIMITED_PERMISSION_USER_TOKEN to be set. This should
-    be an OAuth token for a Databricks user who:
+    Tests in this class require LAKEBASE_LIMITED_SP_CLIENT_ID and
+    LAKEBASE_LIMITED_SP_CLIENT_SECRET to be set. These should be OAuth M2M
+    credentials for a service principal that:
     1. HAS a PostgreSQL role in the Lakebase database (create_role was called for them)
     2. Does NOT have 'CAN MANAGE' permission on the Lakebase instance
     3. Does NOT have GRANT OPTION on schemas/tables
 
     Example:
-        export LIMITED_PERMISSION_USER_TOKEN=<oauth-token-for-user-with-role-but-no-grant>
+        export LAKEBASE_LIMITED_SP_CLIENT_ID=<sp-client-id>
+        export LAKEBASE_LIMITED_SP_CLIENT_SECRET=<sp-client-secret>
 
-    This user can connect to the database but cannot grant privileges to others.
+    This SP can connect to the database but cannot grant privileges to others.
 
-    To set up this user:
-    1. As an admin, call: client.create_role("user@example.com", "USER")
-    2. Grant them basic access: GRANT USAGE ON SCHEMA public TO "user@example.com"
+    To set up this SP:
+    1. As an admin, call: client.create_role("<sp-application-id>", "SERVICE_PRINCIPAL")
+    2. Grant them basic access: GRANT USAGE ON SCHEMA public TO "<sp-application-id>"
     3. Do NOT give them 'CAN MANAGE' on the Lakebase instance
     """
 
     @pytest.fixture
     def limited_permission_client(self, instance_name):
         """
-        Create a client for a user who has a role but limited permissions.
+        Create a client for a SP who has a role but limited permissions.
 
-        This user can connect to PostgreSQL but cannot grant privileges to others
+        This SP can connect to PostgreSQL but cannot grant privileges to others
         because they lack 'CAN MANAGE' and GRANT OPTION.
         """
-        limited_token = os.environ.get("LIMITED_PERMISSION_USER_TOKEN")
-        if not limited_token:
+        client_id = os.environ.get("LAKEBASE_LIMITED_SP_CLIENT_ID")
+        client_secret = os.environ.get("LAKEBASE_LIMITED_SP_CLIENT_SECRET")
+        if not client_id or not client_secret:
             pytest.skip(
-                "LIMITED_PERMISSION_USER_TOKEN not set. "
-                "Set this to an OAuth token for a user who HAS a database role "
-                "but lacks GRANT permissions. "
-                "Example: export LIMITED_PERMISSION_USER_TOKEN=<oauth-token>"
+                "LAKEBASE_LIMITED_SP_CLIENT_ID/SECRET not set. "
+                "Set these to OAuth credentials for a SP with a role but no GRANT permissions."
             )
 
-        workspace_client = create_workspace_client_with_token(limited_token)
+        workspace_client = create_workspace_client_with_oauth(client_id, client_secret)
         pool = LakebasePool(
             instance_name=instance_name,
             workspace_client=workspace_client,
@@ -761,7 +822,7 @@ class TestLimitedPermissionUserErrors:
         """
         Granting schema privileges without proper permissions should raise PermissionError.
 
-        NOTE: Requires LIMITED_PERMISSION_USER_TOKEN env var. Skipped if not set.
+        NOTE: Requires LAKEBASE_LIMITED_SP_CLIENT_ID/SECRET env vars. Skipped if not set.
 
         SETUP REQUIRED: Create 'test_limited_perm_schema' as admin before running:
             CREATE SCHEMA IF NOT EXISTS test_limited_perm_schema;
@@ -777,7 +838,7 @@ class TestLimitedPermissionUserErrors:
                 schemas=[test_schema],
             )
             pytest.fail(
-                f"LIMITED_PERMISSION_USER_TOKEN user was able to grant on '{test_schema}'! "
+                f"Limited-permission SP was able to grant on '{test_schema}'! "
                 "This user should NOT have GRANT permission. "
                 "Ensure this schema is owned by a different user."
             )
@@ -801,7 +862,7 @@ class TestLimitedPermissionUserErrors:
         """
         Granting table privileges without proper permissions should raise PermissionError.
 
-        NOTE: Requires LIMITED_PERMISSION_USER_TOKEN env var. Skipped if not set.
+        NOTE: Requires LAKEBASE_LIMITED_SP_CLIENT_ID/SECRET env vars. Skipped if not set.
         """
         try:
             limited_permission_client.grant_all_tables_in_schema(
@@ -810,7 +871,7 @@ class TestLimitedPermissionUserErrors:
                 schemas=["public"],
             )
             pytest.fail(
-                "LIMITED_PERMISSION_USER_TOKEN user was able to grant table privileges! "
+                "Limited-permission SP was able to grant table privileges! "
                 "This user should NOT have GRANT permission on tables."
             )
         except PermissionError as e:
@@ -823,7 +884,7 @@ class TestLimitedPermissionUserErrors:
         """
         Creating a role without 'CAN MANAGE' permission should raise PermissionError.
 
-        NOTE: Requires LIMITED_PERMISSION_USER_TOKEN env var. Skipped if not set.
+        NOTE: Requires LAKEBASE_LIMITED_SP_CLIENT_ID/SECRET env vars. Skipped if not set.
 
         Expected error message should include:
         - What operation failed
@@ -835,7 +896,7 @@ class TestLimitedPermissionUserErrors:
                 "SERVICE_PRINCIPAL",
             )
             pytest.fail(
-                "LIMITED_PERMISSION_USER_TOKEN user was able to create a role! "
+                "Limited-permission SP was able to create a role! "
                 "This user should NOT have CAN MANAGE permission."
             )
         except PermissionError as e:
@@ -945,5 +1006,135 @@ class TestEndToEndPermissionSetup:
                 SequencePrivilege.SELECT,
                 SequencePrivilege.UPDATE,
             ],
+            schemas=["public"],
+        )
+
+
+# =============================================================================
+# Autoscaling Integration Tests
+# =============================================================================
+
+
+class TestAutoscalingProjectBranch:
+    """Test connectivity and basic operations using project+branch autoscaling mode."""
+
+    def test_connect_and_execute(self, autoscaling_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = autoscaling_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, autoscaling_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, autoscaling_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, autoscaling_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, autoscaling_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        autoscaling_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        autoscaling_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public"],
+        )
+
+
+class TestAutoscalingEndpoint:
+    """Test connectivity and basic operations using autoscaling_endpoint mode."""
+
+    def test_connect_and_execute(self, endpoint_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = endpoint_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, endpoint_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, endpoint_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, endpoint_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, endpoint_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        endpoint_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        endpoint_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
+            schemas=["public"],
+        )
+
+
+class TestAutoscalingBranchResourcePath:
+    """Test connectivity and basic operations using branch-as-resource-path mode."""
+
+    def test_connect_and_execute(self, branch_resource_path_client):
+        """Execute SELECT 1 to verify connection works."""
+        result = branch_resource_path_client.execute("SELECT 1")
+        assert result is not None
+
+    def test_create_role(self, branch_resource_path_client, test_service_principal):
+        """Create role for service principal (idempotent)."""
+        result = branch_resource_path_client.create_role(
+            test_service_principal, "SERVICE_PRINCIPAL"
+        )
+        assert result is None or isinstance(result, list)
+
+    def test_grant_schema(self, branch_resource_path_client, test_service_principal):
+        """Grant USAGE on public schema."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_schema(
+            grantee=test_service_principal,
+            privileges=[SchemaPrivilege.USAGE],
+            schemas=["public"],
+        )
+
+    def test_grant_all_tables(self, branch_resource_path_client, test_service_principal):
+        """Grant SELECT on all tables in public."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_all_tables_in_schema(
+            grantee=test_service_principal,
+            privileges=[TablePrivilege.SELECT],
+            schemas=["public"],
+        )
+
+    def test_grant_all_sequences(self, branch_resource_path_client, test_service_principal):
+        """Grant USAGE on all sequences in public."""
+        branch_resource_path_client.create_role(test_service_principal, "SERVICE_PRINCIPAL")
+        branch_resource_path_client.grant_all_sequences_in_schema(
+            grantee=test_service_principal,
+            privileges=[SequencePrivilege.USAGE],
             schemas=["public"],
         )

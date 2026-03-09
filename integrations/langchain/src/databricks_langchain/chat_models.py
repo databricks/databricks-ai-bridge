@@ -522,7 +522,7 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(item_dict)
 
                 try:
-                    args = json.loads(item.arguments, strict=False)  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    args = json.loads(item.arguments, strict=False)  # ty:ignore[unresolved-attribute, invalid-argument-type]: astral-sh/ty#1479 should fix this
                     error = None
                 except json.JSONDecodeError as e:
                     error = str(e)
@@ -1385,7 +1385,7 @@ class ChatDatabricks(BaseChatModel):
 
 
 def _convert_message_to_dict(message: BaseMessage) -> dict:
-    message_dict = {"content": message.content}
+    message_dict: Dict[str, Any] = {"content": message.content}
 
     # NB: We don't propagate 'name' field from input message to the endpoint because
     #  FMAPI doesn't support it. We should update the endpoints to be compatible with
@@ -1709,7 +1709,7 @@ def _convert_responses_api_chunk_to_lc_chunk(
             tool_call_chunks.append(
                 tool_call_chunk(
                     name=item.name,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
-                    args=item.arguments,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                    args=item.arguments,  # ty:ignore[unresolved-attribute, invalid-argument-type]: astral-sh/ty#1479 should fix this
                     id=item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                 )
             )
