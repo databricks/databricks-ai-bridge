@@ -131,13 +131,17 @@ def test_chat_databricks_stream(model):
     assert all("Python" not in chunk.content for chunk in chunks)
     assert callback.chunk_counts == len(chunks)
 
-    last_chunk = chunks[-1]
-    assert last_chunk.response_metadata.get("finish_reason") in ("stop", "end_turn", None)
+    # finish_reason may be on the last content chunk, not necessarily chunks[-1]
+    # (a usage-only chunk may follow when stream_options is enabled)
+    finish_reasons = [
+        chunk.response_metadata.get("finish_reason")
+        for chunk in chunks
+        if chunk.response_metadata.get("finish_reason")
+    ]
+    assert len(finish_reasons) >= 1, "Expected at least one chunk with finish_reason"
+    assert finish_reasons[-1] in ("stop", "end_turn")
 
 
-@pytest.mark.skip(
-    reason="Streaming usage_metadata requires stream_options support in ChatDatabricks"
-)
 @pytest.mark.foundation_models
 @pytest.mark.parametrize("model", _FOUNDATION_MODELS)
 def test_chat_databricks_stream_with_usage(model):
@@ -164,8 +168,15 @@ def test_chat_databricks_stream_with_usage(model):
     assert all("Python" not in chunk.content for chunk in chunks)
     assert callback.chunk_counts == len(chunks)
 
-    last_chunk = chunks[-1]
-    assert last_chunk.response_metadata.get("finish_reason") in ("stop", "end_turn", None)
+    # finish_reason may be on the last content chunk, not necessarily chunks[-1]
+    # (a usage-only chunk may follow when stream_options is enabled)
+    finish_reasons = [
+        chunk.response_metadata.get("finish_reason")
+        for chunk in chunks
+        if chunk.response_metadata.get("finish_reason")
+    ]
+    assert len(finish_reasons) >= 1, "Expected at least one chunk with finish_reason"
+    assert finish_reasons[-1] in ("stop", "end_turn")
     assert last_chunk.usage_metadata is not None
     assert last_chunk.usage_metadata["input_tokens"] > 0
     assert last_chunk.usage_metadata["output_tokens"] > 0
@@ -747,57 +758,6 @@ def test_chat_databricks_utf8_encoding(model):
     assert "blåbær" in full_content.lower()
 
 
-@pytest.mark.skip(reason="Unit test with mocks — should be moved to unit_tests/")
-def test_chat_databricks_with_timeout_and_retries():
-    """Test that ChatDatabricks can be initialized with timeout and max_retries parameters."""
-    from unittest.mock import Mock, patch
-
-    # Mock the OpenAI client
-    mock_openai_client = Mock()
-    mock_workspace_client = Mock()
-    mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
-
-    with patch("databricks.sdk.WorkspaceClient", return_value=mock_workspace_client):
-        # Create ChatDatabricks with timeout and max_retries
-        chat = ChatDatabricks(
-            model="databricks-meta-llama-3-3-70b-instruct", timeout=45.0, max_retries=3
-        )
-
-        # Verify the parameters are set correctly
-        assert chat.timeout == 45.0
-        assert chat.max_retries == 3
-
-        # Verify the client was configured with these parameters
-        assert chat.client == mock_openai_client
-
-    # Test with workspace_client parameter
-    from databricks.sdk import WorkspaceClient
-
-    mock_ws = Mock(spec=WorkspaceClient)
-    mock_ws.serving_endpoints = Mock()
-    mock_ws.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
-    mock_ws.config = Mock()
-    mock_ws.config.host = "https://test.databricks.com"
-
-    with patch(
-        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
-    ) as mock_get_client:
-        chat_with_ws = ChatDatabricks(
-            model="databricks-meta-llama-3-3-70b-instruct",
-            workspace_client=mock_ws,
-            timeout=30.0,
-            max_retries=2,
-        )
-
-        # Verify get_openai_client was called with all parameters
-        mock_get_client.assert_called_once_with(
-            workspace_client=mock_ws, timeout=30.0, max_retries=2
-        )
-
-        assert chat_with_ws.timeout == 30.0
-        assert chat_with_ws.max_retries == 2
-
-
 def test_chat_databricks_with_gpt_oss():
     """
     API ref: https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/api-reference#contentitem
@@ -838,9 +798,6 @@ def test_chat_databricks_custom_outputs_stream():
     assert any(chunk.custom_outputs["key"] == "value" for chunk in response)  # type: ignore[attr-defined]
 
 
-@pytest.mark.skip(
-    reason="Streaming usage_metadata requires stream_options support in ChatDatabricks"
-)
 def test_chat_databricks_token_count():
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
@@ -856,15 +813,13 @@ def test_chat_databricks_token_count():
 
     llm_with_usage = ChatDatabricks(model="databricks-gpt-oss-120b", stream_usage=True)
     chunks = list(llm_with_usage.stream("What is the 100th fibonacci number?"))
-    last_chunk = chunks[-1]
-    assert last_chunk.usage_metadata is not None
-    assert last_chunk.usage_metadata["input_tokens"] > 0
-    assert last_chunk.usage_metadata["output_tokens"] > 0
-    assert last_chunk.usage_metadata["total_tokens"] > 0
-    assert (
-        last_chunk.usage_metadata["total_tokens"]
-        == last_chunk.usage_metadata["input_tokens"] + last_chunk.usage_metadata["output_tokens"]
-    )
+    usage_chunks = [c for c in chunks if c.usage_metadata is not None]
+    assert len(usage_chunks) >= 1, "Expected at least one chunk with usage_metadata"
+    usage = usage_chunks[-1].usage_metadata
+    assert usage["input_tokens"] > 0
+    assert usage["output_tokens"] > 0
+    assert usage["total_tokens"] > 0
+    assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
 
 
 def test_chat_databricks_gpt5_stream_with_usage():
