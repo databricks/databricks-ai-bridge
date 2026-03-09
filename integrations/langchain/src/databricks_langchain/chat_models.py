@@ -1424,6 +1424,11 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     """
     Convert a LangChain message to a Responses API message.
     """
+    # FMAPI enforces id prefixes (msg_ for messages, fc_ for function_calls)
+    # and a 64-char max. lc_msg.id is typically resp_... (193 chars, wrong prefix).
+    def _msg_id(lc_id: str) -> str:
+        return f"msg_{lc_id[:59]}" if lc_id else lc_id
+
     # TODO: add multimodal support
     input_items = []
     for lc_msg in messages:
@@ -1449,7 +1454,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                                         }
                                     ],
                                     "role": "assistant",
-                                    "id": lc_msg.id,
+                                    "id": _msg_id(lc_msg.id),
                                 }
                             )
                         elif block_type == "refusal":
@@ -1463,7 +1468,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                                         }
                                     ],
                                     "role": "assistant",
-                                    "id": lc_msg.id,
+                                    "id": _msg_id(lc_msg.id),
                                 }
                             )
                         elif block_type in (
@@ -1496,7 +1501,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                     {
                         "type": "message",
                         "role": "assistant",
-                        "id": lc_msg.id,
+                        "id": _msg_id(lc_msg.id),
                         "content": [{"type": "output_text", "text": cc_msg["content"]}],
                     }
                 )

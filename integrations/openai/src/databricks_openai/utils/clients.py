@@ -417,6 +417,10 @@ class DatabricksOpenAI(OpenAI):
             http_client=_get_authorized_http_client(workspace_client),
         )
 
+        # Override the parent's cached_property with our DatabricksResponses
+        # which truncates oversized FMAPI response ids.
+        self.__dict__["responses"] = DatabricksResponses(self, self._workspace_client)
+
     @override
     @property
     def chat(self) -> Chat:
@@ -429,12 +433,6 @@ class DatabricksOpenAI(OpenAI):
             )
             return chat_with_custom_completions
         return super().chat
-
-    @property
-    def responses(self) -> Responses:
-        if not hasattr(self, "_databricks_responses"):
-            self._databricks_responses = DatabricksResponses(self, self._workspace_client)
-        return self._databricks_responses
 
 
 class AsyncDatabricksCompletions(AsyncCompletions):
@@ -573,6 +571,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 
+        # Override the parent's cached_property with our AsyncDatabricksResponses
+        self.__dict__["responses"] = AsyncDatabricksResponses(self, self._workspace_client)
+
     @property
     def chat(self) -> AsyncChat:
         if not isinstance(super().chat, AsyncDatabricksChat):
@@ -584,9 +585,3 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             )
             return chat_with_custom_completions
         return super().chat
-
-    @property
-    def responses(self) -> AsyncResponses:
-        if not hasattr(self, "_databricks_responses"):
-            self._databricks_responses = AsyncDatabricksResponses(self, self._workspace_client)
-        return self._databricks_responses
