@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.17.0 databricks-langchain 0.17.0 databricks-openai 0.13.0 (2026-03-09)
+
+### Release
+- Support Lakebase autoscaling in stateful agent SDKs
+
 ## databricks-ai-bridge 0.14.1 databricks-openai 0.11.1 (2026-02-10)
 
 ### Bug Fixes

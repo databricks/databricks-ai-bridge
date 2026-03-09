@@ -1,6 +1,6 @@
 [project]
 name = "databricks-openai"
-version = "0.12.1"
+version = "0.13.0"
 description = "Support for Databricks AI support with OpenAI"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory = [
-    "databricks-ai-bridge[memory]>=0.14.1",
+    "databricks-ai-bridge[memory]>=0.17.0",
 ]
 
 [dependency-groups]
