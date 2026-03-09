@@ -9,6 +9,7 @@ need to update the corresponding integration test, please contact to the
 maintainers of the repository to verify the changes.
 """
 
+import os
 from typing import Annotated
 
 import pytest
@@ -237,6 +238,10 @@ async def test_chat_databricks_abatch(model):
 @pytest.mark.asyncio
 @pytest.mark.st_endpoints
 @pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 async def test_chat_databricks_responses_api_ainvoke(endpoint):
     """Test async ChatDatabricks with responses API."""
     from databricks.sdk import WorkspaceClient
@@ -259,6 +264,10 @@ async def test_chat_databricks_responses_api_ainvoke(endpoint):
 @pytest.mark.asyncio
 @pytest.mark.st_endpoints
 @pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 async def test_chat_databricks_responses_api_astream(endpoint):
     """Test async ChatDatabricks streaming with responses API."""
     from databricks.sdk import WorkspaceClient
@@ -498,6 +507,10 @@ def test_chat_databricks_langgraph_with_memory(model):
 
 @pytest.mark.st_endpoints
 @pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_chat_databricks_responses_api_invoke(endpoint):
     """Test ChatDatabricks with responses API."""
     from databricks.sdk import WorkspaceClient
@@ -519,6 +532,10 @@ def test_chat_databricks_responses_api_invoke(endpoint):
 
 @pytest.mark.st_endpoints
 @pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_chat_databricks_responses_api_stream(endpoint):
     """Test ChatDatabricks streaming with responses API."""
     from databricks.sdk import WorkspaceClient
@@ -556,6 +573,10 @@ def test_chat_databricks_responses_api_stream(endpoint):
 
 
 @pytest.mark.st_endpoints
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_chat_databricks_chatagent_invoke():
     """Test ChatDatabricks with ChatAgent endpoint."""
     from databricks.sdk import WorkspaceClient
@@ -609,6 +630,10 @@ def test_chat_databricks_chatagent_invoke():
 
 
 @pytest.mark.st_endpoints
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_chat_databricks_chatagent_stream():
     """Test ChatDatabricks streaming with ChatAgent endpoint."""
     from databricks.sdk import WorkspaceClient
@@ -646,6 +671,10 @@ def test_chat_databricks_chatagent_stream():
 
 @pytest.mark.st_endpoints
 @pytest.mark.parametrize("endpoint", _RESPONSES_API_ENDPOINTS)
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_responses_api_extra_body_custom_inputs(endpoint):
     """Test that extra_body parameter can pass custom_inputs to Responses API endpoint"""
     from databricks.sdk import WorkspaceClient
@@ -672,6 +701,10 @@ def test_responses_api_extra_body_custom_inputs(endpoint):
 
 
 @pytest.mark.st_endpoints
+@pytest.mark.skipif(
+    os.environ.get("RUN_ST_ENDPOINT_TESTS", "").lower() != "true",
+    reason="Single tenant endpoint tests require special endpoint access. Set RUN_ST_ENDPOINT_TESTS=true to run.",
+)
 def test_chatagent_extra_body_custom_inputs():
     """Test that extra_body parameter works with ChatAgent endpoints"""
     from databricks.sdk import WorkspaceClient
@@ -736,7 +769,6 @@ def test_chat_databricks_with_gpt_oss():
     assert isinstance(response.content, str)
 
 
-@pytest.mark.st_endpoints
 def test_chat_databricks_custom_outputs():
     llm = ChatDatabricks(model="agents_ml-bbqiu-codegen", use_responses_api=True)
     response = llm.invoke(
@@ -746,7 +778,6 @@ def test_chat_databricks_custom_outputs():
     assert response.custom_outputs["key"] == "value"  # type: ignore[attr-defined]
 
 
-@pytest.mark.st_endpoints
 def test_chat_databricks_custom_outputs_stream():
     llm = ChatDatabricks(model="agents_ml-bbqiu-mcp-openai", use_responses_api=True)
     response = llm.stream(
@@ -758,6 +789,10 @@ def test_chat_databricks_custom_outputs_stream():
 
 
 def test_chat_databricks_token_count():
+    import mlflow
+
+    mlflow.set_experiment("4435237072766312")
+    mlflow.langchain.autolog()
     llm = ChatDatabricks(model="databricks-gpt-oss-120b")
     response = llm.invoke("What is the 100th fibonacci number?")
     assert response.content is not None
