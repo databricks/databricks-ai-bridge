@@ -454,10 +454,6 @@ class ChatDatabricks(BaseChatModel):
             if self.n != 1:
                 data["n"] = self.n
 
-            # Request usage metadata in streaming responses
-            if stream and self.stream_usage:
-                data["stream_options"] = {"include_usage": True}
-
         return data
 
     def _convert_responses_api_response_to_chat_result(self, response: Response) -> ChatResult:
