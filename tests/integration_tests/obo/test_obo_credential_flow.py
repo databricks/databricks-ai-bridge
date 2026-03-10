@@ -41,8 +41,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _MAX_RETRIES = 3
-_MAX_WARMUP_ATTEMPTS = 10
-_WARMUP_INTERVAL = 30  # seconds between warmup attempts (5 min total)
+_MAX_WARMUP_ATTEMPTS = 20
+_WARMUP_INTERVAL = 30  # seconds between warmup attempts (10 min total)
 _PROMPT = "Call the whoami tool and respond with ONLY the raw result. Do not add any other text."
 
 
@@ -136,28 +136,53 @@ def serving_endpoint():
 
 
 @pytest.fixture(scope="module")
-def serving_endpoint_ready(sp_a_client, serving_endpoint):
-    """Warm up the serving endpoint (may be scaled to zero) before tests."""
+def serving_endpoint_ready(sp_a_workspace_client, sp_a_client, serving_endpoint):
+    """Warm up the serving endpoint (may be scaled to zero) before tests.
+
+    Polls endpoint state via SDK first (cheap), then sends a real request
+    once the endpoint reports READY.
+    """
     for attempt in range(_MAX_WARMUP_ATTEMPTS):
         try:
-            sp_a_client.responses.create(
-                model=serving_endpoint,
-                input=[{"role": "user", "content": "ping"}],
+            ep = sp_a_workspace_client.serving_endpoints.get(serving_endpoint)
+            state = ep.state.ready if ep.state else None
+            if state == "READY":
+                # Endpoint infrastructure is ready — send a real request to confirm
+                sp_a_client.responses.create(
+                    model=serving_endpoint,
+                    input=[{"role": "user", "content": "ping"}],
+                )
+                log.info("Serving endpoint is warm after %d attempt(s)", attempt + 1)
+                return
+            log.info(
+                "Warmup %d/%d: endpoint state=%s — waiting %ds",
+                attempt + 1,
+                _MAX_WARMUP_ATTEMPTS,
+                state,
+                _WARMUP_INTERVAL,
             )
-            log.info("Serving endpoint is warm after %d attempt(s)", attempt + 1)
-            return
         except Exception as exc:
             log.info(
-                "Warmup attempt %d/%d: %s — waiting %ds",
+                "Warmup %d/%d: %s — waiting %ds",
                 attempt + 1,
                 _MAX_WARMUP_ATTEMPTS,
                 exc,
                 _WARMUP_INTERVAL,
             )
-            time.sleep(_WARMUP_INTERVAL)
+        time.sleep(_WARMUP_INTERVAL)
+    # Get final endpoint state for a useful error message
+    try:
+        ep = sp_a_workspace_client.serving_endpoints.get(serving_endpoint)
+        final_state = ep.state.ready if ep.state else "unknown"
+        config_update = ep.state.config_update if ep.state else "unknown"
+    except Exception:
+        final_state = "unknown"
+        config_update = "unknown"
     pytest.fail(
         f"Serving endpoint '{serving_endpoint}' did not scale up within "
-        f"{_MAX_WARMUP_ATTEMPTS * _WARMUP_INTERVAL}s"
+        f"{_MAX_WARMUP_ATTEMPTS * _WARMUP_INTERVAL}s. "
+        f"Final state: ready={final_state}, config_update={config_update}. "
+        f"The endpoint may need manual intervention or a longer timeout."
     )
 
 
