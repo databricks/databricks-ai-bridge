@@ -437,3 +437,44 @@ class TestAgentToolCallingResponsesAPI:
                 assert ToolCallItem in second_item_types
 
         await async_retry(_run)
+
+    async def test_streaming(self, async_client, workspace_client, model):
+        """Streaming via Responses API: verify stream events via Runner.run_streamed()."""
+        from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
+        from agents.stream_events import RunItemStreamEvent
+
+        from databricks_openai.agents import McpServer
+
+        async def _run():
+            set_default_openai_client(async_client)
+            set_default_openai_api("responses")
+
+            async with McpServer.from_uc_function(
+                catalog=_MCP_CATALOG,
+                schema=_MCP_SCHEMA,
+                function_name=_MCP_FUNCTION,
+                workspace_client=workspace_client,
+                timeout=60,
+            ) as server:
+                agent = Agent(
+                    name="echo-agent",
+                    instructions="Use the echo_message tool to echo messages when asked.",
+                    model=model,
+                    mcp_servers=[server],
+                )
+                result = Runner.run_streamed(agent, input="Echo the message 'streaming test'")
+
+                event_count = 0
+                run_item_events = []
+                async for event in result.stream_events():
+                    event_count += 1
+                    if isinstance(event, RunItemStreamEvent):
+                        run_item_events.append(event)
+
+                assert event_count > 0, "No stream events received"
+                event_names = [e.name for e in run_item_events]
+                assert "tool_called" in event_names, (
+                    f"Expected tool_called event, got: {event_names}"
+                )
+
+        await async_retry(_run)
