@@ -19,21 +19,23 @@ DEFAULT_MAX_TOKENS = 200
 
 # Models excluded from Chat Completions API tests.
 SKIP_CHAT_COMPLETIONS = {
-    "databricks-gpt-5-1-codex-max",  # Responses API only
-    "databricks-gpt-5-1-codex-mini",  # Responses API only
-    "databricks-gpt-5-2-codex",  # Responses API only
-    "databricks-gpt-5-3-codex",  # Responses API only
-    "databricks-gpt-5-4",  # Responses API only
+    # Kept from COMMON_SKIP_MODELS on main:
     "databricks-gpt-5-nano",  # too small for reliable tool calling
-    "databricks-gpt-oss-20b",  # hallucinates tool names
-    "databricks-gpt-oss-120b",  # hallucinates tool names
-    "databricks-llama-4-maverick",  # hallucinates tool names
-    "databricks-gemini-2-5-flash",  # list content issues
-    "databricks-gemini-2-5-pro",  # list content issues
-    "databricks-gemini-3-flash",  # requires thought_signature
-    "databricks-gemini-3-pro",  # requires thought_signature
-    "databricks-gemini-3-1-pro",  # requires thought_signature
-    "databricks-gemini-3-1-flash-lite",  # requires thought_signature
+    "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
+    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
+    "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
+    "databricks-gemini-3-flash",  # requires thought_signature on function calls
+    "databricks-gemini-3-pro",  # requires thought_signature on function calls
+    "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
+    "databricks-gemini-2-5-pro",  # returns list content that breaks Agents SDK parsing
+    "databricks-gemini-2-5-flash",  # returns list content that breaks Agents SDK parsing
+    "databricks-gpt-5-1-codex-max",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-1-codex-mini",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-2-codex",  # Responses API only, no Chat Completions support
+    "databricks-gpt-5-3-codex",  # Responses API only, no Chat Completions support
+    # Added in this PR:
+    "databricks-gpt-5-4",  # Responses API only, no Chat Completions support
+    "databricks-gemini-3-1-flash-lite",  # requires thought_signature on function calls
 }
 
 # Additional models excluded only in LangChain Chat Completions tests.
