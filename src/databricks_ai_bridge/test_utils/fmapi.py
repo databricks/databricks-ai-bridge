@@ -39,6 +39,7 @@ RESPONSES_ONLY_MODELS = {
     "databricks-gpt-5-1-codex-mini",
     "databricks-gpt-5-2-codex",
     "databricks-gpt-5-3-codex",
+    "databricks-gpt-5-4",  # tool calling only via Responses API
 }
 
 # Reasoning models consume reasoning tokens from the max_tokens budget.

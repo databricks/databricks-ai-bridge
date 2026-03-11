@@ -2,7 +2,7 @@ from typing import Any, List, Union
 from urllib.parse import urlparse
 
 import numpy as np
-from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
+from databricks_openai import AsyncDatabricksOpenAI
 from openai import AsyncOpenAI, OpenAI
 
 
@@ -23,22 +23,31 @@ def get_deployment_client(target_uri: str) -> Any:
 
 
 def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
-    """Get a DatabricksOpenAI client configured for Databricks.
-
-    Uses DatabricksOpenAI (not the vanilla OpenAI client) to get Databricks-specific
-    fixes like strict stripping, Gemini content flattening, and response id truncation.
+    """Get an OpenAI client configured for Databricks.
 
     Args:
         workspace_client: Optional WorkspaceClient instance to use for authentication.
             If not provided, creates a default WorkspaceClient.
-        **kwargs: Additional keyword arguments to pass to DatabricksOpenAI(),
+        **kwargs: Additional keyword arguments to pass to get_open_ai_client(),
             such as timeout and max_retries.
     """
-    from databricks.sdk import WorkspaceClient
+    try:
+        from databricks.sdk import WorkspaceClient
 
-    if workspace_client is None:
-        workspace_client = WorkspaceClient()
-    return DatabricksOpenAI(workspace_client=workspace_client, **kwargs)
+        # If workspace_client is provided, use it directly
+        if workspace_client is not None:
+            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
+        else:
+            # Otherwise, create default workspace client
+            workspace_client = WorkspaceClient()
+            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
+
+    except ImportError as e:
+        raise ImportError(
+            "Failed to create the OpenAI client. "
+            "Please run `pip install databricks-sdk` to install "
+            "required dependencies."
+        ) from e
 
 
 def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpenAI:
