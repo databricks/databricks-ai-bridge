@@ -14,7 +14,8 @@ import os
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.test_utils.fmapi import (
-    CHAT_SKIP_MODELS,
+    SKIP_CHAT_COMPLETIONS,
+    SKIP_RESPONSES_API,
     async_retry,
     discover_chat_models,
     discover_responses_models,
@@ -28,8 +29,8 @@ pytestmark = pytest.mark.skipif(
     reason="FMAPI tool calling tests disabled. Set RUN_FMAPI_TOOL_CALLING_TESTS=1 to enable.",
 )
 
-_CHAT_MODELS = discover_chat_models(CHAT_SKIP_MODELS)
-_RESPONSES_MODELS = discover_responses_models()
+_CHAT_MODELS = discover_chat_models(SKIP_CHAT_COMPLETIONS)
+_RESPONSES_MODELS = discover_responses_models(SKIP_RESPONSES_API)
 
 
 # MCP test infrastructure

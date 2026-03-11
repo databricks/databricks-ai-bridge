@@ -17,35 +17,48 @@ MAX_RETRIES = 3
 # Default max_tokens for test requests
 DEFAULT_MAX_TOKENS = 200
 
-# Models skipped from Chat Completions tests (behavioral issues, not API limitations)
-CHAT_SKIP_MODELS = {
-    "databricks-gpt-5-nano",  # too small for reliable tool calling
-    "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
-    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
-    "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
-    "databricks-gemini-2-5-flash",  # Gemini list content issues (separate fix)
-    "databricks-gemini-2-5-pro",  # Gemini list content issues (separate fix)
-    "databricks-gemini-3-flash",  # requires thought_signature on function calls
-    "databricks-gemini-3-pro",  # requires thought_signature on function calls
-    "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
-}
+# =============================================================================
+# Skip lists — models excluded from each test path.
+# Both lists use the same pattern: if a model is in the skip set, it won't
+# be discovered for that test path. This keeps the include/exclude logic
+# symmetric and easy to reason about.
+# =============================================================================
 
-# Additional models skipped only in LangChain Chat Completions tests
-LANGCHAIN_CHAT_SKIP_MODELS = CHAT_SKIP_MODELS | {
-    "databricks-gemma-3-12b",  # outputs raw tool call text instead of executing tools
-}
-
-# Responses API only models — skip from Chat Completions, include in Responses API tests
-RESPONSES_ONLY_MODELS = {
+# Models skipped from Chat Completions API tests.
+SKIP_CHAT_COMPLETIONS = {
+    # --- Responses API only (no Chat Completions support) ---
     "databricks-gpt-5-1-codex-max",
     "databricks-gpt-5-1-codex-mini",
     "databricks-gpt-5-2-codex",
     "databricks-gpt-5-3-codex",
     "databricks-gpt-5-4",  # tool calling only via Responses API
+    # --- Behavioral issues ---
+    "databricks-gpt-5-nano",  # too small for reliable tool calling
+    "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
+    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
+    "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
+    # --- Gemini issues (list content / thought_signature) ---
+    "databricks-gemini-2-5-flash",
+    "databricks-gemini-2-5-pro",
+    "databricks-gemini-3-flash",
+    "databricks-gemini-3-pro",
+    "databricks-gemini-3-1-pro",
+    "databricks-gemini-3-1-flash-lite",
+}
+
+# Additional models skipped only in LangChain Chat Completions tests.
+SKIP_CHAT_COMPLETIONS_LANGCHAIN = SKIP_CHAT_COMPLETIONS | {
+    "databricks-gemma-3-12b",  # outputs raw tool call text instead of executing tools
+}
+
+# Models skipped from Responses API tests.
+# Only GPT models (non-OSS) support the Responses API, so non-GPT models
+# are filtered out by discover_responses_models() automatically.
+SKIP_RESPONSES_API = {
+    "databricks-gpt-5-nano",  # too small for reliable tool calling
 }
 
 # Reasoning models consume reasoning tokens from the max_tokens budget.
-# Gemini 2.5 Pro needs 200-600 reasoning tokens with 2 tools, so 200 is too small.
 MODEL_MAX_TOKENS: dict[str, int] = {
     "databricks-gemini-2-5-pro": 1000,
 }
@@ -56,7 +69,7 @@ def max_tokens_for_model(model: str) -> int:
     return MODEL_MAX_TOKENS.get(model, DEFAULT_MAX_TOKENS)
 
 
-# Fallback list if dynamic discovery fails (e.g. auth not configured at collection time)
+# Fallback lists if dynamic discovery fails (e.g. auth not configured at collection time)
 FALLBACK_CHAT_MODELS = [
     "databricks-claude-sonnet-4-6",
     "databricks-claude-opus-4-6",
@@ -72,6 +85,11 @@ FALLBACK_RESPONSES_MODELS = [
     "databricks-gpt-5-2-codex",
     "databricks-gpt-5-3-codex",
 ]
+
+
+# =============================================================================
+# Discovery
+# =============================================================================
 
 
 def has_function_calling(w: WorkspaceClient, endpoint_name: str) -> bool:
@@ -91,7 +109,8 @@ def _supports_responses_api(name: str) -> bool:
 def discover_chat_models(skip_models: set[str]) -> list[str]:
     """Discover FMAPI models for Chat Completions tests.
 
-    Excludes Responses API-only models (codex) and models in skip_models.
+    Excludes models in skip_models (pass SKIP_CHAT_COMPLETIONS or
+    SKIP_CHAT_COMPLETIONS_LANGCHAIN).
     """
     try:
         w = WorkspaceClient()
@@ -109,14 +128,11 @@ def discover_chat_models(skip_models: set[str]) -> list[str]:
     models = []
     for e in sorted(chat_endpoints, key=lambda e: e.name or ""):
         name = e.name or ""
-        if name in RESPONSES_ONLY_MODELS:
-            log.info("Skipping %s from chat tests: Responses API only", name)
-            continue
         if not has_function_calling(w, name):
             log.info("Skipping %s: does not support function calling", name)
             continue
         if name in skip_models:
-            log.info("Skipping %s: in skip list", name)
+            log.info("Skipping %s from chat tests: in skip list", name)
             continue
         models.append(name)
 
@@ -124,11 +140,11 @@ def discover_chat_models(skip_models: set[str]) -> list[str]:
     return models
 
 
-def discover_responses_models() -> list[str]:
+def discover_responses_models(skip_models: set[str]) -> list[str]:
     """Discover FMAPI models for Responses API tests.
 
-    Only GPT models support the Responses API on Databricks.
-    Includes both codex (Responses-only) and regular GPT models.
+    Only GPT models (non-OSS) support the Responses API on Databricks.
+    Excludes models in skip_models (pass SKIP_RESPONSES_API).
     """
     try:
         w = WorkspaceClient()
@@ -151,13 +167,18 @@ def discover_responses_models() -> list[str]:
         if not has_function_calling(w, name):
             log.info("Skipping %s: does not support function calling", name)
             continue
-        # Skip nano — too small for reliable tool calling in any API
-        if "nano" in name:
+        if name in skip_models:
+            log.info("Skipping %s from responses tests: in skip list", name)
             continue
         models.append(name)
 
     log.info("Discovered %d responses API models", len(models))
     return models
+
+
+# =============================================================================
+# Retry helpers
+# =============================================================================
 
 
 def retry(fn, retries=MAX_RETRIES):
