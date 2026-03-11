@@ -1,4 +1,5 @@
 import os
+from functools import cached_property
 from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
@@ -338,9 +339,10 @@ class DatabricksOpenAI(OpenAI):
             http_client=_get_authorized_http_client(workspace_client),
         )
 
-        # Override the parent's cached_property with our DatabricksResponses
-        # which truncates oversized FMAPI response ids for multi-turn support.
-        self.__dict__["responses"] = DatabricksResponses(self, self._workspace_client)
+    @cached_property
+    def responses(self) -> Responses:  # type: ignore[override]
+        """DatabricksResponses that truncates oversized FMAPI response ids."""
+        return DatabricksResponses(self, self._workspace_client)
 
     @override
     @property
@@ -485,8 +487,10 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 
-        # Override the parent's cached_property with our AsyncDatabricksResponses
-        self.__dict__["responses"] = AsyncDatabricksResponses(self, self._workspace_client)
+    @cached_property
+    def responses(self) -> AsyncResponses:  # type: ignore[override]
+        """AsyncDatabricksResponses that truncates oversized FMAPI response ids."""
+        return AsyncDatabricksResponses(self, self._workspace_client)
 
     @property
     def chat(self) -> AsyncChat:
