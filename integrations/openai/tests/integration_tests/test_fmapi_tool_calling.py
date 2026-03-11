@@ -428,10 +428,9 @@ class TestAgentToolCallingResponsesAPI:
                 first_result = await Runner.run(agent, "Echo 'turn one'")
                 assert first_result.final_output is not None
 
-                history = first_result.to_input_list()
-                second_result = await Runner.run(
-                    agent, input=history + [{"role": "user", "content": "Now echo 'turn two'"}]
-                )
+                history: list = first_result.to_input_list()
+                history.append({"role": "user", "content": "Now echo 'turn two'"})
+                second_result = await Runner.run(agent, input=history)
                 assert second_result.final_output is not None
                 second_item_types = [type(item) for item in second_result.new_items]
                 assert ToolCallItem in second_item_types
