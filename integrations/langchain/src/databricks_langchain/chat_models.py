@@ -565,9 +565,11 @@ class ChatDatabricks(BaseChatModel):
                 "mcp_approval_request",
                 "image_generation_call",
             ):
-                # For these special types, convert to dict if possible
+                # For these special types, convert to dict if possible.
+                # Use exclude_none to drop default None fields (e.g. status, namespace)
+                # that FMAPI rejects as unknown parameters.
                 if hasattr(item, "model_dump"):
-                    content_blocks.append(item.model_dump())
+                    content_blocks.append(item.model_dump(exclude_none=True))
                 else:
                     content_blocks.append(item)
 
@@ -1483,6 +1485,8 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             "mcp_list_tools",
                             "mcp_approval_request",
                         ):
+                            # FMAPI rejects output-only fields on input items.
+                            block.pop("status", None)
                             # Fix ids: FMAPI requires fc_ prefix on function_call ids.
                             if "id" not in block:
                                 call_id = block.get("call_id", "")
