@@ -23,6 +23,8 @@ CHAT_SKIP_MODELS = {
     "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
     "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
     "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
+    "databricks-gemini-2-5-flash",  # Gemini list content issues (separate fix)
+    "databricks-gemini-2-5-pro",  # Gemini list content issues (separate fix)
     "databricks-gemini-3-flash",  # requires thought_signature on function calls
     "databricks-gemini-3-pro",  # requires thought_signature on function calls
     "databricks-gemini-3-1-pro",  # requires thought_signature on function calls
