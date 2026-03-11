@@ -1486,12 +1486,11 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                         ):
                             if block_type == "function_call":
                                 has_function_calls_in_content = True
-                            # Strip nulls (FMAPI rejects them) and fix ids.
-                            cleaned = {k: v for k, v in block.items() if v is not None}
-                            if "id" not in cleaned:
-                                call_id = cleaned.get("call_id", "")
-                                cleaned["id"] = f"fc_{call_id}" if call_id else lc_msg.id
-                            input_items.append(cleaned)
+                            # Fix ids: FMAPI requires fc_ prefix on function_call ids.
+                            if "id" not in block:
+                                call_id = block.get("call_id", "")
+                                block["id"] = f"fc_{call_id}" if call_id else lc_msg.id
+                            input_items.append(block)
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
                     {
