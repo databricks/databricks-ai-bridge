@@ -17,50 +17,38 @@ MAX_RETRIES = 3
 # Default max_tokens for test requests
 DEFAULT_MAX_TOKENS = 200
 
-# =============================================================================
-# Skip lists — models excluded from each test path.
-# Both lists use the same pattern: if a model is in the skip set, it won't
-# be discovered for that test path. This keeps the include/exclude logic
-# symmetric and easy to reason about.
-# =============================================================================
-
-# Models skipped from Chat Completions API tests.
+# Models excluded from Chat Completions API tests.
 SKIP_CHAT_COMPLETIONS = {
-    # --- Responses API only (no Chat Completions support) ---
-    "databricks-gpt-5-1-codex-max",
-    "databricks-gpt-5-1-codex-mini",
-    "databricks-gpt-5-2-codex",
-    "databricks-gpt-5-3-codex",
-    "databricks-gpt-5-4",  # tool calling only via Responses API
-    # --- Behavioral issues ---
+    "databricks-gpt-5-1-codex-max",  # Responses API only
+    "databricks-gpt-5-1-codex-mini",  # Responses API only
+    "databricks-gpt-5-2-codex",  # Responses API only
+    "databricks-gpt-5-3-codex",  # Responses API only
+    "databricks-gpt-5-4",  # Responses API only
     "databricks-gpt-5-nano",  # too small for reliable tool calling
-    "databricks-gpt-oss-20b",  # hallucinates tool names in agent loop
-    "databricks-gpt-oss-120b",  # hallucinates tool names in agent loop
-    "databricks-llama-4-maverick",  # hallucinates tool names in agent loop
-    # --- Gemini issues (list content / thought_signature) ---
-    "databricks-gemini-2-5-flash",
-    "databricks-gemini-2-5-pro",
-    "databricks-gemini-3-flash",
-    "databricks-gemini-3-pro",
-    "databricks-gemini-3-1-pro",
-    "databricks-gemini-3-1-flash-lite",
+    "databricks-gpt-oss-20b",  # hallucinates tool names
+    "databricks-gpt-oss-120b",  # hallucinates tool names
+    "databricks-llama-4-maverick",  # hallucinates tool names
+    "databricks-gemini-2-5-flash",  # list content issues
+    "databricks-gemini-2-5-pro",  # list content issues
+    "databricks-gemini-3-flash",  # requires thought_signature
+    "databricks-gemini-3-pro",  # requires thought_signature
+    "databricks-gemini-3-1-pro",  # requires thought_signature
+    "databricks-gemini-3-1-flash-lite",  # requires thought_signature
 }
 
-# Additional models skipped only in LangChain Chat Completions tests.
+# Additional models excluded only in LangChain Chat Completions tests.
 SKIP_CHAT_COMPLETIONS_LANGCHAIN = SKIP_CHAT_COMPLETIONS | {
-    "databricks-gemma-3-12b",  # outputs raw tool call text instead of executing tools
+    "databricks-gemma-3-12b",  # outputs raw tool call text instead of tool calls
 }
 
-# Models skipped from Responses API tests.
-# Only GPT models (non-OSS) support the Responses API, so non-GPT models
-# are filtered out by discover_responses_models() automatically.
+# Models excluded from Responses API tests.
+# Non-GPT models are filtered out automatically by discover_responses_models().
 SKIP_RESPONSES_API = {
     "databricks-gpt-5-nano",  # too small for reliable tool calling
 }
 
-# Reasoning models consume reasoning tokens from the max_tokens budget.
 MODEL_MAX_TOKENS: dict[str, int] = {
-    "databricks-gemini-2-5-pro": 1000,
+    "databricks-gemini-2-5-pro": 1000,  # reasoning models need more token budget
 }
 
 
@@ -85,11 +73,6 @@ FALLBACK_RESPONSES_MODELS = [
     "databricks-gpt-5-2-codex",
     "databricks-gpt-5-3-codex",
 ]
-
-
-# =============================================================================
-# Discovery
-# =============================================================================
 
 
 def has_function_calling(w: WorkspaceClient, endpoint_name: str) -> bool:
@@ -174,11 +157,6 @@ def discover_responses_models(skip_models: set[str]) -> list[str]:
 
     log.info("Discovered %d responses API models", len(models))
     return models
-
-
-# =============================================================================
-# Retry helpers
-# =============================================================================
 
 
 def retry(fn, retries=MAX_RETRIES):

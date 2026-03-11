@@ -1424,8 +1424,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     """
     Convert a LangChain message to a Responses API message.
     """
-    # FMAPI enforces id prefixes (msg_ for messages, fc_ for function_calls)
-    # and a 64-char max. lc_msg.id is typically resp_... (193 chars, wrong prefix).
+    # FMAPI requires msg_ prefix and <= 64 chars for message ids.
     def _msg_id(lc_id: str) -> str:
         return f"msg_{lc_id[:59]}" if lc_id else lc_id
 
@@ -1484,15 +1483,11 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                         ):
                             if block_type == "function_call":
                                 has_function_calls_in_content = True
-                            # Strip null values that FMAPI rejects as unknown params.
-                            # Use the block's own id if present; fall back to call_id
-                            # for function_call blocks. Avoid lc_msg.id which can
-                            # exceed FMAPI's 64-char limit for input item ids.
+                            # Strip nulls (FMAPI rejects them) and fix ids.
                             cleaned = {
                                 k: v for k, v in block.items() if v is not None
                             }
                             if "id" not in cleaned:
-                                # function_call items need an id starting with "fc"
                                 call_id = cleaned.get("call_id", "")
                                 cleaned["id"] = f"fc_{call_id}" if call_id else lc_msg.id
                             input_items.append(cleaned)
