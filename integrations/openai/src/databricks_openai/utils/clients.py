@@ -1,5 +1,4 @@
 import os
-from functools import cached_property
 from typing import Any, Generator
 
 from databricks.sdk import WorkspaceClient
@@ -339,11 +338,6 @@ class DatabricksOpenAI(OpenAI):
             http_client=_get_authorized_http_client(workspace_client),
         )
 
-    @cached_property
-    def responses(self) -> Responses:  # type: ignore[override]
-        """DatabricksResponses that truncates oversized FMAPI response ids."""
-        return DatabricksResponses(self, self._workspace_client)
-
     @override
     @property
     def chat(self) -> Chat:
@@ -356,6 +350,12 @@ class DatabricksOpenAI(OpenAI):
             )
             return chat_with_custom_completions
         return super().chat
+
+    @property
+    def responses(self) -> Responses:
+        if not hasattr(self, "_databricks_responses"):
+            self._databricks_responses = DatabricksResponses(self, self._workspace_client)
+        return self._databricks_responses
 
 
 class AsyncDatabricksCompletions(AsyncCompletions):
@@ -487,11 +487,6 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             http_client=_get_authorized_async_http_client(workspace_client),
         )
 
-    @cached_property
-    def responses(self) -> AsyncResponses:  # type: ignore[override]
-        """AsyncDatabricksResponses that truncates oversized FMAPI response ids."""
-        return AsyncDatabricksResponses(self, self._workspace_client)
-
     @property
     def chat(self) -> AsyncChat:
         if not isinstance(super().chat, AsyncDatabricksChat):
@@ -503,3 +498,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             )
             return chat_with_custom_completions
         return super().chat
+
+    @property
+    def responses(self) -> AsyncResponses:
+        if not hasattr(self, "_databricks_responses"):
+            self._databricks_responses = AsyncDatabricksResponses(self, self._workspace_client)
+        return self._databricks_responses
