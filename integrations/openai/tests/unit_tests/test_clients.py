@@ -680,3 +680,5 @@ class TestOpenAIApiKey:
     def test_falls_back_to_no_token_when_empty_string(self):
         with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
             assert _get_openai_api_key() == "no-token"
+
+

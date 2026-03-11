@@ -227,6 +227,27 @@ def _truncate_response_ids(response: Any) -> None:
             item.id = item_id[:_FMAPI_MAX_ID_LENGTH]
 
 
+def _truncate_input_ids(input_items: Any) -> None:
+    """Truncate ids in Responses API input items before sending to FMAPI.
+
+    When streaming, _truncate_response_ids cannot intercept the assembled response
+    (the stream object has no .id/.output). The Agents SDK then replays the raw
+    191-char ids as input on the next turn, which FMAPI rejects. Truncating input
+    ids covers this streaming gap.
+    """
+    if not input_items or not isinstance(input_items, list):
+        return
+    for item in input_items:
+        if isinstance(item, dict):
+            item_id = item.get("id")
+            if isinstance(item_id, str) and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+                item["id"] = item_id[:_FMAPI_MAX_ID_LENGTH]
+        else:
+            item_id = getattr(item, "id", None)
+            if isinstance(item_id, str) and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+                item.id = item_id[:_FMAPI_MAX_ID_LENGTH]
+
+
 class DatabricksResponses(Responses):
     """Responses resource that handles apps/ prefix routing and id truncation."""
 
@@ -250,6 +271,7 @@ class DatabricksResponses(Responses):
 
     def create(self, **kwargs):
         model = kwargs.get("model", "")
+        _truncate_input_ids(kwargs.get("input"))
 
         if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
             app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
@@ -399,6 +421,7 @@ class AsyncDatabricksResponses(AsyncResponses):
 
     async def create(self, **kwargs):
         model = kwargs.get("model", "")
+        _truncate_input_ids(kwargs.get("input"))
 
         if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
             app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
