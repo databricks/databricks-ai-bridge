@@ -303,3 +303,33 @@ class TestLangGraphResponsesAPI:
             assert len(r2["messages"]) > len(r1["messages"]), "History should grow across turns"
 
         retry(_run)
+
+    def test_streaming(self, model):
+        """Streaming: agent streams node updates and tool events via Responses API."""
+        llm = ChatDatabricks(model=model, use_responses_api=True)
+        agent = create_react_agent(llm, [add, multiply])
+
+        def _run():
+            event_count = 0
+            nodes_seen = set()
+            got_message_chunks = False
+
+            for event in agent.stream(
+                {"messages": [("human", "Use the add tool to compute 10 + 5")]},
+                stream_mode=["updates", "messages"],
+            ):
+                event_count += 1
+                mode, data = event
+                if mode == "updates":
+                    nodes_seen.update(data.keys())
+                elif mode == "messages":
+                    chunk, _metadata = data
+                    if isinstance(chunk, AIMessageChunk):
+                        got_message_chunks = True
+
+            assert event_count > 0, "No stream events received"
+            assert "agent" in nodes_seen, f"Expected 'agent' node, got: {nodes_seen}"
+            assert "tools" in nodes_seen, f"Expected 'tools' node, got: {nodes_seen}"
+            assert got_message_chunks, "Expected AIMessageChunk tokens in message stream"
+
+        retry(_run)
