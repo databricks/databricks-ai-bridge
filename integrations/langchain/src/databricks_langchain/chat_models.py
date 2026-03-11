@@ -1425,11 +1425,11 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     Convert a LangChain message to a Responses API message.
     """
 
-    # FMAPI requires msg_ prefix and <= 64 chars for message ids.
+    # FMAPI requires msg_ prefix on message ids.
     def _msg_id(lc_id: str | None) -> str | None:
         if not lc_id or lc_id.startswith("msg_"):
             return lc_id
-        return f"msg_{lc_id[:59]}"
+        return f"msg_{lc_id}"
 
     # TODO: add multimodal support
     input_items = []
@@ -1440,7 +1440,6 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
             cc_msg.pop("name")
         role = cc_msg["role"]
         if role == "assistant":
-            has_function_calls_in_content = False
             if isinstance(cc_msg.get("content"), list):
                 for block in cc_msg["content"]:
                     if isinstance(block, dict) and (block_type := block.get("type")):
@@ -1484,8 +1483,6 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             "mcp_list_tools",
                             "mcp_approval_request",
                         ):
-                            if block_type == "function_call":
-                                has_function_calls_in_content = True
                             # Fix ids: FMAPI requires fc_ prefix on function_call ids.
                             if "id" not in block:
                                 call_id = block.get("call_id", "")
@@ -1501,21 +1498,19 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                     }
                 )
 
-            # Only add tool_calls if they weren't already included from content blocks
-            if not has_function_calls_in_content:
-                if tool_calls := cc_msg.get("tool_calls"):
-                    input_items.extend(
-                        [
-                            {
-                                "type": "function_call",
-                                "id": f"fc_{tool_call['id']}",
-                                "call_id": tool_call["id"],
-                                "name": tool_call["function"]["name"],
-                                "arguments": tool_call["function"]["arguments"],
-                            }
-                            for tool_call in tool_calls
-                        ]
-                    )
+            if tool_calls := cc_msg.get("tool_calls"):
+                input_items.extend(
+                    [
+                        {
+                            "type": "function_call",
+                            "id": f"fc_{tool_call['id']}",
+                            "call_id": tool_call["id"],
+                            "name": tool_call["function"]["name"],
+                            "arguments": tool_call["function"]["arguments"],
+                        }
+                        for tool_call in tool_calls
+                    ]
+                )
         elif role == "tool":
             input_items.append(
                 {
