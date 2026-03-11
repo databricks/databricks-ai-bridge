@@ -228,12 +228,8 @@ def _truncate_response_ids(response: Any) -> None:
 
 
 def _truncate_input_ids(input_items: Any) -> None:
-    """Truncate ids in Responses API input items before sending to FMAPI.
-
-    When streaming, _truncate_response_ids cannot intercept the assembled response
-    (the stream object has no .id/.output). The Agents SDK then replays the raw
-    191-char ids as input on the next turn, which FMAPI rejects. Truncating input
-    ids covers this streaming gap.
+    """Truncate ids in input items. Covers the streaming path where
+    _truncate_response_ids can't intercept the assembled response.
     """
     if not input_items or not isinstance(input_items, list):
         return
