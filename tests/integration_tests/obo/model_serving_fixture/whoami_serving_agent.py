@@ -139,7 +139,7 @@ class ToolCallingAgent(ResponsesAgent):
         return ResponsesAgentResponse(output=outputs)
 
     def predict_stream(
-        self, request: ResponsesAgentRequest, user_client: WorkspaceClient = None
+        self, request: ResponsesAgentRequest, user_client: Option[WorkspaceClient] = None
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
         if user_client is None:
             user_client = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
