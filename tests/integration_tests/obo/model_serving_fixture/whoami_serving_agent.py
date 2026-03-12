@@ -13,7 +13,7 @@ Required API scopes (for the calling user via OBO):
 """
 
 import json
-from typing import Any, Callable, Generator
+from typing import Any, Callable, Generator, Optional
 from uuid import uuid4
 
 import mlflow
@@ -143,7 +143,7 @@ class ToolCallingAgent(ResponsesAgent):
         return ResponsesAgentResponse(output=outputs)
 
     def predict_stream(
-        self, request: ResponsesAgentRequest, user_client: Option[WorkspaceClient] = None
+        self, request: ResponsesAgentRequest, user_client: Optional[WorkspaceClient] = None
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
         if user_client is None:
             user_client = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
