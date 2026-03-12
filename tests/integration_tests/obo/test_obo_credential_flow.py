@@ -213,6 +213,14 @@ class TestModelServingOBO:
             "SP-A and SP-B should see different identities from whoami()"
         )
 
+    def test_sp_a_sees_own_identity(
+        self, sp_a_client, sp_a_identity, serving_endpoint, serving_endpoint_ready
+    ):
+        response = _invoke_agent(sp_a_client, serving_endpoint)
+        assert sp_a_identity in response, (
+            f"Expected SP-A identity '{sp_a_identity}' in response, got: {response}"
+        )
+
     def test_sp_b_sees_own_identity(
         self, sp_b_client, sp_b_identity, serving_endpoint, serving_endpoint_ready
     ):
@@ -237,6 +245,13 @@ class TestAppsOBO:
         sp_b_response = _invoke_agent(sp_b_client, model)
         assert sp_a_response != sp_b_response, (
             "SP-A and SP-B should see different identities from whoami()"
+        )
+
+    def test_sp_a_sees_own_identity(self, sp_a_client, sp_a_identity, app_name):
+        model = f"apps/{app_name}"
+        response = _invoke_agent(sp_a_client, model)
+        assert sp_a_identity in response, (
+            f"Expected SP-A identity '{sp_a_identity}' in response, got: {response}"
         )
 
     def test_sp_b_sees_own_identity(self, sp_b_client, sp_b_identity, app_name):

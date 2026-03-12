@@ -29,7 +29,7 @@ SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
 
 UC_CATALOG = "integration_testing"
 UC_SCHEMA = "databricks_ai_bridge_mcp_test"
-UC_MODEL_NAME_SHORT = "test_endpoint_dhruv"
+UC_MODEL_NAME_SHORT = "obo_test_endpoint"
 UC_MODEL_NAME = f"{UC_CATALOG}.{UC_SCHEMA}.{UC_MODEL_NAME_SHORT}"
 
 
