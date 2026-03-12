@@ -1427,11 +1427,16 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     Convert a LangChain message to a Responses API message.
     """
 
-    # FMAPI requires msg_ prefix on message ids.
+    # FMAPI enforces max 64-char IDs and requires msg_ prefix on message ids.
+    _MAX_ID = 64
+
+    def _truncate(s: str) -> str:
+        return s[:_MAX_ID]
+
     def _msg_id(lc_id: str | None) -> str | None:
         if not lc_id or lc_id.startswith("msg_"):
-            return lc_id
-        return f"msg_{lc_id}"
+            return _truncate(lc_id) if lc_id else lc_id
+        return _truncate(f"msg_{lc_id}")
 
     # TODO: add multimodal support
     input_items = []
@@ -1487,10 +1492,14 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                         ):
                             # FMAPI rejects output-only fields on input items.
                             block.pop("status", None)
-                            # Fix ids: FMAPI requires fc_ prefix on function_call ids.
+                            # Fix ids: FMAPI requires fc_ prefix and max 64 chars.
                             if "id" not in block:
                                 call_id = block.get("call_id", "")
-                                block["id"] = f"fc_{call_id}" if call_id else lc_msg.id
+                                block["id"] = _truncate(
+                                    f"fc_{call_id}" if call_id else (lc_msg.id or "")
+                                )
+                            elif len(block["id"]) > _MAX_ID:
+                                block["id"] = _truncate(block["id"])
                             input_items.append(block)
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
@@ -1507,7 +1516,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                     [
                         {
                             "type": "function_call",
-                            "id": f"fc_{tool_call['id']}",
+                            "id": _truncate(f"fc_{tool_call['id']}"),
                             "call_id": tool_call["id"],
                             "name": tool_call["function"]["name"],
                             "arguments": tool_call["function"]["arguments"],
