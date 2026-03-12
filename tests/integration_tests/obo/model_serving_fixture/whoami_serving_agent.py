@@ -50,7 +50,7 @@ def create_whoami_tool(user_client: WorkspaceClient) -> ToolInfo:
             response = user_client.statement_execution.execute_statement(
                 warehouse_id=SQL_WAREHOUSE_ID,
                 statement="SELECT integration_testing.databricks_ai_bridge_mcp_test.whoami() as result",
-                wait_timeout="120s",
+                wait_timeout="50s",
             )
             if response.status.state == StatementState.SUCCEEDED:
                 if response.result and response.result.data_array:
