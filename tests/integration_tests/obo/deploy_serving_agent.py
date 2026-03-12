@@ -67,15 +67,10 @@ def main():
             ]
         )
 
-        input_example = {
-            "input": [{"role": "user", "content": "Who am I?"}],
-        }
-
         with mlflow.start_run():
             logged_agent_info = mlflow.pyfunc.log_model(
                 name="agent",
                 python_model=str(agent_file),
-                input_example=input_example,
                 auth_policy=AuthPolicy(
                     system_auth_policy=system_policy,
                     user_auth_policy=user_policy,
