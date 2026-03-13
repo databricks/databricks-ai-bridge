@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import AsyncGenerator, AsyncIterator, Optional
 from uuid import uuid4
 
@@ -37,18 +36,7 @@ def get_user_workspace_client() -> WorkspaceClient:
         )
         return WorkspaceClient()
     host = get_databricks_host()
-    # Temporarily clear app SP credentials from env to avoid
-    # "more than one authorization method" conflict in the SDK
-    old_id = os.environ.pop("DATABRICKS_CLIENT_ID", None)
-    old_secret = os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
-    try:
-        wc = WorkspaceClient(host=host, token=token)
-    finally:
-        if old_id is not None:
-            os.environ["DATABRICKS_CLIENT_ID"] = old_id
-        if old_secret is not None:
-            os.environ["DATABRICKS_CLIENT_SECRET"] = old_secret
-    return wc
+    return WorkspaceClient(host=host, token=token, auth_type="pat")
 
 
 async def process_agent_stream_events(

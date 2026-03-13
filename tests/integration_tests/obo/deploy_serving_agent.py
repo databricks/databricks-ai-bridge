@@ -29,7 +29,7 @@ SQL_WAREHOUSE_ID = os.environ["OBO_TEST_WAREHOUSE_ID"]
 
 UC_CATALOG = "integration_testing"
 UC_SCHEMA = "databricks_ai_bridge_mcp_test"
-UC_MODEL_NAME_SHORT = "test_endpoint_dhruv"
+UC_MODEL_NAME_SHORT = "obo_test_endpoint"
 UC_MODEL_NAME = f"{UC_CATALOG}.{UC_SCHEMA}.{UC_MODEL_NAME_SHORT}"
 
 
@@ -61,21 +61,15 @@ def main():
         )
         user_policy = UserAuthPolicy(
             api_scopes=[
-                "sql.statement-execution",
-                "sql.warehouses",
-                "serving.serving-endpoints",
+                "sql",
+                "model-serving",
             ]
         )
-
-        input_example = {
-            "input": [{"role": "user", "content": "Who am I?"}],
-        }
 
         with mlflow.start_run():
             logged_agent_info = mlflow.pyfunc.log_model(
                 name="agent",
                 python_model=str(agent_file),
-                input_example=input_example,
                 auth_policy=AuthPolicy(
                     system_auth_policy=system_policy,
                     user_auth_policy=user_policy,
