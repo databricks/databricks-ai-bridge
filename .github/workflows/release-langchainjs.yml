@@ -21,7 +21,7 @@ jobs:
     permissions:
       contents: write
     environment:
-      name: ${{ (github.event_name == 'push' || inputs.production) && 'npm' || 'npm-next' }}
+      name: ${{ (github.event_name == 'push' || inputs.production) && 'npm-langchainjs' || 'npm-next-langchainjs' }}
       url: https://www.npmjs.com/package/@databricks/langchainjs
     defaults:
       run:
