@@ -66,3 +66,4 @@ def pytest_configure(config):
         "markers", "behavior: mark test as behavior validation (search results)"
     )
     config.addinivalue_line("markers", "slow: mark test as slow (may take > 30 seconds)")
+    config.addinivalue_line("markers", "obo: mark test as OBO credential flow test")
