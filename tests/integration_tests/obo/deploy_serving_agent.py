@@ -61,9 +61,8 @@ def main():
         )
         user_policy = UserAuthPolicy(
             api_scopes=[
-                "sql.statement-execution",
-                "sql.warehouses",
-                "serving.serving-endpoints",
+                "sql",
+                "model-serving",
             ]
         )
 

@@ -8,8 +8,8 @@ This file gets logged as an MLflow model artifact via:
     mlflow.pyfunc.log_model(python_model="whoami_serving_agent.py", ...)
 
 Required API scopes (for the calling user via OBO):
-    - Serving endpoints: invoke the LLM endpoint (chat completions)
-    - SQL Statement Execution: run ``SELECT whoami()`` on the configured warehouse
+    - model-serving: invoke the LLM endpoint (chat completions)
+    - sql: run ``SELECT whoami()`` on the configured warehouse
 """
 
 import json
