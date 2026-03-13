@@ -5,7 +5,7 @@ Invokes pre-deployed agents (Model Serving endpoint and Databricks App) as
 two different service principals and asserts each caller sees their own identity
 via the whoami() UC function tool.
 
-  - SP-A ("deployer"): authenticated via DATABRICKS_CLIENT_ID/SECRET
+  - SP-A ("CI/Jobs SP"): authenticated via DATABRICKS_CLIENT_ID/SECRET
   - SP-B ("end user"): authenticated via OBO_TEST_CLIENT_ID/SECRET
 
 Environment Variables:
@@ -13,8 +13,8 @@ Environment Variables:
 Required:
     RUN_OBO_INTEGRATION_TESTS      - Set to "1" to enable
     DATABRICKS_HOST                - Workspace URL
-    DATABRICKS_CLIENT_ID           - SP-A client ID
-    DATABRICKS_CLIENT_SECRET       - SP-A client secret
+    DATABRICKS_CLIENT_ID           - CI/Jobs SP client ID (SP-A)
+    DATABRICKS_CLIENT_SECRET       - CI/Jobs SP client secret (SP-A)
     OBO_TEST_CLIENT_ID             - SP-B client ID
     OBO_TEST_CLIENT_SECRET         - SP-B client secret
     OBO_TEST_SERVING_ENDPOINT      - Pre-deployed Model Serving endpoint name
