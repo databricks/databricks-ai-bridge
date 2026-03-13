@@ -1,0 +1,160 @@
+name: Release @databricks/langchainjs
+
+on:
+  push:
+    tags:
+      - "langchainjs-v*"
+  workflow_dispatch:
+    inputs:
+      production:
+        description: "Publish to npm? (If unchecked, will publish with --tag next)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on:
+      group: databricks-protected-runner-group
+      labels: linux-ubuntu-latest
+
+    permissions:
+      contents: write
+    environment:
+      name: ${{ (github.event_name == 'push' || inputs.production) && 'npm' || 'npm-next' }}
+      url: https://www.npmjs.com/package/@databricks/langchainjs
+    defaults:
+      run:
+        working-directory: integrations/langchainjs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: rm -f package-lock.json && npm install
+
+      - name: Get package version
+        id: get-version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Verify version matches tag
+        if: github.event_name == 'push'
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          TAG_NAME="langchainjs-v$PKG_VERSION"
+
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG_NAME" | cut -f1)
+
+          if [ -z "$TAG_COMMIT" ]; then
+            echo "Tag $TAG_NAME does not exist on GitHub"
+            exit 1
+          fi
+
+          if [ "$CURRENT_COMMIT" != "$TAG_COMMIT" ]; then
+            echo "Tag $TAG_NAME exists but points to commit $TAG_COMMIT, not current commit $CURRENT_COMMIT"
+            exit 1
+          fi
+
+          echo "Verified: Tag $TAG_NAME exists and points to current commit $CURRENT_COMMIT"
+
+      - name: Clean
+        run: rm -rf dist
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check package exports
+        run: npm run check-package
+
+      - name: Pack
+        run: npm pack
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist-langchainjs
+          path: integrations/langchainjs/*.tgz
+
+      - name: Create GitHub Release (draft)
+        if: github.event_name == 'push' || inputs.production
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "integrations/langchainjs/*.tgz"
+          draft: true
+          generateReleaseNotes: true
+
+      - name: Publish to npm
+        if: github.event_name == 'push' || inputs.production
+        run: npm publish --access public --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish to npm (next tag)
+        if: github.event_name != 'push' && !inputs.production
+        run: npm publish --access public --tag next --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Wait for registry propagation
+        run: sleep 15
+
+      - name: Smoke test (production)
+        if: github.event_name == 'push' || inputs.production
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/langchainjs@$PKG_VERSION
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/langchainjs/package.json').version")
+          echo "Expected: $PKG_VERSION"
+          echo "Installed: $INSTALLED_VERSION"
+          if [ "$PKG_VERSION" != "$INSTALLED_VERSION" ]; then
+            echo "Version mismatch!"
+            exit 1
+          fi
+          echo "Smoke test passed!"
+
+      - name: Smoke test (next tag)
+        if: github.event_name != 'push' && !inputs.production
+        run: |
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/langchainjs@next
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/langchainjs/package.json').version")
+          echo "Installed @next version: $INSTALLED_VERSION"
+          echo "Smoke test passed!"
+
+      - name: Generate package link
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          if [ "${{ github.event_name == 'push' || inputs.production }}" == "true" ]; then
+            LINK="https://www.npmjs.com/package/@databricks/langchainjs/v/$PKG_VERSION"
+            echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/langchainjs v$PKG_VERSION** has been published to npm!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          else
+            LINK="https://www.npmjs.com/package/@databricks/langchainjs?activeTab=versions"
+            echo "## :test_tube: Package Released (next tag)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/langchainjs v$PKG_VERSION** has been published to npm with --tag next!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          fi
