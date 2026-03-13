@@ -201,9 +201,9 @@ class DatabricksCompletions(Completions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
-            kwargs = _strip_strict_from_kwargs(kwargs)
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
+        kwargs = _strip_strict_from_kwargs(kwargs)
         return super().create(**kwargs)
 
 
@@ -349,9 +349,9 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
-            kwargs = _strip_strict_from_kwargs(kwargs)
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
+        kwargs = _strip_strict_from_kwargs(kwargs)
         return await super().create(**kwargs)
 
 
