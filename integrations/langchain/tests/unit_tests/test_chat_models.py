@@ -2115,6 +2115,4 @@ def test_chat_databricks_with_timeout_and_retries():
         assert chat.timeout == 45.0
         assert chat.max_retries == 3
         assert chat.client == mock_openai_client
-        mock_get_client.assert_called_once_with(
-            workspace_client=None, timeout=45.0, max_retries=3
-        )
+        mock_get_client.assert_called_once_with(workspace_client=None, timeout=45.0, max_retries=3)
