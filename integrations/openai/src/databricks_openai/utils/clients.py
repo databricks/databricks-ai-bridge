@@ -49,6 +49,10 @@ def _strip_strict_from_tools(tools: Any) -> Any:
             tool.get("function", {}).pop("strict", None)
     return tools
 
+def _strip_strict_from_kwargs(kwargs: dict) -> dict:
+    """Strip 'strict' from top-level kwargs which causes issues for GPT models."""
+    kwargs.pop("strict", None)  # Remove top-level strict if present
+    return kwargs
 
 def _should_strip_strict(model: str | None) -> bool:
     """Determine if strict should be stripped based on model name.
@@ -197,6 +201,7 @@ class DatabricksCompletions(Completions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+            kwargs = _strip_strict_from_kwargs(kwargs)
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         return super().create(**kwargs)
@@ -344,6 +349,7 @@ class AsyncDatabricksCompletions(AsyncCompletions):
         model = kwargs.get("model")
         if _should_strip_strict(model):
             _strip_strict_from_tools(kwargs.get("tools"))
+            kwargs = _strip_strict_from_kwargs(kwargs)
         if _is_claude_model(model):
             _fix_empty_assistant_content_in_messages(kwargs.get("messages"))
         return await super().create(**kwargs)
