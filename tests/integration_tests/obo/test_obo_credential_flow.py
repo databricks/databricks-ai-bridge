@@ -103,9 +103,9 @@ def sp_b_workspace_client():
 
 
 @pytest.fixture(scope="module")
-def sp_a_identity(sp_a_workspace_client):
-    """SP-A's display name."""
-    return sp_a_workspace_client.current_user.me().display_name
+def sp_a_identity():
+    """SP-A's client ID — the value whoami()/current_user() returns for an SP."""
+    return os.environ["DATABRICKS_CLIENT_ID"]
 
 
 @pytest.fixture(scope="module")
@@ -146,7 +146,7 @@ def serving_endpoint_ready(sp_a_workspace_client, sp_a_client, serving_endpoint)
         try:
             ep = sp_a_workspace_client.serving_endpoints.get(serving_endpoint)
             state = ep.state.ready if ep.state else None
-            if state == "READY":
+            if state and str(state) == "READY":
                 # Endpoint infrastructure is ready — send a real request to confirm
                 sp_a_client.responses.create(
                     model=serving_endpoint,
