@@ -14,9 +14,11 @@ import os
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.test_utils.fmapi import (
-    COMMON_SKIP_MODELS,
+    SKIP_CHAT_COMPLETIONS,
+    SKIP_RESPONSES_API,
     async_retry,
-    discover_foundation_models,
+    discover_chat_models,
+    discover_responses_models,
     retry,
 )
 
@@ -27,7 +29,8 @@ pytestmark = pytest.mark.skipif(
     reason="FMAPI tool calling tests disabled. Set RUN_FMAPI_TOOL_CALLING_TESTS=1 to enable.",
 )
 
-_FOUNDATION_MODELS = discover_foundation_models(COMMON_SKIP_MODELS)
+_CHAT_MODELS = discover_chat_models(SKIP_CHAT_COMPLETIONS)
+_RESPONSES_MODELS = discover_responses_models(SKIP_RESPONSES_API)
 
 
 # MCP test infrastructure
@@ -58,7 +61,7 @@ def async_client(workspace_client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", _FOUNDATION_MODELS)
+@pytest.mark.parametrize("model", _CHAT_MODELS)
 class TestAgentToolCalling:
     """Async agent tests using the OpenAI Agents SDK with MCP tools.
 
@@ -230,7 +233,7 @@ _ECHO_MESSAGE_TOOL = {
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("model", _FOUNDATION_MODELS)
+@pytest.mark.parametrize("model", _CHAT_MODELS)
 class TestSyncClientToolCalling:
     """Sync DatabricksOpenAI tests using direct chat.completions.create()."""
 
@@ -346,3 +349,131 @@ class TestSyncClientToolCalling:
             assert "message" in args
 
         retry(_run)
+
+
+# =============================================================================
+# Responses API — Agents SDK (GPT models including codex)
+# =============================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", _RESPONSES_MODELS)
+class TestAgentToolCallingResponsesAPI:
+    """Agents SDK tests using the Responses API path.
+
+    Tests GPT models (including codex which only supports Responses API)
+    via set_default_openai_api("responses").
+    """
+
+    async def test_single_turn(self, async_client, workspace_client, model):
+        """Single-turn via Responses API."""
+        from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
+        from agents.items import ToolCallItem, ToolCallOutputItem
+
+        from databricks_openai.agents import McpServer
+
+        async def _run():
+            set_default_openai_client(async_client)
+            set_default_openai_api("responses")
+
+            async with McpServer.from_uc_function(
+                catalog=_MCP_CATALOG,
+                schema=_MCP_SCHEMA,
+                function_name=_MCP_FUNCTION,
+                workspace_client=workspace_client,
+                timeout=60,
+            ) as server:
+                agent = Agent(
+                    name="echo-agent",
+                    instructions="Use the echo_message tool to echo messages when asked.",
+                    model=model,
+                    mcp_servers=[server],
+                )
+                result = await Runner.run(agent, "Echo the message 'hello from responses API'")
+
+                assert result.final_output is not None
+                assert "hello from responses API" in result.final_output
+
+                item_types = [type(item) for item in result.new_items]
+                assert ToolCallItem in item_types, f"Expected ToolCallItem, got: {item_types}"
+                assert ToolCallOutputItem in item_types
+
+        await async_retry(_run)
+
+    async def test_multi_turn(self, async_client, workspace_client, model):
+        """Multi-turn via Responses API."""
+        from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
+        from agents.items import ToolCallItem
+
+        from databricks_openai.agents import McpServer
+
+        async def _run():
+            set_default_openai_client(async_client)
+            set_default_openai_api("responses")
+
+            async with McpServer.from_uc_function(
+                catalog=_MCP_CATALOG,
+                schema=_MCP_SCHEMA,
+                function_name=_MCP_FUNCTION,
+                workspace_client=workspace_client,
+                timeout=60,
+            ) as server:
+                agent = Agent(
+                    name="echo-agent",
+                    instructions="Use the echo_message tool to echo messages when asked.",
+                    model=model,
+                    mcp_servers=[server],
+                )
+                first_result = await Runner.run(agent, "Echo 'turn one'")
+                assert first_result.final_output is not None
+
+                history: list = first_result.to_input_list()
+                history.append({"role": "user", "content": "Now echo 'turn two'"})
+                second_result = await Runner.run(agent, input=history)
+                assert second_result.final_output is not None
+                second_item_types = [type(item) for item in second_result.new_items]
+                assert ToolCallItem in second_item_types
+
+        await async_retry(_run)
+
+    async def test_streaming(self, async_client, workspace_client, model):
+        """Streaming via Responses API: verify stream events via Runner.run_streamed()."""
+        from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
+        from agents.stream_events import RunItemStreamEvent
+
+        from databricks_openai.agents import McpServer
+
+        async def _run():
+            set_default_openai_client(async_client)
+            set_default_openai_api("responses")
+
+            async with McpServer.from_uc_function(
+                catalog=_MCP_CATALOG,
+                schema=_MCP_SCHEMA,
+                function_name=_MCP_FUNCTION,
+                workspace_client=workspace_client,
+                timeout=60,
+            ) as server:
+                agent = Agent(
+                    name="echo-agent",
+                    instructions="Use the echo_message tool to echo messages when asked.",
+                    model=model,
+                    mcp_servers=[server],
+                )
+                result = Runner.run_streamed(agent, input="Echo the message 'streaming test'")
+
+                event_count = 0
+                run_item_events = []
+                async for event in result.stream_events():
+                    event_count += 1
+                    if isinstance(event, RunItemStreamEvent):
+                        run_item_events.append(event)
+
+                assert event_count > 0, "No stream events received"
+                event_names = [e.name for e in run_item_events]
+                assert "tool_called" in event_names, (
+                    f"Expected tool_called event, got: {event_names}"
+                )
+
+        await async_retry(_run)

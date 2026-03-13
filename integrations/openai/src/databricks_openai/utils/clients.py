@@ -208,8 +208,44 @@ class DatabricksChat(Chat):
     completions: DatabricksCompletions
 
 
+_FMAPI_MAX_ID_LENGTH = 64
+
+
+def _truncate_response_ids(response: Any) -> None:
+    """Truncate ids that exceed FMAPI's 64-char input limit.
+
+    FMAPI returns response and output item ids longer than 64 chars, but rejects
+    them on the next turn's input. We truncate to prevent multi-turn failures.
+    """
+    if hasattr(response, "id") and response.id and len(response.id) > _FMAPI_MAX_ID_LENGTH:
+        response.id = response.id[:_FMAPI_MAX_ID_LENGTH]
+    if not hasattr(response, "output"):
+        return
+    for item in response.output:
+        item_id = getattr(item, "id", None)
+        if item_id and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+            item.id = item_id[:_FMAPI_MAX_ID_LENGTH]
+
+
+def _truncate_input_ids(input_items: Any) -> None:
+    """Truncate ids in input items. Covers the streaming path where
+    _truncate_response_ids can't intercept the assembled response.
+    """
+    if not input_items or not isinstance(input_items, list):
+        return
+    for item in input_items:
+        if isinstance(item, dict):
+            item_id = item.get("id")
+            if isinstance(item_id, str) and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+                item["id"] = item_id[:_FMAPI_MAX_ID_LENGTH]
+        else:
+            item_id = getattr(item, "id", None)
+            if isinstance(item_id, str) and len(item_id) > _FMAPI_MAX_ID_LENGTH:
+                item.id = item_id[:_FMAPI_MAX_ID_LENGTH]
+
+
 class DatabricksResponses(Responses):
-    """Responses resource that handles apps/ prefix routing."""
+    """Responses resource that handles apps/ prefix routing and id truncation."""
 
     def __init__(self, client, workspace_client: WorkspaceClient):
         super().__init__(client)
@@ -231,6 +267,7 @@ class DatabricksResponses(Responses):
 
     def create(self, **kwargs):
         model = kwargs.get("model", "")
+        _truncate_input_ids(kwargs.get("input"))
 
         if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
             app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
@@ -240,7 +277,9 @@ class DatabricksResponses(Responses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        return super().create(**kwargs)
+        response = super().create(**kwargs)
+        _truncate_response_ids(response)
+        return response
 
 
 class DatabricksOpenAI(OpenAI):
@@ -356,7 +395,7 @@ class AsyncDatabricksChat(AsyncChat):
 
 
 class AsyncDatabricksResponses(AsyncResponses):
-    """Async Responses resource that handles apps/ prefix routing."""
+    """Async Responses resource that handles apps/ prefix routing and id truncation."""
 
     def __init__(self, client, workspace_client: WorkspaceClient):
         super().__init__(client)
@@ -378,6 +417,7 @@ class AsyncDatabricksResponses(AsyncResponses):
 
     async def create(self, **kwargs):
         model = kwargs.get("model", "")
+        _truncate_input_ids(kwargs.get("input"))
 
         if isinstance(model, str) and model.startswith(_APPS_ENDPOINT_PREFIX):
             app_name = model[len(_APPS_ENDPOINT_PREFIX) :]
@@ -387,7 +427,9 @@ class AsyncDatabricksResponses(AsyncResponses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        return await super().create(**kwargs)
+        response = await super().create(**kwargs)
+        _truncate_response_ids(response)
+        return response
 
 
 class AsyncDatabricksOpenAI(AsyncOpenAI):
