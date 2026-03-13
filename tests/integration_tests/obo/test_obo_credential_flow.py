@@ -146,7 +146,8 @@ def serving_endpoint_ready(sp_a_workspace_client, sp_a_client, serving_endpoint)
         try:
             ep = sp_a_workspace_client.serving_endpoints.get(serving_endpoint)
             state = ep.state.ready if ep.state else None
-            if state and str(state) == "READY":
+            state_val = state.value if hasattr(state, "value") else str(state)
+            if state_val == "READY":
                 # Endpoint infrastructure is ready — send a real request to confirm
                 sp_a_client.responses.create(
                     model=serving_endpoint,
