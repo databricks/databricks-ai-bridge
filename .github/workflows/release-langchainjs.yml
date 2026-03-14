@@ -1,0 +1,134 @@
+name: Release @databricks/langchainjs
+
+on:
+  workflow_dispatch:
+    inputs:
+      production:
+        description: "Publish to npm? (If unchecked, will publish with --tag next)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+    environment:
+      name: ${{ inputs.production && 'npm' || 'npm-next' }}
+      url: https://www.npmjs.com/package/@databricks/langchainjs
+    defaults:
+      run:
+        working-directory: integrations/langchainjs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: rm -f package-lock.json && npm install
+
+      - name: Get package version
+        id: get-version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Clean
+        run: rm -rf dist
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check package exports
+        run: npm run check-package
+
+      - name: Pack
+        run: npm pack
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: dist-langchainjs
+          path: integrations/langchainjs/*.tgz
+
+      - name: Create GitHub Release (draft)
+        if: inputs.production
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "integrations/langchainjs/*.tgz"
+          draft: true
+          generateReleaseNotes: true
+
+      - name: Publish to npm
+        if: inputs.production
+        run: npm publish --access public --provenance --ignore-scripts
+
+      - name: Publish to npm (next tag)
+        if: ${{ !inputs.production }}
+        run: npm publish --access public --tag next --provenance --ignore-scripts
+
+      - name: Wait for registry propagation
+        run: sleep 15
+
+      - name: Smoke test (production)
+        if: inputs.production
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/langchainjs@$PKG_VERSION
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/langchainjs/package.json').version")
+          echo "Expected: $PKG_VERSION"
+          echo "Installed: $INSTALLED_VERSION"
+          if [ "$PKG_VERSION" != "$INSTALLED_VERSION" ]; then
+            echo "Version mismatch!"
+            exit 1
+          fi
+          echo "Smoke test passed!"
+
+      - name: Smoke test (next tag)
+        if: ${{ !inputs.production }}
+        run: |
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/langchainjs@next
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/langchainjs/package.json').version")
+          echo "Installed @next version: $INSTALLED_VERSION"
+          echo "Smoke test passed!"
+
+      - name: Generate package link
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          if [ "${{ inputs.production }}" == "true" ]; then
+            LINK="https://www.npmjs.com/package/@databricks/langchainjs/v/$PKG_VERSION"
+            echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/langchainjs v$PKG_VERSION** has been published to npm!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          else
+            LINK="https://www.npmjs.com/package/@databricks/langchainjs?activeTab=versions"
+            echo "## :test_tube: Package Released (next tag)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/langchainjs v$PKG_VERSION** has been published to npm with --tag next!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          fi
