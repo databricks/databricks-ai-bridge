@@ -1,6 +1,6 @@
 {
   "name": "@databricks/langchainjs",
-  "version": "0.1.0",
+  "version": "0.1.1-test.0",
   "description": "LangChain integration for Databricks Model Serving",
   "author": {
     "name": "Databricks",
