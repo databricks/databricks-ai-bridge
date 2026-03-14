@@ -669,6 +669,8 @@ class TestNoRoleUserErrors:
                 "Set these to OAuth credentials for a SP with no database role."
             )
 
+        assert client_id is not None
+        assert client_secret is not None
         workspace_client = create_workspace_client_with_oauth(client_id, client_secret)
         pool = LakebasePool(
             instance_name=instance_name,
@@ -806,6 +808,8 @@ class TestLimitedPermissionUserErrors:
                 "Set these to OAuth credentials for a SP with a role but no GRANT permissions."
             )
 
+        assert client_id is not None
+        assert client_secret is not None
         workspace_client = create_workspace_client_with_oauth(client_id, client_secret)
         pool = LakebasePool(
             instance_name=instance_name,
