@@ -1,9 +1,6 @@
 name: Release @databricks/ai-sdk-provider
 
 on:
-  push:
-    tags:
-      - "ai-sdk-provider-v*"
   workflow_dispatch:
     inputs:
       production:
@@ -20,7 +17,7 @@ jobs:
       id-token: write
       contents: write
     environment:
-      name: ${{ (github.event_name == 'push' || inputs.production) && 'npm' || 'npm-next' }}
+      name: ${{ inputs.production && 'npm' || 'npm-next' }}
       url: https://www.npmjs.com/package/@databricks/ai-sdk-provider
     defaults:
       run:
@@ -44,27 +41,6 @@ jobs:
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Verify version matches tag
-        if: github.event_name == 'push'
-        run: |
-          PKG_VERSION=${{ steps.get-version.outputs.version }}
-          TAG_NAME="ai-sdk-provider-v$PKG_VERSION"
-
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          TAG_COMMIT=$(git ls-remote --tags origin "refs/tags/$TAG_NAME" | cut -f1)
-
-          if [ -z "$TAG_COMMIT" ]; then
-            echo "Tag $TAG_NAME does not exist on GitHub"
-            exit 1
-          fi
-
-          if [ "$CURRENT_COMMIT" != "$TAG_COMMIT" ]; then
-            echo "Tag $TAG_NAME exists but points to commit $TAG_COMMIT, not current commit $CURRENT_COMMIT"
-            exit 1
-          fi
-
-          echo "Verified: Tag $TAG_NAME exists and points to current commit $CURRENT_COMMIT"
 
       - name: Clean
         run: npm run clean
@@ -91,7 +67,7 @@ jobs:
           path: integrations/ai-sdk-provider/*.tgz
 
       - name: Create GitHub Release (draft)
-        if: github.event_name == 'push' || inputs.production
+        if: inputs.production
         uses: ncipollo/release-action@v1
         with:
           artifacts: "integrations/ai-sdk-provider/*.tgz"
@@ -99,18 +75,18 @@ jobs:
           generateReleaseNotes: true
 
       - name: Publish to npm
-        if: github.event_name == 'push' || inputs.production
+        if: inputs.production
         run: npm publish --access public --provenance --ignore-scripts
 
       - name: Publish to npm (next tag)
-        if: github.event_name != 'push' && !inputs.production
+        if: !inputs.production
         run: npm publish --access public --tag next --provenance --ignore-scripts
 
       - name: Wait for registry propagation
         run: sleep 15
 
       - name: Smoke test (production)
-        if: github.event_name == 'push' || inputs.production
+        if: inputs.production
         run: |
           PKG_VERSION=${{ steps.get-version.outputs.version }}
           mkdir -p /tmp/smoke-test
@@ -126,7 +102,7 @@ jobs:
           echo "Smoke test passed!"
 
       - name: Smoke test (next tag)
-        if: github.event_name != 'push' && !inputs.production
+        if: !inputs.production
         run: |
           mkdir -p /tmp/smoke-test
           cd /tmp/smoke-test
@@ -138,7 +114,7 @@ jobs:
       - name: Generate package link
         run: |
           PKG_VERSION=${{ steps.get-version.outputs.version }}
-          if [ "${{ github.event_name == 'push' || inputs.production }}" == "true" ]; then
+          if [ "${{ inputs.production }}" == "true" ]; then
             LINK="https://www.npmjs.com/package/@databricks/ai-sdk-provider/v/$PKG_VERSION"
             echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
