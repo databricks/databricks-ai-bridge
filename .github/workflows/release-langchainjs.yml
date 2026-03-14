@@ -82,7 +82,7 @@ jobs:
         run: npm publish --access public --provenance --ignore-scripts
 
       - name: Publish to npm (next tag)
-        if: !inputs.production
+        if: ${{ !inputs.production }}
         run: npm publish --access public --tag next --provenance --ignore-scripts
 
       - name: Wait for registry propagation
@@ -105,7 +105,7 @@ jobs:
           echo "Smoke test passed!"
 
       - name: Smoke test (next tag)
-        if: !inputs.production
+        if: ${{ !inputs.production }}
         run: |
           mkdir -p /tmp/smoke-test
           cd /tmp/smoke-test
