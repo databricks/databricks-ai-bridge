@@ -14,11 +14,10 @@ on:
 
 jobs:
   release:
-    runs-on:
-      group: databricks-protected-runner-group
-      labels: linux-ubuntu-latest
+    runs-on: ubuntu-latest
 
     permissions:
+      id-token: write
       contents: write
     environment:
       name: ${{ (github.event_name == 'push' || inputs.production) && 'npm' || 'npm-next' }}
@@ -33,6 +32,9 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Update npm
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install
@@ -98,15 +100,11 @@ jobs:
 
       - name: Publish to npm
         if: github.event_name == 'push' || inputs.production
-        run: npm publish --access public --ignore-scripts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance --ignore-scripts
 
       - name: Publish to npm (next tag)
         if: github.event_name != 'push' && !inputs.production
-        run: npm publish --access public --tag next --ignore-scripts
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag next --provenance --ignore-scripts
 
       - name: Wait for registry propagation
         run: sleep 15
