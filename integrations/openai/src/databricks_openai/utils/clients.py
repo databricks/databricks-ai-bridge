@@ -134,8 +134,9 @@ def _get_ai_gateway_base_url(
             logger.debug("AI Gateway V2 endpoint missing ai_gateway_url field")
             return None
         # The ai_gateway_url is a full endpoint URL; extract the base (scheme + host)
+        # Append /mlflow/v1 so the OpenAI client builds correct paths
         parsed = urlparse(gateway_url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        base_url = f"{parsed.scheme}://{parsed.netloc}/mlflow/v1"
         logger.info("AI Gateway V2 detected, using base URL: %s", base_url)
         return base_url
     except Exception:

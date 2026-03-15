@@ -709,7 +709,7 @@ class TestAIGatewayV2Detection:
             },
         )
         result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
-        assert result == "https://12345.ai-gateway.cloud.databricks.com"
+        assert result == "https://12345.ai-gateway.cloud.databricks.com/mlflow/v1"
         mock_client.get.assert_called_once_with(
             "https://test.databricks.com/api/ai-gateway/v2/endpoints"
         )
@@ -754,7 +754,7 @@ class TestAIGatewayV2Detection:
             },
         )
         result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
-        assert result == "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com"
+        assert result == "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com/mlflow/v1"
 
 
 class TestDatabricksOpenAIWithGateway:
@@ -767,7 +767,7 @@ class TestDatabricksOpenAIWithGateway:
         )
         with patch(
             "databricks_openai.utils.clients._get_ai_gateway_base_url",
-            return_value="https://12345.ai-gateway.cloud.databricks.com",
+            return_value="https://12345.ai-gateway.cloud.databricks.com/mlflow/v1",
         ):
             client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
             assert "ai-gateway" in str(client.base_url)
