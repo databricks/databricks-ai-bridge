@@ -18,7 +18,6 @@ from databricks_openai.utils.clients import (
     _get_authorized_async_http_client,
     _get_authorized_http_client,
     _get_openai_api_key,
-    _resolve_base_url,
     _should_strip_strict,
     _strip_strict_from_tools,
     _validate_oauth_for_apps,
