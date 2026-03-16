@@ -17,8 +17,8 @@ from unitycatalog.ai.core.databricks import DatabricksFunctionClient
 from unitycatalog.ai.openai.toolkit import UCFunctionToolkit
 
 from databricks_openai.mcp_server_toolkit import McpServerToolkit, ToolInfo
-from databricks_openai.utils.clients import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.uc_volume_tool import UCVolumeTool
+from databricks_openai.utils.clients import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.vector_search_retriever_tool import VectorSearchRetrieverTool
 
 # Expose all integrations to users under databricks-openai

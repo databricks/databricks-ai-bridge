@@ -45,9 +45,7 @@ class UCVolumeTool(UCVolumeToolMixin):
         .. code-block:: python
 
             messages.append(first_response.choices[0].message)
-            messages.append(
-                {"role": "tool", "tool_call_id": tool_call.id, "content": result}
-            )
+            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
             second_response = client.chat.completions.create(
                 model="gpt-4o", messages=messages, tools=[vol_tool.tool]
             )
@@ -71,9 +69,10 @@ class UCVolumeTool(UCVolumeToolMixin):
             name=tool_name,
             description=self.tool_description or self._get_default_tool_description(),
         )
-        # Remove strict mode for compatibility (same as VectorSearchRetrieverTool)
+        # We need to remove strict: True from the tool in order to support arbitrary filters
         if "function" in self.tool and "strict" in self.tool["function"]:
             del self.tool["function"]["strict"]
+        # We need to remove additionalProperties from the tool in order to support arbitrary kwargs
         if (
             "function" in self.tool
             and "parameters" in self.tool["function"]

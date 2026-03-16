@@ -40,24 +40,30 @@ class TestInit:
     def test_init_creates_tool_spec(self):
         tool = init_volume_tool()
         assert tool.tool is not None
-        assert tool.tool["type"] == "function"
-        assert "function" in tool.tool
+        tool_spec = tool.tool
+        assert tool_spec["type"] == "function"
+        assert "function" in tool_spec
 
     def test_init_with_custom_name_and_description(self):
         tool = init_volume_tool(tool_name="my_reader", tool_description="Reads docs")
-        assert tool.tool["function"]["name"] == "my_reader"
-        assert tool.tool["function"]["description"] == "Reads docs"
+        assert tool.tool is not None
+        tool_spec = tool.tool
+        assert tool_spec["function"]["name"] == "my_reader"
+        assert tool_spec["function"]["description"] == "Reads docs"
 
     def test_init_default_name_from_volume_name(self):
         tool = init_volume_tool()
+        assert tool.tool is not None
         assert tool.tool["function"]["name"] == VOLUME_NAME.replace(".", "__")
 
     def test_init_no_strict_mode(self):
         tool = init_volume_tool()
+        assert tool.tool is not None
         assert "strict" not in tool.tool.get("function", {})
 
     def test_init_no_additional_properties(self):
         tool = init_volume_tool()
+        assert tool.tool is not None
         assert "additionalProperties" not in tool.tool["function"]["parameters"]
 
 
@@ -107,14 +113,18 @@ class TestExecute:
 class TestToolNameGeneration:
     def test_default_tool_name(self):
         tool = init_volume_tool()
+        assert tool.tool is not None
         assert tool.tool["function"]["name"] == VOLUME_NAME.replace(".", "__")
 
     @pytest.mark.parametrize(
         "volume_name",
-        ["catalog.schema.really_really_really_long_volume_name_that_should_be_truncated_to_64_chars"],
+        [
+            "catalog.schema.really_really_really_long_volume_name_that_should_be_truncated_to_64_chars"
+        ],
     )
     def test_long_volume_name_truncated(self, volume_name):
         tool = init_volume_tool(volume_name=volume_name)
+        assert tool.tool is not None
         assert len(tool.tool["function"]["name"]) <= 64
 
     @pytest.mark.parametrize("tool_name", [None, "valid_tool_name", "test_tool"])
@@ -147,7 +157,5 @@ class TestTracing:
         tool = init_volume_tool()
         tool.execute(file_path="reports/q4.txt")
         trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
-        inputs = json.loads(
-            trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"]
-        )
+        inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
         assert inputs["file_path"] == "reports/q4.txt"

@@ -60,6 +60,8 @@ def read_volume_file(
     client = workspace_client or WorkspaceClient()
     full_path = _to_volume_path(volume_name, file_path)
     resp = client.files.download(full_path)
+    if resp.contents is None:
+        raise ValueError(f"No content returned for '{full_path}'")
     content = resp.contents.read()
     if as_bytes:
         return content
@@ -90,9 +92,9 @@ def list_volume_files(
     results = []
     for item in client.files.list_directory_contents(full_path):
         info = VolumeFileInfo(
-            name=item.name,
-            path=item.path,
-            is_directory=item.is_directory,
+            name=item.name or "",
+            path=item.path or "",
+            is_directory=item.is_directory or False,
             file_size=getattr(item, "file_size", None),
         )
         results.append(info)

@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from databricks_ai_bridge.test_utils.uc_volume import mock_workspace_client  # noqa: F401
 from databricks_ai_bridge.uc_volume_tool import UCVolumeToolMixin
 
-
 VOLUME_NAME = "test_catalog.test_schema.test_volume"
 
 

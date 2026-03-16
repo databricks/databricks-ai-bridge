@@ -4,11 +4,11 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-
 VOLUME_NAME = "test_catalog.test_schema.test_volume"
 
 SAMPLE_FILE_CONTENT = "This is the content of the test file."
 SAMPLE_FILE_CONTENT_BYTES = SAMPLE_FILE_CONTENT.encode("utf-8")
+
 
 def _make_dir_entry(name, path, is_directory, file_size=None):
     """Create a mock directory entry with a proper .name attribute."""

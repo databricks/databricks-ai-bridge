@@ -14,8 +14,7 @@ class UCVolumeTool(BaseTool, UCVolumeToolMixin):
     A LangChain tool for reading files from a Databricks Unity Catalog Volume.
 
     This class integrates with Databricks UC Volumes and provides a convenient interface
-    for building a file reading tool for agents. Follows the same pattern as
-    VectorSearchRetrieverTool.
+    for building a file reading tool for agents.
 
     Example:
 

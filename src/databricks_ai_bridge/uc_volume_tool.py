@@ -51,9 +51,7 @@ class UCVolumeToolMixin(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-    volume_name: str = Field(
-        ..., description="The full volume name: 'catalog.schema.volume'."
-    )
+    volume_name: str = Field(..., description="The full volume name: 'catalog.schema.volume'.")
     tool_name: Optional[str] = Field(None, description="The name of the tool.")
     tool_description: Optional[str] = Field(None, description="A description of the tool.")
     workspace_client: Optional[WorkspaceClient] = Field(
@@ -108,10 +106,11 @@ class UCVolumeToolMixin(BaseModel):
         if not file_path:
             return "Error: file_path is required."
         try:
-            content = read_volume_file(self.volume_name, file_path, workspace_client=wc)
+            result = read_volume_file(self.volume_name, file_path, workspace_client=wc)
         except UnicodeDecodeError:
             return (
-                f"Cannot read '{file_path}': binary file. "
-                f"This tool supports text-based files only."
+                f"Cannot read '{file_path}': binary file. This tool supports text-based files only."
             )
-        return content
+        # read_volume_file returns str by default (as_bytes=False)
+        assert isinstance(result, str)
+        return result

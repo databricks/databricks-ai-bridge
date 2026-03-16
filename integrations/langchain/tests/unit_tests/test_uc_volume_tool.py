@@ -1,5 +1,4 @@
 import io
-import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -60,7 +59,8 @@ class TestInvoke:
 
     def test_invoke_with_dict_input(self):
         tool = init_volume_tool()
-        result = tool.invoke({"file_path": "reports/q4.txt"})
+        input_dict: dict[str, Any] = {"file_path": "reports/q4.txt"}
+        result = tool.invoke(input_dict)
         assert result == SAMPLE_FILE_CONTENT
 
     def test_invoke_binary_file_returns_error(self, mock_workspace_client):
@@ -74,7 +74,8 @@ class TestInvoke:
 
     def test_invoke_empty_path_returns_error(self):
         tool = init_volume_tool()
-        result = tool.invoke({"file_path": ""})
+        input_dict: dict[str, Any] = {"file_path": ""}
+        result = tool.invoke(input_dict)
         assert "Error" in result
 
 
