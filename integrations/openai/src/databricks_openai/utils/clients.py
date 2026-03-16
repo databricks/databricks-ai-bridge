@@ -133,8 +133,6 @@ def _get_ai_gateway_base_url(
         if not gateway_url:
             logger.debug("AI Gateway V2 endpoint missing ai_gateway_url field")
             return None
-        # The ai_gateway_url is a full endpoint URL; extract the base (scheme + host)
-        # Append /mlflow/v1 so the OpenAI client builds correct paths
         parsed = urlparse(gateway_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}/mlflow/v1"
         logger.info("AI Gateway V2 detected, using base URL: %s", base_url)
@@ -512,7 +510,6 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
 
         self._workspace_client = workspace_client
 
-        # Use a sync http client for the gateway probe (init is synchronous)
         sync_http_client = _get_authorized_http_client(workspace_client)
         target_base_url = _resolve_base_url(
             workspace_client, base_url, use_ai_gateway, sync_http_client

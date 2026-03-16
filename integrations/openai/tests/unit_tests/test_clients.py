@@ -701,8 +701,10 @@ class TestAIGatewayV2Detection:
             {
                 "endpoints": [
                     {
-                        "name": "my-endpoint",
-                        "ai_gateway_url": "https://12345.ai-gateway.cloud.databricks.com/serving-endpoints/my-endpoint/invocations",
+                        "name": "databricks-claude-sonnet-4-6",
+                        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                        "created_by": "Databricks",
+                        "ai_gateway_url": "https://12345.ai-gateway.cloud.databricks.com",
                     }
                 ]
             },
@@ -740,14 +742,15 @@ class TestAIGatewayV2Detection:
         result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
         assert result is None
 
-    def test_parses_base_url_from_full_endpoint_url(self):
+    def test_parses_base_url_from_different_workspace(self):
         mock_client = MagicMock(spec=httpx.Client)
         mock_client.get.return_value = _mock_httpx_response(
             200,
             {
                 "endpoints": [
                     {
-                        "ai_gateway_url": "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com/serving-endpoints/ep/invocations",
+                        "name": "databricks-gpt-5-2",
+                        "ai_gateway_url": "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com",
                     }
                 ]
             },
