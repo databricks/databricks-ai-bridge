@@ -325,6 +325,27 @@ class TestDatabricksOpenAIStrictStripping:
                 )
                 mock_create.assert_called_once()
 
+    def test_chat_completions_strips_top_level_strict_kwarg(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            client = DatabricksOpenAI()
+
+            with patch.object(Completions, "create") as mock_create:
+                mock_create.return_value = MagicMock()
+                client.chat.completions.create(
+                    model="databricks-gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    strict=True,
+                )
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert "strict" not in call_kwargs
+                assert call_kwargs["model"] == "databricks-gpt-4o"
+
 
 class TestAsyncDatabricksOpenAIStrictStripping:
     """Tests for strict stripping in AsyncDatabricksOpenAI."""
@@ -374,6 +395,27 @@ class TestAsyncDatabricksOpenAIStrictStripping:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs["tools"][0]["function"]["strict"] is True
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_strips_top_level_strict_kwarg(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            client = AsyncDatabricksOpenAI()
+
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
+                await client.chat.completions.create(
+                    model="databricks-gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    strict=True,
+                )
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert "strict" not in call_kwargs
+                assert call_kwargs["model"] == "databricks-gpt-4o"
 
 
 class TestDatabricksAppsSupport:
