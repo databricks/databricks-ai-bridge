@@ -336,11 +336,15 @@ class TestDatabricksOpenAIStrictStripping:
 
             with patch.object(Completions, "create") as mock_create:
                 mock_create.return_value = MagicMock()
-                client.chat.completions.create(
-                    model="databricks-gpt-4o",
-                    messages=[{"role": "user", "content": "hi"}],
-                    strict=True,
+                request_kwargs = cast(
+                    Any,
+                    {
+                        "model": "databricks-gpt-4o",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "strict": True,
+                    },
                 )
+                client.chat.completions.create(**request_kwargs)
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "strict" not in call_kwargs
@@ -407,11 +411,15 @@ class TestAsyncDatabricksOpenAIStrictStripping:
             client = AsyncDatabricksOpenAI()
 
             with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
-                await client.chat.completions.create(
-                    model="databricks-gpt-4o",
-                    messages=[{"role": "user", "content": "hi"}],
-                    strict=True,
+                request_kwargs = cast(
+                    Any,
+                    {
+                        "model": "databricks-gpt-4o",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "strict": True,
+                    },
                 )
+                await client.chat.completions.create(**request_kwargs)
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "strict" not in call_kwargs
