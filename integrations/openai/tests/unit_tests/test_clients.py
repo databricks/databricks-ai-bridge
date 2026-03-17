@@ -18,6 +18,7 @@ from databricks_openai.utils.clients import (
     _get_authorized_http_client,
     _get_openai_api_key,
     _should_strip_strict,
+    _strip_strict_from_kwargs,
     _strip_strict_from_tools,
     _validate_oauth_for_apps,
     _wrap_app_error,
@@ -169,6 +170,21 @@ class TestAsyncDatabricksOpenAI:
 
 class TestStrictFieldStripping:
     """Tests for strict field stripping helper functions."""
+
+    def test_strip_strict_from_kwargs_removes_top_level_strict_only(self):
+        kwargs = {
+            "strict": True,
+            "model": "databricks-claude-3-7-sonnet",
+            "temperature": 0.2,
+            "tools": [{"type": "function", "function": {"name": "test", "strict": True}}],
+        }
+
+        result = _strip_strict_from_kwargs(kwargs)
+
+        assert "strict" not in result
+        assert result["model"] == "databricks-claude-3-7-sonnet"
+        assert result["temperature"] == 0.2
+        assert result["tools"][0]["function"]["strict"] is True
 
     def test_strip_strict_from_tools_removes_strict(self):
         tools = [
