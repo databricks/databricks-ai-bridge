@@ -58,9 +58,6 @@ class UCVolumeToolMixin(BaseModel):
         None,
         description="Optional pre-configured WorkspaceClient for authentication.",
     )
-    resources: Optional[list] = Field(
-        None, description="Resources required to log a model that uses this tool."
-    )
 
     @model_validator(mode="after")
     def _validate_volume_name(self):
