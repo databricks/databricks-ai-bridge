@@ -845,7 +845,10 @@ class LakebaseClient:
         except psycopg.errors.InsufficientPrivilege as e:
             raise PermissionError(
                 f"Insufficient privileges to create role '{identity_name}'. "
-                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance. "
+                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance "
+                f"and a Postgres Role which can create other Postgres roles "
+                f"(see https://docs.databricks.com/aws/en/oltp/projects/postgres-roles"
+                f"?language=SQL#create-an-oauth-role-for-databricks-identities). "
                 f"Original error: {e}"
             ) from e
         except psycopg.errors.UndefinedFunction as e:
@@ -912,7 +915,8 @@ class LakebaseClient:
         except psycopg.errors.InsufficientPrivilege as e:
             raise PermissionError(
                 f"Insufficient privileges to {operation_desc}. "
-                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance "
+                f"Ensure you have 'CAN MANAGE' permission on the Lakebase instance, "
+                f"a Postgres Role on the Lakebase instance, "
                 f"and appropriate ownership or GRANT OPTION on the target objects. "
                 f"Original error: {e}"
             ) from e

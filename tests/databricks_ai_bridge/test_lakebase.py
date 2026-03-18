@@ -532,6 +532,32 @@ class TestLakebaseClientCreateRole:
         assert "nonexistent-sp-uuid" in error_msg
         assert "service principal" in error_msg  # Should format identity type nicely
 
+    def test_create_role_handles_insufficient_privilege(self):
+        """create_role should raise PermissionError with helpful message for insufficient privileges."""
+        pool, cursor = _make_mock_pool()
+
+        call_count = [0]
+
+        def execute_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 2:  # Second call is create_role
+                raise lakebase.psycopg.errors.InsufficientPrivilege(
+                    "[Databricks Auth] Permission denied to create role."
+                )
+
+        cursor.execute.side_effect = execute_side_effect
+
+        client = LakebaseClient(pool=pool)
+
+        with pytest.raises(PermissionError) as exc_info:
+            client.create_role("sp-uuid-123", "SERVICE_PRINCIPAL")
+
+        error_msg = str(exc_info.value)
+        assert "Insufficient privileges" in error_msg
+        assert "CAN MANAGE" in error_msg
+        assert "Postgres Role which can create other Postgres roles" in error_msg
+        assert "docs.databricks.com" in error_msg
+
 
 class TestLakebaseClientGrantSchema:
     """Tests for LakebaseClient.grant_schema()."""
@@ -1059,6 +1085,7 @@ class TestExecuteGrantErrorHandling:
         error_msg = str(exc_info.value)
         assert "Insufficient privileges" in error_msg
         assert "CAN MANAGE" in error_msg
+        assert "Postgres Role on the Lakebase instance" in error_msg
 
 
 # =============================================================================
