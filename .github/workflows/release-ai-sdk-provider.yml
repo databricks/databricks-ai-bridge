@@ -57,23 +57,6 @@ jobs:
       - name: Check package exports
         run: npm run check-package
 
-      - name: Pack
-        run: npm pack
-
-      - name: Upload tarball artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: dist-ai-sdk-provider
-          path: integrations/ai-sdk-provider/*.tgz
-
-      - name: Create GitHub Release (draft)
-        if: inputs.production
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "integrations/ai-sdk-provider/*.tgz"
-          draft: true
-          generateReleaseNotes: true
-
       - name: Publish to npm
         if: inputs.production
         run: npm publish --access public --provenance --ignore-scripts
