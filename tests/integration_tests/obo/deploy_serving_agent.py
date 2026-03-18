@@ -78,6 +78,7 @@ def main():
                     "databricks-openai",
                     "databricks-ai-bridge",
                     "databricks-sdk",
+                    "mlflow<=3.9.0",
                 ],
             )
         log.info("Logged model: %s", logged_agent_info.model_uri)
