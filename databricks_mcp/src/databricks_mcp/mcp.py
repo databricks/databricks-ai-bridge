@@ -158,16 +158,7 @@ class DatabricksMCPClient:
 
     def __init__(self, server_url: str, workspace_client: Optional[WorkspaceClient] = None):
         self.client = workspace_client or WorkspaceClient()
-        self.server_url = server_url
-
-        # Early detection: error if using non-OAuth auth with Databricks Apps
-        if _is_databricks_apps_url(server_url) and not _is_oauth_auth(self.client):
-            raise ValueError(
-                "OAuth authentication is required for MCP servers hosted on Databricks Apps. "
-                "Your current authentication method is not supported. "
-                "Please use OAuth authentication instead. "
-                "For more information: https://docs.databricks.com/aws/en/generative-ai/mcp/custom-mcp"
-            )
+        self.server_url = server_url        
 
     def _get_databricks_managed_mcp_url_type(self) -> str | None:
         """Determine the MCP URL type based on the path."""
