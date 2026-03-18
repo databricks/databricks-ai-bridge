@@ -8,11 +8,37 @@ backed by UC functions, Vector Search indexes, and Genie spaces.
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 import pytest
 from conftest import _skip_if_not_found
 from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult
+
+
+@asynccontextmanager
+async def raw_mcp_session(url, workspace_client):
+    """Create a raw MCP ClientSession using streamable_http_client with Databricks OAuth."""
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    from databricks_mcp import DatabricksOAuthClientProvider
+
+    async with httpx.AsyncClient(
+        auth=DatabricksOAuthClientProvider(workspace_client),
+        follow_redirects=True,
+        timeout=httpx.Timeout(120.0, read=120.0),
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                yield session
+
 
 from databricks_mcp import DatabricksMCPClient
 
@@ -164,132 +190,54 @@ class TestRawStreamableHttpClient:
     @pytest.mark.asyncio
     async def test_uc_function_list_and_call(self, uc_function_url, workspace_client):
         """list_tools + call_tool via raw streamable_http_client for UC functions."""
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
+        async with raw_mcp_session(uc_function_url, workspace_client) as session:
+            tools_response = await session.list_tools()
+            tools = tools_response.tools
+            assert len(tools) > 0
+            tool_names = [t.name for t in tools]
+            assert any("echo_message" in name for name in tool_names)
 
-        from databricks_mcp import DatabricksOAuthClientProvider
-
-        async with httpx.AsyncClient(
-            auth=DatabricksOAuthClientProvider(workspace_client),
-            follow_redirects=True,
-            timeout=httpx.Timeout(120.0, read=120.0),
-        ) as http_client:
-            async with streamable_http_client(uc_function_url, http_client=http_client) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    # list_tools
-                    tools_response = await session.list_tools()
-                    tools = tools_response.tools
-                    assert len(tools) > 0
-                    tool_names = [t.name for t in tools]
-                    assert any("echo_message" in name for name in tool_names)
-
-                    # call_tool
-                    tool_name = next(n for n in tool_names if "echo_message" in n)
-                    result = await session.call_tool(tool_name, {"message": "raw_client_test"})
-                    assert result.content
-                    first = result.content[0]
-                    assert hasattr(first, "text")
-                    assert "raw_client_test" in str(first.text)
+            tool_name = next(n for n in tool_names if "echo_message" in n)
+            result = await session.call_tool(tool_name, {"message": "raw_client_test"})
+            assert result.content
+            first = result.content[0]
+            assert hasattr(first, "text")
+            assert "raw_client_test" in str(first.text)
 
     @pytest.mark.asyncio
     async def test_vs_list_tools(self, vs_mcp_url, workspace_client):
         """list_tools via raw streamable_http_client for Vector Search."""
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
-
-        from databricks_mcp import DatabricksOAuthClientProvider
-
-        async with httpx.AsyncClient(
-            auth=DatabricksOAuthClientProvider(workspace_client),
-            follow_redirects=True,
-            timeout=httpx.Timeout(120.0, read=120.0),
-        ) as http_client:
-            async with streamable_http_client(vs_mcp_url, http_client=http_client) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    tools_response = await session.list_tools()
-                    assert len(tools_response.tools) > 0
+        async with raw_mcp_session(vs_mcp_url, workspace_client) as session:
+            tools_response = await session.list_tools()
+            assert len(tools_response.tools) > 0
 
     @pytest.mark.asyncio
     async def test_dbsql_list_and_call(self, dbsql_mcp_url, workspace_client):
         """list_tools + call_tool via raw streamable_http_client for DBSQL."""
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
+        async with raw_mcp_session(dbsql_mcp_url, workspace_client) as session:
+            tools_response = await session.list_tools()
+            tools = tools_response.tools
+            tool_names = [t.name for t in tools]
+            assert "execute_sql_read_only" in tool_names
 
-        from databricks_mcp import DatabricksOAuthClientProvider
-
-        async with httpx.AsyncClient(
-            auth=DatabricksOAuthClientProvider(workspace_client),
-            follow_redirects=True,
-            timeout=httpx.Timeout(120.0, read=120.0),
-        ) as http_client:
-            async with streamable_http_client(dbsql_mcp_url, http_client=http_client) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    tools_response = await session.list_tools()
-                    tools = tools_response.tools
-                    tool_names = [t.name for t in tools]
-                    assert "execute_sql_read_only" in tool_names
-
-                    result = await session.call_tool(
-                        "execute_sql_read_only", {"query": "SHOW CATALOGS"}
-                    )
-                    assert result.content
-                    assert len(result.content) > 0
+            result = await session.call_tool("execute_sql_read_only", {"query": "SHOW CATALOGS"})
+            assert result.content
+            assert len(result.content) > 0
 
     @pytest.mark.asyncio
     async def test_genie_list_and_call(self, genie_mcp_url, workspace_client):
         """list_tools + call_tool via raw streamable_http_client for Genie."""
-        import httpx
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamable_http_client
+        async with raw_mcp_session(genie_mcp_url, workspace_client) as session:
+            tools_response = await session.list_tools()
+            tools = tools_response.tools
+            assert len(tools) > 0
 
-        from databricks_mcp import DatabricksOAuthClientProvider
-
-        async with httpx.AsyncClient(
-            auth=DatabricksOAuthClientProvider(workspace_client),
-            follow_redirects=True,
-            timeout=httpx.Timeout(120.0, read=120.0),
-        ) as http_client:
-            async with streamable_http_client(genie_mcp_url, http_client=http_client) as (
-                read_stream,
-                write_stream,
-                _,
-            ):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    tools_response = await session.list_tools()
-                    tools = tools_response.tools
-                    assert len(tools) > 0
-
-                    # Call the first tool (query_space_*)
-                    tool = tools[0]
-                    properties = tool.inputSchema.get("properties", {})
-                    param_name = next(iter(properties), "query")
-                    result = await session.call_tool(
-                        tool.name, {param_name: "How many rows are there?"}
-                    )
-                    assert result.content
-                    assert len(result.content) > 0
+            tool = tools[0]
+            properties = tool.inputSchema.get("properties", {})
+            param_name = next(iter(properties), "query")
+            result = await session.call_tool(tool.name, {param_name: "How many rows are there?"})
+            assert result.content
+            assert len(result.content) > 0
 
 
 # =============================================================================

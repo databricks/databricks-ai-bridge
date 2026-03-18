@@ -200,11 +200,8 @@ def dbsql_mcp_client(dbsql_mcp_url, workspace_client):
 
 @pytest.fixture(scope="session")
 def cached_dbsql_tools_list(dbsql_mcp_client):
-    """Cache the DBSQL list_tools() result; skip if DBSQL MCP endpoint unavailable."""
-    try:
-        tools = dbsql_mcp_client.list_tools()
-    except ExceptionGroup as e:  # ty: ignore[unresolved-reference]
-        _skip_if_not_found(e, "DBSQL MCP endpoint not available in workspace")
+    """Cache the DBSQL list_tools() result."""
+    tools = dbsql_mcp_client.list_tools()
     assert tools, "DBSQL list_tools() returned no tools"
     return tools
 
