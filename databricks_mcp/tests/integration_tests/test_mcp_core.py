@@ -194,7 +194,9 @@ class TestRawStreamableHttpClient:
                     tool_name = next(n for n in tool_names if "echo_message" in n)
                     result = await session.call_tool(tool_name, {"message": "raw_client_test"})
                     assert result.content
-                    assert "raw_client_test" in str(result.content[0].text)
+                    first = result.content[0]
+                    assert hasattr(first, "text")
+                    assert "raw_client_test" in str(first.text)
 
     @pytest.mark.asyncio
     async def test_vs_list_tools(self, vs_mcp_url, workspace_client):
