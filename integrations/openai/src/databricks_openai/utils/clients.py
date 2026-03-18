@@ -324,8 +324,8 @@ class DatabricksOpenAI(OpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
-        use_ai_gateway: If True (default), auto-detect AI Gateway V2 availability and route
-            requests through it. Set to False to always use serving endpoints directly.
+        use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
+            requests through it. Defaults to False.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = DatabricksOpenAI()
@@ -359,7 +359,7 @@ class DatabricksOpenAI(OpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
-        use_ai_gateway: bool = True,
+        use_ai_gateway: bool = False,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
@@ -468,8 +468,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
-        use_ai_gateway: If True (default), auto-detect AI Gateway V2 availability and route
-            requests through it. Set to False to always use serving endpoints directly.
+        use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
+            requests through it. Defaults to False.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = AsyncDatabricksOpenAI()
@@ -503,7 +503,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
-        use_ai_gateway: bool = True,
+        use_ai_gateway: bool = False,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
