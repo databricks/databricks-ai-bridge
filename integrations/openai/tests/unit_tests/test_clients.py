@@ -784,7 +784,7 @@ class TestDatabricksOpenAIWithGateway:
             "databricks_openai.utils.clients._get_ai_gateway_base_url",
             return_value=None,
         ):
-            with pytest.raises(ValueError, match="use_ai_gateway=True but AI Gateway V2"):
+            with pytest.raises(ValueError, match="Please ensure AI Gateway V2 is enabled"):
                 client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])

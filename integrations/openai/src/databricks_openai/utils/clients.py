@@ -148,8 +148,8 @@ def _resolve_base_url(
         if gateway_url:
             return gateway_url
         raise ValueError(
-            "use_ai_gateway=True but AI Gateway V2 is not available for this workspace. "
-            "Set use_ai_gateway=False to use serving endpoints directly."
+            "Please ensure AI Gateway V2 is enabled for the workspace "
+            "when use_ai_gateway is set to True."
         )
 
     # Fallback to using serving endpoints
