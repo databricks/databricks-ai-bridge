@@ -2100,3 +2100,19 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
         assert usage_metadata["total_tokens"] == 150
         assert usage_metadata["input_token_details"]["cache_read"] == 25
         assert usage_metadata["output_token_details"]["reasoning"] == 10
+
+
+def test_chat_databricks_with_timeout_and_retries():
+    """Test that ChatDatabricks can be initialized with timeout and max_retries parameters."""
+    mock_openai_client = Mock()
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        chat = ChatDatabricks(
+            model="databricks-meta-llama-3-3-70b-instruct", timeout=45.0, max_retries=3
+        )
+        assert chat.timeout == 45.0
+        assert chat.max_retries == 3
+        assert chat.client == mock_openai_client
+        mock_get_client.assert_called_once_with(workspace_client=None, timeout=45.0, max_retries=3)
