@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "msw",
+      "rolldown"
+    ]
+  }
+}

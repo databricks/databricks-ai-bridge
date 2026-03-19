@@ -1,0 +1,3 @@
+packages:
+  - "integrations/ai-sdk-provider"
+  - "integrations/langchainjs"

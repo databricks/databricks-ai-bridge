@@ -25,16 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Update npm
-        run: npm install -g npm@latest
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Get package version
         id: get-version
@@ -46,27 +47,27 @@ jobs:
         run: rm -rf dist
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Test
-        run: npm run test
+        run: pnpm run test
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Check formatting
-        run: npm run format:check
+        run: pnpm run format:check
 
       - name: Check package exports
-        run: npm run check-package
+        run: pnpm run check-package
 
       - name: Publish to npm
         if: inputs.production
-        run: npm publish --access public --provenance --ignore-scripts
+        run: pnpm publish --access public --provenance --no-git-checks
 
       - name: Publish to npm (next tag)
         if: ${{ !inputs.production }}
-        run: npm publish --access public --tag next --provenance --ignore-scripts
+        run: pnpm publish --access public --tag next --provenance --no-git-checks
 
       - name: Wait for registry propagation
         run: sleep 15
