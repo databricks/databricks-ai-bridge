@@ -1,0 +1,85 @@
+{
+  "name": "@databricks/chat-ui",
+  "version": "0.1.0",
+  "description": "React chat UI components for Databricks AI agents",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsdown && tailwindcss -i src/styles.css -o dist/styles.css --minify",
+    "dev": "tsdown --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.{ts,tsx}'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx}'"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "prettier": "^3.0.0",
+    "tailwindcss": "^3.4.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsdown": "^0.9.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.0.18"
+  },
+  "author": {
+    "name": "Databricks",
+    "email": "agent-feedback@databricks.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/databricks/databricks-ai-bridge.git",
+    "directory": "integrations/chat-ui"
+  },
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/chat-ui",
+  "bugs": {
+    "url": "https://github.com/databricks/databricks-ai-bridge/issues"
+  },
+  "keywords": [
+    "databricks",
+    "chat",
+    "agent",
+    "react",
+    "ui",
+    "components"
+  ],
+  "license": "Databricks License"
+}
