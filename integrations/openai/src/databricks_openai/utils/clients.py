@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Any, Generator
 from urllib.parse import urlparse
@@ -10,8 +9,6 @@ from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
-
-logger = logging.getLogger(__name__)
 
 # Prefix for routing requests to Databricks Apps
 _APPS_ENDPOINT_PREFIX = "apps/"
@@ -117,28 +114,19 @@ def _get_ai_gateway_base_url(
     Returns None if gateway is not available.
     """
     try:
-        url = f"{host}/api/ai-gateway/v2/endpoints"
-        logger.debug("Probing AI Gateway V2 at %s", url)
-        response = http_client.get(url)
+        response = http_client.get(f"{host}/api/ai-gateway/v2/endpoints")
         if response.status_code != 200:
-            logger.debug("AI Gateway V2 probe returned status %s", response.status_code)
             return None
         data = response.json()
         endpoints = data.get("endpoints", [])
         if not endpoints:
-            logger.debug("AI Gateway V2 returned no endpoints")
             return None
-        # Extract gateway base URL from the first endpoint's ai_gateway_url
         gateway_url = endpoints[0].get("ai_gateway_url")
         if not gateway_url:
-            logger.debug("AI Gateway V2 endpoint missing ai_gateway_url field")
             return None
         parsed = urlparse(gateway_url)
-        base_url = f"{parsed.scheme}://{parsed.netloc}/mlflow/v1"
-        logger.info("AI Gateway V2 detected, using base URL: %s", base_url)
-        return base_url
+        return f"{parsed.scheme}://{parsed.netloc}/mlflow/v1"
     except Exception:
-        logger.debug("AI Gateway V2 check failed, falling back to serving endpoints", exc_info=True)
         return None
 
 
@@ -159,6 +147,10 @@ def _resolve_base_url(
         gateway_url = _get_ai_gateway_base_url(http_client, workspace_client.config.host)
         if gateway_url:
             return gateway_url
+        raise ValueError(
+            "use_ai_gateway=True but AI Gateway V2 is not available for this workspace. "
+            "Set use_ai_gateway=False to use serving endpoints directly."
+        )
 
     # Fallback to using serving endpoints
     return f"{workspace_client.config.host}/serving-endpoints"

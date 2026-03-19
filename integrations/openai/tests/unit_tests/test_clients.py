@@ -776,9 +776,7 @@ class TestDatabricksOpenAIWithGateway:
             assert "12345.ai-gateway.cloud.databricks.com" in str(client.base_url)
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_gateway_unavailable_falls_back_to_serving(
-        self, client_cls_name, mock_workspace_client
-    ):
+    def test_gateway_unavailable_raises_error(self, client_cls_name, mock_workspace_client):
         client_cls = (
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
         )
@@ -786,8 +784,8 @@ class TestDatabricksOpenAIWithGateway:
             "databricks_openai.utils.clients._get_ai_gateway_base_url",
             return_value=None,
         ):
-            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
-            assert "/serving-endpoints/" in str(client.base_url)
+            with pytest.raises(ValueError, match="use_ai_gateway=True but AI Gateway V2"):
+                client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
     def test_gateway_disabled_no_api_call(self, client_cls_name, mock_workspace_client):
@@ -815,15 +813,3 @@ class TestDatabricksOpenAIWithGateway:
             )
             mock_gateway.assert_not_called()
             assert "custom.example.com" in str(client.base_url)
-
-    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_gateway_detection_failure_falls_back(self, client_cls_name, mock_workspace_client):
-        client_cls = (
-            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
-        )
-        with patch(
-            "databricks_openai.utils.clients._get_ai_gateway_base_url",
-            return_value=None,
-        ):
-            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
-            assert "/serving-endpoints/" in str(client.base_url)
