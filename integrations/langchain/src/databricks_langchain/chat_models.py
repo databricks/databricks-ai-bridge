@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 import warnings
 from functools import cached_property
 from operator import itemgetter
@@ -444,6 +445,19 @@ class ChatDatabricks(BaseChatModel):
             # Responses API only supports temperature, not max_tokens, stop, or n
             if self.temperature is not None:
                 data["temperature"] = self.temperature
+            # Convert tools from Chat Completions format to Responses API format
+            if "tools" in data:
+                data["tools"] = [
+                    {
+                        "type": "function",
+                        "name": t["function"]["name"],
+                        "description": t["function"].get("description", ""),
+                        "parameters": t["function"].get("parameters", {}),
+                    }
+                    if "function" in t
+                    else t
+                    for t in data["tools"]
+                ]
         else:
             # Chat completions API expects "messages" parameter
             data["messages"] = [_convert_message_to_dict(msg) for msg in messages]
@@ -555,9 +569,11 @@ class ChatDatabricks(BaseChatModel):
                 "mcp_approval_request",
                 "image_generation_call",
             ):
-                # For these special types, convert to dict if possible
+                # For these special types, convert to dict if possible.
+                # Use exclude_none to drop default None fields (e.g. status, namespace)
+                # that FMAPI rejects as unknown parameters.
                 if hasattr(item, "model_dump"):
-                    content_blocks.append(item.model_dump())
+                    content_blocks.append(item.model_dump(exclude_none=True))
                 else:
                     content_blocks.append(item)
 
@@ -1413,6 +1429,18 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
     """
     Convert a LangChain message to a Responses API message.
     """
+
+    # FMAPI enforces max 64-char IDs and requires msg_ prefix on message ids.
+    _MAX_ID = 64
+
+    def _truncate(s: str) -> str:
+        return s[:_MAX_ID]
+
+    def _msg_id(lc_id: str | None) -> str | None:
+        if not lc_id or lc_id.startswith("msg_"):
+            return _truncate(lc_id) if lc_id else lc_id
+        return _truncate(f"msg_{lc_id}")
+
     # TODO: add multimodal support
     input_items = []
     for lc_msg in messages:
@@ -1437,7 +1465,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                                         }
                                     ],
                                     "role": "assistant",
-                                    "id": lc_msg.id,
+                                    "id": _msg_id(lc_msg.id),
                                 }
                             )
                         elif block_type == "refusal":
@@ -1451,7 +1479,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                                         }
                                     ],
                                     "role": "assistant",
-                                    "id": lc_msg.id,
+                                    "id": _msg_id(lc_msg.id),
                                 }
                             )
                         elif block_type in (
@@ -1465,13 +1493,28 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             "mcp_list_tools",
                             "mcp_approval_request",
                         ):
-                            input_items.append(block | {"id": lc_msg.id})
+                            # FMAPI rejects output-only fields on input items.
+                            block.pop("status", None)
+                            # Fix ids: FMAPI requires fc_ prefix on function_call ids
+                            # and max 64 chars on all ids.
+                            if "id" not in block:
+                                call_id = block.get("call_id", "")
+                                if call_id:
+                                    raw_id = (
+                                        call_id if call_id.startswith("fc_") else f"fc_{call_id}"
+                                    )
+                                else:
+                                    raw_id = lc_msg.id or str(uuid.uuid4())
+                                block["id"] = _truncate(raw_id)
+                            elif len(block["id"]) > _MAX_ID:
+                                block["id"] = _truncate(block["id"])
+                            input_items.append(block)
             elif isinstance(cc_msg.get("content"), str):
                 input_items.append(
                     {
                         "type": "message",
                         "role": "assistant",
-                        "id": lc_msg.id,
+                        "id": _msg_id(lc_msg.id),
                         "content": [{"type": "output_text", "text": cc_msg["content"]}],
                     }
                 )
@@ -1481,7 +1524,7 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                     [
                         {
                             "type": "function_call",
-                            "id": lc_msg.id,
+                            "id": _truncate(f"fc_{tool_call['id']}"),
                             "call_id": tool_call["id"],
                             "name": tool_call["function"]["name"],
                             "arguments": tool_call["function"]["arguments"],

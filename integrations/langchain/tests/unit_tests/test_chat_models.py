@@ -924,7 +924,7 @@ def test_convert_lc_messages_to_responses_api_with_tool_calls():
             "name": "get_weather",
             "call_id": "call_123",
             "arguments": '{"location": "SF"}',
-            "id": "msg_123",
+            "id": "fc_call_123",
         },
         {
             "type": "function_call_output",
