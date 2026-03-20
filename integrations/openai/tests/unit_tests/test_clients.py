@@ -22,7 +22,11 @@ from databricks_openai.utils.clients import (
     _strip_strict_from_tools,
     _validate_oauth_for_apps,
     _wrap_app_error,
+    is_jwt,
 )
+
+# Dummy JWT token for testing purposes only (not a real secret)
+_VALID_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0In0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"  # gitleaks:allow
 
 
 @pytest.fixture
@@ -60,8 +64,26 @@ def mock_workspace_client_no_oauth():
     mock_client.config.host = "https://test.databricks.com"
     mock_client.config.authenticate.return_value = {"Authorization": "Bearer pat-token"}
     mock_client.config.oauth_token.side_effect = Exception("No OAuth token available")
+    # New code path reads from workspace_client.client.config.authenticate()
+    # Must assign explicitly because WorkspaceClient spec doesn't expose 'client' directly
+    mock_client.client = MagicMock()
+    mock_client.client.config.authenticate.return_value = {"Authorization": "Bearer pat-token"}
 
     return mock_client
+
+
+class TestIsJwt:
+    @pytest.mark.parametrize(
+        "token,expected",
+        [
+            (_VALID_JWT, True),
+            ("dapi1234567890abcdef", False),  # PAT token
+            ("not.a.token", False),           # invalid base64 JSON parts
+            ("", False),
+        ],
+    )
+    def test_is_jwt(self, token, expected):
+        assert is_jwt(token) == expected
 
 
 class TestDatabricksOpenAI:
@@ -371,6 +393,25 @@ class TestDatabricksAppsSupport:
     def test_validate_oauth_for_apps_failure(self, mock_workspace_client_no_oauth):
         with pytest.raises(ValueError, match="OAuth authentication"):
             _validate_oauth_for_apps(mock_workspace_client_no_oauth)
+
+    @pytest.mark.parametrize(
+        "token,should_raise",
+        [
+            (_VALID_JWT, False),   # JWT token (e.g. M2M) → allowed even if oauth_token() fails
+            ("dapi1234567890abcdef", True),  # PAT token → must raise
+        ],
+    )
+    def test_validate_oauth_for_apps_jwt_fallback(self, token, should_raise):
+        mock_client = MagicMock(spec=WorkspaceClient)
+        mock_client.config.oauth_token.side_effect = Exception("No OAuth token available")
+        mock_client.client = MagicMock()
+        mock_client.client.config.authenticate.return_value = {"Authorization": f"Bearer {token}"}
+
+        if should_raise:
+            with pytest.raises(ValueError, match="OAuth authentication"):
+                _validate_oauth_for_apps(mock_client)
+        else:
+            _validate_oauth_for_apps(mock_client)  # should not raise
 
     def test_get_app_url_success(self, mock_workspace_client_with_oauth):
         url = _get_app_url(mock_workspace_client_with_oauth, "my-app")

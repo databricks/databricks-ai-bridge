@@ -9,6 +9,7 @@ from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
+import jwt
 
 # Prefix for routing requests to Databricks Apps
 _APPS_ENDPOINT_PREFIX = "apps/"
@@ -165,17 +166,27 @@ def _get_authorized_async_http_client(workspace_client: WorkspaceClient) -> Asyn
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
     return AsyncClient(auth=databricks_token_auth)
 
+def is_jwt(token: str) -> bool:
+    try:
+        jwt.decode(token, options={"verify_signature": False})
+        return True
+    except jwt.DecodeError:
+        return False
 
 def _validate_oauth_for_apps(workspace_client: WorkspaceClient) -> None:
     """Validate that workspace_client uses OAuth (required for Apps)."""
     try:
         workspace_client.config.oauth_token()
     except Exception as e:
-        raise ValueError(
-            "Querying Databricks Apps requires OAuth authentication. "
-            "See https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html "
-            "or https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m.html"
-        ) from e
+        headers = workspace_client.client.config.authenticate()
+        authorization_header = headers["Authorization"]
+        token = authorization_header.split("Bearer ")[1]
+        if not is_jwt(token):
+            raise ValueError(
+                "Querying Databricks Apps requires OAuth authentication. "
+                "See https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m.html "
+                "or https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m.html"
+            ) from e
 
 
 def _get_app_url(workspace_client: WorkspaceClient, app_name: str) -> str:
