@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 import warnings
 from functools import cached_property
 from operator import itemgetter
@@ -1499,9 +1500,11 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                             if "id" not in block:
                                 call_id = block.get("call_id", "")
                                 if call_id:
-                                    raw_id = call_id if call_id.startswith("fc_") else f"fc_{call_id}"
+                                    raw_id = (
+                                        call_id if call_id.startswith("fc_") else f"fc_{call_id}"
+                                    )
                                 else:
-                                    raw_id = lc_msg.id or ""
+                                    raw_id = lc_msg.id or str(uuid.uuid4())
                                 block["id"] = _truncate(raw_id)
                             elif len(block["id"]) > _MAX_ID:
                                 block["id"] = _truncate(block["id"])
