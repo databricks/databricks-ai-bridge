@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import requests
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.annotations import experimental
+from databricks_ai_bridge.utils.auth import is_oauth_auth
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult, Tool
@@ -31,19 +32,6 @@ def _is_databricks_apps_url(url: str) -> bool:
     return parsed.netloc.endswith(".databricksapps.com")
 
 
-def _is_oauth_auth(workspace_client: WorkspaceClient) -> bool:
-    """Check if the workspace client is using OAuth authentication.
-
-    Uses the SDK's oauth_token() method to determine if OAuth is available.
-    This is more resilient than checking auth_type directly, as it handles
-    various non-OAuth auth types (pat, runtime, etc.).
-    """
-    try:
-        workspace_client.config.oauth_token()
-        return True
-    except ValueError:
-        # oauth_token() raises ValueError when not using OAuth-based auth
-        return False
 
 
 # MCP URL types
@@ -161,7 +149,7 @@ class DatabricksMCPClient:
         self.server_url = server_url
 
         # Early detection: error if using non-OAuth auth with Databricks Apps
-        if _is_databricks_apps_url(server_url) and not _is_oauth_auth(self.client):
+        if _is_databricks_apps_url(server_url) and not is_oauth_auth(self.client):
             raise ValueError(
                 "OAuth authentication is required for MCP servers hosted on Databricks Apps. "
                 "Your current authentication method is not supported. "

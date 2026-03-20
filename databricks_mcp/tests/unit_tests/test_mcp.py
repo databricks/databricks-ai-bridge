@@ -13,7 +13,6 @@ from databricks_mcp.mcp import (
     VECTOR_SEARCH_MCP,
     DatabricksMCPClient,
     _is_databricks_apps_url,
-    _is_oauth_auth,
 )
 
 
@@ -538,20 +537,6 @@ class TestIsDatabricksAppsUrl:
     def test_is_databricks_apps_url(self, url, expected):
         assert _is_databricks_apps_url(url) == expected
 
-
-class TestIsOauthAuth:
-    @pytest.mark.parametrize(
-        "side_effect,expected",
-        [
-            (None, True),  # oauth_token succeeds
-            (ValueError("not available"), False),  # oauth_token raises
-        ],
-    )
-    def test_is_oauth_auth(self, side_effect, expected):
-        mock_client = MagicMock(spec=WorkspaceClient)
-        if side_effect:
-            mock_client.config.oauth_token.side_effect = side_effect
-        assert _is_oauth_auth(mock_client) is expected
 
 
 class TestDatabricksMCPClientOAuthValidation:
