@@ -1,0 +1,115 @@
+name: Release @databricks/chat-ui
+
+on:
+  workflow_dispatch:
+    inputs:
+      production:
+        description: "Publish to npm? (If unchecked, will publish with --tag next)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: write
+    environment:
+      name: ${{ inputs.production && 'npm' || 'npm-next' }}
+      url: https://www.npmjs.com/package/@databricks/chat-ui
+    defaults:
+      run:
+        working-directory: integrations/chat-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+          cache-dependency-path: integrations/chat-ui/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Get package version
+        id: get-version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Clean
+        run: pnpm run clean
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Publish to npm
+        if: inputs.production
+        run: pnpm publish --access public --provenance --no-git-checks
+
+      - name: Publish to npm (next tag)
+        if: ${{ !inputs.production }}
+        run: pnpm publish --access public --tag next --provenance --no-git-checks
+
+      - name: Wait for registry propagation
+        run: sleep 15
+
+      - name: Smoke test (production)
+        if: inputs.production
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/chat-ui@$PKG_VERSION
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/chat-ui/package.json').version")
+          echo "Expected: $PKG_VERSION"
+          echo "Installed: $INSTALLED_VERSION"
+          if [ "$PKG_VERSION" != "$INSTALLED_VERSION" ]; then
+            echo "Version mismatch!"
+            exit 1
+          fi
+          echo "Smoke test passed!"
+
+      - name: Smoke test (next tag)
+        if: ${{ !inputs.production }}
+        run: |
+          mkdir -p /tmp/smoke-test
+          cd /tmp/smoke-test
+          npm install @databricks/chat-ui@next
+          INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/chat-ui/package.json').version")
+          echo "Installed @next version: $INSTALLED_VERSION"
+          echo "Smoke test passed!"
+
+      - name: Generate package link
+        run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
+          if [ "${{ inputs.production }}" == "true" ]; then
+            LINK="https://www.npmjs.com/package/@databricks/chat-ui/v/$PKG_VERSION"
+            echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/chat-ui v$PKG_VERSION** has been published to npm!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          else
+            LINK="https://www.npmjs.com/package/@databricks/chat-ui?activeTab=versions"
+            echo "## :test_tube: Package Released (next tag)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**@databricks/chat-ui v$PKG_VERSION** has been published to npm with --tag next!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
+          fi

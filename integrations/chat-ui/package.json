@@ -81,5 +81,11 @@
     "ui",
     "components"
   ],
-  "license": "Databricks License"
+  "license": "Databricks License",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "rolldown"
+    ]
+  }
 }
