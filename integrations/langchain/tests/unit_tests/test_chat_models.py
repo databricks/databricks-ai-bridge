@@ -601,11 +601,18 @@ def test_chat_model_bind_tolls_with_invalid_choices(llm: ChatDatabricks) -> None
 
 
 # Pydantic-based schema
+class Justification(BaseModel):
+    """A justification  to the answer including step-by-step reasoning and supporting sources."""
+
+    reasoning: str = Field(description="Step-by-step reasoning.")
+    sources: list[str] = Field(description="Supporting sources")
+
+
 class AnswerWithJustification(BaseModel):
     """An answer to the user question along with justification for the answer."""
 
     answer: str = Field(description="The answer to the user question.")
-    justification: str = Field(description="The justification for the answer.")
+    justification: Justification = Field(description="The justification for the answer.")
 
 
 # Raw JSON schema
@@ -620,9 +627,23 @@ JSON_SCHEMA = {
             "description": "The answer to the user question.",
         },
         "justification": {
-            "type": "string",
+            "type": "object",
             "title": "Justification",
             "description": "The justification for the answer.",
+            "properties": {
+                "reasoning": {
+                    "type": "string",
+                    "title": "Reasoning",
+                    "description": "Step-by-step reasoning.",
+                },
+                "sources": {
+                    "type": "array",
+                    "title": "Sources",
+                    "description": "Supporting sources",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["reasoning", "sources"],
         },
     },
     "required": ["answer", "justification"],
@@ -641,7 +662,15 @@ def test_chat_model_with_structured_output(llm, schema, method: str):
     if method == "function_calling":
         assert bind["tool_choice"]["function"]["name"] == "AnswerWithJustification"
     elif method == "json_schema":
-        assert bind["response_format"]["json_schema"]["schema"] == JSON_SCHEMA
+        js = bind["response_format"]["json_schema"]
+        assert js["name"] == "AnswerWithJustification"
+        assert js["strict"] is True
+        assert js["schema"]["additionalProperties"] is False
+        assert js["schema"]["properties"]["justification"]["additionalProperties"] is False
+        assert set(js["schema"]["required"]) == set(js["schema"]["properties"].keys())
+        assert set(js["schema"]["properties"]["justification"]["required"]) == set(
+            js["schema"]["properties"]["justification"]["properties"].keys()
+        )
     else:
         assert bind["response_format"] == {"type": "json_object"}
 
@@ -2071,3 +2100,19 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
         assert usage_metadata["total_tokens"] == 150
         assert usage_metadata["input_token_details"]["cache_read"] == 25
         assert usage_metadata["output_token_details"]["reasoning"] == 10
+
+
+def test_chat_databricks_with_timeout_and_retries():
+    """Test that ChatDatabricks can be initialized with timeout and max_retries parameters."""
+    mock_openai_client = Mock()
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        chat = ChatDatabricks(
+            model="databricks-meta-llama-3-3-70b-instruct", timeout=45.0, max_retries=3
+        )
+        assert chat.timeout == 45.0
+        assert chat.max_retries == 3
+        assert chat.client == mock_openai_client
+        mock_get_client.assert_called_once_with(workspace_client=None, timeout=45.0, max_retries=3)

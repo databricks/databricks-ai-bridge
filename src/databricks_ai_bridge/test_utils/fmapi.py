@@ -33,9 +33,8 @@ SKIP_CHAT_COMPLETIONS = {
     "databricks-gpt-5-1-codex-mini",  # Responses API only, no Chat Completions support
     "databricks-gpt-5-2-codex",  # Responses API only, no Chat Completions support
     "databricks-gpt-5-3-codex",  # Responses API only, no Chat Completions support
-    # Added in this PR:
-    "databricks-gpt-5-4",  # Responses API only, no Chat Completions support
-    "databricks-gemini-3-1-flash-lite",  # requires thought_signature on function calls
+    "databricks-gpt-5-4",  # Requires /v1/responses for tool calling, not /v1/chat/completions
+    "databricks-gemini-3-1-flash-lite",  # Requires thought_signature on function calls
 }
 
 # Additional models excluded only in LangChain Chat Completions tests.

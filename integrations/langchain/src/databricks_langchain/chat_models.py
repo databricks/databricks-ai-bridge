@@ -56,7 +56,10 @@ from langchain_core.output_parsers.openai_tools import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
-from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.function_calling import (
+    convert_to_openai_function,
+    convert_to_openai_tool,
+)
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
@@ -1332,12 +1335,11 @@ class ChatDatabricks(BaseChatModel):
                 raise ValueError(
                     "schema must be specified when method is 'json_schema'. Received None."
                 )
+            function = convert_to_openai_function(schema, strict=True)
+            function["schema"] = function.pop("parameters")
             response_format = {
                 "type": "json_schema",
-                "json_schema": {
-                    "strict": True,
-                    "schema": (pydantic_schema.model_json_schema() if pydantic_schema else schema),
-                },
+                "json_schema": function,
             }
             llm = self.bind(response_format=response_format)
             output_parser = (
@@ -1492,12 +1494,15 @@ def _convert_lc_messages_to_responses_api(messages: list[BaseMessage]) -> list[d
                         ):
                             # FMAPI rejects output-only fields on input items.
                             block.pop("status", None)
-                            # Fix ids: FMAPI requires fc_ prefix and max 64 chars.
+                            # Fix ids: FMAPI requires fc_ prefix on function_call ids
+                            # and max 64 chars on all ids.
                             if "id" not in block:
                                 call_id = block.get("call_id", "")
-                                block["id"] = _truncate(
-                                    f"fc_{call_id}" if call_id else (lc_msg.id or "")
-                                )
+                                if call_id:
+                                    raw_id = call_id if call_id.startswith("fc_") else f"fc_{call_id}"
+                                else:
+                                    raw_id = lc_msg.id or ""
+                                block["id"] = _truncate(raw_id)
                             elif len(block["id"]) > _MAX_ID:
                                 block["id"] = _truncate(block["id"])
                             input_items.append(block)

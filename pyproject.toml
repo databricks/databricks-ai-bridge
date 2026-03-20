@@ -125,3 +125,9 @@ root = ["./src", "./tests"]
 
 [tool.ty.src]
 include = ["./src", "./tests"]
+exclude = [
+  # Fixture code and deploy scripts — not SDK code, uses MLflow/agents types that don't resolve
+  "./tests/integration_tests/obo/model_serving_fixture",
+  "./tests/integration_tests/obo/app_fixture",
+  "./tests/integration_tests/obo/deploy_serving_agent.py",
+]

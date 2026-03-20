@@ -13,6 +13,7 @@ from openai.resources.responses import AsyncResponses, Responses
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
 from databricks_openai.utils.clients import (
+    _get_ai_gateway_base_url,
     _get_app_url,
     _get_authorized_async_http_client,
     _get_authorized_http_client,
@@ -680,3 +681,135 @@ class TestOpenAIApiKey:
     def test_falls_back_to_no_token_when_empty_string(self):
         with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
             assert _get_openai_api_key() == "no-token"
+
+
+def _mock_httpx_response(status_code: int, json_data: Any = None) -> MagicMock:
+    """Create a mock httpx Response."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = json_data or {}
+    return response
+
+
+class TestAIGatewayV2Detection:
+    """Tests for _get_ai_gateway_base_url."""
+
+    def test_returns_base_url_when_endpoints_exist(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.return_value = _mock_httpx_response(
+            200,
+            {
+                "endpoints": [
+                    {
+                        "name": "databricks-claude-sonnet-4-6",
+                        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                        "created_by": "Databricks",
+                        "ai_gateway_url": "https://12345.ai-gateway.cloud.databricks.com",
+                    }
+                ]
+            },
+        )
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result == "https://12345.ai-gateway.cloud.databricks.com/mlflow/v1"
+        mock_client.get.assert_called_once_with(
+            "https://test.databricks.com/api/ai-gateway/v2/endpoints"
+        )
+
+    def test_returns_none_on_404(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.return_value = _mock_httpx_response(404)
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result is None
+
+    def test_returns_none_on_empty_endpoints(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.return_value = _mock_httpx_response(200, {"endpoints": []})
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result is None
+
+    def test_returns_none_on_network_exception(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.side_effect = Exception("Connection refused")
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result is None
+
+    def test_returns_none_on_missing_ai_gateway_url(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.return_value = _mock_httpx_response(
+            200,
+            {"endpoints": [{"name": "my-endpoint"}]},
+        )
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result is None
+
+    def test_parses_base_url_from_different_workspace(self):
+        mock_client = MagicMock(spec=httpx.Client)
+        mock_client.get.return_value = _mock_httpx_response(
+            200,
+            {
+                "endpoints": [
+                    {
+                        "name": "databricks-gpt-5-2",
+                        "ai_gateway_url": "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com",
+                    }
+                ]
+            },
+        )
+        result = _get_ai_gateway_base_url(mock_client, "https://test.databricks.com")
+        assert result == "https://ws-123.ai-gateway.us-east-1.cloud.databricks.com/mlflow/v1"
+
+
+class TestDatabricksOpenAIWithGateway:
+    """Tests for AI Gateway V2 integration in DatabricksOpenAI and AsyncDatabricksOpenAI."""
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_gateway_available_uses_gateway_url(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with patch(
+            "databricks_openai.utils.clients._get_ai_gateway_base_url",
+            return_value="https://12345.ai-gateway.cloud.databricks.com/mlflow/v1",
+        ):
+            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
+            assert "ai-gateway" in str(client.base_url)
+            assert "12345.ai-gateway.cloud.databricks.com" in str(client.base_url)
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_gateway_unavailable_raises_error(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with patch(
+            "databricks_openai.utils.clients._get_ai_gateway_base_url",
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="Please ensure AI Gateway V2 is enabled"):
+                client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_gateway_disabled_no_api_call(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with patch(
+            "databricks_openai.utils.clients._get_ai_gateway_base_url",
+        ) as mock_gateway:
+            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=False)
+            mock_gateway.assert_not_called()
+            assert "/serving-endpoints/" in str(client.base_url)
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_explicit_base_url_skips_gateway_check(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with patch(
+            "databricks_openai.utils.clients._get_ai_gateway_base_url",
+        ) as mock_gateway:
+            client = client_cls(
+                workspace_client=mock_workspace_client,
+                base_url="https://custom.example.com/v1",
+            )
+            mock_gateway.assert_not_called()
+            assert "custom.example.com" in str(client.base_url)
