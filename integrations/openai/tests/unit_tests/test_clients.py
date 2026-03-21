@@ -186,6 +186,20 @@ class TestStrictFieldStripping:
         assert result["temperature"] == 0.2
         assert result["tools"][0]["function"]["strict"] is True
 
+    def test_strip_strict_from_kwargs_is_noop_when_strict_absent(self):
+        kwargs = {
+            "model": "databricks-gpt-4o",
+            "temperature": 0.2,
+            "tools": [{"type": "function", "function": {"name": "test", "strict": True}}],
+        }
+
+        expected = kwargs.copy()
+        result = _strip_strict_from_kwargs(kwargs)
+
+        assert result is kwargs
+        assert result == expected
+        assert result["tools"][0]["function"]["strict"] is True
+
     def test_strip_strict_from_tools_removes_strict(self):
         tools = [
             {"type": "function", "function": {"name": "test", "strict": True, "parameters": {}}}
