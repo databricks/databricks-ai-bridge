@@ -19,6 +19,7 @@ from databricks_openai.utils.clients import (
     _get_authorized_http_client,
     _get_openai_api_key,
     _should_strip_strict,
+    _strip_strict_from_kwargs,
     _strip_strict_from_tools,
     _validate_oauth_for_apps,
     _wrap_app_error,
@@ -171,6 +172,35 @@ class TestAsyncDatabricksOpenAI:
 class TestStrictFieldStripping:
     """Tests for strict field stripping helper functions."""
 
+    def test_strip_strict_from_kwargs_removes_top_level_strict_only(self):
+        kwargs = {
+            "strict": True,
+            "model": "databricks-claude-3-7-sonnet",
+            "temperature": 0.2,
+            "tools": [{"type": "function", "function": {"name": "test", "strict": True}}],
+        }
+
+        result = _strip_strict_from_kwargs(kwargs)
+
+        assert "strict" not in result
+        assert result["model"] == "databricks-claude-3-7-sonnet"
+        assert result["temperature"] == 0.2
+        assert result["tools"][0]["function"]["strict"] is True
+
+    def test_strip_strict_from_kwargs_is_noop_when_strict_absent(self):
+        kwargs = {
+            "model": "databricks-gpt-4o",
+            "temperature": 0.2,
+            "tools": [{"type": "function", "function": {"name": "test", "strict": True}}],
+        }
+
+        expected = kwargs.copy()
+        result = _strip_strict_from_kwargs(kwargs)
+
+        assert result is kwargs
+        assert result == expected
+        assert result["tools"][0]["function"]["strict"] is True
+
     def test_strip_strict_from_tools_removes_strict(self):
         tools = [
             {"type": "function", "function": {"name": "test", "strict": True, "parameters": {}}}
@@ -310,6 +340,31 @@ class TestDatabricksOpenAIStrictStripping:
                 )
                 mock_create.assert_called_once()
 
+    def test_chat_completions_strips_top_level_strict_kwarg(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            client = DatabricksOpenAI()
+
+            with patch.object(Completions, "create") as mock_create:
+                mock_create.return_value = MagicMock()
+                request_kwargs = cast(
+                    Any,
+                    {
+                        "model": "databricks-gpt-4o",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "strict": True,
+                    },
+                )
+                client.chat.completions.create(**request_kwargs)
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert "strict" not in call_kwargs
+                assert call_kwargs["model"] == "databricks-gpt-4o"
+
 
 class TestAsyncDatabricksOpenAIStrictStripping:
     """Tests for strict stripping in AsyncDatabricksOpenAI."""
@@ -359,6 +414,31 @@ class TestAsyncDatabricksOpenAIStrictStripping:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs["tools"][0]["function"]["strict"] is True
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_strips_top_level_strict_kwarg(self):
+        with patch("databricks_openai.utils.clients.WorkspaceClient") as mock_ws:
+            mock_client = MagicMock(spec=WorkspaceClient)
+            mock_client.config.host = "https://test.databricks.com"
+            mock_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
+            mock_ws.return_value = mock_client
+
+            client = AsyncDatabricksOpenAI()
+
+            with patch.object(AsyncCompletions, "create", new_callable=AsyncMock) as mock_create:
+                request_kwargs = cast(
+                    Any,
+                    {
+                        "model": "databricks-gpt-4o",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "strict": True,
+                    },
+                )
+                await client.chat.completions.create(**request_kwargs)
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert "strict" not in call_kwargs
+                assert call_kwargs["model"] == "databricks-gpt-4o"
 
 
 class TestDatabricksAppsSupport:
