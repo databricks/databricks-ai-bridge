@@ -102,16 +102,14 @@ def cleanup_tables_project_branch():
     tables_to_cleanup: list[tuple[str, str]] = []
     yield tables_to_cleanup
     if tables_to_cleanup:
-        from databricks_ai_bridge.lakebase import LakebasePool
+        from databricks_ai_bridge.lakebase import LakebaseClient
 
-        pool = LakebasePool(
+        with LakebaseClient(
             project=os.environ["LAKEBASE_PROJECT"], branch=os.environ["LAKEBASE_BRANCH"]
-        )
-        with pool.connection() as conn:
+        ) as client:
             for sessions_table, messages_table in tables_to_cleanup:
-                conn.execute(f"DROP TABLE IF EXISTS {messages_table}")
-                conn.execute(f"DROP TABLE IF EXISTS {sessions_table}")
-        pool.close()
+                client.execute(f"DROP TABLE IF EXISTS {messages_table}")
+                client.execute(f"DROP TABLE IF EXISTS {sessions_table}")
 
 
 @pytest.fixture
@@ -120,14 +118,14 @@ def cleanup_tables_endpoint():
     tables_to_cleanup: list[tuple[str, str]] = []
     yield tables_to_cleanup
     if tables_to_cleanup:
-        from databricks_ai_bridge.lakebase import LakebasePool
+        from databricks_ai_bridge.lakebase import LakebaseClient
 
-        pool = LakebasePool(autoscaling_endpoint=os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"])
-        with pool.connection() as conn:
+        with LakebaseClient(
+            autoscaling_endpoint=os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"]
+        ) as client:
             for sessions_table, messages_table in tables_to_cleanup:
-                conn.execute(f"DROP TABLE IF EXISTS {messages_table}")
-                conn.execute(f"DROP TABLE IF EXISTS {sessions_table}")
-        pool.close()
+                client.execute(f"DROP TABLE IF EXISTS {messages_table}")
+                client.execute(f"DROP TABLE IF EXISTS {sessions_table}")
 
 
 # =============================================================================

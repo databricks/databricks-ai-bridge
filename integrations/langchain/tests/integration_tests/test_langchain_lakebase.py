@@ -82,6 +82,9 @@ def get_autoscaling_endpoint() -> str:
 
 # =============================================================================
 # Tables managed by LangGraph that must be cleaned up between test runs.
+# Includes both data tables and migration-tracking tables; PostgresStore's
+# setup() is a no-op when the migration table already marks a version as
+# applied, so we must always drop both together.
 # =============================================================================
 
 STORE_TABLES = ["store_vectors", "vector_migrations", "store", "store_migrations"]
@@ -116,7 +119,14 @@ def unique_namespace() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def cleanup_store_tables():
-    """Drop store tables before and after all provisioned store tests."""
+    """Drop store tables before and after all provisioned store tests.
+
+    scope="module" means tables are dropped once at the start of the module and
+    once at the end — NOT before/after each individual test. This keeps tests
+    fast while still cleaning up stale migration-tracking tables left by
+    previous CI runs (PostgresStore.setup() silently skips table creation when
+    its migration tracker says the schema is already at the latest version).
+    """
     _drop_tables(STORE_TABLES)
     yield
     _drop_tables(STORE_TABLES)
@@ -124,7 +134,11 @@ def cleanup_store_tables():
 
 @pytest.fixture(scope="module")
 def cleanup_checkpoint_tables():
-    """Drop checkpoint tables before and after all provisioned checkpoint tests."""
+    """Drop checkpoint tables before and after all provisioned checkpoint tests.
+
+    scope="module" means tables are dropped once at the start of the module and
+    once at the end — NOT before/after each individual test.
+    """
     _drop_tables(CHECKPOINT_TABLES)
     yield
     _drop_tables(CHECKPOINT_TABLES)
