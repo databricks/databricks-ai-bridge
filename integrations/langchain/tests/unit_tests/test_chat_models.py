@@ -880,9 +880,9 @@ def test_convert_response_to_chat_result_anthropic_cache_tokens(llm: ChatDatabri
     choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
     usage = _create_claude_completion_usage()
     response = ChatCompletion(
-        id="chatcmpl_test",
+        id=_MOCK_CHAT_RESPONSE["id"],
         choices=[choice],
-        created=1721875529,
+        created=_MOCK_CHAT_RESPONSE["created"],
         model="databricks-claude-sonnet-4-5",
         object="chat.completion",
         usage=usage,
@@ -903,9 +903,9 @@ def test_convert_response_to_chat_result_openai_cache_tokens(llm: ChatDatabricks
     choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
     usage = _create_openai_completion_usage()
     response = ChatCompletion(
-        id="chatcmpl_test",
+        id=_MOCK_CHAT_RESPONSE["id"],
         choices=[choice],
-        created=1721875529,
+        created=_MOCK_CHAT_RESPONSE["created"],
         model="gpt-4o",
         object="chat.completion",
         usage=usage,
@@ -924,9 +924,9 @@ def test_convert_response_to_chat_result_no_cache_tokens(llm: ChatDatabricks) ->
     choice = Choice(index=0, message=message, finish_reason="stop", logprobs=None)
     usage = CompletionUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     response = ChatCompletion(
-        id="chatcmpl_test",
+        id=_MOCK_CHAT_RESPONSE["id"],
         choices=[choice],
-        created=1721875529,
+        created=_MOCK_CHAT_RESPONSE["created"],
         model="test-model",
         object="chat.completion",
         usage=usage,
