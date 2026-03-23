@@ -2,14 +2,20 @@
 Integration tests for LangChain Lakebase wrappers (DatabricksStore, CheckpointSaver).
 
 These tests require:
-1. A Lakebase instance to be available
+1. A Lakebase instance to be available (provisioned or autoscaling)
 2. Valid Databricks authentication (DATABRICKS_HOST + DATABRICKS_CLIENT_ID/SECRET or profile)
 
-Set the environment variable:
-    LAKEBASE_INSTANCE_NAME: Name of the Lakebase instance
+Set at least one of these environment variables:
+    LAKEBASE_INSTANCE_NAME: Name of the Lakebase provisioned instance
+    LAKEBASE_PROJECT + LAKEBASE_BRANCH: Autoscaling project and branch names
+    LAKEBASE_AUTOSCALING_ENDPOINT: Full autoscaling endpoint resource path
 
-Example:
+Example (provisioned):
     LAKEBASE_INSTANCE_NAME=my-lakebase pytest tests/integration_tests/test_langchain_lakebase.py -v
+
+Example (autoscaling):
+    LAKEBASE_PROJECT=my-project LAKEBASE_BRANCH=main \
+        pytest tests/integration_tests/test_langchain_lakebase.py -v
 """
 
 from __future__ import annotations
@@ -32,16 +38,46 @@ from databricks_langchain import (
     DatabricksStore,
 )
 
-# Skip all tests if LAKEBASE_INSTANCE_NAME is not set
+# Skip all tests if no Lakebase env vars are set
 pytestmark = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_INSTANCE_NAME")
+    and not os.environ.get("LAKEBASE_PROJECT")
+    and not os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT"),
+    reason="No Lakebase env vars set "
+    "(need LAKEBASE_INSTANCE_NAME, LAKEBASE_PROJECT, or LAKEBASE_AUTOSCALING_ENDPOINT)",
+)
+
+_skip_no_instance = pytest.mark.skipif(
     not os.environ.get("LAKEBASE_INSTANCE_NAME"),
-    reason="LAKEBASE_INSTANCE_NAME environment variable not set",
+    reason="LAKEBASE_INSTANCE_NAME not set",
+)
+
+_skip_no_project_branch = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_PROJECT") or not os.environ.get("LAKEBASE_BRANCH"),
+    reason="LAKEBASE_PROJECT and LAKEBASE_BRANCH not set",
+)
+
+_skip_no_endpoint = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT"),
+    reason="LAKEBASE_AUTOSCALING_ENDPOINT not set",
 )
 
 
 def get_instance_name() -> str:
     """Get the Lakebase instance name from environment."""
     return os.environ["LAKEBASE_INSTANCE_NAME"]
+
+
+def get_project() -> str:
+    return os.environ["LAKEBASE_PROJECT"]
+
+
+def get_branch() -> str:
+    return os.environ["LAKEBASE_BRANCH"]
+
+
+def get_autoscaling_endpoint() -> str:
+    return os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"]
 
 
 # =============================================================================
@@ -58,11 +94,14 @@ CHECKPOINT_TABLES = [
     "checkpoint_writes",
     "checkpoints",
 ]
+ALL_TABLES = STORE_TABLES + CHECKPOINT_TABLES
 
 
-def _drop_tables(tables: list[str]) -> None:
-    """Drop the given tables from the Lakebase instance."""
-    with LakebaseClient(instance_name=get_instance_name()) as client:
+def _drop_tables(tables: list[str], **client_kwargs) -> None:
+    """Drop the given tables from a Lakebase instance."""
+    if not client_kwargs:
+        client_kwargs = {"instance_name": get_instance_name()}
+    with LakebaseClient(**client_kwargs) as client:
         for table in tables:
             client.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
@@ -80,7 +119,7 @@ def unique_namespace() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def cleanup_store_tables():
-    """Drop store tables before and after all store tests.
+    """Drop store tables before and after all provisioned store tests.
 
     scope="module" means tables are dropped once at the start of the module and
     once at the end — NOT before/after each individual test. This keeps tests
@@ -95,7 +134,7 @@ def cleanup_store_tables():
 
 @pytest.fixture(scope="module")
 def cleanup_checkpoint_tables():
-    """Drop checkpoint tables before and after all checkpoint tests.
+    """Drop checkpoint tables before and after all provisioned checkpoint tests.
 
     scope="module" means tables are dropped once at the start of the module and
     once at the end — NOT before/after each individual test.
@@ -103,6 +142,30 @@ def cleanup_checkpoint_tables():
     _drop_tables(CHECKPOINT_TABLES)
     yield
     _drop_tables(CHECKPOINT_TABLES)
+
+
+@pytest.fixture(scope="module")
+def cleanup_all_tables_project_branch():
+    """Drop all LangGraph tables on the project/branch autoscaling database."""
+    if not os.environ.get("LAKEBASE_PROJECT") or not os.environ.get("LAKEBASE_BRANCH"):
+        yield
+        return
+    kwargs = {"project": get_project(), "branch": get_branch()}
+    _drop_tables(ALL_TABLES, **kwargs)
+    yield
+    _drop_tables(ALL_TABLES, **kwargs)
+
+
+@pytest.fixture(scope="module")
+def cleanup_all_tables_endpoint():
+    """Drop all LangGraph tables on the endpoint autoscaling database."""
+    if not os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT"):
+        yield
+        return
+    kwargs = {"autoscaling_endpoint": get_autoscaling_endpoint()}
+    _drop_tables(ALL_TABLES, **kwargs)
+    yield
+    _drop_tables(ALL_TABLES, **kwargs)
 
 
 def _make_checkpoint(ts: str = "2025-01-01T00:00:00+00:00") -> Checkpoint:
@@ -119,10 +182,11 @@ def _make_checkpoint(ts: str = "2025-01-01T00:00:00+00:00") -> Checkpoint:
 
 
 # =============================================================================
-# DatabricksStore (Sync) Tests
+# DatabricksStore (Sync) Tests — Provisioned
 # =============================================================================
 
 
+@_skip_no_instance
 class TestDatabricksStore:
     """Test synchronous DatabricksStore against a live Lakebase instance."""
 
@@ -186,10 +250,11 @@ class TestDatabricksStore:
 
 
 # =============================================================================
-# AsyncDatabricksStore Tests
+# AsyncDatabricksStore Tests — Provisioned
 # =============================================================================
 
 
+@_skip_no_instance
 class TestAsyncDatabricksStore:
     """Test asynchronous AsyncDatabricksStore against a live Lakebase instance."""
 
@@ -259,10 +324,11 @@ class TestAsyncDatabricksStore:
 
 
 # =============================================================================
-# CheckpointSaver (Sync) Tests
+# CheckpointSaver (Sync) Tests — Provisioned
 # =============================================================================
 
 
+@_skip_no_instance
 class TestCheckpointSaver:
     """Test synchronous CheckpointSaver against a live Lakebase instance."""
 
@@ -304,10 +370,11 @@ class TestCheckpointSaver:
 
 
 # =============================================================================
-# AsyncCheckpointSaver Tests
+# AsyncCheckpointSaver Tests — Provisioned
 # =============================================================================
 
 
+@_skip_no_instance
 class TestAsyncCheckpointSaver:
     """Test asynchronous AsyncCheckpointSaver against a live Lakebase instance."""
 
@@ -348,3 +415,143 @@ class TestAsyncCheckpointSaver:
 
             checkpoints = [c async for c in saver.alist(config)]
             assert len(checkpoints) == 3
+
+
+# =============================================================================
+# Autoscaling — Project/Branch
+# =============================================================================
+
+
+@_skip_no_project_branch
+class TestAutoscalingProjectBranch:
+    """Test all LangChain Lakebase wrappers with autoscaling project/branch mode."""
+
+    def test_store_put_and_get(self, unique_namespace, cleanup_all_tables_project_branch):
+        """Test DatabricksStore: autoscaling params forwarded to LakebasePool."""
+        store = DatabricksStore(project=get_project(), branch=get_branch())
+        store.setup()
+
+        ns = unique_namespace
+        store.put(ns, "key1", {"data": "autoscaling hello"})
+
+        item = store.get(ns, "key1")
+        assert item is not None
+        assert item.value == {"data": "autoscaling hello"}
+        assert item.key == "key1"
+
+    @pytest.mark.asyncio
+    async def test_async_store_put_and_get(
+        self, unique_namespace, cleanup_all_tables_project_branch
+    ):
+        """Test AsyncDatabricksStore: async pool open/close + put + get."""
+        async with AsyncDatabricksStore(project=get_project(), branch=get_branch()) as store:
+            await store.setup()
+
+            ns = unique_namespace
+            await store.aput(ns, "async_key", {"data": "async autoscaling"})
+
+            item = await store.aget(ns, "async_key")
+            assert item is not None
+            assert item.value == {"data": "async autoscaling"}
+
+        assert store._lakebase.pool.closed
+
+    def test_checkpoint_write_and_read(self, cleanup_all_tables_project_branch):
+        """Test CheckpointSaver: context manager auto-setup + put + get_tuple."""
+        thread_id = uuid.uuid4().hex
+
+        with CheckpointSaver(project=get_project(), branch=get_branch()) as saver:
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            checkpoint = _make_checkpoint()
+            saver.put(config, checkpoint, CheckpointMetadata(), {})
+
+            result = saver.get_tuple(config)
+            assert result is not None
+            assert result.checkpoint["id"] == checkpoint["id"]
+
+        assert saver._lakebase.pool.closed
+
+    @pytest.mark.asyncio
+    async def test_async_checkpoint_write_and_read(self, cleanup_all_tables_project_branch):
+        """Test AsyncCheckpointSaver: async context manager auto-setup + put + get_tuple."""
+        thread_id = uuid.uuid4().hex
+
+        async with AsyncCheckpointSaver(project=get_project(), branch=get_branch()) as saver:
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            checkpoint = _make_checkpoint()
+            await saver.aput(config, checkpoint, CheckpointMetadata(), {})
+
+            result = await saver.aget_tuple(config)
+            assert result is not None
+            assert result.checkpoint["id"] == checkpoint["id"]
+
+        assert saver._lakebase.pool.closed
+
+
+# =============================================================================
+# Autoscaling — Endpoint
+# =============================================================================
+
+
+@_skip_no_endpoint
+class TestAutoscalingEndpoint:
+    """Test all LangChain Lakebase wrappers with autoscaling endpoint mode."""
+
+    def test_store_put_and_get(self, unique_namespace, cleanup_all_tables_endpoint):
+        """Test DatabricksStore: endpoint params forwarded to LakebasePool."""
+        store = DatabricksStore(autoscaling_endpoint=get_autoscaling_endpoint())
+        store.setup()
+
+        ns = unique_namespace
+        store.put(ns, "key1", {"data": "endpoint hello"})
+
+        item = store.get(ns, "key1")
+        assert item is not None
+        assert item.value == {"data": "endpoint hello"}
+        assert item.key == "key1"
+
+    @pytest.mark.asyncio
+    async def test_async_store_put_and_get(self, unique_namespace, cleanup_all_tables_endpoint):
+        """Test AsyncDatabricksStore: async endpoint pool open/close + put + get."""
+        async with AsyncDatabricksStore(autoscaling_endpoint=get_autoscaling_endpoint()) as store:
+            await store.setup()
+
+            ns = unique_namespace
+            await store.aput(ns, "async_key", {"data": "async endpoint"})
+
+            item = await store.aget(ns, "async_key")
+            assert item is not None
+            assert item.value == {"data": "async endpoint"}
+
+        assert store._lakebase.pool.closed
+
+    def test_checkpoint_write_and_read(self, cleanup_all_tables_endpoint):
+        """Test CheckpointSaver: endpoint context manager auto-setup + put + get_tuple."""
+        thread_id = uuid.uuid4().hex
+
+        with CheckpointSaver(autoscaling_endpoint=get_autoscaling_endpoint()) as saver:
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            checkpoint = _make_checkpoint()
+            saver.put(config, checkpoint, CheckpointMetadata(), {})
+
+            result = saver.get_tuple(config)
+            assert result is not None
+            assert result.checkpoint["id"] == checkpoint["id"]
+
+        assert saver._lakebase.pool.closed
+
+    @pytest.mark.asyncio
+    async def test_async_checkpoint_write_and_read(self, cleanup_all_tables_endpoint):
+        """Test AsyncCheckpointSaver: async endpoint pool lifecycle."""
+        thread_id = uuid.uuid4().hex
+
+        async with AsyncCheckpointSaver(autoscaling_endpoint=get_autoscaling_endpoint()) as saver:
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            checkpoint = _make_checkpoint()
+            await saver.aput(config, checkpoint, CheckpointMetadata(), {})
+
+            result = await saver.aget_tuple(config)
+            assert result is not None
+            assert result.checkpoint["id"] == checkpoint["id"]
+
+        assert saver._lakebase.pool.closed
