@@ -386,8 +386,8 @@ The CI runner repo checks out `databricks-ai-bridge` at `ref: main` by default. 
 
 **Via GitHub CLI:**
 ```bash
-# Switch to the account with access to the runner repo
-gh auth switch --user dhruv-gupta_data
+# Switch to the account with runner repo access
+gh auth switch --user <your-runner-repo-username>
 
 # Create a branch in the runner repo that points to your PR branch
 gh repo clone databricks-eng/ai-oss-integration-tests-runner /tmp/runner-repo
@@ -408,11 +408,12 @@ gh run watch
 ```
 
 **Via GitHub UI:**
-1. Go to the runner repo's Actions tab
-2. Select "Databricks AI Bridge Integration Tests"
-3. Click "Run workflow"
-4. Select your runner branch from the branch dropdown
-5. Click "Run workflow"
+1. Push a branch to the runner repo with `ref: main` changed to `ref: <your-branch>` in `.github/workflows/integration-tests.yml`
+2. Go to the runner repo's Actions tab
+3. Select "Databricks AI Bridge Integration Tests"
+4. Click "Run workflow"
+5. Select your runner branch from the branch dropdown
+6. Click "Run workflow"
 
 After tests pass, delete the temporary runner branch. Once your PR is merged to `main`, the nightly CI will automatically pick it up.
 
