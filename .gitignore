@@ -22,3 +22,7 @@ docs/build
 **/uv.lock
 
 node_modules/
+
+# Environment secrets
+.env
+.env.local

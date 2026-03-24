@@ -1,0 +1,44 @@
+{
+  "name": "@databricks/appkit-agent-playground-custom-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:server": "tsx watch --env-file=.env server/index.ts",
+    "dev:client": "vite",
+    "dev": "concurrently -n server,client -c blue,green \"pnpm run dev:server\" \"pnpm run dev:client\"",
+    "build:client": "vite build",
+    "start": "node --env-file=.env server/index.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^3.0.118",
+    "@databricks/appkit": "^0.21.0",
+    "@databricks/appkit-agent": "file:../..",
+    "@databricks/langchainjs": "^0.1.0",
+    "@langchain/core": "^1.1.33",
+    "@langchain/langgraph": "^1.2.2",
+    "ai": "^6.0.116",
+    "pg": "^8.20.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "reflect-metadata": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.18.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "concurrently": "^9.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.4.0",
+    "vite": "^6.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@databricks/appkit",
+      "esbuild",
+      "protobufjs"
+    ]
+  }
+}
