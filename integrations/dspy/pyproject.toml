@@ -12,6 +12,7 @@ dependencies = [
     "dspy>=2.6.27",
     "databricks-sdk>=0.58.0",
     "mlflow>=3.0.0",
+    "litellm<=1.82.6",
 ]
 
 [dependency-groups]
