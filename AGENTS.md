@@ -45,3 +45,26 @@ Integration tests hit live Databricks APIs (no mocks) and cover 6 areas: Vector 
 - **Claude Code skill:** [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) -- principles and patterns for writing new integration tests (trigger with `/integration-tests`)
 
 Tests are gated by environment variables (e.g., `RUN_VS_INTEGRATION_TESTS=1`) so they don't run during normal development. CI runs nightly in a private runner repo that injects workspace credentials.
+
+Running integration tests is **optional** and separate from PR CI. After creating a PR, ask the user if they want to trigger integration tests. If so, the process is:
+
+```bash
+# Switch to account with runner repo access
+gh auth switch --user <your-runner-repo-username>
+
+# Clone runner repo and create a branch pointing to the PR branch
+gh repo clone databricks-eng/ai-oss-integration-tests-runner /tmp/runner-repo
+cd /tmp/runner-repo
+git checkout -b test/<your-bridge-feature-branch>
+
+# Point the workflow at the PR branch instead of main
+sed -i '' 's/ref: main/ref: <your-bridge-feature-branch>/g' .github/workflows/integration-tests.yml
+git add . && git commit -m "Point to <your-bridge-feature-branch> for testing"
+git push -u origin test/<your-bridge-feature-branch>
+
+# Trigger and watch
+gh workflow run integration-tests.yml --ref test/<your-bridge-feature-branch>
+gh run watch
+```
+
+Delete the temporary runner branch after tests pass.
