@@ -13,6 +13,7 @@ await createApp({
       backend: "agent",
       // Uncomment this to use a local PostgreSQL database for persistence
       // pool: new pg.Pool({ connectionString: "postgres://user@localhost:5432/database" }),
+      // autoMigrate: true
     }),
   ],
 });

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file=.env server/index.ts",
-    "start": "node --env-file=.env server/index.ts"
+    "start": "tsx server/index.ts"
   },
   "dependencies": {
     "@databricks/appkit": "^0.21.0",
