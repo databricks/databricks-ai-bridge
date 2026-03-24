@@ -405,6 +405,9 @@ gh workflow run integration-tests.yml --ref test/<your-bridge-feature-branch>
 # Watch the run
 gh run list --workflow=integration-tests.yml --limit 1
 gh run watch
+
+# Cleanup: delete the temporary runner branch after tests pass
+git push origin --delete test/<your-bridge-feature-branch>
 ```
 
 **Via GitHub UI:**
