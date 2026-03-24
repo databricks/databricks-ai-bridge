@@ -65,6 +65,7 @@ git push -u origin test/<your-bridge-feature-branch>
 # Trigger and watch
 gh workflow run integration-tests.yml --ref test/<your-bridge-feature-branch>
 gh run watch
-```
 
-Delete the temporary runner branch after tests pass.
+# Cleanup: delete the temporary runner branch after tests pass
+git push origin --delete test/<your-bridge-feature-branch>
+```
