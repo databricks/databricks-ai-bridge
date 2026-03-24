@@ -206,6 +206,48 @@ describe("createInvokeHandler", () => {
       );
     });
 
+    test("history contains only messages before the last user message", async () => {
+      const spyAgent = {
+        invoke: vi.fn().mockResolvedValue([
+          {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              { type: "output_text", text: "response", annotations: [] },
+            ],
+          },
+        ]),
+        stream: vi.fn(),
+      };
+      const historyHandler = createInvokeHandler(() => spyAgent as any);
+
+      const req = makeReq({
+        input: [
+          { role: "user", content: "First message" },
+          { role: "user", content: "Second message" },
+          { role: "assistant", content: "Interrupted reply" },
+        ],
+        stream: false,
+      });
+      const res = makeRes();
+
+      await historyHandler(req, res, vi.fn());
+
+      expect(spyAgent.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: "Second message",
+          chat_history: [
+            expect.objectContaining({
+              role: "user",
+              content: "First message",
+            }),
+          ],
+        }),
+      );
+    });
+
     test("handles function_call items in history", async () => {
       const spyAgent = {
         invoke: vi.fn().mockResolvedValue([
@@ -274,6 +316,30 @@ describe("createInvokeHandler", () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           error: "No user message found in input",
+        }),
+      );
+    });
+
+    test("returns 500 when non-streaming agent invoke throws", async () => {
+      const errorAgent = {
+        invoke: vi.fn().mockRejectedValue(new Error("invoke exploded")),
+        stream: vi.fn(),
+      };
+      const errorHandler = createInvokeHandler(() => errorAgent as any);
+
+      const req = makeReq({
+        input: [{ role: "user", content: "boom" }],
+        stream: false,
+      });
+      const res = makeRes();
+
+      await errorHandler(req, res, vi.fn());
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: "Internal server error",
+          message: "invoke exploded",
         }),
       );
     });

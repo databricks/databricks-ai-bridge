@@ -239,9 +239,12 @@ export class AgentPlugin extends Plugin<IAgentConfig> {
         if (!this.agentImpl) {
           throw new Error("AgentPlugin not initialized");
         }
-        const lastUser = [...messages].reverse().find((m) => m.role === "user");
-        const input = lastUser?.content ?? "";
-        const chatHistory = messages.slice(0, -1);
+        const lastUserIdx = messages.findLastIndex((m) => m.role === "user");
+        if (lastUserIdx < 0) {
+          throw new Error("No user message found in input");
+        }
+        const input = messages[lastUserIdx].content;
+        const chatHistory = messages.slice(0, lastUserIdx);
         const items = await this.agentImpl.invoke({
           input,
           chat_history: chatHistory,
@@ -258,9 +261,12 @@ export class AgentPlugin extends Plugin<IAgentConfig> {
         if (!this.agentImpl) {
           throw new Error("AgentPlugin not initialized");
         }
-        const lastUser = [...messages].reverse().find((m) => m.role === "user");
-        const input = lastUser?.content ?? "";
-        const chatHistory = messages.slice(0, -1);
+        const lastUserIdx = messages.findLastIndex((m) => m.role === "user");
+        if (lastUserIdx < 0) {
+          throw new Error("No user message found in input");
+        }
+        const input = messages[lastUserIdx].content;
+        const chatHistory = messages.slice(0, lastUserIdx);
         yield* this.agentImpl.stream({
           input,
           chat_history: chatHistory,

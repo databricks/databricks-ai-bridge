@@ -164,6 +164,37 @@ describe("AgentPlugin", () => {
       expect(completedEvent).toBeDefined();
     });
 
+    test("invoke history contains only messages before the last user message", async () => {
+      const spyAgent = {
+        invoke: vi.fn().mockResolvedValue([
+          {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "ok", annotations: [] }],
+          },
+        ]),
+        stream: vi.fn(),
+      };
+      const config: IAgentConfig = { agentInstance: spyAgent as any };
+      const plugin = new AgentPlugin(config);
+      await plugin.setup();
+
+      await plugin.exports().invoke([
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+        { role: "assistant", content: "interrupted" },
+      ]);
+
+      expect(spyAgent.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: "second",
+          chat_history: [{ role: "user", content: "first" }],
+        }),
+      );
+    });
+
     test("throws when not initialized", async () => {
       const config: IAgentConfig = { agentInstance: new StubAgent() };
       const plugin = new AgentPlugin(config);
@@ -171,6 +202,29 @@ describe("AgentPlugin", () => {
       await expect(
         plugin.exports().invoke([{ role: "user", content: "hi" }]),
       ).rejects.toThrow("not initialized");
+    });
+  });
+
+  describe("abortActiveOperations()", () => {
+    function injectMcpClient(
+      plugin: AgentPlugin,
+      close: ReturnType<typeof vi.fn>,
+    ) {
+      Reflect.set(plugin, "mcpClient", { getTools: vi.fn(), close });
+    }
+
+    test("closes MCP client when present", async () => {
+      const stub = new StubAgent();
+      const config: IAgentConfig = { agentInstance: stub };
+      const plugin = new AgentPlugin(config);
+      await plugin.setup();
+
+      const closeFn = vi.fn().mockResolvedValue(undefined);
+      injectMcpClient(plugin, closeFn);
+
+      await plugin.abortActiveOperations();
+
+      expect(closeFn).toHaveBeenCalledOnce();
     });
   });
 
