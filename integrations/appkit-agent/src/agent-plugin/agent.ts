@@ -217,6 +217,7 @@ export class AgentPlugin extends Plugin<IAgentConfig> {
   injectRoutes(router: express.Router) {
     const handler = createInvokeHandler(() => this.getAgentImpl());
     router.post("/", handler);
+    router.post("/responses", handler);
     this.registerEndpoint("invoke", `/api/${this.name}`);
   }
 
