@@ -123,7 +123,10 @@ export function createInvokeHandler(
         userInput = lastUserMessage.content as string;
       }
 
-      const chatHistory = input.slice(0, -1).map(flattenHistoryItem);
+      const lastUserIdx = input.findLastIndex(
+        (msg: any) => msg.role === "user",
+      );
+      const chatHistory = input.slice(0, lastUserIdx).map(flattenHistoryItem);
 
       const agentParams = { input: userInput, chat_history: chatHistory };
       const agent = getAgent();
