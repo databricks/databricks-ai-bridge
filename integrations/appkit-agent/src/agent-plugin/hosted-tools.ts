@@ -11,7 +11,7 @@
 // ---------------------------------------------------------------------------
 
 export interface GenieTool {
-  type: "genie-space";
+  type: "genie_space";
   genie_space: { id: string };
 }
 
@@ -41,7 +41,7 @@ export type HostedTool =
 // ---------------------------------------------------------------------------
 
 const HOSTED_TOOL_TYPES = new Set([
-  "genie-space",
+  "genie_space",
   "vector_search_index",
   "custom_mcp_server",
   "external_mcp_server",
@@ -73,7 +73,7 @@ export async function resolveHostedTools(
 
   return tools.map((tool) => {
     switch (tool.type) {
-      case "genie-space":
+      case "genie_space":
         return DatabricksMCPServer.fromGenieSpace(tool.genie_space.id);
 
       case "vector_search_index": {

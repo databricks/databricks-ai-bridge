@@ -1,9 +1,9 @@
 # @databricks/appkit-agent
 
-Agent plugin for [Databricks AppKit](https://github.com/databricks/appkit). Provides two things:
+Agent plugin for [Databricks AppKit](https://github.com/databricks/appkit). You can define an agent using one of the following approaches:
 
-1. **`AgentInterface`** — a contract for writing custom agent implementations that speak the OpenAI Responses API format (streaming + non-streaming).
-2. **`StandardAgent`** — a ready-to-use LangGraph-based ReAct agent that implements `AgentInterface`, with streaming Responses API support, function tools, and Databricks-hosted tool integration (Genie, Vector Search, MCP servers).
+1. Declaratively define an agent by specifying `model`, `tools,` and `instructions`
+2. Implement a custom agent loop using **`AgentInterface`** — a contract for writing custom agent implementations that speak the OpenAI Responses API format (streaming + non-streaming).
 
 ## Installation
 
@@ -11,13 +11,13 @@ Agent plugin for [Databricks AppKit](https://github.com/databricks/appkit). Prov
 npm install @databricks/appkit-agent
 ```
 
-The LangChain peer dependencies are required when using the built-in ReAct agent (not needed if you provide a custom `agentInstance`):
+The following peer dependencies are required when using the built-in agent (not needed if you provide a custom `agentInstance`):
 
 ```bash
 npm install @databricks/langchainjs @langchain/core @langchain/langgraph
 ```
 
-If you use hosted MCP tools (Genie, Vector Search, custom/external MCP servers):
+If you use hosted tools (Genie, Vector Search, custom/external MCP servers):
 
 ```bash
 npm install @langchain/mcp-adapters
@@ -63,7 +63,7 @@ agent({
   // Tools available to the agent (see Tools section below)
   tools: [myTool, genieTool],
 
-  // Or bring your own AgentInterface implementation (skips LangGraph setup)
+  // Or bring your own AgentInterface implementation
   agentInstance: myCustomAgent,
 });
 ```
@@ -109,7 +109,7 @@ Connect to Databricks-managed services without writing tool handlers:
 ```typescript
 // Genie Space — natural-language queries over your data
 const genie = {
-  type: "genie-space" as const,
+  type: "genie_space" as const,
   genie_space: { id: "01efg..." },
 };
 
@@ -214,7 +214,7 @@ class MyAgent implements AgentInterface {
 agent({ agentInstance: new MyAgent() });
 ```
 
-The `StandardAgent` class (exported from this package) is the built-in implementation that wraps a LangGraph `createReactAgent` and translates its stream events into Responses API format. When you pass `model` instead of `agentInstance`, the plugin uses `StandardAgent` under the hood.
+The `StandardAgent` class (exported from this package) is the built-in implementation used when you pass `model` instead of `agentInstance`. It translates the underlying agent's stream events into Responses API format.
 
 ## API Reference
 
@@ -223,7 +223,7 @@ The `StandardAgent` class (exported from this package) is the built-in implement
 | Export                | Kind           | Description                                              |
 | --------------------- | -------------- | -------------------------------------------------------- |
 | `agent`               | Plugin factory | Main entry point — call with config, pass to `createApp` |
-| `StandardAgent`       | Class          | LangGraph-backed `AgentInterface` implementation         |
+| `StandardAgent`       | Class          | Built-in `AgentInterface` implementation                 |
 | `createInvokeHandler` | Function       | Express handler factory for the `/api/agent` endpoint    |
 | `isFunctionTool`      | Function       | Type guard for `FunctionTool`                            |
 | `isHostedTool`        | Function       | Type guard for `HostedTool`                              |
