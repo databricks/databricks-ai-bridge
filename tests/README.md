@@ -4,7 +4,7 @@
 
 `databricks-ai-bridge` is a bridge library -- it connects upstream SDKs (LangChain, OpenAI, etc.) to Databricks platform services (Vector Search, Genie, MCP, Lakebase, FMAPI, Model Serving). The bridge layer handles auth forwarding, parameter translation, response transformation, and API compatibility. Unit tests with mocks verify logic in isolation, but they cannot catch the regressions that matter most: a real API response changing shape, auth credentials failing to propagate, or a new model silently breaking tool calling.
 
-These integration tests exist to catch exactly those failures. Every test hits live Databricks APIs. There are no mocks.
+These integration tests exist to catch exactly those failures. Every test hits live Databricks APIs. There are no mocks. Tests are designed to replicate real user patterns from the [app-templates](https://github.com/databricks/app-templates) repo -- the same agent code that customers deploy.
 
 > **See also:** [`.claude/skills/integration-tests.md`](../.claude/skills/integration-tests.md) -- a Claude Code skill that codifies the principles and patterns for *writing* integration tests in this repo. This document covers what tests exist and why; the skill covers how to add new ones.
 
@@ -119,7 +119,7 @@ Unlike Vector Search, MCP uses plain `WorkspaceClient()` (SDK-native auth) -- no
 
 **What the bridge provides:** `DatabricksOpenAI`/`AsyncDatabricksOpenAI` clients that wrap the standard OpenAI SDK with Databricks-specific middleware: `strict` field stripping for non-GPT models, empty assistant content fix for Claude models, and response/input ID truncation to 64 characters (FMAPI generates longer IDs but rejects them on subsequent turns). `ChatDatabricks` (LangChain) delegates to these clients, supporting both Chat Completions and Responses API paths with `bind_tools()`.
 
-**Motivation -- early detection of broken models:** Databricks FMAPI continuously onboards new models. Each model may have subtly different tool calling behavior -- malformed tool call IDs, missing fields in streaming deltas, unsupported schema parameters, incorrect JSON in function arguments. These failures are invisible until a customer tries to build an agent with the new model. The FMAPI tests exist to catch these failures *the moment a new model appears*, before customers hit them.
+**Motivation -- early detection of broken models:** These tests were created after two customer-reported regressions: the `strict: True` field injected by OpenAI Agents SDK v0.6.4+ broke non-GPT models ([PR #269](https://github.com/databricks/databricks-ai-bridge/pull/269)), and empty assistant content with `tool_calls` broke Claude models ([PR #333](https://github.com/databricks/databricks-ai-bridge/pull/333)). Both were caught by customers, not CI. Beyond these specific fixes, Databricks FMAPI continuously onboards new models, each with subtly different tool calling behavior. The FMAPI tests exist to catch these failures *the moment a new model appears*, before customers hit them.
 
 **How dynamic model discovery works:** The `discover_chat_models()` utility (in `src/databricks_ai_bridge/test_utils/fmapi.py`) runs at pytest collection time:
 1. Lists all `databricks-*` serving endpoints with `llm/v1/chat` task
@@ -201,7 +201,7 @@ The fundamental assertion: when SP-A calls the agent, it sees SP-A's identity; w
 |------|---------------|
 | `tests/integration_tests/obo/test_obo_credential_flow.py` | `TestModelServingOBO` (3 tests): SP-A and SP-B get different responses; SP-A's response contains SP-A's client ID; SP-B's response contains SP-B's client ID. `TestAppsOBO` (3 identical tests targeting `apps/{app_name}`). Both use `DatabricksOpenAI` Responses API as the client. |
 
-**Warmup:** The Model Serving endpoint uses `scale_to_zero=True`. The `serving_endpoint_ready` fixture polls endpoint state (up to 20 attempts at 30s intervals = 10 minutes max) before tests run.
+**Warmup:** The Model Serving endpoint uses `scale_to_zero=True`. The `serving_endpoint_ready` fixture polls endpoint state (up to 20 attempts at 30s intervals = 10 minutes max) before tests run. App lifecycle (deploy before tests, stop after) is managed by the CI runner workflow, not the test code.
 
 **Weekly redeploy (`deploy_serving_agent.py`):** The Model Serving endpoint must run on the latest SDK versions (`databricks-openai`, `databricks-ai-bridge`, `databricks-sdk`, `mlflow`) because pip requirements are frozen at model log time. A separate weekly CI workflow re-logs the model with current package versions and redeploys. The App fixture does not need this because its dependencies resolve from `pyproject.toml` at deploy time.
 

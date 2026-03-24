@@ -381,8 +381,40 @@ cd <package_dir>  # e.g., integrations/langchain
 RUN_<FEATURE>_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/test_<file>.py -v -x
 ```
 
-### 6. Trigger CI for only the new tests
-In the CI runner, trigger a workflow run targeting only the new test file or feature gate. This avoids running the full suite and gives faster feedback. Once the new tests pass in isolation, run the full nightly suite to confirm nothing regresses.
+### 6. Trigger CI from your PR branch
+The CI runner repo checks out `databricks-ai-bridge` at `ref: main` by default. To test a PR branch:
+
+**Via GitHub CLI:**
+```bash
+# Switch to the account with access to the runner repo
+gh auth switch --user dhruv-gupta_data
+
+# Create a branch in the runner repo that points to your PR branch
+gh repo clone databricks-eng/ai-oss-integration-tests-runner /tmp/runner-repo
+cd /tmp/runner-repo
+git checkout -b test/<your-branch-name>
+
+# Update the ref in the workflow (change ref: main -> ref: <your-branch>)
+sed -i '' 's/ref: main/ref: <your-branch>/g' .github/workflows/integration-tests.yml
+git add . && git commit -m "Point to <your-branch> for testing"
+git push -u origin test/<your-branch-name>
+
+# Trigger the workflow from your runner branch
+gh workflow run integration-tests.yml --ref test/<your-branch-name>
+
+# Watch the run
+gh run list --workflow=integration-tests.yml --limit 1
+gh run watch
+```
+
+**Via GitHub UI:**
+1. Go to the runner repo's Actions tab
+2. Select "Databricks AI Bridge Integration Tests"
+3. Click "Run workflow"
+4. Select your runner branch from the branch dropdown
+5. Click "Run workflow"
+
+After tests pass, delete the temporary runner branch. Once your PR is merged to `main`, the nightly CI will automatically pick it up.
 
 ### 7. PR review checklist
 Before requesting review, verify:

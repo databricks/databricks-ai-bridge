@@ -32,6 +32,9 @@ python -m pytest tests/unit_tests/ -v
 
 # Lint
 ruff check && ruff format
+
+# Type check
+ty check
 ```
 
 ## Integration Tests
