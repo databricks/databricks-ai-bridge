@@ -1,5 +1,5 @@
 {
-  "name": "@databricks/appkit-agent-playground-full-ui",
+  "name": "@databricks/appkit-agent-playground-default-ui",
   "private": true,
   "type": "module",
   "scripts": {
