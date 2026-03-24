@@ -12,7 +12,7 @@ These integration tests exist to catch exactly those failures. Every test hits l
 
 ### Two-Repo Model
 
-Tests live in this public repo (`databricks/databricks-ai-bridge`). CI orchestration and secrets live in a separate private repo (`databricks-eng/ai-oss-integration-tests-runner`). The runner repo contains no test code -- it checks out this repo, injects secrets as environment variables, and runs pytest.
+Tests live in this public repo (`databricks/databricks-ai-bridge`). CI orchestration and secrets live in a separate private repo. The runner repo contains no test code -- it checks out this repo, injects secrets as environment variables, and runs pytest.
 
 This separation keeps workspace credentials out of the public repo while letting anyone read and contribute to the tests.
 
@@ -44,7 +44,7 @@ The runner executes 7 parallel jobs nightly (and on-demand via `workflow_dispatc
 | `obo-credential-tests` | 30 min | `RUN_OBO_INTEGRATION_TESTS` |
 | `obo-redeploy-serving` *(weekly)* | -- | *(separate workflow)* |
 
-If any job fails, a PagerDuty SEV2 alert fires identifying which jobs broke and linking to the run.
+If any job fails, an alert fires identifying which jobs broke and linking to the run.
 
 ---
 
