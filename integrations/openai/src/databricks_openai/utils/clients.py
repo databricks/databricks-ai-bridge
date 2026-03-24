@@ -141,12 +141,17 @@ def _resolve_base_url(
     base_url: str | None,
     use_ai_gateway: bool,
     http_client: Client,
+    endpoint_name: str | None = None,
 ) -> str:
     """Resolve the target base URL for the OpenAI client."""
     if base_url is not None:
         if _DATABRICKS_APPS_DOMAIN in base_url:
             _validate_oauth_for_apps(workspace_client)
         return base_url
+
+    if endpoint_name is not None:
+        host = workspace_client.config.host.rstrip("/")
+        return f"{host}/serving-endpoints/{endpoint_name}/openai/v1"
 
     # Prioritize using AI Gateway endpoints
     if use_ai_gateway:
@@ -362,6 +367,12 @@ class DatabricksOpenAI(OpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        endpoint_name: Optional name of a Databricks serving endpoint to target directly using
+            the native OpenAI-compatible API. When set, the client sends requests to
+            ``{workspace}/serving-endpoints/{endpoint_name}/openai/v1``, which lets you use
+            the full OpenAI SDK interface (chat completions, responses, etc.) against that
+            endpoint without specifying ``model`` in every call. Cannot be combined with
+            ``base_url`` or ``use_ai_gateway``.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it. Defaults to False.
 
@@ -369,6 +380,12 @@ class DatabricksOpenAI(OpenAI):
         >>> client = DatabricksOpenAI()
         >>> response = client.chat.completions.create(
         ...     model="databricks-meta-llama-3-1-70b-instruct",
+        ...     messages=[{"role": "user", "content": "Hello!"}],
+        ... )
+
+    Example - Query a specific endpoint via its native OpenAI-compatible API:
+        >>> client = DatabricksOpenAI(endpoint_name="databricks-meta-llama-3-1-70b-instruct")
+        >>> response = client.chat.completions.create(
         ...     messages=[{"role": "user", "content": "Hello!"}],
         ... )
 
@@ -397,15 +414,23 @@ class DatabricksOpenAI(OpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        endpoint_name: str | None = None,
         use_ai_gateway: bool = False,
     ):
+        if endpoint_name is not None and base_url is not None:
+            raise ValueError("Cannot specify both 'endpoint_name' and 'base_url'.")
+        if endpoint_name is not None and use_ai_gateway:
+            raise ValueError("Cannot specify both 'endpoint_name' and 'use_ai_gateway'.")
+
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
         self._workspace_client = workspace_client
 
         http_client = _get_authorized_http_client(workspace_client)
-        target_base_url = _resolve_base_url(workspace_client, base_url, use_ai_gateway, http_client)
+        target_base_url = _resolve_base_url(
+            workspace_client, base_url, use_ai_gateway, http_client, endpoint_name
+        )
 
         # Authentication is handled via http_client, not api_key
         super().__init__(
@@ -510,6 +535,12 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        endpoint_name: Optional name of a Databricks serving endpoint to target directly using
+            the native OpenAI-compatible API. When set, the client sends requests to
+            ``{workspace}/serving-endpoints/{endpoint_name}/openai/v1``, which lets you use
+            the full OpenAI SDK interface (chat completions, responses, etc.) against that
+            endpoint without specifying ``model`` in every call. Cannot be combined with
+            ``base_url`` or ``use_ai_gateway``.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it. Defaults to False.
 
@@ -517,6 +548,12 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         >>> client = AsyncDatabricksOpenAI()
         >>> response = await client.chat.completions.create(
         ...     model="databricks-meta-llama-3-1-70b-instruct",
+        ...     messages=[{"role": "user", "content": "Hello!"}],
+        ... )
+
+    Example - Query a specific endpoint via its native OpenAI-compatible API:
+        >>> client = AsyncDatabricksOpenAI(endpoint_name="databricks-meta-llama-3-1-70b-instruct")
+        >>> response = await client.chat.completions.create(
         ...     messages=[{"role": "user", "content": "Hello!"}],
         ... )
 
@@ -545,8 +582,14 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        endpoint_name: str | None = None,
         use_ai_gateway: bool = False,
     ):
+        if endpoint_name is not None and base_url is not None:
+            raise ValueError("Cannot specify both 'endpoint_name' and 'base_url'.")
+        if endpoint_name is not None and use_ai_gateway:
+            raise ValueError("Cannot specify both 'endpoint_name' and 'use_ai_gateway'.")
+
         if workspace_client is None:
             workspace_client = WorkspaceClient()
 
@@ -554,7 +597,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
 
         sync_http_client = _get_authorized_http_client(workspace_client)
         target_base_url = _resolve_base_url(
-            workspace_client, base_url, use_ai_gateway, sync_http_client
+            workspace_client, base_url, use_ai_gateway, sync_http_client, endpoint_name
         )
 
         # Authentication is handled via http_client, not api_key

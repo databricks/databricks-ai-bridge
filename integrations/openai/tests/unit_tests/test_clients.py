@@ -893,3 +893,48 @@ class TestDatabricksOpenAIWithGateway:
             )
             mock_gateway.assert_not_called()
             assert "custom.example.com" in str(client.base_url)
+
+
+class TestEndpointName:
+    """Tests for endpoint_name parameter in DatabricksOpenAI and AsyncDatabricksOpenAI."""
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_endpoint_name_sets_native_openai_base_url(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        client = client_cls(
+            workspace_client=mock_workspace_client,
+            endpoint_name="databricks-meta-llama-3-1-70b-instruct",
+        )
+        assert (
+            "serving-endpoints/databricks-meta-llama-3-1-70b-instruct/openai/v1"
+            in str(client.base_url)
+        )
+        assert "test.databricks.com" in str(client.base_url)
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_endpoint_name_and_base_url_raises(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with pytest.raises(ValueError, match="Cannot specify both 'endpoint_name' and 'base_url'"):
+            client_cls(
+                workspace_client=mock_workspace_client,
+                endpoint_name="my-endpoint",
+                base_url="https://custom.example.com/v1",
+            )
+
+    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
+    def test_endpoint_name_and_use_ai_gateway_raises(self, client_cls_name, mock_workspace_client):
+        client_cls = (
+            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
+        )
+        with pytest.raises(
+            ValueError, match="Cannot specify both 'endpoint_name' and 'use_ai_gateway'"
+        ):
+            client_cls(
+                workspace_client=mock_workspace_client,
+                endpoint_name="my-endpoint",
+                use_ai_gateway=True,
+            )
