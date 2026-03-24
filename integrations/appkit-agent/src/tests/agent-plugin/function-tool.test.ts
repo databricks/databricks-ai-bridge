@@ -51,7 +51,7 @@ describe("isFunctionTool", () => {
 
   test("returns false for hosted tool object", () => {
     expect(
-      isFunctionTool({ type: "genie-space", genie_space: { id: "123" } }),
+      isFunctionTool({ type: "genie_space", genie_space: { id: "123" } }),
     ).toBe(false);
   });
 

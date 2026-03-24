@@ -12,7 +12,7 @@ import {
 } from "../../agent-plugin/hosted-tools";
 
 const genieTool: GenieTool = {
-  type: "genie-space",
+  type: "genie_space",
   genie_space: { id: "space-123" },
 };
 
@@ -94,7 +94,7 @@ describe("hosted tool types", () => {
   test("can be mixed in an array with discriminator", () => {
     const tools: HostedTool[] = [genieTool, vectorSearchTool];
     const types = tools.map((t) => t.type);
-    expect(types).toEqual(["genie-space", "vector_search_index"]);
+    expect(types).toEqual(["genie_space", "vector_search_index"]);
   });
 });
 
@@ -136,7 +136,7 @@ describe("resolveHostedTools", () => {
     vi.clearAllMocks();
   });
 
-  test("resolves genie-space tool via fromGenieSpace", async () => {
+  test("resolves genie_space tool via fromGenieSpace", async () => {
     const result = await resolveHostedTools([genieTool]);
 
     expect(mockFromGenieSpace).toHaveBeenCalledWith("space-123");
