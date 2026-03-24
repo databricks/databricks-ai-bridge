@@ -13,8 +13,12 @@ Set at least one of these environment variables:
 Example (provisioned):
     LAKEBASE_INSTANCE_NAME=lakebase pytest tests/integration_tests/test_memory_session.py -v
 
-Example (autoscaling):
+Example (autoscaling — project/branch):
     LAKEBASE_PROJECT=my-project LAKEBASE_BRANCH=main \
+        pytest tests/integration_tests/test_memory_session.py -v
+
+Example (autoscaling — endpoint):
+    LAKEBASE_AUTOSCALING_ENDPOINT=projects/my-project/branches/main/endpoints/primary \
         pytest tests/integration_tests/test_memory_session.py -v
 """
 
