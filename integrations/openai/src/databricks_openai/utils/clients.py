@@ -154,7 +154,7 @@ def _resolve_base_url(
     base_url: str | None,
     use_ai_gateway: bool,
     http_client: Client,
-    ai_gateway_native_api: bool = False,
+    ai_gateway_native_api: bool,
 ) -> str:
     """Resolve the target base URL for the OpenAI client."""
     if base_url is not None:
