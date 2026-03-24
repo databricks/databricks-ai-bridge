@@ -6,6 +6,9 @@ import {
   pipeUIMessageStreamToResponse,
   streamText,
 } from "ai";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type express from "express";
 import { Plugin, toPlugin, type PluginManifest } from "@databricks/appkit";
 import { createLogger } from "../logger";
@@ -88,6 +91,36 @@ export class ChatPlugin extends Plugin<ChatConfig> {
   public name = "chat" as const;
   static manifest = manifest as PluginManifest<"chat">;
   declare protected config: ChatConfig;
+
+  /**
+   * Resolve the path to the pre-built chat client static assets.
+   * Pass this to the server plugin's `staticPath` to serve the chat UI at `/`.
+   *
+   * @example
+   * ```ts
+   * createApp({
+   *   plugins: [
+   *     server({ staticPath: ChatPlugin.staticAssetsPath }),
+   *     chat({ ... }),
+   *   ],
+   * });
+   * ```
+   */
+  static get staticAssetsPath(): string | undefined {
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
+    const candidates = [
+      path.resolve(currentDir, "chat-client"),
+      path.resolve(currentDir, "../chat-client"),
+      path.resolve(process.cwd(), "dist/chat-client"),
+    ];
+
+    for (const dir of candidates) {
+      if (fs.existsSync(path.join(dir, "index.html"))) {
+        return dir;
+      }
+    }
+    return undefined;
+  }
 
   private provider: ReturnType<typeof createChatProvider> | null = null;
   private streamCache: StreamCache | null = null;
@@ -733,7 +766,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
                       (typeof p.approval === "object" &&
                         p.approval !== null &&
                         (p.approval as Record<string, unknown>).approved ===
-                          false)),
+                        false)),
                 ),
             );
 
@@ -947,4 +980,30 @@ async function generateTitleFromUserMessage(
   return title ?? "New chat";
 }
 
-export const chat = toPlugin(ChatPlugin);
+const _chat = toPlugin(ChatPlugin);
+
+/**
+ * Chat plugin factory — pass to `createApp({ plugins: [...] })`.
+ *
+ * Also exposes `chat.staticAssetsPath` for use with the server plugin's
+ * `staticPath` option to serve the bundled chat UI at `/`.
+ */
+export const chat = Object.assign(_chat, {
+  /**
+   * Resolve the path to the pre-built chat client static assets.
+   * Pass this to the server plugin's `staticPath` to serve the chat UI at `/`.
+   *
+   * @example
+   * ```ts
+   * createApp({
+   *   plugins: [
+   *     server({ staticPath: chat.staticAssetsPath }),
+   *     chat({ ... }),
+   *   ],
+   * });
+   * ```
+   */
+  get staticAssetsPath(): string | undefined {
+    return ChatPlugin.staticAssetsPath;
+  },
+});

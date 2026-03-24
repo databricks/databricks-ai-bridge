@@ -26,18 +26,7 @@
         "types": "./dist/chat/index.d.cts",
         "default": "./dist/chat/index.cjs"
       }
-    },
-    "./chat-ui/simple": {
-      "import": {
-        "types": "./dist/chat-ui/simple.d.mts",
-        "default": "./dist/chat-ui/simple.mjs"
-      },
-      "require": {
-        "types": "./dist/chat-ui/simple.d.cts",
-        "default": "./dist/chat-ui/simple.cjs"
-      }
-    },
-    "./chat-ui/simple/styles.css": "./dist/chat-ui/styles.css"
+    }
   },
   "files": [
     "dist",
@@ -47,7 +36,9 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsdown && tailwindcss -c tailwind.chat-ui.config.js -i src/chat-ui/simple/styles.css -o dist/chat-ui/styles.css --minify",
+    "build:client": "cd client && pnpm install --frozen-lockfile=false && pnpm exec vite build",
+    "build:server": "tsdown",
+    "build": "rm -rf dist && pnpm run build:client && pnpm run build:server",
     "dev": "tsdown --watch",
     "clean": "rm -rf dist",
     "test": "vitest run",
@@ -67,9 +58,7 @@
     "@langchain/langgraph": ">=1.0.0",
     "@langchain/mcp-adapters": ">=1.0.0",
     "express": ">=4.0.0",
-    "pg": ">=8.0.0",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "pg": ">=8.0.0"
   },
   "peerDependenciesMeta": {
     "@databricks/langchainjs": {
@@ -86,22 +75,12 @@
     },
     "pg": {
       "optional": true
-    },
-    "react": {
-      "optional": true
-    },
-    "react-dom": {
-      "optional": true
     }
   },
   "dependencies": {
     "@databricks/ai-sdk-provider": "^0.5.1",
-    "@radix-ui/react-slot": "^1.2.4",
     "ai": "^6.0.70",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
     "drizzle-orm": "^0.38.0",
-    "tailwind-merge": "^3.4.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
@@ -112,11 +91,11 @@
     "@types/pg": "^8.16.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "date-fns": "^4.1.0",
     "drizzle-kit": "^0.31.10",
+    "fast-deep-equal": "^3.1.3",
     "prettier": "^3.0.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "tailwindcss": "^3.4.0",
     "tsdown": "^0.9.0",
     "typescript": "^5.4.0",
     "vitest": "^4.0.18"

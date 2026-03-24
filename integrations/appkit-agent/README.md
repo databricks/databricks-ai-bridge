@@ -48,7 +48,7 @@ const app = await createApp({
 });
 ```
 
-### Agent + Chat
+### Agent + Chat with bundled UI
 
 ```typescript
 import { createApp, server } from "@databricks/appkit";
@@ -56,7 +56,7 @@ import { agent, chat } from "@databricks/appkit-agent";
 
 await createApp({
   plugins: [
-    server({ autoStart: true }),
+    server({ autoStart: true, staticPath: chat.staticAssetsPath }),
     agent({
       model: "databricks-claude-sonnet-4-5",
       systemPrompt: "You are a helpful assistant.",
@@ -68,7 +68,7 @@ await createApp({
 });
 ```
 
-The agent plugin registers `POST /api/agent` (OpenAI Responses API format with SSE streaming). The chat plugin registers routes under `/api/chat/` for streaming chat, history, feedback, and more.
+This starts a server with the agent backend, chat API, and a pre-built chat UI served at `/`. The agent plugin registers `POST /api/agent` (OpenAI Responses API format with SSE streaming). The chat plugin registers routes under `/api/chat/` for streaming chat, history, feedback, and more.
 
 ## Environment Variables
 
@@ -318,6 +318,20 @@ All routes are mounted under `/api/chat/`.
 | `GET`    | `/:id`                   | required+ACL | Get single chat                    |
 | `DELETE` | `/:id`                   | required+ACL | Delete a chat                      |
 | `POST`   | `/`                      | required     | Main chat handler (streaming)      |
+
+## Bundled Chat UI
+
+The package includes a pre-built React chat application in `dist/chat-client/`. It provides a full-featured chat experience with conversation history sidebar, message editing, code syntax highlighting, MCP tool approval, file attachments, reasoning display, and theme toggle.
+
+### Serving the UI
+
+Pass `chat.staticAssetsPath` to the server plugin's `staticPath` option:
+
+```typescript
+server({ staticPath: chat.staticAssetsPath })
+```
+
+The chat UI communicates with the chat plugin's `/api/chat/` endpoints automatically. No additional configuration is needed.
 
 ## API Reference
 
