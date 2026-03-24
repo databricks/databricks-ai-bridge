@@ -394,8 +394,8 @@ gh repo clone databricks-eng/ai-oss-integration-tests-runner /tmp/runner-repo
 cd /tmp/runner-repo
 git checkout -b test/<your-branch-name>
 
-# Update the ref in the workflow (change ref: main -> ref: <your-branch>)
-sed -i '' 's/ref: main/ref: <your-branch>/g' .github/workflows/integration-tests.yml
+# Update the ref in the workflow (change ref: main -> ref: <your-bridge-feature-branch>)
+sed -i '' 's/ref: main/ref: <your-bridge-feature-branch>/g' .github/workflows/integration-tests.yml
 git add . && git commit -m "Point to <your-branch> for testing"
 git push -u origin test/<your-branch-name>
 
@@ -408,7 +408,7 @@ gh run watch
 ```
 
 **Via GitHub UI:**
-1. Push a branch to the runner repo with `ref: main` changed to `ref: <your-branch>` in `.github/workflows/integration-tests.yml`
+1. Push a branch to the runner repo with `ref: main` changed to `ref: <your-bridge-feature-branch>` in `.github/workflows/integration-tests.yml`
 2. Go to the runner repo's Actions tab
 3. Select "Databricks AI Bridge Integration Tests"
 4. Click "Run workflow"
