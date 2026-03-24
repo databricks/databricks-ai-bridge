@@ -12,7 +12,7 @@ These integration tests exist to catch exactly those failures. Every test hits l
 
 ### Two-Repo Model
 
-Tests live in this public repo (`databricks/databricks-ai-bridge`). CI orchestration and secrets live in a separate private repo. The runner repo contains no test code -- it checks out this repo, injects secrets as environment variables, and runs pytest.
+Tests live in this public repo (`databricks/databricks-ai-bridge`). CI orchestration and secrets live in a separate private repo (`databricks-eng/ai-oss-integration-tests-runner`). The runner repo contains no test code -- it checks out this repo, injects secrets as environment variables, and runs pytest.
 
 This separation keeps workspace credentials out of the public repo while letting anyone read and contribute to the tests.
 

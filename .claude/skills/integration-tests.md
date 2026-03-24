@@ -92,7 +92,7 @@ pytestmark = pytest.mark.skipif(
 Existing gates: `RUN_VS_INTEGRATION_TESTS`, `RUN_GENIE_INTEGRATION_TESTS`, `RUN_MCP_INTEGRATION_TESTS`, `LAKEBASE_INTEGRATION_TESTS`.
 
 ### CI Runner
-- Tests run in a private CI runner repo
+- Tests run in `databricks-eng/ai-oss-integration-tests-runner` (private repo)
 - Secrets: `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`, `GENIE_SPACE_ID`
 - Catalog/schema: `integration_testing.databricks_ai_bridge_vs_test` (VS), `integration_testing.databricks_ai_bridge_mcp_test` (MCP)
 
