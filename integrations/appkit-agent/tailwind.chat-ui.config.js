@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./src/**/*.{ts,tsx}"],
+  content: ["./src/chat-ui/simple/**/*.{ts,tsx}"],
   darkMode: "class",
   corePlugins: {
     preflight: false,

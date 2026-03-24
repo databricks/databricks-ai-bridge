@@ -1,8 +1,8 @@
 /*
- * @databricks/chat-ui — compiled stylesheet
+ * @databricks/appkit-agent/chat-ui/simple — compiled stylesheet
  *
  * Import this file to use the styled components without your own Tailwind setup:
- *   import "@databricks/chat-ui/styles.css";
+ *   import "@databricks/appkit-agent/chat-ui/simple/styles.css";
  *
  * If you already use Tailwind with a Shadcn-compatible theme, you can skip this
  * import and let your own Tailwind config handle the utility classes. Just ensure
@@ -11,10 +11,8 @@
  * Theme customization: override the CSS variables below on :root or any ancestor.
  */
 
-/* Tailwind CSS variable defaults (--tw-ring-*, --tw-shadow, etc.) */
 @tailwind base;
 
-/* Utility classes extracted from the component source */
 @tailwind utilities;
 
 /* ── Default theme (Shadcn-compatible) ─────────────────────────── */
