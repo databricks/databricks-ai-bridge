@@ -92,7 +92,7 @@ pytestmark = pytest.mark.skipif(
 Existing gates: `RUN_VS_INTEGRATION_TESTS`, `RUN_GENIE_INTEGRATION_TESTS`, `RUN_MCP_INTEGRATION_TESTS`, `LAKEBASE_INTEGRATION_TESTS`.
 
 ### CI Runner
-- Tests run in `databricks-eng/ai-oss-integration-tests-runner` (private repo)
+- Tests run in a private CI runner repo
 - Secrets: `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`, `GENIE_SPACE_ID`
 - Catalog/schema: `integration_testing.databricks_ai_bridge_vs_test` (VS), `integration_testing.databricks_ai_bridge_mcp_test` (MCP)
 
@@ -392,15 +392,15 @@ gh auth switch --user <your-runner-repo-username>
 # Create a branch in the runner repo that points to your PR branch
 gh repo clone databricks-eng/ai-oss-integration-tests-runner /tmp/runner-repo
 cd /tmp/runner-repo
-git checkout -b test/<your-branch-name>
+git checkout -b test/<your-bridge-feature-branch>
 
 # Update the ref in the workflow (change ref: main -> ref: <your-bridge-feature-branch>)
 sed -i '' 's/ref: main/ref: <your-bridge-feature-branch>/g' .github/workflows/integration-tests.yml
-git add . && git commit -m "Point to <your-branch> for testing"
-git push -u origin test/<your-branch-name>
+git add . && git commit -m "Point to <your-bridge-feature-branch> for testing"
+git push -u origin test/<your-bridge-feature-branch>
 
 # Trigger the workflow from your runner branch
-gh workflow run integration-tests.yml --ref test/<your-branch-name>
+gh workflow run integration-tests.yml --ref test/<your-bridge-feature-branch>
 
 # Watch the run
 gh run list --workflow=integration-tests.yml --limit 1
