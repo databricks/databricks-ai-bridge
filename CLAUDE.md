@@ -1,3 +1,3 @@
-# CLAUDE.md
+@AGENTS.md
 
-See [AGENTS.md](AGENTS.md) for repo context, structure, and development guidelines.
+<!-- used to load AGENTS.md file into claude code -->
