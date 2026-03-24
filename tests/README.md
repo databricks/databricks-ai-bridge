@@ -46,6 +46,17 @@ The runner executes 7 parallel jobs nightly (and on-demand via `workflow_dispatc
 
 If any job fails, an alert fires identifying which jobs broke and linking to the run.
 
+### Triggering CI from a PR Branch
+
+The runner checks out `databricks-ai-bridge` at `ref: main` by default. To test a PR branch before merging:
+
+1. Create a branch in the runner repo
+2. Change `ref: main` to `ref: <your-branch>` in `.github/workflows/integration-tests.yml`
+3. Push and trigger the workflow (via `gh workflow run` or the Actions tab UI, selecting your runner branch)
+4. Delete the temporary runner branch after tests pass
+
+See the [integration-tests skill](../.claude/skills/integration-tests.md) for detailed CLI commands.
+
 ---
 
 ## Coverage by Area
