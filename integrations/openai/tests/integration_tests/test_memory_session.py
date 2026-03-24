@@ -2,14 +2,24 @@
 Integration tests for AsyncDatabricksSession.
 
 These tests require:
-1. A Lakebase instance to be available
+1. A Lakebase instance to be available (provisioned or autoscaling)
 2. Valid Databricks authentication (DATABRICKS_HOST + DATABRICKS_TOKEN or profile)
 
-Set the environment variable:
-    LAKEBASE_INSTANCE_NAME: Name of the Lakebase instance
+Set at least one of these environment variables:
+    LAKEBASE_INSTANCE_NAME: Name of the Lakebase provisioned instance
+    LAKEBASE_PROJECT + LAKEBASE_BRANCH: Autoscaling project and branch names
+    LAKEBASE_AUTOSCALING_ENDPOINT: Full autoscaling endpoint resource path
 
-Example:
+Example (provisioned):
     LAKEBASE_INSTANCE_NAME=lakebase pytest tests/integration_tests/test_memory_session.py -v
+
+Example (autoscaling — project/branch):
+    LAKEBASE_PROJECT=my-project LAKEBASE_BRANCH=main \
+        pytest tests/integration_tests/test_memory_session.py -v
+
+Example (autoscaling — endpoint):
+    LAKEBASE_AUTOSCALING_ENDPOINT=projects/my-project/branches/main/endpoints/primary \
+        pytest tests/integration_tests/test_memory_session.py -v
 """
 
 from __future__ import annotations
@@ -20,10 +30,28 @@ from typing import Any, cast
 
 import pytest
 
-# Skip all tests if LAKEBASE_INSTANCE_NAME is not set
+# Skip all tests if no Lakebase env vars are set
 pytestmark = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_INSTANCE_NAME")
+    and not os.environ.get("LAKEBASE_PROJECT")
+    and not os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT"),
+    reason="No Lakebase env vars set "
+    "(need LAKEBASE_INSTANCE_NAME, LAKEBASE_PROJECT, or LAKEBASE_AUTOSCALING_ENDPOINT)",
+)
+
+_skip_no_instance = pytest.mark.skipif(
     not os.environ.get("LAKEBASE_INSTANCE_NAME"),
-    reason="LAKEBASE_INSTANCE_NAME environment variable not set",
+    reason="LAKEBASE_INSTANCE_NAME not set",
+)
+
+_skip_no_project_branch = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_PROJECT") or not os.environ.get("LAKEBASE_BRANCH"),
+    reason="LAKEBASE_PROJECT and LAKEBASE_BRANCH not set",
+)
+
+_skip_no_endpoint = pytest.mark.skipif(
+    not os.environ.get("LAKEBASE_AUTOSCALING_ENDPOINT"),
+    reason="LAKEBASE_AUTOSCALING_ENDPOINT not set",
 )
 
 
@@ -38,31 +66,32 @@ def get_unique_table_names() -> tuple[str, str]:
     return f"test_sessions_{suffix}", f"test_messages_{suffix}"
 
 
+def _drop_tables(tables_to_cleanup: list[tuple[str, str]], **client_kwargs) -> None:
+    """Drop test tables using LakebaseClient."""
+    from databricks_ai_bridge.lakebase import LakebaseClient
+
+    with LakebaseClient(**client_kwargs) as client:
+        for sessions_table, messages_table in tables_to_cleanup:
+            # Drop messages first (foreign key constraint)
+            client.execute(f"DROP TABLE IF EXISTS {messages_table}")
+            client.execute(f"DROP TABLE IF EXISTS {sessions_table}")
+
+
 @pytest.fixture
 def cleanup_tables():
-    """Fixture to track and clean up test tables after tests."""
+    """Fixture to track and clean up test tables after provisioned tests."""
     tables_to_cleanup: list[tuple[str, str]] = []
-
     yield tables_to_cleanup
-
-    # Cleanup after test
     if tables_to_cleanup:
-        from databricks_ai_bridge.lakebase import LakebasePool
-
-        pool = LakebasePool(instance_name=get_instance_name())
-        with pool.connection() as conn:
-            for sessions_table, messages_table in tables_to_cleanup:
-                # Drop messages first (foreign key constraint)
-                conn.execute(f"DROP TABLE IF EXISTS {messages_table}")
-                conn.execute(f"DROP TABLE IF EXISTS {sessions_table}")
-        pool.close()
+        _drop_tables(tables_to_cleanup, instance_name=get_instance_name())
 
 
 # =============================================================================
-# AsyncDatabricksSession Tests
+# AsyncDatabricksSession Tests — Provisioned
 # =============================================================================
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_crud_operations(cleanup_tables):
     """
@@ -133,6 +162,7 @@ async def test_memory_session_crud_operations(cleanup_tables):
     assert items == [], f"Expected empty after clear, got {items}"
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_multiple_sessions_isolated(cleanup_tables):
     """Test that different session_ids have isolated data."""
@@ -185,6 +215,7 @@ async def test_memory_session_multiple_sessions_isolated(cleanup_tables):
     await session_2.clear_session()
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_pop_empty_returns_none(cleanup_tables):
     """Test that pop_item returns None on empty session."""
@@ -205,6 +236,7 @@ async def test_memory_session_pop_empty_returns_none(cleanup_tables):
     assert popped is None
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_add_empty_items_noop(cleanup_tables):
     """Test that add_items with empty list is a no-op."""
@@ -228,6 +260,7 @@ async def test_memory_session_add_empty_items_noop(cleanup_tables):
     assert items == []
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_complex_message_data(cleanup_tables):
     """Test storing complex message data with nested structures."""
@@ -275,6 +308,7 @@ async def test_memory_session_complex_message_data(cleanup_tables):
     await session.clear_session()
 
 
+@_skip_no_instance
 @pytest.mark.asyncio
 async def test_memory_session_get_items_ordering(cleanup_tables):
     """Test that get_items returns items in correct chronological order."""
@@ -310,3 +344,96 @@ async def test_memory_session_get_items_ordering(cleanup_tables):
 
     # Cleanup
     await session.clear_session()
+
+
+# =============================================================================
+# AsyncDatabricksSession Tests — Autoscaling
+# =============================================================================
+
+
+async def _run_autoscaling_crud_test(conn_kwargs: dict, cleanup_tables: list):
+    """Test CRUD lifecycle for autoscaling: empty -> add -> get -> pop -> clear."""
+    from databricks_openai.agents import AsyncDatabricksSession
+
+    sessions_table, messages_table = get_unique_table_names()
+    cleanup_tables.append((sessions_table, messages_table))
+
+    session = AsyncDatabricksSession(
+        session_id=str(uuid.uuid4()),
+        sessions_table=sessions_table,
+        messages_table=messages_table,
+        **conn_kwargs,
+    )
+
+    # Empty session
+    items = cast(list[Any], await session.get_items())
+    assert items == []
+
+    # Add and retrieve
+    test_items: list[Any] = [
+        {"role": "user", "content": "Hello from autoscaling"},
+        {"role": "assistant", "content": "Autoscaling response"},
+    ]
+    await session.add_items(test_items)
+
+    items = cast(list[Any], await session.get_items())
+    assert len(items) == 2
+    assert items[0]["content"] == "Hello from autoscaling"
+    assert items[1]["content"] == "Autoscaling response"
+
+    # Pop last item
+    popped = cast(Any, await session.pop_item())
+    assert popped is not None
+    assert popped["role"] == "assistant"
+
+    # Clear
+    await session.clear_session()
+    items = cast(list[Any], await session.get_items())
+    assert items == []
+
+
+@pytest.fixture
+def cleanup_tables_project_branch():
+    """Track and clean up test tables on the project/branch autoscaling database."""
+    tables_to_cleanup: list[tuple[str, str]] = []
+    yield tables_to_cleanup
+    if tables_to_cleanup:
+        _drop_tables(
+            tables_to_cleanup,
+            project=os.environ["LAKEBASE_PROJECT"],
+            branch=os.environ["LAKEBASE_BRANCH"],
+        )
+
+
+@pytest.fixture
+def cleanup_tables_endpoint():
+    """Track and clean up test tables on the endpoint autoscaling database."""
+    tables_to_cleanup: list[tuple[str, str]] = []
+    yield tables_to_cleanup
+    if tables_to_cleanup:
+        _drop_tables(
+            tables_to_cleanup,
+            autoscaling_endpoint=os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"],
+        )
+
+
+class TestSessionAutoscaling:
+    """Test AsyncDatabricksSession with autoscaling modes (project/branch and endpoint)."""
+
+    @_skip_no_project_branch
+    @pytest.mark.asyncio
+    async def test_crud_project_branch(self, cleanup_tables_project_branch):
+        """Test autoscaling project/branch params forwarded to AsyncLakebaseSQLAlchemy."""
+        await _run_autoscaling_crud_test(
+            {"project": os.environ["LAKEBASE_PROJECT"], "branch": os.environ["LAKEBASE_BRANCH"]},
+            cleanup_tables_project_branch,
+        )
+
+    @_skip_no_endpoint
+    @pytest.mark.asyncio
+    async def test_crud_endpoint(self, cleanup_tables_endpoint):
+        """Test endpoint autoscaling params forwarded to AsyncLakebaseSQLAlchemy."""
+        await _run_autoscaling_crud_test(
+            {"autoscaling_endpoint": os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"]},
+            cleanup_tables_endpoint,
+        )
