@@ -912,7 +912,7 @@ class TestAIGatewayNativeAPI:
                 ai_gateway_native_api=True,
             )
             assert "12345.ai-gateway.cloud.databricks.com" in str(client.base_url)
-            assert "/openai" in str(client.base_url)
+            assert "/openai/v1" in str(client.base_url)
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
     def test_native_api_unavailable_raises_error(self, client_cls_name, mock_workspace_client):

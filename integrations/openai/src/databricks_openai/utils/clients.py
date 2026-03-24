@@ -166,7 +166,7 @@ def _resolve_base_url(
     if ai_gateway_native_api:
         gateway_host = _discover_ai_gateway_host(http_client, workspace_client.config.host)
         if gateway_host:
-            return f"{gateway_host}/openai"
+            return f"{gateway_host}/openai/v1"
         raise ValueError(
             "Please ensure AI Gateway V2 is enabled for the workspace "
             "when ai_gateway_native_api is set to True."
