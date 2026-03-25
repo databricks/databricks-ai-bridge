@@ -95,6 +95,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
 
   private provider: ReturnType<typeof createChatProvider> | null = null;
   private streamCache: StreamCache | null = null;
+  private db: ReturnType<typeof createDb> | null = null;
   private getChat: (id: string) => Promise<import("./schema").ChatRow | null> =
     async () => null;
   private agentEndpointPath: string | null = null;
@@ -119,8 +120,8 @@ export class ChatPlugin extends Plugin<ChatConfig> {
         await ensureSchema(this.config.pool);
         logger.info("Database schema ensured (autoMigrate)");
       }
-      const db = createDb(this.config.pool);
-      this.getChat = (id) => getChatById(db, id);
+      this.db = createDb(this.config.pool);
+      this.getChat = (id) => getChatById(this.db!, id);
     }
     logger.info(
       "Chat plugin initialized (persistence: %s)",
@@ -130,7 +131,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
 
   injectRoutes(router: express.Router) {
     const pool = this.config.pool;
-    const db = pool ? createDb(pool) : null;
+    const db = this.db;
     const getSessionFn = this.config.getSession;
     const cache = this.streamCache!;
     const prov = this.provider!;
@@ -220,7 +221,11 @@ export class ChatPlugin extends Plugin<ChatConfig> {
           session?: Awaited<ReturnType<typeof resolveSession>>;
         }
       ).session;
-      if (!session?.user) return;
+      if (!session?.user) {
+        const err = new ChatServerError("unauthorized:chat");
+        const { status, json } = err.toResponse();
+        return res.status(status).json(json);
+      }
       const limit = Number.parseInt((req.query.limit as string) || "10", 10);
       const startingAfter = (req.query.starting_after as string) || null;
       const endingBefore = (req.query.ending_before as string) || null;
@@ -321,7 +326,11 @@ export class ChatPlugin extends Plugin<ChatConfig> {
             session?: Awaited<ReturnType<typeof resolveSession>>;
           }
         ).session;
-        if (!session?.user) return;
+        if (!session?.user) {
+          const err = new ChatServerError("unauthorized:chat");
+          const { status, json } = err.toResponse();
+          return res.status(status).json(json);
+        }
 
         let traceId: string | null = null;
         let chatId: string | undefined;
@@ -623,7 +632,11 @@ export class ChatPlugin extends Plugin<ChatConfig> {
             session?: Awaited<ReturnType<typeof resolveSession>>;
           }
         ).session;
-        if (!session?.user) return;
+        if (!session?.user) {
+          const err = new ChatServerError("unauthorized:chat");
+          const { status, json } = err.toResponse();
+          return res.status(status).json(json);
+        }
 
         const {
           id,
