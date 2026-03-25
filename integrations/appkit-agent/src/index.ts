@@ -21,3 +21,11 @@ export { isHostedTool } from "./agent-plugin/hosted-tools";
 export { createInvokeHandler } from "./agent-plugin/invoke-handler";
 export { StandardAgent } from "./agent-plugin/standard-agent";
 export type { AgentTool, IAgentConfig } from "./agent-plugin/types";
+
+export { chat, ChatPlugin } from "./chat-plugin/index";
+export type {
+  ChatConfig,
+  ChatSession,
+  GetSession,
+  ChatAgentBackend,
+} from "./chat-plugin/index";

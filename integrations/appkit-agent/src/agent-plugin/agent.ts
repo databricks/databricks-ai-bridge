@@ -234,6 +234,8 @@ export class AgentPlugin extends Plugin<IAgentConfig> {
 
   exports() {
     return {
+      endpointPath: `/api/${this.name}`,
+
       invoke: async (
         messages: { role: string; content: string }[],
       ): Promise<string> => {
