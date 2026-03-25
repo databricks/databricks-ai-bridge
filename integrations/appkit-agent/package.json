@@ -1,0 +1,168 @@
+{
+  "name": "@databricks/appkit-agent",
+  "version": "0.1.0",
+  "description": "Agent plugin for Databricks AppKit — LangGraph AI agent with streaming Responses API and MCP tool support",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./chat": {
+      "import": {
+        "types": "./dist/chat/index.d.mts",
+        "default": "./dist/chat/index.mjs"
+      },
+      "require": {
+        "types": "./dist/chat/index.d.cts",
+        "default": "./dist/chat/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.mts",
+        "default": "./dist/react/index.mjs"
+      },
+      "require": {
+        "types": "./dist/react/index.d.cts",
+        "default": "./dist/react/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "drizzle",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build:client": "cd client && pnpm install --frozen-lockfile=false && pnpm exec vite build",
+    "build:server": "tsdown",
+    "build": "rm -rf dist && pnpm run build:client && pnpm run build:server",
+    "dev": "tsdown --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts'",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/react": ">=1.0.0",
+    "@databricks/appkit": ">=0.21.0",
+    "@databricks/langchainjs": ">=0.1.0",
+    "@langchain/core": ">=1.0.0",
+    "@langchain/langgraph": ">=1.0.0",
+    "@langchain/mcp-adapters": ">=1.0.0",
+    "express": ">=4.0.0",
+    "pg": ">=8.0.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0",
+    "swr": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@databricks/langchainjs": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "@langchain/langgraph": {
+      "optional": true
+    },
+    "@langchain/mcp-adapters": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "@ai-sdk/react": {
+      "optional": true
+    },
+    "swr": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@databricks/ai-sdk-provider": "^0.5.1",
+    "ai": "^6.0.70",
+    "drizzle-orm": "^0.38.0",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@ai-sdk/react": "^3.0.131",
+    "@databricks/appkit": "^0.21.0",
+    "@langchain/core": "^1.1.8",
+    "@testing-library/react": "^16.3.2",
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.16.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "date-fns": "^4.1.0",
+    "drizzle-kit": "^0.31.10",
+    "fast-deep-equal": "^3.1.3",
+    "happy-dom": "^20.8.4",
+    "prettier": "^3.0.0",
+    "swr": "^2.4.1",
+    "tsdown": "^0.9.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.0.18"
+  },
+  "author": {
+    "name": "Databricks",
+    "email": "agent-feedback@databricks.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/databricks/databricks-ai-bridge.git",
+    "directory": "integrations/appkit-agent"
+  },
+  "homepage": "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/appkit-agent",
+  "bugs": {
+    "url": "https://github.com/databricks/databricks-ai-bridge/issues"
+  },
+  "keywords": [
+    "databricks",
+    "appkit",
+    "agent",
+    "ai",
+    "langchain",
+    "langgraph",
+    "mcp",
+    "llm"
+  ],
+  "license": "Databricks License",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@databricks/appkit",
+      "esbuild",
+      "protobufjs",
+      "rolldown"
+    ],
+    "overrides": {
+      "vite": "8.0.0"
+    }
+  }
+}
