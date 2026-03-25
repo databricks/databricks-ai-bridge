@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
@@ -8,6 +9,7 @@ try:
     from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg.errors import UniqueViolation
 
     _checkpoint_imports_available = True
 except ImportError:
@@ -15,6 +17,8 @@ except ImportError:
     AsyncPostgresSaver = object  # type: ignore
 
     _checkpoint_imports_available = False
+
+logger = logging.getLogger(__name__)
 
 
 class CheckpointSaver(PostgresSaver):
@@ -54,7 +58,12 @@ class CheckpointSaver(PostgresSaver):
 
     def __enter__(self):
         """Enter context manager and create checkpoint tables."""
-        self.setup()
+        try:
+            self.setup()
+        except UniqueViolation:
+            logger.debug(
+                "Checkpoint migration already applied by another process, skipping."
+            )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -103,7 +112,12 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
     async def __aenter__(self):
         """Enter async context manager, open the connection pool, and create checkpoint tables."""
         await self._lakebase.open()
-        await self.setup()
+        try:
+            await self.setup()
+        except UniqueViolation:
+            logger.debug(
+                "Checkpoint migration already applied by another process, skipping."
+            )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
