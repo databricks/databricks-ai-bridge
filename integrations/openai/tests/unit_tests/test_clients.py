@@ -896,7 +896,7 @@ class TestDatabricksOpenAIWithGateway:
 
 
 class TestAIGatewayNativeAPI:
-    """Tests for ai_gateway_native_api parameter in DatabricksOpenAI and AsyncDatabricksOpenAI."""
+    """Tests for use_ai_gateway_native_api parameter in DatabricksOpenAI and AsyncDatabricksOpenAI."""
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
     def test_native_api_uses_openai_base_path(self, client_cls_name, mock_workspace_client):
@@ -909,7 +909,7 @@ class TestAIGatewayNativeAPI:
         ):
             client = client_cls(
                 workspace_client=mock_workspace_client,
-                ai_gateway_native_api=True,
+                use_ai_gateway_native_api=True,
             )
             assert "12345.ai-gateway.cloud.databricks.com" in str(client.base_url)
             assert "/openai/v1" in str(client.base_url)
@@ -926,7 +926,7 @@ class TestAIGatewayNativeAPI:
             with pytest.raises(ValueError, match="Please ensure AI Gateway V2 is enabled"):
                 client_cls(
                     workspace_client=mock_workspace_client,
-                    ai_gateway_native_api=True,
+                    use_ai_gateway_native_api=True,
                 )
 
     @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
@@ -935,11 +935,11 @@ class TestAIGatewayNativeAPI:
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
         )
         with pytest.raises(
-            ValueError, match="Cannot specify both 'ai_gateway_native_api' and 'base_url'"
+            ValueError, match="Cannot specify both 'use_ai_gateway_native_api' and 'base_url'"
         ):
             client_cls(
                 workspace_client=mock_workspace_client,
-                ai_gateway_native_api=True,
+                use_ai_gateway_native_api=True,
                 base_url="https://custom.example.com/v1",
             )
 
@@ -949,10 +949,27 @@ class TestAIGatewayNativeAPI:
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
         )
         with pytest.raises(
-            ValueError, match="Cannot specify both 'ai_gateway_native_api' and 'use_ai_gateway'"
+            ValueError,
+            match="Cannot specify both 'use_ai_gateway_native_api' and 'use_ai_gateway'",
         ):
             client_cls(
                 workspace_client=mock_workspace_client,
-                ai_gateway_native_api=True,
+                use_ai_gateway_native_api=True,
                 use_ai_gateway=True,
             )
+
+    def test_discover_ai_gateway_host_strips_path(self):
+        """_discover_ai_gateway_host returns only scheme+netloc, stripping any path."""
+        from unittest.mock import MagicMock
+
+        from databricks_openai.utils.clients import _discover_ai_gateway_host
+
+        mock_http = MagicMock()
+        mock_http.get.return_value.status_code = 200
+        mock_http.get.return_value.json.return_value = {
+            "endpoints": [
+                {"ai_gateway_url": "https://12345.ai-gateway.cloud.databricks.com/some/path"}
+            ]
+        }
+        result = _discover_ai_gateway_host(mock_http, "https://test.databricks.com")
+        assert result == "https://12345.ai-gateway.cloud.databricks.com"

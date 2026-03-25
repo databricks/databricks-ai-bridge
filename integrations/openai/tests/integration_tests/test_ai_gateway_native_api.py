@@ -1,5 +1,5 @@
 """
-Integration tests for DatabricksOpenAI with ai_gateway_native_api=True.
+Integration tests for DatabricksOpenAI with use_ai_gateway_native_api=True.
 
 Prerequisites:
 - AI Gateway V2 must be enabled on the test workspace.
@@ -36,12 +36,12 @@ def workspace_client():
 
 @pytest.fixture(scope="module")
 def sync_client(workspace_client):
-    return DatabricksOpenAI(workspace_client=workspace_client, ai_gateway_native_api=True)
+    return DatabricksOpenAI(workspace_client=workspace_client, use_ai_gateway_native_api=True)
 
 
 @pytest_asyncio.fixture(scope="module")
 async def async_client(workspace_client):
-    return AsyncDatabricksOpenAI(workspace_client=workspace_client, ai_gateway_native_api=True)
+    return AsyncDatabricksOpenAI(workspace_client=workspace_client, use_ai_gateway_native_api=True)
 
 
 class TestAIGatewayNativeAPISync:
