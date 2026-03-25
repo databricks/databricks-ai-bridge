@@ -14,7 +14,6 @@ from databricks_ai_bridge import lakebase
 from databricks_langchain import AsyncDatabricksStore, DatabricksStore
 from databricks_langchain.embeddings import DatabricksEmbeddings
 
-
 # =============================================================================
 # Synchronous DatabricksStore Tests
 # ====================

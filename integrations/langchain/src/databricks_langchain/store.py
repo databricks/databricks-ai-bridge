@@ -20,6 +20,7 @@ except ImportError:
     AsyncBatchedBaseStore = object  # type: ignore
     _store_imports_available = False
 
+
 class DatabricksStore(BaseStore):
     """Provides APIs for working with long-term memory on Databricks using Lakebase.
     Extends LangGraph BaseStore interface using Databricks Lakebase for connection pooling,

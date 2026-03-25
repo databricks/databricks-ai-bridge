@@ -377,5 +377,3 @@ async def test_async_checkpoint_saver_branch_resource_path(monkeypatch):
 
     assert "host=auto-db-host" in test_pool.conninfo
     assert saver._lakebase._is_autoscaling is True
-
-
