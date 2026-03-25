@@ -333,9 +333,256 @@ server({ staticPath: chat.staticAssetsPath })
 
 The chat UI communicates with the chat plugin's `/api/chat/` endpoints automatically. No additional configuration is needed.
 
+## Custom UI
+
+Instead of using the bundled chat UI, you can build your own with the headless React library exported from `@databricks/appkit-agent/react`. It provides hooks and renderless components — no styling opinions, no Tailwind, no shadcn.
+
+### Installation
+
+The React library requires these peer dependencies in your app:
+
+```bash
+npm install react react-dom swr @ai-sdk/react ai
+```
+
+### Provider
+
+Wrap your app in `ChatAgentProvider`. It fetches config and session from the chat plugin automatically:
+
+```tsx
+import { ChatAgentProvider } from "@databricks/appkit-agent/react";
+
+function App() {
+  return (
+    <ChatAgentProvider apiBase="/api/chat">
+      <YourChatUI />
+    </ChatAgentProvider>
+  );
+}
+```
+
+| Prop          | Type                        | Default        | Description                                            |
+| ------------- | --------------------------- | -------------- | ------------------------------------------------------ |
+| `apiBase`     | `string`                    | `"/api/chat"`  | Base URL for the chat API endpoints                    |
+| `basePath`    | `string`                    | `"/"`          | Base path for client-side routing                      |
+| `features`    | `Partial<ChatFeatures>`     | auto-fetched   | Override feature flags (history, feedback)              |
+| `session`     | `ClientSession`             | auto-fetched   | Override user session                                  |
+| `onNavigate`  | `(chatId: string) => void`  | —              | Called when a new chat is created (for URL navigation)  |
+
+### Hooks
+
+#### `useChat(options?)`
+
+Manages a streaming chat conversation. Handles sending messages, receiving streamed responses, and stream resumption.
+
+```tsx
+const chat = useChat({
+  id: chatId,
+  initialMessages: [],    // pre-loaded messages for existing chats
+  title: "My Chat",
+  onError: (err) => console.error(err),
+  onTitleGenerated: (title) => console.log(title),
+});
+
+// chat.messages — current message list
+// chat.sendMessage — send a new message
+// chat.status — "ready" | "submitted" | "streaming"
+// chat.stop — abort the current stream
+// chat.title / chat.isTitleLoading — auto-generated title
+```
+
+#### `useHistory()`
+
+Paginated chat history with infinite scroll support.
+
+```tsx
+const { chats, isLoading, hasMore, loadMore, deleteChat } = useHistory();
+```
+
+#### `useSession()`
+
+Current user session from the provider context.
+
+```tsx
+const { user } = useSession();
+```
+
+#### `useConfig()`
+
+Feature flags from the provider context.
+
+```tsx
+const { chatHistoryEnabled, feedbackEnabled } = useConfig();
+```
+
+#### `useChatData(chatId)`
+
+Fetches an existing chat's messages, metadata, and feedback from the server. Use this to load data before passing it to `useChat`:
+
+```tsx
+const { chatData, isLoading, error } = useChatData(chatId);
+
+// When loaded, pass to useChat:
+// useChat({ id: chatId, initialMessages: chatData.messages })
+```
+
+### Headless Components
+
+Renderless components that use the [render props](https://react.dev/reference/react/cloneElement#passing-data-with-a-render-prop) pattern — you provide the JSX, the component provides the logic.
+
+#### `<ChatInput>`
+
+Manages input state, form submission, Enter-to-send, and stop-while-streaming:
+
+```tsx
+<ChatInput onSubmit={chat.sendMessage} status={chat.status} onStop={chat.stop}>
+  {({ value, onChange, submit, isStreaming, stop, handleKeyDown }) => (
+    <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      {isStreaming
+        ? <button type="button" onClick={stop}>Stop</button>
+        : <button type="submit">Send</button>
+      }
+    </form>
+  )}
+</ChatInput>
+```
+
+#### `<Conversation>`
+
+Wraps `useChat` with auto-scroll and exposes the full chat state via render props:
+
+```tsx
+<Conversation id={chatId} initialMessages={messages}>
+  {({ messages, status, sendMessage, stop, title }) => (
+    <div>
+      {messages.map((m) => <Message key={m.id} message={m} />)}
+    </div>
+  )}
+</Conversation>
+```
+
+#### `<HistoryList>`
+
+Wraps `useHistory` with render props for building a chat sidebar:
+
+```tsx
+<HistoryList>
+  {({ chats, isLoading, hasMore, loadMore, deleteChat }) => (
+    <ul>
+      {chats.map((c) => <li key={c.id}>{c.title}</li>)}
+      {hasMore && <button onClick={loadMore}>Load more</button>}
+    </ul>
+  )}
+</HistoryList>
+```
+
+### Full Example
+
+A minimal custom chat app (see `playground/custom-ui/` for the complete source):
+
+```tsx
+import { useState } from "react";
+import {
+  ChatAgentProvider,
+  ChatInput,
+  useChat,
+  useChatData,
+  useHistory,
+  useSession,
+  generateUUID,
+} from "@databricks/appkit-agent/react";
+
+function App() {
+  const [chatId, setChatId] = useState<string>();
+
+  return (
+    <ChatAgentProvider apiBase="/api/chat" onNavigate={setChatId}>
+      <Sidebar chatId={chatId} onSelect={setChatId} />
+      <ChatView key={chatId ?? "new"} chatId={chatId} />
+    </ChatAgentProvider>
+  );
+}
+
+function Sidebar({ chatId, onSelect }) {
+  const { chats, hasMore, loadMore, deleteChat } = useHistory();
+  return (
+    <nav>
+      <button onClick={() => onSelect(undefined)}>New Chat</button>
+      {chats.map((c) => (
+        <div key={c.id} onClick={() => onSelect(c.id)}>
+          {c.title || "Untitled"}
+        </div>
+      ))}
+      {hasMore && <button onClick={loadMore}>Load more</button>}
+    </nav>
+  );
+}
+
+function ChatView({ chatId }) {
+  const { chatData, isLoading } = useChatData(chatId);
+  if (chatId && isLoading) return <div>Loading...</div>;
+
+  return (
+    <ActiveChat
+      key={chatId ?? "new"}
+      chatId={chatId}
+      initialMessages={chatData?.messages}
+    />
+  );
+}
+
+function ActiveChat({ chatId, initialMessages }) {
+  const [id] = useState(() => chatId ?? generateUUID());
+  const chat = useChat({ id, initialMessages: initialMessages ?? [] });
+
+  return (
+    <div>
+      {chat.messages.map((m) => (
+        <div key={m.id}>{m.parts.map((p) => p.type === "text" && p.text)}</div>
+      ))}
+      <ChatInput onSubmit={chat.sendMessage} status={chat.status} onStop={chat.stop}>
+        {({ value, onChange, submit, handleKeyDown }) => (
+          <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+            <input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={handleKeyDown} />
+            <button type="submit">Send</button>
+          </form>
+        )}
+      </ChatInput>
+    </div>
+  );
+}
+```
+
+### Server Setup
+
+The custom UI still needs the agent and chat plugins running on the backend. A minimal server:
+
+```typescript
+import { createApp, server } from "@databricks/appkit";
+import { agent, chat } from "@databricks/appkit-agent";
+
+await createApp({
+  plugins: [
+    server({ autoStart: true }),
+    agent({
+      model: "databricks-claude-sonnet-4-5",
+      systemPrompt: "You are a helpful assistant.",
+    }),
+    chat({ backend: "agent" }),
+  ],
+});
+```
+
+Note that `staticPath` is omitted since you're serving your own frontend. During development, AppKit automatically detects a `client/` directory with a Vite config and serves it with HMR when `NODE_ENV=development`.
+
 ## API Reference
 
-### Exports
+### Exports from `@databricks/appkit-agent`
 
 | Export                | Kind           | Description                                                |
 | --------------------- | -------------- | ---------------------------------------------------------- |
@@ -346,6 +593,22 @@ The chat UI communicates with the chat plugin's `/api/chat/` endpoints automatic
 | `createInvokeHandler` | Function       | Express handler factory for the `/api/agent` endpoint      |
 | `isFunctionTool`      | Function       | Type guard for `FunctionTool`                              |
 | `isHostedTool`        | Function       | Type guard for `HostedTool`                                |
+
+### Exports from `@databricks/appkit-agent/react`
+
+| Export                | Kind           | Description                                                 |
+| --------------------- | -------------- | ----------------------------------------------------------- |
+| `ChatAgentProvider`   | Component      | Root provider — fetches config/session, sets up SWR          |
+| `useChat`             | Hook           | Streaming chat conversation management                       |
+| `useHistory`          | Hook           | Paginated chat history with delete                           |
+| `useSession`          | Hook           | Current user session                                         |
+| `useConfig`           | Hook           | Feature flags (history, feedback)                            |
+| `useChatData`         | Hook           | Fetch existing chat messages/metadata from the server        |
+| `ChatInput`           | Component      | Headless input with render props (submit, stop, key events)  |
+| `Conversation`        | Component      | Headless conversation with render props (messages, scroll)   |
+| `HistoryList`         | Component      | Headless history list with render props (pagination)         |
+| `ChatAgentContext`    | Context        | React context for advanced use-cases                         |
+| `generateUUID`        | Utility        | UUID v4 generator                                            |
 
 ### Types
 
