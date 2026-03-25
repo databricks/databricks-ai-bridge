@@ -6,17 +6,10 @@ import pytest
 
 pytest.importorskip("databricks_ai_bridge.lakebase")
 pytest.importorskip("langgraph.checkpoint.postgres")
-psycopg_errors = pytest.importorskip("psycopg.errors")
-UniqueViolation = psycopg_errors.UniqueViolation
 
 from databricks_ai_bridge import lakebase
 
 from databricks_langchain import AsyncCheckpointSaver, CheckpointSaver
-
-
-async def _async_noop():
-    """No-op coroutine used to mock async setup() in tests."""
-    pass
 
 
 class TestConnectionPool:
@@ -141,7 +134,6 @@ async def test_async_checkpoint_saver_configures_lakebase(monkeypatch):
 async def test_async_checkpoint_saver_context_manager(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -163,7 +155,6 @@ async def test_async_checkpoint_saver_context_manager(monkeypatch):
 async def test_async_checkpoint_saver_connection(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -239,7 +230,6 @@ async def test_async_checkpoint_saver_autoscaling_configures_lakebase(monkeypatc
 async def test_async_checkpoint_saver_autoscaling_context_manager(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = _create_autoscaling_workspace()
 
@@ -389,53 +379,3 @@ async def test_async_checkpoint_saver_branch_resource_path(monkeypatch):
     assert saver._lakebase._is_autoscaling is True
 
 
-# =============================================================================
-# UniqueViolation handling in setup()
-# =============================================================================
-
-
-def test_checkpoint_saver_enter_ignores_unique_violation(monkeypatch):
-    """CheckpointSaver.__enter__ catches UniqueViolation from concurrent setup()."""
-    test_pool = TestConnectionPool(connection_value="lake-conn")
-    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
-
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-
-    def raise_unique_violation(self):
-        raise UniqueViolation("duplicate key value violates unique constraint")
-
-    monkeypatch.setattr(CheckpointSaver, "setup", raise_unique_violation)
-
-    saver = CheckpointSaver(instance_name="lakebase-instance", workspace_client=workspace)
-    saver.__enter__()
-    assert saver is not None
-
-
-@pytest.mark.asyncio
-async def test_async_checkpoint_saver_aenter_ignores_unique_violation(monkeypatch):
-    """AsyncCheckpointSaver.__aenter__ catches UniqueViolation from concurrent setup()."""
-    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
-    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-
-    async def raise_unique_violation(self):
-        raise UniqueViolation("duplicate key value violates unique constraint")
-
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", raise_unique_violation)
-
-    async with AsyncCheckpointSaver(
-        instance_name="lakebase-instance", workspace_client=workspace
-    ) as saver:
-        assert test_pool._opened
-        assert saver._lakebase.pool == test_pool
-
-    assert test_pool._closed
