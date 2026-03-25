@@ -25,7 +25,7 @@ export type { AgentTool, IAgentConfig } from "./agent-plugin/types";
 export { chat, ChatPlugin } from "./chat-plugin/index";
 export type {
   ChatConfig,
+  ChatBackend,
   ChatSession,
   GetSession,
-  ChatAgentBackend,
 } from "./chat-plugin/index";

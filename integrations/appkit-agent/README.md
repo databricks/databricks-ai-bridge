@@ -339,6 +339,7 @@ All routes are mounted under `/api/chat/`.
 | --------------------- | ------------------------------------------------------------- |
 | `IAgentConfig`        | Agent plugin configuration options                            |
 | `ChatConfig`          | Chat plugin configuration options                             |
+| `ChatBackend`         | Backend target: plugin name, `{ proxy }`, or `{ endpoint }`  |
 | `ChatSession`         | Session object with user info                                 |
 | `GetSession`          | Custom session resolver function type                         |
 | `AgentInterface`      | Contract for custom agent implementations                     |

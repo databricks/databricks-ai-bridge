@@ -13,7 +13,7 @@ export class ChatServerError extends Error {
       "unauthorized:chat": 401,
       "forbidden:chat": 403,
       "not_found:database": 404,
-      "empty:stream": 404,
+      "empty:stream": 204,
       "offline:chat": 503,
       "bad_request:database": 500,
     };
