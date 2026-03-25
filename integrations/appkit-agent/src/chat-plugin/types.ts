@@ -15,15 +15,29 @@ export type GetSession = (
   req: Request,
 ) => Promise<ChatSession | null> | ChatSession | null;
 
+/**
+ * Chat backend target.
+ *
+ * - `string` — name of a local AppKit plugin (e.g. `'agent'`). Requests are
+ *   proxied to `/api/<name>` on the same server at request time.
+ * - `{ proxy: string }` — arbitrary proxy URL (e.g. `{ proxy: 'http://localhost:8000/invocations' }`).
+ * - `{ endpoint: string }` — Databricks serving endpoint name
+ *   (e.g. `{ endpoint: 'databricks-claude-sonnet-4-5' }`).
+ *
+ * When omitted, defaults to `process.env.DATABRICKS_SERVING_ENDPOINT` or `'chat-model'`.
+ */
+export type ChatBackend =
+  | string
+  | { proxy: string }
+  | { endpoint: string };
+
 export interface ChatConfig extends BasePluginConfig {
   /** Resolve session from request. If not set, session is derived from x-forwarded-user headers. */
   getSession?: GetSession;
   /** pg Pool for persistence. When not set, runs in ephemeral mode (no history). */
   pool?: import("pg").Pool;
-  /** Model / endpoint id. Defaults to process.env.DATABRICKS_SERVING_ENDPOINT or "chat-model". */
-  modelId?: string;
-  /** Proxy URL for model requests (e.g. MLflow Agent Server). Defaults to process.env.API_PROXY. */
-  apiProxy?: string;
+  /** Chat backend target. See {@link ChatBackend}. */
+  backend?: ChatBackend;
   /** Enable feedback feature (thumbs up/down). Defaults to !!process.env.MLFLOW_EXPERIMENT_ID. */
   feedbackEnabled?: boolean;
   /** Auto-create the ai_chatbot schema and tables on startup. Defaults to false. */

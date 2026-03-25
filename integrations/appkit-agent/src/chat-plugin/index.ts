@@ -52,6 +52,7 @@ import {
 
 export type { ChatConfig } from "./types";
 export type { ChatSession, GetSession } from "./types";
+export type { ChatBackend } from "./types";
 
 import {
   convertToUIMessages,
@@ -60,11 +61,6 @@ import {
 } from "./utils";
 
 const logger = createLogger("chat");
-
-/** Agent backend shape expected by `useAgentBackend`. */
-export type ChatAgentBackend = {
-  endpointPath: string;
-};
 
 type ChatMessage = NonNullable<PostRequestBody["previousMessages"]>[number];
 
@@ -98,22 +94,9 @@ export class ChatPlugin extends Plugin<ChatConfig> {
   private db: ReturnType<typeof createDb> | null = null;
   private getChat: (id: string) => Promise<import("./schema").ChatRow | null> =
     async () => null;
-  private agentEndpointPath: string | null = null;
-
-  /**
-   * Wire the agent plugin as the chat backend. When set, chat POST requests
-   * are routed through the agent's local HTTP endpoint using the same
-   * `streamText` path as a remote serving endpoint — no custom adapter needed.
-   */
-  useAgentBackend(agent: ChatAgentBackend): void {
-    this.agentEndpointPath = agent.endpointPath;
-    logger.info("Chat backend set to local agent at %s", agent.endpointPath);
-  }
 
   async setup() {
-    this.provider = createChatProvider({
-      apiProxy: this.config.apiProxy ?? process.env.API_PROXY,
-    });
+    this.provider = createChatProvider();
     this.streamCache = new StreamCache();
     if (this.config.pool) {
       if (this.config.autoMigrate) {
@@ -766,13 +749,12 @@ export class ChatPlugin extends Plugin<ChatConfig> {
         let finalUsage: LanguageModelUsage | undefined;
         let traceId: string | null = null;
 
-        const activeProv = this.agentEndpointPath
-          ? createChatProvider({
-              apiProxy: `${req.protocol}://${req.get("host")}${this.agentEndpointPath}`,
-            })
-          : prov;
+        const { provider: activeProv, modelId: resolvedModelId } =
+          this.resolveBackend(req);
 
-        const model = await activeProv.languageModel(selectedChatModel);
+        const model = await activeProv.languageModel(
+          resolvedModelId ?? selectedChatModel,
+        );
         const modelMessages = await convertToModelMessages(
           uiMessages as Parameters<typeof convertToModelMessages>[0],
         );
@@ -918,10 +900,33 @@ export class ChatPlugin extends Plugin<ChatConfig> {
     this.registerEndpoint("chat", `/api/${this.name}`);
   }
 
+  private resolveBackend(req: express.Request): {
+    provider: ReturnType<typeof createChatProvider>;
+    modelId: string | null;
+  } {
+    const backend = this.config.backend;
+    if (!backend) {
+      return { provider: this.provider!, modelId: null };
+    }
+    if (typeof backend === "string") {
+      return {
+        provider: createChatProvider({
+          apiProxy: `${req.protocol}://${req.get("host")}/api/${backend}`,
+        }),
+        modelId: null,
+      };
+    }
+    if ("proxy" in backend) {
+      return {
+        provider: createChatProvider({ apiProxy: backend.proxy }),
+        modelId: null,
+      };
+    }
+    return { provider: this.provider!, modelId: backend.endpoint };
+  }
+
   exports() {
-    return {
-      useAgentBackend: (agent: ChatAgentBackend) => this.useAgentBackend(agent),
-    };
+    return {};
   }
 }
 
