@@ -1,9 +1,9 @@
 # @databricks/appkit-agent
 
-Agent plugin for [Databricks AppKit](https://github.com/databricks/appkit). You can define an agent using one of the following approaches:
+Plugins for [Databricks AppKit](https://github.com/databricks/appkit):
 
-1. Declaratively define an agent by specifying `model`, `tools,` and `instructions`
-2. Implement a custom agent loop using **`AgentInterface`** — a contract for writing custom agent implementations that speak the OpenAI Responses API format (streaming + non-streaming).
+- **Agent plugin** — define an AI agent declaratively (model + tools + instructions) or bring a custom `AgentInterface` implementation. Speaks the OpenAI Responses API format with streaming.
+- **Chat plugin** — full-featured chat server with streaming, session management, optional PostgreSQL persistence, feedback via MLflow Traces, and stream resumption.
 
 ## Installation
 
@@ -23,7 +23,15 @@ If you use hosted tools (Genie, Vector Search, custom/external MCP servers):
 npm install @langchain/mcp-adapters
 ```
 
+For chat persistence (optional — without it the chat plugin runs in ephemeral mode):
+
+```bash
+npm install pg
+```
+
 ## Quick Start
+
+### Agent only
 
 ```typescript
 import { createApp, server } from "@databricks/appkit";
@@ -31,18 +39,36 @@ import { agent } from "@databricks/appkit-agent";
 
 const app = await createApp({
   plugins: [
-    server(),
+    server({ autoStart: true }),
     agent({
       model: "databricks-claude-sonnet-4-5",
       systemPrompt: "You are a helpful assistant.",
     }),
   ],
 });
-
-app.server.start();
 ```
 
-The plugin registers `POST /api/agent` which accepts the [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) request format with SSE streaming.
+### Agent + Chat
+
+```typescript
+import { createApp, server } from "@databricks/appkit";
+import { agent, chat } from "@databricks/appkit-agent";
+
+await createApp({
+  plugins: [
+    server({ autoStart: true }),
+    agent({
+      model: "databricks-claude-sonnet-4-5",
+      systemPrompt: "You are a helpful assistant.",
+    }),
+    chat({
+      backend: "agent",
+    }),
+  ],
+});
+```
+
+The agent plugin registers `POST /api/agent` (OpenAI Responses API format with SSE streaming). The chat plugin registers routes under `/api/chat/` for streaming chat, history, feedback, and more.
 
 ## Environment Variables
 
@@ -216,23 +242,105 @@ agent({ agentInstance: new MyAgent() });
 
 The `StandardAgent` class (exported from this package) is the built-in implementation used when you pass `model` instead of `agentInstance`. It translates the underlying agent's stream events into Responses API format.
 
+## Chat Plugin
+
+The chat plugin provides a streaming chat server that can be wired to the agent plugin or to a remote Databricks serving endpoint.
+
+### Configuration
+
+```typescript
+import { chat } from "@databricks/appkit-agent";
+
+chat({
+  // Route chat through the local agent plugin
+  backend: "agent",
+
+  // Or point to a remote proxy / serving endpoint:
+  // backend: { proxy: "http://localhost:8000/invocations" },
+  // backend: { endpoint: "databricks-claude-sonnet-4-5" },
+
+  // Optional: PostgreSQL pool for persistent chat history
+  // pool: new Pool(),
+
+  // Auto-create the ai_chatbot schema and tables on startup (default: false)
+  // autoMigrate: true,
+
+  // Enable thumbs up/down feedback (default: !!process.env.MLFLOW_EXPERIMENT_ID)
+  // feedbackEnabled: true,
+
+  // Custom session resolver (default: x-forwarded-user headers → SCIM → env)
+  // getSession: (req) => ({ user: { id: req.headers["x-user-id"] } }),
+});
+```
+
+### Persistence
+
+Without a `pool`, the chat plugin runs in **ephemeral mode** — conversations are not saved. To enable persistent chat history, pass a `pg.Pool`:
+
+```typescript
+import { Pool } from "pg";
+
+chat({
+  backend: "agent",
+  pool: new Pool({ connectionString: "postgres://..." }),
+  autoMigrate: true,
+});
+```
+
+When `autoMigrate: true` is set, the plugin creates the `ai_chatbot` schema and tables (`Chat`, `Message`, `Vote`) on startup using [Drizzle migrations](https://orm.drizzle.team/docs/migrations). Migration SQL is generated from the Drizzle schema definition, so it stays in sync automatically.
+
+### Session Resolution
+
+In production on Databricks Apps, sessions are resolved from headers set by the platform proxy (`x-forwarded-user`, `x-forwarded-email`). In local development, the plugin falls back to the SCIM `/Me` API (if Databricks auth is configured) or `process.env.USER`.
+
+You can override this entirely with a custom `getSession` callback.
+
+### Feedback
+
+When feedback is enabled, thumbs up/down votes are submitted as assessments to the [MLflow Traces API](https://docs.databricks.com/en/mlflow/llm-tracing.html). Votes are also persisted in the database when a pool is configured.
+
+### Chat API Routes
+
+All routes are mounted under `/api/chat/`.
+
+| Method   | Path                     | Auth         | Description                        |
+| -------- | ------------------------ | ------------ | ---------------------------------- |
+| `GET`    | `/config`                | —            | Feature flags (history, feedback)  |
+| `GET`    | `/session`               | —            | Current user session               |
+| `GET`    | `/history`               | required     | Paginated chat list                |
+| `GET`    | `/messages/:id`          | required+ACL | Messages for a chat                |
+| `DELETE` | `/messages/:id/trailing` | required     | Delete messages after a given one  |
+| `POST`   | `/feedback`              | required     | Submit thumbs up/down              |
+| `GET`    | `/feedback/chat/:chatId` | required+ACL | Votes for a chat                   |
+| `POST`   | `/title`                 | required     | Auto-generate title from message   |
+| `PATCH`  | `/:id/visibility`        | required+ACL | Toggle public/private              |
+| `GET`    | `/:id/stream`            | required     | Resume an active stream            |
+| `GET`    | `/:id`                   | required+ACL | Get single chat                    |
+| `DELETE` | `/:id`                   | required+ACL | Delete a chat                      |
+| `POST`   | `/`                      | required     | Main chat handler (streaming)      |
+
 ## API Reference
 
 ### Exports
 
-| Export                | Kind           | Description                                              |
-| --------------------- | -------------- | -------------------------------------------------------- |
-| `agent`               | Plugin factory | Main entry point — call with config, pass to `createApp` |
-| `StandardAgent`       | Class          | Built-in `AgentInterface` implementation                 |
-| `createInvokeHandler` | Function       | Express handler factory for the `/api/agent` endpoint    |
-| `isFunctionTool`      | Function       | Type guard for `FunctionTool`                            |
-| `isHostedTool`        | Function       | Type guard for `HostedTool`                              |
+| Export                | Kind           | Description                                                |
+| --------------------- | -------------- | ---------------------------------------------------------- |
+| `agent`               | Plugin factory | Agent plugin — call with config, pass to `createApp`       |
+| `chat`                | Plugin factory | Chat plugin — call with config, pass to `createApp`        |
+| `ChatPlugin`          | Class          | Chat plugin class (for `ChatPlugin.staticAssetsPath`, etc) |
+| `StandardAgent`       | Class          | Built-in `AgentInterface` implementation                   |
+| `createInvokeHandler` | Function       | Express handler factory for the `/api/agent` endpoint      |
+| `isFunctionTool`      | Function       | Type guard for `FunctionTool`                              |
+| `isHostedTool`        | Function       | Type guard for `HostedTool`                                |
 
 ### Types
 
 | Type                  | Description                                                   |
 | --------------------- | ------------------------------------------------------------- |
-| `IAgentConfig`        | Plugin configuration options                                  |
+| `IAgentConfig`        | Agent plugin configuration options                            |
+| `ChatConfig`          | Chat plugin configuration options                             |
+| `ChatSession`         | Session object with user info                                 |
+| `GetSession`          | Custom session resolver function type                         |
 | `AgentInterface`      | Contract for custom agent implementations                     |
 | `AgentTool`           | Union of `FunctionTool \| HostedTool`                         |
 | `FunctionTool`        | Local tool with JSON Schema parameters and `execute` handler  |

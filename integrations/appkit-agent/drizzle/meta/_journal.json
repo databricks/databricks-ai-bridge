@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1774365591071,
+      "tag": "0000_lying_bill_hollister",
+      "breakpoints": true
+    }
+  ]
+}

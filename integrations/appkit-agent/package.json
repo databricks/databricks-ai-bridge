@@ -17,6 +17,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./chat": {
+      "import": {
+        "types": "./dist/chat/index.d.mts",
+        "default": "./dist/chat/index.mjs"
+      },
+      "require": {
+        "types": "./dist/chat/index.d.cts",
+        "default": "./dist/chat/index.cjs"
+      }
+    },
     "./chat-ui/simple": {
       "import": {
         "types": "./dist/chat-ui/simple.d.mts",
@@ -31,6 +41,7 @@
   },
   "files": [
     "dist",
+    "drizzle",
     "README.md",
     "LICENSE",
     "NOTICE"
@@ -47,7 +58,7 @@
     "format:check": "prettier --check 'src/**/*.ts'"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "peerDependencies": {
     "@databricks/appkit": ">=0.21.0",
@@ -56,6 +67,7 @@
     "@langchain/langgraph": ">=1.0.0",
     "@langchain/mcp-adapters": ">=1.0.0",
     "express": ">=4.0.0",
+    "pg": ">=8.0.0",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
@@ -72,6 +84,9 @@
     "@langchain/mcp-adapters": {
       "optional": true
     },
+    "pg": {
+      "optional": true
+    },
     "react": {
       "optional": true
     },
@@ -80,9 +95,12 @@
     }
   },
   "dependencies": {
+    "@databricks/ai-sdk-provider": "^0.5.1",
     "@radix-ui/react-slot": "^1.2.4",
+    "ai": "^6.0.70",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "drizzle-orm": "^0.38.0",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.3.5"
   },
@@ -91,8 +109,10 @@
     "@langchain/core": "^1.1.8",
     "@types/express": "^4.17.25",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.16.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "drizzle-kit": "^0.31.10",
     "prettier": "^3.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
