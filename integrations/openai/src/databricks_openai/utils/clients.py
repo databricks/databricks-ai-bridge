@@ -109,15 +109,15 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
                 message["content"] = " "
 
 
-def _get_ai_gateway_base_url(
+def _discover_ai_gateway_host(
     http_client: Client,
     host: str,
 ) -> str | None:
-    """Check if AI Gateway V2 is enabled and return its base URL.
+    """Discover the AI Gateway host URL (scheme + netloc only).
 
     Calls GET /api/ai-gateway/v2/endpoints. If successful and endpoints exist,
-    extracts the ai_gateway_url from the first endpoint response.
-    Returns None if gateway is not available.
+    extracts the ai_gateway_url from the first endpoint response and returns
+    just the scheme + netloc (no path). Returns None if gateway is not available.
     """
     try:
         response = http_client.get(f"{host}/api/ai-gateway/v2/endpoints")
@@ -131,9 +131,22 @@ def _get_ai_gateway_base_url(
         if not gateway_url:
             return None
         parsed = urlparse(gateway_url)
-        return f"{parsed.scheme}://{parsed.netloc}/mlflow/v1"
+        return f"{parsed.scheme}://{parsed.netloc}"
     except Exception:
         return None
+
+
+def _get_ai_gateway_base_url(
+    http_client: Client,
+    host: str,
+) -> str | None:
+    """Check if AI Gateway V2 is enabled and return its MLflow base URL.
+
+    Returns the AI Gateway base URL with /mlflow/v1 path appended, or None if
+    the gateway is not available.
+    """
+    gateway_host = _discover_ai_gateway_host(http_client, host)
+    return f"{gateway_host}/mlflow/v1" if gateway_host else None
 
 
 def _resolve_base_url(
@@ -141,14 +154,30 @@ def _resolve_base_url(
     base_url: str | None,
     use_ai_gateway: bool,
     http_client: Client,
+    use_ai_gateway_native_api: bool,
 ) -> str:
     """Resolve the target base URL for the OpenAI client."""
+    if use_ai_gateway_native_api and base_url is not None:
+        raise ValueError("Cannot specify both 'use_ai_gateway_native_api' and 'base_url'.")
+    if use_ai_gateway_native_api and use_ai_gateway:
+        raise ValueError("Cannot specify both 'use_ai_gateway_native_api' and 'use_ai_gateway'.")
+
     if base_url is not None:
         if _DATABRICKS_APPS_DOMAIN in base_url:
             _validate_oauth_for_apps(workspace_client)
         return base_url
 
-    # Prioritize using AI Gateway endpoints
+    # Native provider API via AI Gateway (e.g. OpenAI-compatible /openai path)
+    if use_ai_gateway_native_api:
+        gateway_host = _discover_ai_gateway_host(http_client, workspace_client.config.host)
+        if gateway_host:
+            return f"{gateway_host}/openai/v1"
+        raise ValueError(
+            "Please ensure AI Gateway V2 is enabled for the workspace "
+            "when use_ai_gateway_native_api is set to True."
+        )
+
+    # MLflow-format AI Gateway endpoints
     if use_ai_gateway:
         gateway_url = _get_ai_gateway_base_url(http_client, workspace_client.config.host)
         if gateway_url:
@@ -362,11 +391,22 @@ class DatabricksOpenAI(OpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        use_ai_gateway_native_api: If True, auto-detect AI Gateway V2 and route requests through
+            its native OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of
+            provider-native features not available through the MLflow API. Cannot be combined
+            with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
-            requests through it. Defaults to False.
+            requests through it using the MLflow API. Defaults to False.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = DatabricksOpenAI()
+        >>> response = client.chat.completions.create(
+        ...     model="databricks-meta-llama-3-1-70b-instruct",
+        ...     messages=[{"role": "user", "content": "Hello!"}],
+        ... )
+
+    Example - Query AI Gateway endpoints via the native OpenAI-compatible API:
+        >>> client = DatabricksOpenAI(use_ai_gateway_native_api=True)
         >>> response = client.chat.completions.create(
         ...     model="databricks-meta-llama-3-1-70b-instruct",
         ...     messages=[{"role": "user", "content": "Hello!"}],
@@ -397,6 +437,7 @@ class DatabricksOpenAI(OpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
     ):
         if workspace_client is None:
@@ -405,7 +446,9 @@ class DatabricksOpenAI(OpenAI):
         self._workspace_client = workspace_client
 
         http_client = _get_authorized_http_client(workspace_client)
-        target_base_url = _resolve_base_url(workspace_client, base_url, use_ai_gateway, http_client)
+        target_base_url = _resolve_base_url(
+            workspace_client, base_url, use_ai_gateway, http_client, use_ai_gateway_native_api
+        )
 
         # Authentication is handled via http_client, not api_key
         super().__init__(
@@ -510,11 +553,22 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        use_ai_gateway_native_api: If True, auto-detect AI Gateway V2 and route requests through
+            its native OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of
+            provider-native features not available through the MLflow API. Cannot be combined
+            with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
-            requests through it. Defaults to False.
+            requests through it using the MLflow API. Defaults to False.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = AsyncDatabricksOpenAI()
+        >>> response = await client.chat.completions.create(
+        ...     model="databricks-meta-llama-3-1-70b-instruct",
+        ...     messages=[{"role": "user", "content": "Hello!"}],
+        ... )
+
+    Example - Query AI Gateway endpoints via the native OpenAI-compatible API:
+        >>> client = AsyncDatabricksOpenAI(use_ai_gateway_native_api=True)
         >>> response = await client.chat.completions.create(
         ...     model="databricks-meta-llama-3-1-70b-instruct",
         ...     messages=[{"role": "user", "content": "Hello!"}],
@@ -545,6 +599,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
     ):
         if workspace_client is None:
@@ -554,7 +609,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
 
         sync_http_client = _get_authorized_http_client(workspace_client)
         target_base_url = _resolve_base_url(
-            workspace_client, base_url, use_ai_gateway, sync_http_client
+            workspace_client, base_url, use_ai_gateway, sync_http_client, use_ai_gateway_native_api
         )
 
         # Authentication is handled via http_client, not api_key
