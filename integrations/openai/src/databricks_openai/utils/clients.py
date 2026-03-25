@@ -160,9 +160,7 @@ def _resolve_base_url(
     if use_ai_gateway_native_api and base_url is not None:
         raise ValueError("Cannot specify both 'use_ai_gateway_native_api' and 'base_url'.")
     if use_ai_gateway_native_api and use_ai_gateway:
-        raise ValueError(
-            "Cannot specify both 'use_ai_gateway_native_api' and 'use_ai_gateway'."
-        )
+        raise ValueError("Cannot specify both 'use_ai_gateway_native_api' and 'use_ai_gateway'.")
 
     if base_url is not None:
         if _DATABRICKS_APPS_DOMAIN in base_url:
