@@ -40,6 +40,14 @@ export async function deleteChatById(
   db: ReturnType<typeof createDb>,
   id: string,
 ) {
+  const msgIds = await db
+    .select({ id: message.id })
+    .from(message)
+    .where(eq(message.chatId, id));
+  const ids = msgIds.map((r) => r.id);
+  if (ids.length > 0) {
+    await db.delete(vote).where(inArray(vote.messageId, ids));
+  }
   await db.delete(message).where(eq(message.chatId, id));
   const [deleted] = await db.delete(chat).where(eq(chat.id, id)).returning();
   return deleted ?? null;
