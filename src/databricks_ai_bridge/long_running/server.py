@@ -33,6 +33,7 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.tracing.constant import SpanAttributeKey
 
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
+from databricks_ai_bridge.utils.annotations import experimental
 from databricks_ai_bridge.long_running.repository import (
     append_message,
     create_response,
@@ -94,6 +95,7 @@ def _sse_event(event_type: str, data: dict[str, Any] | str) -> str:
     return f"event: {event_type}\ndata: {payload}\n\n"
 
 
+@experimental
 class LongRunningAgentServer(AgentServer):
     """AgentServer subclass adding background mode and retrieve endpoints.
 
