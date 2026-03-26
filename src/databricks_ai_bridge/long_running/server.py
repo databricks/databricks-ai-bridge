@@ -254,6 +254,7 @@ class LongRunningAgentServer(AgentServer):
             "metadata": {},
         }
 
+        # Fire-and-forget is intentional — task status is persisted to the database.
         if is_streaming:
             asyncio.create_task(
                 self._run_background_stream(response_id, request_data, return_trace_id)
@@ -544,8 +545,9 @@ class LongRunningAgentServer(AgentServer):
     ) -> AsyncGenerator[str, None]:
         poll_interval = self._settings.poll_interval_seconds
         last_seq = starting_after
+        deadline = time.monotonic() + self._settings.task_timeout_seconds
 
-        while True:
+        while time.monotonic() < deadline:
             logger.debug(
                 "Poll iteration for %s (last_seq=%s)",
                 response_id,
@@ -601,3 +603,20 @@ class LongRunningAgentServer(AgentServer):
                 break
 
             await asyncio.sleep(poll_interval)
+        else:
+            # Loop exited because we hit the deadline.
+            logger.warning(
+                "Stream retrieve timed out for %s after %ss",
+                response_id,
+                self._settings.task_timeout_seconds,
+            )
+            yield _sse_event(
+                "error",
+                {
+                    "error": {
+                        "message": "Stream retrieve timed out",
+                        "type": "server_error",
+                        "code": "stream_timeout",
+                    }
+                },
+            )
