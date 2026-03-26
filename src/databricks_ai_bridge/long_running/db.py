@@ -43,20 +43,25 @@ async def init_db(
     """Create engine, schema, and tables. Call on app startup."""
     global _session_factory, _engine, _lakebase
 
-    _lakebase = AsyncLakebaseSQLAlchemy(
-        instance_name=instance_name,
-        project=project,
-        branch=branch,
-        pool_size=pool_size,
-        max_overflow=max_overflow,
-        pool_pre_ping=True,
-    )
+    lakebase_kwargs: dict = {
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "pool_pre_ping": True,
+    }
+    if instance_name:
+        lakebase_kwargs["instance_name"] = instance_name
+    if project:
+        lakebase_kwargs["project"] = project
+    if branch:
+        lakebase_kwargs["branch"] = branch
+
+    _lakebase = AsyncLakebaseSQLAlchemy(**lakebase_kwargs)
     _engine = _lakebase.engine
 
     @event.listens_for(_engine.sync_engine, "checkout")
     def _set_statement_timeout(dbapi_conn, connection_record, connection_proxy):
         cursor = dbapi_conn.cursor()
-        cursor.execute(f"SET statement_timeout = {db_statement_timeout_ms}")
+        cursor.execute(f"SET statement_timeout = {int(db_statement_timeout_ms)}")
         cursor.close()
 
     _session_factory = async_sessionmaker(
@@ -66,6 +71,7 @@ async def init_db(
         autoflush=False,
     )
 
+    # AGENT_DB_SCHEMA is a trusted constant ("agent_server"), not user input.
     async with _engine.begin() as conn:
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENT_DB_SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)

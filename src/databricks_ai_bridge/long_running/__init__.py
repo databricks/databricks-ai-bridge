@@ -8,6 +8,7 @@ Requires the ``[server]`` extra::
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
 from databricks_ai_bridge.long_running.models import Base, Message, Response
 from databricks_ai_bridge.long_running.repository import (
+    ResponseInfo,
     append_message,
     create_response,
     get_messages,
@@ -24,6 +25,7 @@ __all__ = [
     "LongRunningSettings",
     "Message",
     "Response",
+    "ResponseInfo",
     "append_message",
     "create_response",
     "dispose_db",

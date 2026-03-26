@@ -99,8 +99,9 @@ def _sse_event(event_type: str, data: dict[str, Any] | str) -> str:
 class LongRunningAgentServer(AgentServer):
     """AgentServer subclass adding background mode and retrieve endpoints.
 
+    Only compatible with ``ResponsesAgent`` mode.
+
     Args:
-        agent_type: The agent type string (e.g. "ResponsesAgent").
         enable_chat_proxy: Whether to enable the chat proxy endpoint.
         db_instance_name: Lakebase provisioned instance name.
         db_project: Lakebase autoscaling project.
@@ -111,9 +112,11 @@ class LongRunningAgentServer(AgentServer):
         cleanup_timeout_seconds: Timeout for DB cleanup after task failure.
     """
 
+    _SUPPORTED_AGENT_TYPE = "ResponsesAgent"
+
     def __init__(
         self,
-        agent_type,
+        agent_type=_SUPPORTED_AGENT_TYPE,
         *,
         enable_chat_proxy=False,
         # DB config
@@ -126,6 +129,11 @@ class LongRunningAgentServer(AgentServer):
         db_statement_timeout_ms: int = 5000,
         cleanup_timeout_seconds: float = 7.0,
     ):
+        if agent_type != self._SUPPORTED_AGENT_TYPE:
+            raise ValueError(
+                f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
+                f"got '{agent_type}'"
+            )
         self._settings = LongRunningSettings(
             task_timeout_seconds=task_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
@@ -149,19 +157,18 @@ class LongRunningAgentServer(AgentServer):
             logger.warning("Database not configured. Background mode disabled.")
             return
 
-        # Auto-register DB lifecycle events
-        @self.app.on_event("startup")
-        async def _startup_db():
+        @asynccontextmanager
+        async def _db_lifespan(app):
             await init_db(
                 instance_name=self._db_instance_name,
                 project=self._db_project,
                 branch=self._db_branch,
                 db_statement_timeout_ms=self._settings.db_statement_timeout_ms,
             )
-
-        @self.app.on_event("shutdown")
-        async def _shutdown_db():
+            yield
             await dispose_db()
+
+        self.app.router.lifespan_context = _db_lifespan
 
         @self.app.get("/responses/{response_id}")
         async def retrieve_endpoint(
@@ -362,11 +369,8 @@ class LongRunningAgentServer(AgentServer):
                 seq += 1
                 state["seq"] = seq
 
-            if self.agent_type == "ResponsesAgent":
-                span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
-                span.set_outputs(ResponsesAgent.responses_agent_output_reducer(all_chunks))
-            else:
-                span.set_outputs(all_chunks)
+            span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
+            span.set_outputs(ResponsesAgent.responses_agent_output_reducer(all_chunks))
 
             if return_trace_id:
                 await append_message(
@@ -415,8 +419,7 @@ class LongRunningAgentServer(AgentServer):
                 result = invoke_fn(request_data)
 
             result = self.validator.validate_and_convert_result(result)
-            if self.agent_type == "ResponsesAgent":
-                span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
+            span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
             span.set_outputs(result)
 
         output = result.get("output", [])
@@ -556,7 +559,7 @@ class LongRunningAgentServer(AgentServer):
 
             for seq, _, evt in messages:
                 if evt is not None:
-                    evt["sequence_number"] = seq
+                    evt = {**evt, "sequence_number": seq}
                     event_type = evt.get("type", "message")
                     logger.debug(
                         "SSE event",

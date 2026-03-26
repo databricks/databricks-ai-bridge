@@ -33,19 +33,6 @@ def mock_session():
 def _patch_get_async_session(mock_session):
     from contextlib import asynccontextmanager
 
-    @asynccontextmanager
-    async def _fake_session():
-        yield mock_session
-
-    with patch(
-        "databricks_ai_bridge.long_running.repository.get_async_session",
-        return_value=_fake_session(),
-    ):
-        # We need to re-patch per call since context manager is consumed once
-        # Use side_effect to return a fresh CM each time
-        pass
-
-    # Instead, patch at module level with a callable that returns a new CM each time
     def _make_session():
         @asynccontextmanager
         async def _cm():

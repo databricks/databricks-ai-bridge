@@ -31,6 +31,7 @@ server = [
   "fastapi>=0.129.0",
   "mlflow>=3.10.0",
   "pydantic-settings>=2.0",
+  "uvicorn>=0.20.0",
 ]
 
 [dependency-groups]

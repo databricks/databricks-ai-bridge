@@ -1,7 +1,7 @@
 """Async repository for responses and messages."""
 
 import json
-from typing import Any
+from typing import Any, NamedTuple
 
 try:
     from sqlalchemy import select
@@ -83,14 +83,18 @@ async def get_messages(
         return out
 
 
-async def get_response(response_id: str) -> tuple[str, str, float, str | None] | None:
-    """Fetch response metadata.
+class ResponseInfo(NamedTuple):
+    response_id: str
+    status: str
+    created_at: float
+    trace_id: str | None
 
-    Returns (response_id, status, created_at, trace_id) or None if not found.
-    """
+
+async def get_response(response_id: str) -> ResponseInfo | None:
+    """Fetch response metadata, or None if not found."""
     async with get_async_session() as session:
         result = await session.execute(select(Response).where(Response.response_id == response_id))
         row = result.scalar_one_or_none()
         if row:
-            return (row.response_id, row.status, row.created_at, row.trace_id)
+            return ResponseInfo(row.response_id, row.status, row.created_at, row.trace_id)
         return None

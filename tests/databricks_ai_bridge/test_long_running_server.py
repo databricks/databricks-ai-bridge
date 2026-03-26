@@ -82,6 +82,26 @@ class TestTransformStreamEvent:
         assert result["type"] == "response.created"
 
 
+class TestAgentTypeValidation:
+    def test_rejects_non_responses_agent(self):
+        with pytest.raises(ValueError, match="only supports 'ResponsesAgent'"):
+            LongRunningAgentServer("ChatAgent")
+
+    def test_accepts_responses_agent(self):
+        with patch(
+            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
+        ):
+            server = LongRunningAgentServer("ResponsesAgent")
+        assert server.agent_type == "ResponsesAgent"
+
+    def test_default_agent_type(self):
+        with patch(
+            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
+        ):
+            server = LongRunningAgentServer()
+        assert server.agent_type == "ResponsesAgent"
+
+
 class TestRouteRegistration:
     def test_routes_without_db(self):
         with patch(
@@ -98,10 +118,6 @@ class TestRouteRegistration:
     def test_routes_with_db(self):
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=True
-        ), patch(
-            "databricks_ai_bridge.long_running.server.init_db", new_callable=AsyncMock
-        ), patch(
-            "databricks_ai_bridge.long_running.server.dispose_db", new_callable=AsyncMock
         ):
             server = LongRunningAgentServer("ResponsesAgent")
 
