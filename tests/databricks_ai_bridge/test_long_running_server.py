@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 pytest.importorskip("fastapi")
 
 from databricks_ai_bridge.long_running.server import (
-    BACKGROUND_KEY,
     LongRunningAgentServer,
     _deferred_mark_failed,
     _sse_event,
@@ -191,7 +189,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
             new_callable=AsyncMock,
-            return_value=("resp_123", "completed", time.time(), "trace_abc"),
+            return_value=("resp_123", "completed", datetime.now(timezone.utc), "trace_abc"),
         ), patch(
             "databricks_ai_bridge.long_running.server.get_messages",
             new_callable=AsyncMock,
@@ -216,7 +214,9 @@ class TestRetrieveRequest:
                 "ResponsesAgent", task_timeout_seconds=10.0
             )
 
-        old_time = time.time() - 100  # well past timeout
+        from datetime import timedelta
+
+        old_time = datetime.now(timezone.utc) - timedelta(seconds=100)  # well past timeout
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
             new_callable=AsyncMock,
@@ -248,7 +248,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
             new_callable=AsyncMock,
-            return_value=("resp_123", "in_progress", time.time(), None),
+            return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
         ), patch(
             "databricks_ai_bridge.long_running.server.get_messages",
             new_callable=AsyncMock,
@@ -273,7 +273,7 @@ class TestStreamRetrieve:
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
             new_callable=AsyncMock,
-            return_value=("resp_123", "completed", time.time(), None),
+            return_value=("resp_123", "completed", datetime.now(timezone.utc), None),
         ), patch(
             "databricks_ai_bridge.long_running.server.get_messages",
             new_callable=AsyncMock,
@@ -283,7 +283,7 @@ class TestStreamRetrieve:
             ],
         ):
             events = []
-            async for chunk in server._stream_retrieve("resp_123", starting_after=-1):
+            async for chunk in server._stream_retrieve("resp_123", starting_after=0):
                 events.append(chunk)
 
             # Should have 2 SSE events + [DONE]
@@ -304,7 +304,7 @@ class TestStreamRetrieve:
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
             new_callable=AsyncMock,
-            return_value=("resp_123", "failed", time.time(), None),
+            return_value=("resp_123", "failed", datetime.now(timezone.utc), None),
         ), patch(
             "databricks_ai_bridge.long_running.server.get_messages",
             new_callable=AsyncMock,
@@ -313,7 +313,7 @@ class TestStreamRetrieve:
             ],
         ):
             events = []
-            async for chunk in server._stream_retrieve("resp_123", starting_after=-1):
+            async for chunk in server._stream_retrieve("resp_123", starting_after=0):
                 events.append(chunk)
 
             assert len(events) == 1

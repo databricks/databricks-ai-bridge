@@ -8,18 +8,12 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
-try:
-    from fastapi import HTTPException, Query, Request
-    from fastapi.responses import StreamingResponse
-except ImportError as e:
-    raise ImportError(
-        "Long-running server requires databricks-ai-bridge[server]. "
-        "Please install with: pip install databricks-ai-bridge[server]"
-    ) from e
-
 import mlflow
+from fastapi import HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from mlflow.genai.agent_server import get_invoke_function, get_stream_function
 from mlflow.genai.agent_server.server import (
     RETURN_TRACE_HEADER,
@@ -33,7 +27,6 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.tracing.constant import SpanAttributeKey
 
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
-from databricks_ai_bridge.utils.annotations import experimental
 from databricks_ai_bridge.long_running.repository import (
     append_message,
     create_response,
@@ -43,6 +36,7 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_trace_id,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
+from databricks_ai_bridge.utils.annotations import experimental
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +90,14 @@ def _sse_event(event_type: str, data: dict[str, Any] | str) -> str:
     """Format an SSE event per Open Responses spec."""
     payload = data if isinstance(data, str) else json.dumps(data)
     return f"event: {event_type}\ndata: {payload}\n\n"
+
+
+def _age_seconds(created_at: datetime) -> float:
+    """Return the age of a timestamp in seconds."""
+    now = datetime.now(timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return (now - created_at).total_seconds()
 
 
 @experimental
@@ -177,7 +179,9 @@ class LongRunningAgentServer(AgentServer):
         async def retrieve_endpoint(
             response_id: str,
             stream: bool = Query(False, description="Stream results as SSE"),
-            starting_after: int = Query(0, ge=0, description="Resume from sequence number"),
+            starting_after: int = Query(
+                0, ge=0, description="Resume from sequence number (0 means fetch all)"
+            ),
         ):
             return await self._handle_retrieve_request(
                 response_id,
@@ -202,7 +206,9 @@ class LongRunningAgentServer(AgentServer):
         try:
             data = await request.json()
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {e!s}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid JSON in request body: {e!s}"
+            ) from None
 
         is_background = data.get(BACKGROUND_KEY, False)
         is_streaming = data.get(MLFLOW_STREAM_KEY, False)
@@ -217,7 +223,7 @@ class LongRunningAgentServer(AgentServer):
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid parameters for {self.agent_type}: {e}",
-            )
+            ) from None
 
         if is_background and is_db_configured():
             return await self._handle_background_request(
@@ -262,7 +268,7 @@ class LongRunningAgentServer(AgentServer):
             return await self._handle_retrieve_request(
                 response_id,
                 stream=True,
-                starting_after=-1,
+                starting_after=0,
             )
         else:
             asyncio.create_task(
@@ -460,7 +466,13 @@ class LongRunningAgentServer(AgentServer):
         stream: bool,
         starting_after: int,
     ) -> dict[str, Any] | StreamingResponse:
-        """Poll or stream messages from the database for a given response_id."""
+        """Poll or stream messages from the database for a given response_id.
+
+        Args:
+            starting_after: Sequence number to resume from. 0 means fetch all
+                messages (sequence numbers start at 0). Values > 0 fetch only
+                messages with sequence_number > starting_after.
+        """
         resp = await get_response(response_id)
         if resp is None:
             raise HTTPException(status_code=404, detail="Response not found")
@@ -469,7 +481,7 @@ class LongRunningAgentServer(AgentServer):
 
         if (
             status == "in_progress"
-            and (time.time() - created_at) > self._settings.task_timeout_seconds
+            and _age_seconds(created_at) > self._settings.task_timeout_seconds
         ):
             # Use conditional update so only one concurrent request performs the transition.
             updated = await update_response_status(
@@ -478,7 +490,10 @@ class LongRunningAgentServer(AgentServer):
             if updated:
                 logger.warning(
                     "Stale in_progress run detected, marking as failed",
-                    extra={"response_id": response_id, "age_s": time.time() - created_at},
+                    extra={
+                        "response_id": response_id,
+                        "age_s": _age_seconds(created_at),
+                    },
                 )
                 # TODO: sequence number computation here is racy under concurrent writers.
                 # Acceptable at current scale; for high-QPS use a DB-assigned sequence or
@@ -543,6 +558,12 @@ class LongRunningAgentServer(AgentServer):
         response_id: str,
         starting_after: int,
     ) -> AsyncGenerator[str, None]:
+        """Stream messages as SSE events from the database.
+
+        Args:
+            starting_after: Sequence number to resume from. 0 means fetch all
+                messages. Values > 0 fetch only messages after that sequence.
+        """
         poll_interval = self._settings.poll_interval_seconds
         last_seq = starting_after
         deadline = time.monotonic() + self._settings.task_timeout_seconds
@@ -572,8 +593,9 @@ class LongRunningAgentServer(AgentServer):
                 break
 
             _, status, _, _ = resp
-            # starting_after=0 and -1 both fetch all messages (seq starts at 0).
-            after_seq = last_seq if last_seq > 0 else -1
+            # starting_after=0 fetches all messages (sequence numbers start at 0).
+            # We use after_sequence=-1 for the DB query so that seq 0 is included.
+            after_seq = last_seq - 1 if last_seq == 0 else last_seq
             messages = await get_messages(response_id, after_sequence=after_seq)
 
             for seq, _, evt in messages:

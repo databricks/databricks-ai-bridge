@@ -1,23 +1,18 @@
 """Async repository for responses and messages."""
 
 import json
+from datetime import datetime
 from typing import Any, NamedTuple
 
-try:
-    from sqlalchemy import select, update
-except ImportError as e:
-    raise ImportError(
-        "Long-running server requires databricks-ai-bridge[server]. "
-        "Please install with: pip install databricks-ai-bridge[server]"
-    ) from e
+from sqlalchemy import select, update
 
-from databricks_ai_bridge.long_running.db import get_async_session
+from databricks_ai_bridge.long_running.db import session_scope
 from databricks_ai_bridge.long_running.models import Message, Response
 
 
 async def create_response(response_id: str, status: str) -> None:
     """Insert a new response."""
-    async with get_async_session() as session:
+    async with session_scope() as session:
         session.add(Response(response_id=response_id, status=status))
         await session.commit()
 
@@ -30,7 +25,7 @@ async def update_response_status(
     If *expected_current_status* is given the update only takes effect when the
     row's current status matches, avoiding concurrent-update races.
     """
-    async with get_async_session() as session:
+    async with session_scope() as session:
         stmt = (
             update(Response)
             .where(Response.response_id == response_id)
@@ -45,12 +40,14 @@ async def update_response_status(
 
 async def update_response_trace_id(response_id: str, trace_id: str) -> None:
     """Update response with trace_id (MLflow trace for observability)."""
-    async with get_async_session() as session:
-        result = await session.execute(select(Response).where(Response.response_id == response_id))
-        row = result.scalar_one_or_none()
-        if row:
-            row.trace_id = trace_id
-            await session.commit()
+    async with session_scope() as session:
+        stmt = (
+            update(Response)
+            .where(Response.response_id == response_id)
+            .values(trace_id=trace_id)
+        )
+        await session.execute(stmt)
+        await session.commit()
 
 
 async def append_message(
@@ -60,7 +57,7 @@ async def append_message(
     stream_event: dict[str, Any] | None = None,
 ) -> None:
     """Append a message (stream event) for a response."""
-    async with get_async_session() as session:
+    async with session_scope() as session:
         session.add(
             Message(
                 response_id=response_id,
@@ -80,7 +77,7 @@ async def get_messages(
 
     Returns list of (sequence_number, item, stream_event_dict).
     """
-    async with get_async_session() as session:
+    async with session_scope() as session:
         stmt = select(Message).where(Message.response_id == response_id)
         if after_sequence is not None:
             stmt = stmt.where(Message.sequence_number > after_sequence)
@@ -97,13 +94,13 @@ async def get_messages(
 class ResponseInfo(NamedTuple):
     response_id: str
     status: str
-    created_at: float
+    created_at: datetime
     trace_id: str | None
 
 
 async def get_response(response_id: str) -> ResponseInfo | None:
     """Fetch response metadata, or None if not found."""
-    async with get_async_session() as session:
+    async with session_scope() as session:
         result = await session.execute(select(Response).where(Response.response_id == response_id))
         row = result.scalar_one_or_none()
         if row:

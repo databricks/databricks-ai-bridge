@@ -4,14 +4,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-try:
-    from sqlalchemy import event, text
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-except ImportError as e:
-    raise ImportError(
-        "Long-running server requires databricks-ai-bridge[server]. "
-        "Please install with: pip install databricks-ai-bridge[server]"
-    ) from e
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from databricks_ai_bridge.lakebase import AsyncLakebaseSQLAlchemy
 from databricks_ai_bridge.long_running.models import AGENT_DB_SCHEMA, Base
@@ -98,7 +92,7 @@ async def dispose_db() -> None:
     _initialized = False
 
 
-def get_async_session():
+def session_scope():
     """Return an async context manager yielding a session from the pool."""
 
     @asynccontextmanager

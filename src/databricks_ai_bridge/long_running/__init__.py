@@ -5,7 +5,21 @@ Requires the ``[server]`` extra::
     pip install databricks-ai-bridge[server]
 """
 
-from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
+try:
+    import fastapi  # noqa: F401
+    import sqlalchemy  # noqa: F401
+except ImportError as e:
+    raise ImportError(
+        "Long-running server requires databricks-ai-bridge[server]. "
+        "Please install with: pip install databricks-ai-bridge[server]"
+    ) from e
+
+from databricks_ai_bridge.long_running.db import (
+    dispose_db,
+    init_db,
+    is_db_configured,
+    session_scope,
+)
 from databricks_ai_bridge.long_running.models import Base, Message, Response
 from databricks_ai_bridge.long_running.repository import (
     ResponseInfo,
@@ -33,6 +47,7 @@ __all__ = [
     "get_response",
     "init_db",
     "is_db_configured",
+    "session_scope",
     "update_response_status",
     "update_response_trace_id",
 ]

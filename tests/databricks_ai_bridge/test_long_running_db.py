@@ -41,7 +41,7 @@ def _patch_get_async_session(mock_session):
         return _cm()
 
     with patch(
-        "databricks_ai_bridge.long_running.repository.get_async_session",
+        "databricks_ai_bridge.long_running.repository.session_scope",
         side_effect=_make_session,
     ):
         yield
@@ -107,14 +107,12 @@ async def test_update_response_status_conditional_mismatch(mock_session):
 
 @pytest.mark.asyncio
 async def test_update_response_trace_id(mock_session):
-    row = MagicMock()
-    row.trace_id = None
     result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = row
+    result_mock.rowcount = 1
     mock_session.execute.return_value = result_mock
 
     await update_response_trace_id("resp_abc123", "trace_xyz")
-    assert row.trace_id == "trace_xyz"
+    mock_session.execute.assert_awaited_once()
     mock_session.commit.assert_awaited_once()
 
 
@@ -167,14 +165,21 @@ async def test_get_response(mock_session):
     row = MagicMock()
     row.response_id = "resp_abc123"
     row.status = "completed"
-    row.created_at = 1234567890.0
+    from datetime import datetime, timezone
+
+    row.created_at = datetime(2009, 2, 13, 23, 31, 30, tzinfo=timezone.utc)
     row.trace_id = "trace_xyz"
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = row
     mock_session.execute.return_value = result_mock
 
     result = await get_response("resp_abc123")
-    assert result == ("resp_abc123", "completed", 1234567890.0, "trace_xyz")
+    assert result == (
+        "resp_abc123",
+        "completed",
+        datetime(2009, 2, 13, 23, 31, 30, tzinfo=timezone.utc),
+        "trace_xyz",
+    )
 
 
 @pytest.mark.asyncio

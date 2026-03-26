@@ -1,15 +1,9 @@
 """SQLAlchemy models for long-running agent persistence."""
 
-import time
+from datetime import datetime
 
-try:
-    from sqlalchemy import Float, ForeignKey, Integer, Text
-    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-except ImportError as e:
-    raise ImportError(
-        "Long-running server requires databricks-ai-bridge[server]. "
-        "Please install with: pip install databricks-ai-bridge[server]"
-    ) from e
+from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Dedicated schema for agent tables (responses, messages)
 AGENT_DB_SCHEMA = "agent_server"
@@ -27,7 +21,9 @@ class Response(Base):
 
     response_id: Mapped[str] = mapped_column(Text, primary_key=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     messages = relationship("Message", back_populates="response", cascade="all, delete-orphan")
