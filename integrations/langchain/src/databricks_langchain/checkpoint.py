@@ -53,8 +53,7 @@ class CheckpointSaver(PostgresSaver):
         super().__init__(self._lakebase.pool)
 
     def __enter__(self):
-        """Enter context manager and create checkpoint tables."""
-        self.setup()
+        """Enter context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -101,9 +100,8 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         super().__init__(self._lakebase.pool)
 
     async def __aenter__(self):
-        """Enter async context manager, open the connection pool, and create checkpoint tables."""
+        """Enter async context manager and open the connection pool."""
         await self._lakebase.open()
-        await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

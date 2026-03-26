@@ -12,11 +12,6 @@ from databricks_ai_bridge import lakebase
 from databricks_langchain import AsyncCheckpointSaver, CheckpointSaver
 
 
-async def _async_noop():
-    """No-op coroutine used to mock async setup() in tests."""
-    pass
-
-
 class TestConnectionPool:
     def __init__(self, connection_value="conn"):
         self.connection_value = connection_value
@@ -139,7 +134,6 @@ async def test_async_checkpoint_saver_configures_lakebase(monkeypatch):
 async def test_async_checkpoint_saver_context_manager(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -161,7 +155,6 @@ async def test_async_checkpoint_saver_context_manager(monkeypatch):
 async def test_async_checkpoint_saver_connection(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = MagicMock()
     workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
@@ -237,7 +230,6 @@ async def test_async_checkpoint_saver_autoscaling_configures_lakebase(monkeypatc
 async def test_async_checkpoint_saver_autoscaling_context_manager(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-    monkeypatch.setattr(AsyncCheckpointSaver, "setup", lambda self: _async_noop())
 
     workspace = _create_autoscaling_workspace()
 
