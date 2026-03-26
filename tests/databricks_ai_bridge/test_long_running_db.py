@@ -60,25 +60,49 @@ async def test_create_response(mock_session):
 
 @pytest.mark.asyncio
 async def test_update_response_status(mock_session):
-    row = MagicMock()
-    row.status = "in_progress"
     result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = row
+    result_mock.rowcount = 1
     mock_session.execute.return_value = result_mock
 
-    await update_response_status("resp_abc123", "completed")
-    assert row.status == "completed"
+    updated = await update_response_status("resp_abc123", "completed")
+    assert updated is True
     mock_session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_update_response_status_not_found(mock_session):
     result_mock = MagicMock()
-    result_mock.scalar_one_or_none.return_value = None
+    result_mock.rowcount = 0
     mock_session.execute.return_value = result_mock
 
-    await update_response_status("resp_missing", "completed")
-    mock_session.commit.assert_not_awaited()
+    updated = await update_response_status("resp_missing", "completed")
+    assert updated is False
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_response_status_conditional(mock_session):
+    result_mock = MagicMock()
+    result_mock.rowcount = 1
+    mock_session.execute.return_value = result_mock
+
+    updated = await update_response_status(
+        "resp_abc123", "failed", expected_current_status="in_progress"
+    )
+    assert updated is True
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_response_status_conditional_mismatch(mock_session):
+    result_mock = MagicMock()
+    result_mock.rowcount = 0
+    mock_session.execute.return_value = result_mock
+
+    updated = await update_response_status(
+        "resp_abc123", "failed", expected_current_status="in_progress"
+    )
+    assert updated is False
 
 
 @pytest.mark.asyncio

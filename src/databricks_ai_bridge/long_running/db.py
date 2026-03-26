@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _engine = None
 _lakebase: AsyncLakebaseSQLAlchemy | None = None
+_initialized = False
 
 
 def is_db_configured() -> bool:
@@ -40,8 +41,12 @@ async def init_db(
     max_overflow: int = 0,
     db_statement_timeout_ms: int = 5000,
 ) -> None:
-    """Create engine, schema, and tables. Call on app startup."""
-    global _session_factory, _engine, _lakebase
+    """Create engine, schema, and tables. Call once on app startup."""
+    global _session_factory, _engine, _lakebase, _initialized
+
+    if _initialized:
+        logger.debug("[DB] Already initialized, skipping")
+        return
 
     lakebase_kwargs: dict = {
         "pool_size": pool_size,
@@ -76,12 +81,13 @@ async def init_db(
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENT_DB_SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)
 
+    _initialized = True
     logger.info("[DB] Engine and schema ready")
 
 
 async def dispose_db() -> None:
     """Dispose engine and clear registration. Call on app shutdown."""
-    global _session_factory, _engine, _lakebase
+    global _session_factory, _engine, _lakebase, _initialized
 
     if _engine is not None:
         await _engine.dispose()
@@ -89,6 +95,7 @@ async def dispose_db() -> None:
     _session_factory = None
     _engine = None
     _lakebase = None
+    _initialized = False
 
 
 def get_async_session():

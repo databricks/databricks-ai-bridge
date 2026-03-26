@@ -11,11 +11,10 @@ class LongRunningSettings:
     construction time — environment-variable reading is the caller's concern.
     """
 
-    task_timeout_seconds: float = 1800.0
+    task_timeout_seconds: float = 3600.0
     poll_interval_seconds: float = 1.0
     db_statement_timeout_ms: int = 5000
     cleanup_timeout_seconds: float = 7.0
-    log_level: str = "INFO"
 
     def __post_init__(self) -> None:
         if self.task_timeout_seconds <= 0:

@@ -61,6 +61,9 @@ async def _deferred_mark_failed(
     try:
         await asyncio.sleep(delay)
 
+        # TODO: sequence number computation is racy under concurrent writers.
+        # Acceptable at current scale; for high-QPS use a DB-assigned sequence
+        # or SELECT FOR UPDATE on the response row to serialise writers.
         async with asyncio.timeout(delay):
             existing = await get_messages(response_id, after_sequence=None)
             next_seq = max((seq for seq, _, _ in existing), default=-1) + 1
@@ -124,7 +127,7 @@ class LongRunningAgentServer(AgentServer):
         db_project: str | None = None,
         db_branch: str | None = None,
         # Settings (override defaults)
-        task_timeout_seconds: float = 1800.0,
+        task_timeout_seconds: float = 3600.0,
         poll_interval_seconds: float = 1.0,
         db_statement_timeout_ms: int = 5000,
         cleanup_timeout_seconds: float = 7.0,
@@ -187,6 +190,10 @@ class LongRunningAgentServer(AgentServer):
     ) -> dict[str, Any] | StreamingResponse:
         """Handle POST /responses and POST /invocations.
 
+        Intentionally overrides the parent implementation to add background
+        mode support. Non-background requests delegate to the same
+        ``_handle_stream_request`` / ``_handle_invoke_request`` helpers.
+
         When background=true and DB is configured, returns a response_id
         immediately and starts the agent loop in the background.
         """
@@ -197,8 +204,9 @@ class LongRunningAgentServer(AgentServer):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {e!s}")
 
-        is_background = data.pop(BACKGROUND_KEY, False)
-        is_streaming = data.pop(MLFLOW_STREAM_KEY, False)
+        is_background = data.get(BACKGROUND_KEY, False)
+        is_streaming = data.get(MLFLOW_STREAM_KEY, False)
+        data = {k: v for k, v in data.items() if k not in (BACKGROUND_KEY, MLFLOW_STREAM_KEY)}
         return_trace_id = (
             (get_request_headers().get(RETURN_TRACE_HEADER) or "").lower() == "true"
         )
@@ -284,6 +292,7 @@ class LongRunningAgentServer(AgentServer):
         except Exception as exc:
             logger.exception("Task %s failed: %s", response_id, exc)
             try:
+                # TODO: sequence number computation is racy (see _deferred_mark_failed).
                 async with asyncio.timeout(self._settings.cleanup_timeout_seconds):
                     existing = await get_messages(response_id, after_sequence=None)
                     next_seq = max((seq for seq, _, _ in existing), default=-1) + 1
@@ -461,26 +470,33 @@ class LongRunningAgentServer(AgentServer):
             status == "in_progress"
             and (time.time() - created_at) > self._settings.task_timeout_seconds
         ):
-            logger.warning(
-                "Stale in_progress run detected, marking as failed",
-                extra={"response_id": response_id, "age_s": time.time() - created_at},
+            # Use conditional update so only one concurrent request performs the transition.
+            updated = await update_response_status(
+                response_id, "failed", expected_current_status="in_progress"
             )
-            existing = await get_messages(response_id, after_sequence=None)
-            next_seq = max((seq for seq, _, _ in existing), default=-1) + 1
-            await append_message(
-                response_id,
-                next_seq,
-                item=None,
-                stream_event={
-                    "type": "error",
-                    "error": {
-                        "message": "Task timed out",
-                        "type": "server_error",
-                        "code": "task_timeout",
+            if updated:
+                logger.warning(
+                    "Stale in_progress run detected, marking as failed",
+                    extra={"response_id": response_id, "age_s": time.time() - created_at},
+                )
+                # TODO: sequence number computation here is racy under concurrent writers.
+                # Acceptable at current scale; for high-QPS use a DB-assigned sequence or
+                # SELECT FOR UPDATE on the response row to serialise writers.
+                existing = await get_messages(response_id, after_sequence=None)
+                next_seq = max((seq for seq, _, _ in existing), default=-1) + 1
+                await append_message(
+                    response_id,
+                    next_seq,
+                    item=None,
+                    stream_event={
+                        "type": "error",
+                        "error": {
+                            "message": "Task timed out",
+                            "type": "server_error",
+                            "code": "task_timeout",
+                        },
                     },
-                },
-            )
-            await update_response_status(response_id, "failed")
+                )
             status = "failed"
 
         logger.debug(
@@ -554,6 +570,7 @@ class LongRunningAgentServer(AgentServer):
                 break
 
             _, status, _, _ = resp
+            # starting_after=0 and -1 both fetch all messages (seq starts at 0).
             after_seq = last_seq if last_seq > 0 else -1
             messages = await get_messages(response_id, after_sequence=after_seq)
 

@@ -4,7 +4,7 @@ import json
 from typing import Any, NamedTuple
 
 try:
-    from sqlalchemy import select
+    from sqlalchemy import select, update
 except ImportError as e:
     raise ImportError(
         "Long-running server requires databricks-ai-bridge[server]. "
@@ -22,14 +22,25 @@ async def create_response(response_id: str, status: str) -> None:
         await session.commit()
 
 
-async def update_response_status(response_id: str, status: str) -> None:
-    """Update response status."""
+async def update_response_status(
+    response_id: str, status: str, *, expected_current_status: str | None = None
+) -> bool:
+    """Update response status. Returns True if a row was updated.
+
+    If *expected_current_status* is given the update only takes effect when the
+    row's current status matches, avoiding concurrent-update races.
+    """
     async with get_async_session() as session:
-        result = await session.execute(select(Response).where(Response.response_id == response_id))
-        row = result.scalar_one_or_none()
-        if row:
-            row.status = status
-            await session.commit()
+        stmt = (
+            update(Response)
+            .where(Response.response_id == response_id)
+        )
+        if expected_current_status is not None:
+            stmt = stmt.where(Response.status == expected_current_status)
+        stmt = stmt.values(status=status)
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.rowcount > 0
 
 
 async def update_response_trace_id(response_id: str, trace_id: str) -> None:

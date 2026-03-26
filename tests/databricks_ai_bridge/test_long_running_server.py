@@ -39,7 +39,7 @@ class TestSSEEvent:
 class TestLongRunningSettings:
     def test_defaults(self):
         s = LongRunningSettings()
-        assert s.task_timeout_seconds == 1800.0
+        assert s.task_timeout_seconds == 3600.0
         assert s.poll_interval_seconds == 1.0
         assert s.db_statement_timeout_ms == 5000
         assert s.cleanup_timeout_seconds == 7.0
