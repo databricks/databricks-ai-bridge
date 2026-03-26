@@ -39,10 +39,7 @@ ty check
 
 ## Integration Tests
 
-Integration tests hit live Databricks APIs (no mocks) and cover 6 areas: Vector Search, Genie, MCP, FMAPI Tool Calling, Lakebase, and OBO Credentials.
-
-- **Documentation:** [`tests/README.md`](tests/README.md) -- what tests exist, their coverage, how to run them locally, and the motivation behind each area
-- **Claude Code skill:** [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) -- principles and patterns for writing new integration tests (trigger with `/integration-tests`)
+Integration tests hit live Databricks APIs (no mocks). See [`tests/README.md`](tests/README.md) for what tests exist, their coverage, and how to run them. See [`.claude/skills/integration-tests.md`](.claude/skills/integration-tests.md) for principles and patterns when writing new tests (trigger with `/integration-tests`).
 
 Tests are gated by environment variables (e.g., `RUN_VS_INTEGRATION_TESTS=1`) so they don't run during normal development. CI runs nightly in a private runner repo that injects workspace credentials.
 
@@ -58,7 +55,11 @@ cd /tmp/runner-repo
 git checkout -b test/<your-bridge-feature-branch>
 
 # Point the workflow at the PR branch instead of main
-sed -i '' 's/ref: main/ref: <your-bridge-feature-branch>/g' .github/workflows/integration-tests.yml
+uv run python -c "
+import pathlib
+f = pathlib.Path('.github/workflows/integration-tests.yml')
+f.write_text(f.read_text().replace('ref: main', 'ref: <your-bridge-feature-branch>'))
+"
 git add . && git commit -m "Point to <your-bridge-feature-branch> for testing"
 git push -u origin test/<your-bridge-feature-branch>
 

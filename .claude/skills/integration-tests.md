@@ -26,38 +26,14 @@ If given a PR, read the diff and review comments first.
 
 ## Repository Structure
 
-```
-tests/integration_tests/           # Core bridge tests
-  conftest.py                      # Shared fixtures (workspace_client with auth conversion)
-  vector_search/
-    conftest.py                    # VS-specific fixtures, skip gate (RUN_VS_INTEGRATION_TESTS)
-    test_bridge_utilities.py       # IndexDetails, parse_vector_search_response
-    test_vectorsearch_behavior.py  # Cursory VS behavior (1-2 calls per index type)
-  genie/
-    conftest.py                    # Genie fixtures, skip gate (RUN_GENIE_INTEGRATION_TESTS)
-    test_genie_behavior.py         # ask_question, conversation continuity, pandas mode
-    test_genie_bridge.py           # _parse_query_result parsing
-  lakebase/
-    test_lakebase_integration.py   # LakebaseClient (provisioned + autoscaling, sync+async)
+Integration tests are spread across multiple packages. See [`tests/README.md`](../../tests/README.md) for a full directory listing and coverage details. The key locations are:
 
-integrations/langchain/tests/integration_tests/   # LangChain wrapper tests
-  test_langchain_vectorsearch.py
-  test_langchain_genie.py
-  test_langchain_lakebase.py       # Store + Checkpoint (provisioned + autoscaling)
-  test_langchain_mcp.py
-  test_fmapi_tool_calling.py
+- `tests/integration_tests/` — Core bridge tests (VS, Genie, Lakebase, OBO)
+- `integrations/langchain/tests/integration_tests/` — LangChain wrapper tests
+- `integrations/openai/tests/integration_tests/` — OpenAI wrapper tests
+- `databricks_mcp/tests/integration_tests/` — MCP core tests
 
-integrations/openai/tests/integration_tests/      # OpenAI wrapper tests
-  test_openai_vectorsearch.py
-  test_openai_mcp.py
-  test_memory_session.py           # AsyncDatabricksSession (provisioned + autoscaling)
-  test_fmapi_tool_calling.py
-
-databricks_mcp/tests/integration_tests/           # MCP core tests
-  conftest.py
-  test_mcp_core.py
-  test_mcp_resources.py
-```
+Before adding tests, explore the relevant directory to find existing files covering the same feature area.
 
 ## Test Infrastructure
 
@@ -112,8 +88,6 @@ Do NOT test:
 - That the MCP protocol itself works
 - Import path existence (covered by e2e tests that use those imports)
 - SDK method signatures (covered by e2e tests)
-
-> "We generally trust that vector search behavior is semantically correct and we don't need to test that for them. We can have very cursory/rough tests here, maybe just a call or two for each type of index. We can focus more on making sure that our integration is passing the right things through." -- Ann (PR #317)
 
 ### 2. Keep It Simple, Minimize API Calls
 - Use `scope="session"` fixtures for expensive operations (creating clients, running queries)
@@ -232,7 +206,7 @@ def cached_tools_list(mcp_client):
 - Autoscaling lakebase tests go in the same file as provisioned lakebase tests (`test_langchain_lakebase.py`, `test_memory_session.py`), using per-class or per-test skip decorators to gate on the relevant env vars.
 - New connection modes, parameter variations, or feature extensions belong in the existing feature file, not a separate file.
 
-Only create a new test file when there is genuinely no existing file that covers the feature area (e.g., an entirely new integration like MCP or Genie).
+Only create a new test file when there is genuinely no existing file that covers the feature area (e.g., an entirely new integration that was added).
 
 ## Code Style
 
@@ -312,6 +286,11 @@ Use `# ===...===` blocks between test class groups:
 7. **No hardcoded workspace URLs or tokens**: Use env vars and the WorkspaceClient auto-detection.
 8. **No top-level heavy imports**: Keep test collection fast with lazy imports.
 9. **No unnecessary new test files**: Add tests to existing files covering the same feature area.
+10. **Use `pytest.importorskip` for extra dependencies**: If tests use classes from optional package extras (e.g., `databricks-langchain[memory]`), guard imports with `pytest.importorskip` so tests are skipped rather than failing when the extra isn't installed:
+    ```python
+    pytest.importorskip("psycopg")
+    pytest.importorskip("langgraph")
+    ```
 
 ## Decision Framework: When to Add Tests
 
@@ -378,7 +357,7 @@ Create a feature branch for the new tests. Keep test changes separate from featu
 If you have workspace access configured locally, run just the new tests:
 ```bash
 cd <package_dir>  # e.g., integrations/langchain
-RUN_<FEATURE>_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/test_<file>.py -v -x
+RUN_<FEATURE>_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/test_<file>.py -v -x
 ```
 
 ### 6. Trigger CI from your PR branch
@@ -395,7 +374,11 @@ cd /tmp/runner-repo
 git checkout -b test/<your-bridge-feature-branch>
 
 # Update the ref in the workflow (change ref: main -> ref: <your-bridge-feature-branch>)
-sed -i '' 's/ref: main/ref: <your-bridge-feature-branch>/g' .github/workflows/integration-tests.yml
+uv run python -c "
+import pathlib
+f = pathlib.Path('.github/workflows/integration-tests.yml')
+f.write_text(f.read_text().replace('ref: main', 'ref: <your-bridge-feature-branch>'))
+"
 git add . && git commit -m "Point to <your-bridge-feature-branch> for testing"
 git push -u origin test/<your-bridge-feature-branch>
 
@@ -410,7 +393,7 @@ gh run watch
 git push origin --delete test/<your-bridge-feature-branch>
 ```
 
-**Via GitHub UI:**
+**Via GitHub UI (for users who prefer to trigger CI manually):**
 1. Push a branch to the runner repo with `ref: main` changed to `ref: <your-bridge-feature-branch>` in `.github/workflows/integration-tests.yml`
 2. Go to the runner repo's Actions tab
 3. Select "Databricks AI Bridge Integration Tests"

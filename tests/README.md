@@ -160,7 +160,7 @@ Every test body is wrapped in a retry (3 attempts) to absorb transient FMAPI err
 
 **What the bridge provides:** A core layer with `LakebasePool`/`AsyncLakebasePool` (psycopg connection pools with OAuth token rotation), `LakebaseClient` (SQL execution + PostgreSQL role/permission management via the `databricks_auth` extension), and `AsyncLakebaseSQLAlchemy` (SQLAlchemy async engine with token injection). LangChain wraps these as `DatabricksStore`/`AsyncDatabricksStore` (LangGraph `BaseStore` backed by `PostgresStore`) and `CheckpointSaver`/`AsyncCheckpointSaver` (LangGraph `PostgresSaver`). OpenAI wraps as `AsyncDatabricksSession` (OpenAI Agents SDK `SQLAlchemySession` with engine caching).
 
-**Two deployment modes:** Provisioned (dedicated instance via `instance_name`) and autoscaling (serverless via `project`+`branch` or `autoscaling_endpoint`). Host resolution and token minting use different SDK APIs for each mode. The tests cover both.
+**Two deployment modes:** Provisioned (specified via `instance_name`) and autoscaling (specified via `project`+`branch` or `autoscaling_endpoint`). Host resolution and token minting use different SDK APIs for each mode. The tests cover both.
 
 **Test files:**
 
@@ -241,27 +241,27 @@ export DATABRICKS_CLIENT_SECRET=your-sp-secret
 ```bash
 # Vector Search
 cd /path/to/databricks-ai-bridge
-RUN_VS_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/vector_search/ -v
+RUN_VS_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/vector_search/ -v
 
 # Genie (needs GENIE_SPACE_ID)
 RUN_GENIE_INTEGRATION_TESTS=1 GENIE_SPACE_ID=your-space-id \
-  python -m pytest tests/integration_tests/genie/ -v
+  uv run python -m pytest tests/integration_tests/genie/ -v
 
 # MCP
-RUN_MCP_INTEGRATION_TESTS=1 python -m pytest databricks_mcp/tests/integration_tests/ -v
+RUN_MCP_INTEGRATION_TESTS=1 uv run python -m pytest databricks_mcp/tests/integration_tests/ -v
 
 # Lakebase (needs LAKEBASE_INSTANCE_NAME or autoscaling vars)
 LAKEBASE_INTEGRATION_TESTS=1 LAKEBASE_INSTANCE_NAME=your-instance \
-  python -m pytest tests/integration_tests/lakebase/ -v
+  uv run python -m pytest tests/integration_tests/lakebase/ -v
 
 # FMAPI tool calling
 RUN_FMAPI_TOOL_CALLING_TESTS=1 \
-  python -m pytest integrations/openai/tests/integration_tests/test_fmapi_tool_calling.py -v
+  uv run python -m pytest integrations/openai/tests/integration_tests/test_fmapi_tool_calling.py -v
 
 # OBO (needs all OBO env vars + pre-deployed agents)
 RUN_OBO_INTEGRATION_TESTS=1 OBO_TEST_SERVING_ENDPOINT=your-endpoint \
   OBO_TEST_APP_NAME=your-app OBO_TEST_CLIENT_ID=sp-b-id OBO_TEST_CLIENT_SECRET=sp-b-secret \
-  python -m pytest tests/integration_tests/obo/ -v
+  uv run python -m pytest tests/integration_tests/obo/ -v
 ```
 
 ### Running LangChain/OpenAI Wrapper Tests
@@ -271,11 +271,11 @@ These live in their respective integration directories and use the same gate var
 ```bash
 # LangChain VS tests
 cd integrations/langchain
-RUN_VS_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/test_langchain_vectorsearch.py -v
+RUN_VS_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/test_langchain_vectorsearch.py -v
 
 # OpenAI MCP tests
 cd integrations/openai
-RUN_MCP_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/test_openai_mcp.py -v
+RUN_MCP_INTEGRATION_TESTS=1 uv run python -m pytest tests/integration_tests/test_openai_mcp.py -v
 ```
 
 ### Environment Variables Reference
@@ -305,6 +305,8 @@ RUN_MCP_INTEGRATION_TESTS=1 python -m pytest tests/integration_tests/test_openai
 ---
 
 ## Directory Structure
+
+> **IMPORTANT:** If you add a new integration test file, please update this list to keep it current.
 
 ```
 tests/integration_tests/
