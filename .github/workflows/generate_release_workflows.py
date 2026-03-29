@@ -72,9 +72,9 @@ jobs:
       name: ${{{{ inputs.production && 'pypi' || 'testpypi' }}}}
       url: ${{{{ inputs.production && 'https://pypi.org/p/{pkg.name}' || 'https://test.pypi.org/p/{pkg.name}' }}}}
 {defaults_section}    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
 
@@ -111,12 +111,12 @@ jobs:
         run: python -m build
 
       - name: Store the distribution packages
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
           name: dist-{pkg.name}
           path: {dist_path}
 
-      - uses: ncipollo/release-action@v1
+      - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
         if: inputs.production
         with:
           artifacts: "{dist_path}*.whl,{dist_path}*.tar.gz"
@@ -125,11 +125,11 @@ jobs:
 
       - name: Publish to PyPI
         if: inputs.production
-        uses: pypa/gh-action-pypi-publish@release/v1{packages_dir_pypi}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e{packages_dir_pypi}
 
       - name: Publish to Test PyPI
         if: github.event_name == 'push' || !inputs.production
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
           repository-url: https://test.pypi.org/legacy/{packages_dir_testpypi}
 
