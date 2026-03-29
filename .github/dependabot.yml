@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Keep GitHub Actions SHA-pinned references up to date automatically
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+
+  # Keep npm dependencies up to date for ai-sdk-provider
+  - package-ecosystem: "npm"
+    directory: "/integrations/ai-sdk-provider"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+
+  # Keep npm dependencies up to date for langchainjs
+  - package-ecosystem: "npm"
+    directory: "/integrations/langchainjs"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"

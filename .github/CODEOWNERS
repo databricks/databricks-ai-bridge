@@ -1,0 +1,3 @@
+# Require security review for any workflow changes.
+# Prevents maintainers from modifying release pipelines without a designated reviewer.
+/.github/workflows/ @databricks/security-team

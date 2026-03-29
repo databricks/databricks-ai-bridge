@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 env:
   UV_VERSION: "0.9.11"
   PYTHON_VERSION: "3.12"

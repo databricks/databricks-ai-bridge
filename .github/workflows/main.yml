@@ -12,6 +12,9 @@ on:
       - ready_for_review
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   UV_VERSION: "0.9.11"
 
