@@ -30,11 +30,8 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Update npm
-        run: npm install -g npm@latest
-
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Get package version
         id: get-version
@@ -90,9 +87,10 @@ jobs:
       - name: Smoke test (next tag)
         if: ${{ !inputs.production }}
         run: |
+          PKG_VERSION=${{ steps.get-version.outputs.version }}
           mkdir -p /tmp/smoke-test
           cd /tmp/smoke-test
-          npm install @databricks/langchainjs@next
+          npm install @databricks/langchainjs@$PKG_VERSION
           INSTALLED_VERSION=$(node -p "require('./node_modules/@databricks/langchainjs/package.json').version")
           echo "Installed @next version: $INSTALLED_VERSION"
           echo "Smoke test passed!"
