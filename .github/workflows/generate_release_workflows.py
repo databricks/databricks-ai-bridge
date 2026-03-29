@@ -79,7 +79,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build==1.2.2
 
       - name: Verify version matches tag
         id: verify-version
