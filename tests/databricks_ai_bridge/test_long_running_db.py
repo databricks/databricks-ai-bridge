@@ -1,14 +1,17 @@
-"""Tests for the long_running repository functions."""
+"""Tests for the long_running repository functions and db lifecycle."""
 
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 pytest.importorskip("sqlalchemy")
 
+import databricks_ai_bridge.long_running.db as db_mod
+from databricks_ai_bridge.long_running.db import dispose_db, init_db, session_scope
 from databricks_ai_bridge.long_running.models import Message, Response
 from databricks_ai_bridge.long_running.repository import (
     append_message,
@@ -190,3 +193,153 @@ async def test_get_response_not_found(mock_session):
 
     result = await get_response("resp_missing")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# init_db / dispose_db / session_scope tests
+# ---------------------------------------------------------------------------
+
+DB_MODULE = "databricks_ai_bridge.long_running.db"
+
+
+@pytest.fixture
+def reset_db_globals():
+    """Reset db.py module globals after tests that call init_db."""
+    yield
+    db_mod._session_factory = None
+    db_mod._engine = None
+    db_mod._lakebase = None
+    db_mod._initialized = False
+
+
+def _mock_lakebase_engine():
+    """Return (mock_lakebase_cls, mock_conn) with engine wired up for init_db."""
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock()
+    mock_conn.run_sync = AsyncMock()
+
+    mock_engine = MagicMock()
+    mock_engine.sync_engine = MagicMock()
+
+    @asynccontextmanager
+    async def fake_begin():
+        yield mock_conn
+
+    mock_engine.begin = fake_begin
+
+    mock_lakebase = MagicMock()
+    mock_lakebase.engine = mock_engine
+
+    mock_cls = MagicMock(return_value=mock_lakebase)
+    return mock_cls, mock_conn
+
+
+class TestInitDb:
+    @pytest.mark.asyncio
+    async def test_with_autoscaling_endpoint(self, reset_db_globals):
+        mock_cls, _ = _mock_lakebase_engine()
+        with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
+            await init_db(autoscaling_endpoint="ep-abc")
+
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["autoscaling_endpoint"] == "ep-abc"
+        assert kwargs["pool_size"] == 10
+        assert kwargs["max_overflow"] == 0
+        assert kwargs["pool_pre_ping"] is True
+        assert "instance_name" not in kwargs
+        assert "project" not in kwargs
+        assert "branch" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_with_instance_name(self, reset_db_globals):
+        mock_cls, _ = _mock_lakebase_engine()
+        with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
+            await init_db(instance_name="my-instance")
+
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["instance_name"] == "my-instance"
+        assert "autoscaling_endpoint" not in kwargs
+        assert "project" not in kwargs
+        assert "branch" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_with_project_and_branch(self, reset_db_globals):
+        mock_cls, _ = _mock_lakebase_engine()
+        with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
+            await init_db(project="proj", branch="br")
+
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["project"] == "proj"
+        assert kwargs["branch"] == "br"
+        assert "instance_name" not in kwargs
+        assert "autoscaling_endpoint" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_creates_schema_and_tables(self, reset_db_globals):
+        mock_cls, mock_conn = _mock_lakebase_engine()
+        with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
+            await init_db(autoscaling_endpoint="ep")
+
+        mock_conn.execute.assert_awaited_once()
+        sql_arg = str(mock_conn.execute.call_args[0][0])
+        assert "CREATE SCHEMA IF NOT EXISTS" in sql_arg
+        mock_conn.run_sync.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_idempotent_skips_second_call(self, reset_db_globals):
+        mock_cls, _ = _mock_lakebase_engine()
+        with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
+            await init_db(autoscaling_endpoint="first")
+            await init_db(instance_name="second")
+
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["autoscaling_endpoint"] == "first"
+
+
+class TestDisposeDb:
+    @pytest.mark.asyncio
+    async def test_disposes_engine_and_resets_globals(self, monkeypatch):
+        mock_engine = AsyncMock()
+        mock_engine.dispose = AsyncMock()
+        monkeypatch.setattr(db_mod, "_engine", mock_engine)
+        monkeypatch.setattr(db_mod, "_session_factory", MagicMock())
+        monkeypatch.setattr(db_mod, "_lakebase", MagicMock())
+        monkeypatch.setattr(db_mod, "_initialized", True)
+
+        await dispose_db()
+
+        mock_engine.dispose.assert_awaited_once()
+        assert db_mod._session_factory is None
+        assert db_mod._engine is None
+        assert db_mod._lakebase is None
+        assert db_mod._initialized is False
+
+    @pytest.mark.asyncio
+    async def test_noop_when_not_initialized(self, monkeypatch):
+        monkeypatch.setattr(db_mod, "_engine", None)
+        monkeypatch.setattr(db_mod, "_session_factory", None)
+        monkeypatch.setattr(db_mod, "_lakebase", None)
+        monkeypatch.setattr(db_mod, "_initialized", False)
+
+        await dispose_db()  # should not raise
+
+
+class TestSessionScope:
+    @pytest.mark.asyncio
+    async def test_raises_when_not_initialized(self, monkeypatch):
+        monkeypatch.setattr(db_mod, "_session_factory", None)
+        with pytest.raises(RuntimeError, match="Database not initialized"):
+            async with session_scope():
+                pass
+
+    @pytest.mark.asyncio
+    async def test_yields_session_when_initialized(self, monkeypatch):
+        mock_session = AsyncMock()
+
+        @asynccontextmanager
+        async def fake_factory():
+            yield mock_session
+
+        monkeypatch.setattr(db_mod, "_session_factory", fake_factory)
+        async with session_scope() as session:
+            assert session is mock_session

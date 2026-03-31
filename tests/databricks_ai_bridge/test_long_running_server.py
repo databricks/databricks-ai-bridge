@@ -681,3 +681,89 @@ class TestIsDbConfigured:
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_ENDPOINT", "")
         assert is_db_configured() is False
+
+
+class TestConstructorParams:
+    def test_stores_db_autoscaling_endpoint(self):
+        server = _make_server(db_autoscaling_endpoint="ep-abc")
+        assert server._db_autoscaling_endpoint == "ep-abc"
+
+    def test_stores_all_db_params(self):
+        server = _make_server(
+            db_instance_name="inst",
+            db_autoscaling_endpoint="ep",
+            db_project="proj",
+            db_branch="br",
+        )
+        assert server._db_instance_name == "inst"
+        assert server._db_autoscaling_endpoint == "ep"
+        assert server._db_project == "proj"
+        assert server._db_branch == "br"
+
+    def test_db_params_default_to_none(self):
+        server = _make_server()
+        assert server._db_instance_name is None
+        assert server._db_autoscaling_endpoint is None
+        assert server._db_project is None
+        assert server._db_branch is None
+
+
+class TestLifespanPlumbing:
+    @pytest.mark.asyncio
+    async def test_lifespan_calls_init_db_with_all_params(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                db_instance_name="inst",
+                db_autoscaling_endpoint="ep",
+                db_project="proj",
+                db_branch="br",
+                db_statement_timeout_ms=3000,
+                cleanup_timeout_seconds=6.0,
+            )
+
+        lifespan = server.app.router.lifespan_context
+        with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init, \
+             patch(f"{MODULE}.dispose_db", new_callable=AsyncMock) as mock_dispose:
+            async with lifespan(MagicMock()):
+                mock_init.assert_awaited_once_with(
+                    instance_name="inst",
+                    autoscaling_endpoint="ep",
+                    project="proj",
+                    branch="br",
+                    db_statement_timeout_ms=3000,
+                )
+            mock_dispose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lifespan_with_endpoint_only(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                db_autoscaling_endpoint="ep-only",
+            )
+
+        lifespan = server.app.router.lifespan_context
+        with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init, \
+             patch(f"{MODULE}.dispose_db", new_callable=AsyncMock):
+            async with lifespan(MagicMock()):
+                mock_init.assert_awaited_once_with(
+                    instance_name=None,
+                    autoscaling_endpoint="ep-only",
+                    project=None,
+                    branch=None,
+                    db_statement_timeout_ms=5000,
+                )
+
+    @pytest.mark.asyncio
+    async def test_lifespan_not_set_when_db_not_configured(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init:
+            # The lifespan should be the default (not our custom _db_lifespan),
+            # so init_db should never be called. We verify by checking that
+            # the retrieve route was NOT registered (no /responses/{id} GET).
+            routes = [r.path for r in server.app.routes if hasattr(r, "path")]
+            assert "/responses/{response_id}" not in routes
+            mock_init.assert_not_awaited()
