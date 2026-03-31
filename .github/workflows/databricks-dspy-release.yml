@@ -7,6 +7,7 @@ on:
 
 jobs:
   extract_tag:
+    if: false  # TEMPORARILY DISABLED - remove this line to re-enable
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.extract.outputs.version }}
