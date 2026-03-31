@@ -40,7 +40,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Run tests
         run: npm run test
@@ -59,7 +59,7 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Run linter
         run: npm run lint
@@ -78,7 +78,7 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Run typecheck
         run: npm run typecheck
@@ -97,7 +97,7 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Check formatting
         run: npm run format:check
@@ -116,7 +116,7 @@ jobs:
           node-version: "20"
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Build package
         run: npm run build

@@ -61,6 +61,7 @@ on:
 
 jobs:
   release:
+    if: false  # TEMPORARILY DISABLED - remove this line to re-enable
     runs-on:
       group: databricks-protected-runner-group
       labels: linux-ubuntu-latest
@@ -79,7 +80,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build
+        run: pip install build==1.2.2
 
       - name: Verify version matches tag
         id: verify-version
