@@ -109,6 +109,7 @@ class LongRunningAgentServer(AgentServer):
     Args:
         enable_chat_proxy: Whether to enable the chat proxy endpoint.
         db_instance_name: Lakebase provisioned instance name.
+        db_autoscaling_endpoint: Lakebase autoscaling endpoint URL.
         db_project: Lakebase autoscaling project.
         db_branch: Lakebase autoscaling branch.
         task_timeout_seconds: Max time for a background task before timeout.
@@ -126,6 +127,7 @@ class LongRunningAgentServer(AgentServer):
         enable_chat_proxy=False,
         # DB config
         db_instance_name: str | None = None,
+        db_autoscaling_endpoint: str | None = None,
         db_project: str | None = None,
         db_branch: str | None = None,
         # Settings (override defaults)
@@ -146,6 +148,7 @@ class LongRunningAgentServer(AgentServer):
             cleanup_timeout_seconds=cleanup_timeout_seconds,
         )
         self._db_instance_name = db_instance_name
+        self._db_autoscaling_endpoint = db_autoscaling_endpoint
         self._db_project = db_project
         self._db_branch = db_branch
         super().__init__(agent_type, enable_chat_proxy=enable_chat_proxy)
@@ -166,6 +169,7 @@ class LongRunningAgentServer(AgentServer):
         async def _db_lifespan(app):
             await init_db(
                 instance_name=self._db_instance_name,
+                autoscaling_endpoint=self._db_autoscaling_endpoint,
                 project=self._db_project,
                 branch=self._db_branch,
                 db_statement_timeout_ms=self._settings.db_statement_timeout_ms,

@@ -21,7 +21,8 @@ _initialized = False
 def is_db_configured() -> bool:
     """Check if database is configured via provisioned instance or autoscaling."""
     return bool(
-        os.getenv("LAKEBASE_INSTANCE_NAME")
+        os.getenv("LAKEBASE_AUTOSCALING_ENDPOINT")
+        or os.getenv("LAKEBASE_INSTANCE_NAME")
         or (os.getenv("LAKEBASE_AUTOSCALING_PROJECT") and os.getenv("LAKEBASE_AUTOSCALING_BRANCH"))
     )
 
@@ -29,6 +30,7 @@ def is_db_configured() -> bool:
 async def init_db(
     *,
     instance_name: str | None = None,
+    autoscaling_endpoint: str | None = None,
     project: str | None = None,
     branch: str | None = None,
     pool_size: int = 10,
@@ -49,6 +51,8 @@ async def init_db(
     }
     if instance_name:
         lakebase_kwargs["instance_name"] = instance_name
+    if autoscaling_endpoint:
+        lakebase_kwargs["autoscaling_endpoint"] = autoscaling_endpoint
     if project:
         lakebase_kwargs["project"] = project
     if branch:
