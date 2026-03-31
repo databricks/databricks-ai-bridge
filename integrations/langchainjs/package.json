@@ -62,18 +62,18 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "^0.15.0",
-    "@types/node": "^22.0.0",
-    "dotenv": "^17.2.3",
-    "@eslint/js": "^10.0.0",
-    "eslint": "^10.0.1",
-    "langchain": "^1.2.10",
-    "prettier": "^3.0.0",
-    "tsdown": "^0.2.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.8.0",
-    "typescript-eslint": "^8.49.0",
-    "vitest": "^3.0.0"
+    "@arethetypeswrong/cli": "0.15.4",
+    "@types/node": "22.19.13",
+    "dotenv": "17.3.1",
+    "@eslint/js": "10.0.1",
+    "eslint": "10.0.2",
+    "langchain": "1.2.29",
+    "prettier": "3.8.1",
+    "tsdown": "0.2.17",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.56.1",
+    "vitest": "3.2.4"
   },
   "repository": {
     "type": "git",
