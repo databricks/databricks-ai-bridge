@@ -342,7 +342,7 @@ class _LakebaseBase:
         if self._endpoint_name is None:
             raise RuntimeError("endpoint name is required for autoscaling mode")
         try:
-            cred = self.workspace_client.postgres.generate_database_credential(
+            cred = self.workspace_client.postgres.generate_database_credential(  # type: ignore[attr-defined]
                 endpoint=self._endpoint_name,
             )
         except Exception as exc:
