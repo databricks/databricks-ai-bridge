@@ -14,14 +14,14 @@ The user will provide one of:
 - A description of code changes
 - A request to add tests for a specific feature
 
-If given a PR, read the diff and review comments first.
+If given a PR, read the diff and review comments first. If given a description or feature request, read the relevant source code and surrounding code to understand the changes properly before proceeding.
 
 ## Workflow
 
-1. **Understand the change**: Read the PR diff or changed files. Identify what bridge code is affected.
+1. **Understand the change**: Read the PR diff or changed files. Also read surrounding code that interacts with the change -- callers, base classes, related modules -- to understand the full picture. Identify what bridge code is affected.
 2. **Check existing tests**: Search for existing integration tests that cover the affected code paths.
 3. **Identify gaps**: Determine what new tests are needed or what existing tests need updating.
-4. **Write tests**: Follow the patterns and principles below exactly.
+4. **Write tests -- only if warranted**: Only write new integration tests if there is genuinely new functionality that needs live API verification. Do not add tests for minor changes, refactors, or code paths already covered by existing tests. Follow the patterns and principles below exactly.
 5. **Run linting**: Run `ruff check` and `ruff format` on any files you create or modify.
 
 ## Repository Structure
