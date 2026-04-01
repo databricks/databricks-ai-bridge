@@ -554,8 +554,8 @@ class ChatDatabricks(BaseChatModel):
                 content_blocks.append(
                     {
                         "role": "tool",
-                        "content": item.output,
-                        "tool_call_id": item.call_id,
+                        "content": item.output,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
+                        "tool_call_id": item.call_id,  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
                     }
                 )
             elif item.type in (
@@ -1712,8 +1712,8 @@ def _convert_responses_api_chunk_to_lc_chunk(
         item = chunk.item  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
         if item.type == "function_call_output":
             lc_chunk = ToolMessageChunk(
-                content=item.output,
-                tool_call_id=item.call_id,
+                content=item.output,  # ty:ignore[unresolved-attribute, invalid-argument-type]: astral-sh/ty#1479 should fix this
+                tool_call_id=item.call_id,  # ty:ignore[unresolved-attribute, invalid-argument-type]: astral-sh/ty#1479 should fix this
             )
         elif item.type == "function_call":
             id = item.call_id  # ty:ignore[unresolved-attribute]: astral-sh/ty#1479 should fix this
