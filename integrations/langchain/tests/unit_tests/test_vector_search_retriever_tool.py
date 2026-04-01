@@ -174,12 +174,13 @@ def test_vector_search_retriever_tool_combinations() -> None:
     )
     assert isinstance(vector_search_tool, BaseTool)
     result = vector_search_tool.invoke("Databricks Agent Framework")
-    # _run now returns a string representation of documents
     assert isinstance(result, str)
-    # Check that metadata keys and page_content appear in the string
-    assert "doc_uri" in result
-    assert "chunk_id" in result
-    assert "page_content" in result
+    # Result should be valid JSON
+    parsed = json.loads(result)
+    assert isinstance(parsed, list)
+    assert all("page_content" in doc and "metadata" in doc for doc in parsed)
+    assert any("doc_uri" in doc["metadata"] for doc in parsed)
+    assert any("chunk_id" in doc["metadata"] for doc in parsed)
 
 
 def test_vector_search_retriever_tool_empty_results() -> None:
@@ -219,9 +220,7 @@ def test_vs_tool_tracing(index_name: str, tool_name: str | None) -> None:
     assert len(spans) == 1
     inputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanInputs"])
     assert inputs["query"] == "Databricks Agent Framework"
-    # _run now returns a string representation of documents
     outputs = json.loads(trace.to_dict()["data"]["spans"][0]["attributes"]["mlflow.spanOutputs"])
-    # Check that the expected text appears in the output string
     assert any(text in outputs for text in INPUT_TEXTS)
 
 
