@@ -38,10 +38,13 @@ const {
   })),
   drainStreamToWriterMock: vi.fn(async () => ({ failed: false })),
   fallbackToGenerateTextMock: vi.fn<
-    () =>
-      Promise<
-        { usage: { inputTokens: number; outputTokens: number }; traceId?: string } | undefined
-      >
+    () => Promise<
+      | {
+          usage: { inputTokens: number; outputTokens: number };
+          traceId?: string;
+        }
+      | undefined
+    >
   >(async () => undefined),
   streamTextMock: vi.fn(() => ({
     toUIMessageStream: vi.fn(() => ({})),
@@ -113,7 +116,10 @@ vi.mock("ai", () => ({
       onFinish,
     }: {
       execute: (args: {
-        writer: { write: (value: unknown) => void; onError?: (e: unknown) => void };
+        writer: {
+          write: (value: unknown) => void;
+          onError?: (e: unknown) => void;
+        };
       }) => Promise<void>;
       onFinish?: (args: {
         responseMessage: { id: string; role: "assistant"; parts: unknown[] };
@@ -363,7 +369,10 @@ describe("ChatPlugin behavior", () => {
     await plugin.setup();
     const { router, getHandler } = createMockRouter() as {
       router: Record<string, unknown>;
-      getHandler: (method: string, path: string) => (req: unknown, res: unknown) => Promise<void>;
+      getHandler: (
+        method: string,
+        path: string,
+      ) => (req: unknown, res: unknown) => Promise<void>;
     };
     plugin.injectRoutes(router as never);
 
@@ -402,7 +411,10 @@ describe("ChatPlugin behavior", () => {
     await plugin.setup();
     const { router, getHandler } = createMockRouter() as {
       router: Record<string, unknown>;
-      getHandler: (method: string, path: string) => (req: unknown, res: unknown) => Promise<void>;
+      getHandler: (
+        method: string,
+        path: string,
+      ) => (req: unknown, res: unknown) => Promise<void>;
     };
     plugin.injectRoutes(router as never);
 

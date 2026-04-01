@@ -61,10 +61,6 @@ export function ChatProvider({
     window.__CHAT_CONFIG__ = { apiBase, basePath };
   }
 
-  useEffect(() => {
-    window.__CHAT_CONFIG__ = { apiBase, basePath };
-  }, [apiBase, basePath]);
-
   const shouldFetchConfig = featuresProp === undefined;
   const { data: serverConfig, isLoading: configLoading } = useSWR<{
     features: ChatFeatures;

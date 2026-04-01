@@ -91,6 +91,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
   public name = "chat" as const;
   static manifest = manifest as PluginManifest<"chat">;
   declare protected config: ChatConfig;
+  private static hasLoggedMissingStaticAssets = false;
 
   /**
    * Resolve the path to the pre-built chat client static assets.
@@ -118,6 +119,14 @@ export class ChatPlugin extends Plugin<ChatConfig> {
       if (fs.existsSync(path.join(dir, "index.html"))) {
         return dir;
       }
+    }
+
+    if (!ChatPlugin.hasLoggedMissingStaticAssets) {
+      ChatPlugin.hasLoggedMissingStaticAssets = true;
+      logger.error(
+        "Chat static assets not found. Expected index.html in one of: %s. Try reinstalling @databricks/appkit-agent package and/or clearing your (p)npm cache.",
+        candidates.join(", "),
+      );
     }
     return undefined;
   }
@@ -147,7 +156,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
 
   injectRoutes(router: express.Router) {
     const pool = this.config.pool;
-    const db = this.db;
+    const db = pool ? createDb(pool) : null;
     const getSessionFn = this.config.getSession;
     const cache = this.streamCache!;
     const prov = this.provider!;
@@ -709,10 +718,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
                     (p: { type: string }) => p.type === "text",
                   ) as { text?: string } | undefined;
                   if (textPart?.text) {
-                    const fallback = truncatePreserveWords(
-                      textPart.text,
-                      128,
-                    );
+                    const fallback = truncatePreserveWords(textPart.text, 128);
                     await updateChatTitleById(db!, {
                       chatId: id,
                       title: fallback,
@@ -766,7 +772,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
                       (typeof p.approval === "object" &&
                         p.approval !== null &&
                         (p.approval as Record<string, unknown>).approved ===
-                        false)),
+                          false)),
                 ),
             );
 

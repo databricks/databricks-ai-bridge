@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { useChatStream, type UseChatStreamOptions } from '@/hooks/use-chat-stream';
 import { ChatHeader, type ChatHeaderProps } from './chat-header';
@@ -43,14 +42,11 @@ export function ChatPanel({
   const chat = useChatStream(streamOptions);
 
   // Handle query param auto-send (for ?query=... deep-links)
-  let searchParams: URLSearchParams | undefined;
-  try {
-    [searchParams] = useSearchParams();
-  } catch {
-    // Not inside a router — skip query param handling
-  }
-
-  const query = searchParams?.get('query');
+  // Avoid router hooks here so ChatPanel can render outside a Router.
+  const query =
+    typeof window === 'undefined'
+      ? null
+      : new URLSearchParams(window.location.search).get('query');
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {

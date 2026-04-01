@@ -26,10 +26,7 @@ export type GetSession = (
  *
  * When omitted, defaults to `process.env.DATABRICKS_SERVING_ENDPOINT` or `'chat-model'`.
  */
-export type ChatBackend =
-  | string
-  | { proxy: string }
-  | { endpoint: string };
+export type ChatBackend = string | { proxy: string } | { endpoint: string };
 
 export interface ChatConfig extends BasePluginConfig {
   /** Resolve session from request. If not set, session is derived from x-forwarded-user headers. */

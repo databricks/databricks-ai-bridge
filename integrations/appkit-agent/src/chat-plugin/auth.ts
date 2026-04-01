@@ -181,17 +181,14 @@ async function getOAuthToken(): Promise<string> {
   const clientSecret = process.env.DATABRICKS_CLIENT_SECRET!;
   const hostUrl = await getHostUrl();
 
-  const response = await fetch(
-    `${hostUrl}/oidc/v1/token`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: "grant_type=client_credentials&scope=all-apis",
+  const response = await fetch(`${hostUrl}/oidc/v1/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-  );
+    body: "grant_type=client_credentials&scope=all-apis",
+  });
 
   if (!response.ok) {
     const text = await response.text();

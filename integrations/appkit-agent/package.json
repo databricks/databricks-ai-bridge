@@ -36,7 +36,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "build:client": "cd client && pnpm install --frozen-lockfile=false && pnpm exec vite build",
+    "build:client": "cd client && pnpm install --frozen-lockfile=true && pnpm exec vite build",
     "build:server": "tsdown",
     "build": "rm -rf dist && pnpm run build:client && pnpm run build:server",
     "dev": "tsdown --watch",

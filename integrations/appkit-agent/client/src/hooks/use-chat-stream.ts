@@ -124,10 +124,10 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             nextMessageId: generateUUID(),
             ...(needsPreviousMessages
               ? {
-                  previousMessages: isUserMessage
-                    ? messages.slice(0, -1)
-                    : messages,
-                }
+                previousMessages: isUserMessage
+                  ? messages.slice(0, -1)
+                  : messages,
+              }
               : {}),
             ...body,
           },
