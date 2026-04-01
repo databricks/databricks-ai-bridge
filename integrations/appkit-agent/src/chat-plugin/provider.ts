@@ -1,5 +1,9 @@
 import { createDatabricksProvider } from "@databricks/ai-sdk-provider";
-import { extractReasoningMiddleware, wrapLanguageModel } from "ai";
+import {
+  type LanguageModel,
+  extractReasoningMiddleware,
+  wrapLanguageModel,
+} from "ai";
 import { getToken, getHostUrl } from "./auth";
 
 export const CONTEXT_HEADER_CONVERSATION_ID = "x-databricks-conversation-id";
@@ -17,9 +21,6 @@ const PROVIDER_CACHE_MS = 5 * 60 * 1000;
 export interface CreateChatProviderOptions {
   apiProxy?: string;
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LanguageModel = any;
 
 const UTILITY_MODEL = "databricks-meta-llama-3-3-70b-instruct";
 

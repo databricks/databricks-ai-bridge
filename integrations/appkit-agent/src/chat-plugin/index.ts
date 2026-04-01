@@ -99,7 +99,7 @@ export class ChatPlugin extends Plugin<ChatConfig> {
     this.provider = createChatProvider();
     this.streamCache = new StreamCache();
     if (this.config.pool) {
-      if (this.config.autoMigrate) {
+      if (this.config.autoMigrate ?? true) {
         await ensureSchema(this.config.pool);
         logger.info("Database schema ensured (autoMigrate)");
       }

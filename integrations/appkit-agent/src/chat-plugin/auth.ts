@@ -2,10 +2,10 @@
  * Consolidated Databricks authentication module.
  *
  * Supported auth methods (checked in priority order):
- *   1. PAT            — DATABRICKS_TOKEN env var
- *   2. OAuth (SP)     — DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET + DATABRICKS_HOST
- *   3. CLI (OAuth U2M)— DATABRICKS_CONFIG_PROFILE or DATABRICKS_HOST
+ *   1. CLI (OAuth U2M)— DATABRICKS_CONFIG_PROFILE or DATABRICKS_HOST
  *                       (requires `databricks auth login`)
+ *   2. OAuth (SP)     — DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET + DATABRICKS_HOST
+ *   3. PAT            — DATABRICKS_TOKEN env var
  */
 
 import { execFile } from "node:child_process";
@@ -39,19 +39,34 @@ const SCIM_CACHE_MS = 30 * 60 * 1000;
 
 // ── Auth method detection ──────────────────────────────────────────
 
+function getConfiguredAuthMethods(): AuthMethod[] {
+  const methods: AuthMethod[] = [];
+  const hasProfile = !!process.env.DATABRICKS_CONFIG_PROFILE;
+  const hasHost = !!process.env.DATABRICKS_HOST;
+  const hasSpCreds = !!(
+    process.env.DATABRICKS_CLIENT_ID && process.env.DATABRICKS_CLIENT_SECRET
+  );
+
+  // Explicit profile is the strongest signal for OAuth U2M via CLI.
+  if (hasProfile) {
+    methods.push("cli");
+  }
+  if (hasSpCreds && hasHost) {
+    methods.push("oauth");
+  }
+  // Host-only mode can still use CLI auth (default profile), but we avoid
+  // preferring it over explicit SP credentials.
+  if (!hasProfile && hasHost && !hasSpCreds) {
+    methods.push("cli");
+  }
+  if (process.env.DATABRICKS_TOKEN) {
+    methods.push("pat");
+  }
+  return methods;
+}
+
 export function getAuthMethod(): AuthMethod {
-  if (process.env.DATABRICKS_TOKEN) return "pat";
-  if (
-    process.env.DATABRICKS_CLIENT_ID &&
-    process.env.DATABRICKS_CLIENT_SECRET &&
-    process.env.DATABRICKS_HOST
-  ) {
-    return "oauth";
-  }
-  if (process.env.DATABRICKS_CONFIG_PROFILE || process.env.DATABRICKS_HOST) {
-    return "cli";
-  }
-  return "none";
+  return getConfiguredAuthMethods()[0] ?? "none";
 }
 
 // ── Host resolution ────────────────────────────────────────────────
@@ -121,22 +136,39 @@ export async function getHostDomain(): Promise<string> {
  * Get a Databricks auth token using the best available method.
  */
 export async function getToken(): Promise<string> {
-  const method = getAuthMethod();
-  switch (method) {
-    case "pat":
-      return process.env.DATABRICKS_TOKEN!;
-    case "oauth":
-      return getOAuthToken();
-    case "cli":
-      return getCliToken();
-    case "none":
-      throw new Error(
-        "No Databricks auth configured. Set one of:\n" +
-          "  • DATABRICKS_TOKEN (PAT)\n" +
-          "  • DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET + DATABRICKS_HOST (OAuth SP)\n" +
-          "  • DATABRICKS_CONFIG_PROFILE or DATABRICKS_HOST (CLI — run `databricks auth login` first)",
-      );
+  const methods = getConfiguredAuthMethods();
+  if (methods.length === 0) {
+    throw new Error(
+      "No Databricks auth configured. Set one of:\n" +
+        "  • DATABRICKS_CONFIG_PROFILE or DATABRICKS_HOST (CLI — run `databricks auth login` first)\n" +
+        "  • DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET + DATABRICKS_HOST (OAuth SP)\n" +
+        "  • DATABRICKS_TOKEN (PAT)",
+    );
   }
+
+  let lastError: unknown;
+  for (const method of methods) {
+    try {
+      switch (method) {
+        case "cli":
+          return await getCliToken();
+        case "oauth":
+          return await getOAuthToken();
+        case "pat":
+          return process.env.DATABRICKS_TOKEN!;
+        case "none":
+          break;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(
+    "No valid Databricks auth method succeeded. Tried (in order): " +
+      methods.join(", ") +
+      (lastError instanceof Error ? `; last error: ${lastError.message}` : ""),
+  );
 }
 
 /**

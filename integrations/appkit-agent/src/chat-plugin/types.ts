@@ -40,7 +40,7 @@ export interface ChatConfig extends BasePluginConfig {
   backend?: ChatBackend;
   /** Enable feedback feature (thumbs up/down). Defaults to !!process.env.MLFLOW_EXPERIMENT_ID. */
   feedbackEnabled?: boolean;
-  /** Auto-create the ai_chatbot schema and tables on startup. Defaults to false. */
+  /** Auto-create the ai_chatbot schema and tables on startup. Defaults to true; set false to disable. */
   autoMigrate?: boolean;
 }
 
