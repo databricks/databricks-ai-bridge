@@ -20,7 +20,7 @@ dev = [
   "typing_extensions==4.15.0",
   "databricks-sdk==0.77.0",
   "ruff==0.14.10",
-  "ty==0.0.24",
+  "ty==0.0.23",
   { include-group = "tests" },
 ]
 
