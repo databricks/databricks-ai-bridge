@@ -715,6 +715,23 @@ class ChatDatabricks(BaseChatModel):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+            # Anthropic cache tokens (extra fields via Pydantic extra='allow')
+            cache_creation = getattr(response.usage, "cache_creation_input_tokens", None)
+            cache_read = getattr(response.usage, "cache_read_input_tokens", None)
+            if cache_creation is not None:
+                llm_output["usage"]["cache_creation_input_tokens"] = cache_creation
+                llm_output["cache_creation_input_tokens"] = cache_creation
+            if cache_read is not None:
+                llm_output["usage"]["cache_read_input_tokens"] = cache_read
+                llm_output["cache_read_input_tokens"] = cache_read
+            # OpenAI cache tokens (standard field)
+            if response.usage.prompt_tokens_details:
+                _cached = getattr(
+                    response.usage.prompt_tokens_details, "cached_tokens", None
+                )
+                if _cached is not None:
+                    llm_output["usage"]["cached_tokens"] = _cached
+                    llm_output["cached_tokens"] = _cached
             # Add individual token counts for backwards compatibility with tests
             llm_output["prompt_tokens"] = response.usage.prompt_tokens
             llm_output["completion_tokens"] = response.usage.completion_tokens
@@ -772,11 +789,25 @@ class ChatDatabricks(BaseChatModel):
         input_tokens = getattr(chunk.usage, "prompt_tokens", None)
         output_tokens = getattr(chunk.usage, "completion_tokens", None)
         if input_tokens is not None and output_tokens is not None:
-            return {
+            usage_dict: Dict[str, int] = {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": input_tokens + output_tokens,
             }
+            # Anthropic cache tokens (extra fields via Pydantic extra='allow')
+            cache_creation = getattr(chunk.usage, "cache_creation_input_tokens", None)
+            cache_read = getattr(chunk.usage, "cache_read_input_tokens", None)
+            if cache_creation is not None:
+                usage_dict["cache_creation_input_tokens"] = cache_creation
+            if cache_read is not None:
+                usage_dict["cache_read_input_tokens"] = cache_read
+            # OpenAI cache tokens (standard field)
+            prompt_details = getattr(chunk.usage, "prompt_tokens_details", None)
+            if prompt_details:
+                _cached = getattr(prompt_details, "cached_tokens", None)
+                if _cached is not None:
+                    usage_dict["cached_tokens"] = _cached
+            return usage_dict
         return None
 
     def _build_usage_chunk_from_completions(
@@ -801,14 +832,31 @@ class ChatDatabricks(BaseChatModel):
                 )
             )
         else:
+            input_token_details = {}
+            cache_creation = usage.get("cache_creation_input_tokens")
+            cache_read = usage.get("cache_read_input_tokens")
+            cached_tokens = usage.get("cached_tokens")
+            if cache_creation is not None:
+                input_token_details["cache_creation"] = cache_creation
+            if cache_read is not None:
+                input_token_details["cache_read"] = cache_read
+            if cached_tokens is not None:
+                input_token_details["cache_read"] = cached_tokens
+
+            usage_metadata_kwargs = {
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+                "total_tokens": usage["total_tokens"],
+            }
+            if input_token_details:
+                usage_metadata_kwargs["input_token_details"] = InputTokenDetails(
+                    **input_token_details
+                )
+
             return ChatGenerationChunk(
                 message=AIMessageChunk(
                     content="",
-                    usage_metadata=UsageMetadata(
-                        input_tokens=usage["input_tokens"],
-                        output_tokens=usage["output_tokens"],
-                        total_tokens=usage["total_tokens"],
-                    ),
+                    usage_metadata=UsageMetadata(**usage_metadata_kwargs),
                 )
             )
 
