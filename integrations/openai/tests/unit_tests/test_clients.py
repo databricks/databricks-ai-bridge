@@ -784,7 +784,7 @@ class TestWorkspaceAIGatewayDetection:
         mock_client.get.return_value = _mock_httpx_response(200)
         assert _is_workspace_ai_gateway_available(mock_client, "https://test.databricks.com")
         mock_client.get.assert_called_once_with(
-            "https://test.databricks.com/ai-gateway/openai/v1/models"
+            "https://test.databricks.com/ai-gateway/mlflow/v1/chat/completions"
         )
 
     def test_available_on_json_404(self):
@@ -833,7 +833,7 @@ class TestAIGatewayV2Detection:
         mock_client = MagicMock(spec=httpx.Client)
 
         def mock_get(url):
-            if "/ai-gateway/openai/v1/models" in url:
+            if "/ai-gateway/mlflow/v1/chat/completions" in url:
                 return _mock_httpx_response(404, content_type="")
             if "api/ai-gateway/v2/endpoints" in url:
                 return _mock_httpx_response(
@@ -860,7 +860,7 @@ class TestAIGatewayV2Detection:
         mock_client = MagicMock(spec=httpx.Client)
 
         def mock_get(url):
-            if "/ai-gateway/openai/v1/models" in url:
+            if "/ai-gateway/mlflow/v1/chat/completions" in url:
                 return _mock_httpx_response(404, content_type="")
             if "api/ai-gateway/v2/endpoints" in url:
                 return _mock_httpx_response(
@@ -893,7 +893,7 @@ class TestAIGatewayV2Detection:
         mock_client = MagicMock(spec=httpx.Client)
 
         def mock_get(url):
-            if "/ai-gateway/openai/v1/models" in url:
+            if "/ai-gateway/mlflow/v1/chat/completions" in url:
                 return _mock_httpx_response(404, content_type="")
             return _mock_httpx_response(200, {"endpoints": []})
 
@@ -907,7 +907,7 @@ class TestAIGatewayV2Detection:
         mock_client = MagicMock(spec=httpx.Client)
 
         def mock_get(url):
-            if "/ai-gateway/openai/v1/models" in url:
+            if "/ai-gateway/mlflow/v1/chat/completions" in url:
                 return _mock_httpx_response(404, content_type="")
             return _mock_httpx_response(200, {"endpoints": [{"name": "my-endpoint"}]})
 
@@ -921,7 +921,7 @@ class TestAIGatewayV2Detection:
         mock_client = MagicMock(spec=httpx.Client)
 
         def mock_get(url):
-            if "/ai-gateway/openai/v1/models" in url:
+            if "/ai-gateway/mlflow/v1/chat/completions" in url:
                 return _mock_httpx_response(404, content_type="")
             return _mock_httpx_response(
                 200,

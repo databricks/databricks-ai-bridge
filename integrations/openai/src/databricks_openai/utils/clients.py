@@ -142,14 +142,17 @@ def _is_workspace_ai_gateway_available(
 ) -> bool:
     """Check whether the workspace supports the /ai-gateway/ URL prefix.
 
-    Makes a lightweight GET to {host}/ai-gateway/openai/v1/models.
+    Makes a lightweight GET to {host}/ai-gateway/mlflow/v1/chat/completions.
     The proxy returns a bare 404 with no content-type when the route doesn't
-    exist; the backend always returns JSON (even for error responses).
+    exist; the backend always returns JSON (even for error responses like
+    400 "Missing required 'model' parameter").
     """
     try:
-        response = http_client.get(f"{host}/ai-gateway/openai/v1/models")
+        response = http_client.get(f"{host}/ai-gateway/mlflow/v1/chat/completions")
         content_type = response.headers.get("content-type", "")
-        return response.status_code != 404 or "application/json" in content_type
+        if "application/json" in content_type:
+            return True
+        return response.status_code != 404
     except Exception:
         return False
 
