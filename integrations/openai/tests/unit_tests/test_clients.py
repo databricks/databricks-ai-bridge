@@ -788,7 +788,7 @@ class TestWorkspaceAIGatewayDetection:
         )
 
     def test_available_on_json_404(self):
-        """A JSON 404 from the backend means the route is live."""
+        """A JSON 404 means the request reached the backend (route is wired up)."""
         mock_client = MagicMock(spec=httpx.Client)
         mock_client.get.return_value = _mock_httpx_response(
             404, {"error_code": "ENDPOINT_NOT_FOUND"}, content_type="application/json"

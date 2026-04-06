@@ -113,7 +113,7 @@ def _discover_ai_gateway_host(
     http_client: Client,
     host: str,
 ) -> str | None:
-    """Discover the legacy AI Gateway host URL (scheme + netloc only).
+    """Discover the AI Gateway host URL (scheme + netloc only).
 
     Calls GET /api/ai-gateway/v2/endpoints. If successful and endpoints exist,
     extracts the ai_gateway_url from the first endpoint response and returns
@@ -142,10 +142,13 @@ def _is_workspace_ai_gateway_available(
 ) -> bool:
     """Check whether the workspace supports the /ai-gateway/ URL prefix.
 
-    Makes a lightweight GET to {host}/ai-gateway/mlflow/v1/chat/completions.
-    The proxy returns a bare 404 with no content-type when the route doesn't
-    exist; the backend always returns JSON (even for error responses like
-    400 "Missing required 'model' parameter").
+    Sends a lightweight GET to {host}/ai-gateway/mlflow/v1/chat/completions.
+
+    Two possible outcomes:
+      - Request reaches the AI Gateway backend: the backend responds with JSON
+        which means the route is live → return True.
+      - Proxy blocks the request: returns a bare 404 with no content-type,
+        meaning /ai-gateway/ is not configured on this workspace → return False.
     """
     try:
         response = http_client.get(f"{host}/ai-gateway/mlflow/v1/chat/completions")
@@ -174,11 +177,9 @@ def _get_ai_gateway_base_url(
       2. Legacy *.ai-gateway.* host: {gateway_host}/{api_path}
       3. None (gateway not available)
     """
-    # Step 1: Try the new workspace-based /ai-gateway/ path
     if _is_workspace_ai_gateway_available(http_client, host):
         return f"{host}/ai-gateway/{api_path}"
 
-    # Step 2: Fall back to legacy *.ai-gateway.* hostname
     gateway_host = _discover_ai_gateway_host(http_client, host)
     return f"{gateway_host}/{api_path}" if gateway_host else None
 
@@ -204,12 +205,19 @@ def _resolve_base_url(
     host = workspace_client.config.host
 
     # AI Gateway routing
-    if use_ai_gateway_native_api or use_ai_gateway:
-        api_path = "openai/v1" if use_ai_gateway_native_api else "mlflow/v1"
+    if use_ai_gateway_native_api:
+        api_path = "openai/v1"
+        flag_name = "use_ai_gateway_native_api"
+    elif use_ai_gateway:
+        api_path = "mlflow/v1"
+        flag_name = "use_ai_gateway"
+    else:
+        api_path = None
+
+    if api_path:
         gateway_url = _get_ai_gateway_base_url(http_client, host, api_path)
         if gateway_url:
             return gateway_url
-        flag_name = "use_ai_gateway_native_api" if use_ai_gateway_native_api else "use_ai_gateway"
         raise ValueError(
             "Please ensure AI Gateway V2 is enabled for the workspace "
             f"when {flag_name} is set to True."
