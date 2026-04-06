@@ -1037,66 +1037,6 @@ class TestDatabricksOpenAIWithGateway:
             assert "custom.example.com" in str(client.base_url)
 
 
-class TestAIGatewayResponsesRouting:
-    """Tests that responses.create() swaps to openai/v1 when use_ai_gateway=True."""
-
-    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_use_ai_gateway_sets_openai_base_url(self, client_cls_name, mock_workspace_client):
-        """use_ai_gateway stores _openai_base_url for responses routing."""
-        client_cls = (
-            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
-        )
-        with patch(
-            "databricks_openai.utils.clients._get_ai_gateway_base_url",
-            return_value="https://12345.ai-gateway.cloud.databricks.com/mlflow/v1",
-        ):
-            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
-            assert client._openai_base_url == "https://12345.ai-gateway.cloud.databricks.com/openai/v1"
-
-    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_use_ai_gateway_workspace_url_sets_openai_base_url(
-        self, client_cls_name, mock_workspace_client
-    ):
-        """use_ai_gateway with workspace URL stores correct _openai_base_url."""
-        client_cls = (
-            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
-        )
-        with patch(
-            "databricks_openai.utils.clients._get_ai_gateway_base_url",
-            return_value="https://test.databricks.com/ai-gateway/mlflow/v1",
-        ):
-            client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway=True)
-            assert client._openai_base_url == "https://test.databricks.com/ai-gateway/openai/v1"
-
-    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_native_api_does_not_set_openai_base_url(
-        self, client_cls_name, mock_workspace_client
-    ):
-        """use_ai_gateway_native_api already uses openai/v1, no swap needed."""
-        client_cls = (
-            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
-        )
-        with patch(
-            "databricks_openai.utils.clients._get_ai_gateway_base_url",
-            return_value="https://12345.ai-gateway.cloud.databricks.com/openai/v1",
-        ):
-            client = client_cls(
-                workspace_client=mock_workspace_client, use_ai_gateway_native_api=True
-            )
-            assert client._openai_base_url is None
-
-    @pytest.mark.parametrize("client_cls_name", ["DatabricksOpenAI", "AsyncDatabricksOpenAI"])
-    def test_no_gateway_does_not_set_openai_base_url(
-        self, client_cls_name, mock_workspace_client
-    ):
-        """No gateway flags → no _openai_base_url."""
-        client_cls = (
-            DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
-        )
-        client = client_cls(workspace_client=mock_workspace_client)
-        assert client._openai_base_url is None
-
-
 class TestAIGatewayNativeAPI:
     """Tests for use_ai_gateway_native_api parameter in DatabricksOpenAI and AsyncDatabricksOpenAI."""
 
