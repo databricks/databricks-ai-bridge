@@ -3,7 +3,7 @@ from typing import Any, Generator
 from urllib.parse import urlparse
 
 from databricks.sdk import WorkspaceClient
-from httpx import AsyncClient, Auth, Client, Request, Response
+from httpx import URL, AsyncClient, Auth, Client, Request, Response
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
@@ -363,7 +363,8 @@ def _truncate_input_ids(input_items: Any) -> None:
 
 
 class DatabricksResponses(Responses):
-    """Responses resource that handles apps/ prefix routing and id truncation."""
+    """Responses resource that handles apps/ prefix routing, id truncation,
+    and base URL swapping for AI Gateway mlflow/v1 → openai/v1."""
 
     def __init__(self, client, workspace_client: WorkspaceClient):
         super().__init__(client)
@@ -395,7 +396,17 @@ class DatabricksResponses(Responses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        response = super().create(**kwargs)
+        # When using use_ai_gateway (mlflow/v1), swap to openai/v1 for responses
+        openai_base_url = getattr(self._client, "_openai_base_url", None)
+        if openai_base_url:
+            original_base_url = self._client._base_url
+            self._client._base_url = URL(f"{openai_base_url}/")
+            try:
+                response = super().create(**kwargs)
+            finally:
+                self._client._base_url = original_base_url
+        else:
+            response = super().create(**kwargs)
         _truncate_response_ids(response)
         return response
 
@@ -478,6 +489,13 @@ class DatabricksOpenAI(OpenAI):
             workspace_client, base_url, use_ai_gateway, http_client, use_ai_gateway_native_api
         )
 
+        # When using use_ai_gateway (mlflow/v1), store the gateway root so that
+        # DatabricksResponses can swap to openai/v1 for the responses API.
+        self._openai_base_url: str | None = None
+        if use_ai_gateway and target_base_url.endswith("/mlflow/v1"):
+            gateway_root = target_base_url[: -len("/mlflow/v1")]
+            self._openai_base_url = f"{gateway_root}/openai/v1"
+
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
@@ -525,7 +543,8 @@ class AsyncDatabricksChat(AsyncChat):
 
 
 class AsyncDatabricksResponses(AsyncResponses):
-    """Async Responses resource that handles apps/ prefix routing and id truncation."""
+    """Async Responses resource that handles apps/ prefix routing, id truncation,
+    and base URL swapping for AI Gateway mlflow/v1 → openai/v1."""
 
     def __init__(self, client, workspace_client: WorkspaceClient):
         super().__init__(client)
@@ -557,7 +576,17 @@ class AsyncDatabricksResponses(AsyncResponses):
             except (APIStatusError, APIConnectionError) as e:
                 raise _wrap_app_error(e, app_name) from e
 
-        response = await super().create(**kwargs)
+        # When using use_ai_gateway (mlflow/v1), swap to openai/v1 for responses
+        openai_base_url = getattr(self._client, "_openai_base_url", None)
+        if openai_base_url:
+            original_base_url = self._client._base_url
+            self._client._base_url = URL(f"{openai_base_url}/")
+            try:
+                response = await super().create(**kwargs)
+            finally:
+                self._client._base_url = original_base_url
+        else:
+            response = await super().create(**kwargs)
         _truncate_response_ids(response)
         return response
 
@@ -639,6 +668,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         target_base_url = _resolve_base_url(
             workspace_client, base_url, use_ai_gateway, sync_http_client, use_ai_gateway_native_api
         )
+
+        # When using use_ai_gateway (mlflow/v1), store the gateway root so that
+        # AsyncDatabricksResponses can swap to openai/v1 for the responses API.
+        self._openai_base_url: str | None = None
+        if use_ai_gateway and target_base_url.endswith("/mlflow/v1"):
+            gateway_root = target_base_url[: -len("/mlflow/v1")]
+            self._openai_base_url = f"{gateway_root}/openai/v1"
 
         # Authentication is handled via http_client, not api_key
         super().__init__(
