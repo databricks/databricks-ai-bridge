@@ -783,9 +783,7 @@ class TestDatabricksOpenAIWithGateway:
         client_cls = (
             DatabricksOpenAI if client_cls_name == "DatabricksOpenAI" else AsyncDatabricksOpenAI
         )
-        client = client_cls(
-            workspace_client=mock_workspace_client, use_ai_gateway_native_api=True
-        )
+        client = client_cls(workspace_client=mock_workspace_client, use_ai_gateway_native_api=True)
         assert "/ai-gateway/openai/v1" in str(client.base_url)
         assert "test.databricks.com" in str(client.base_url)
 
@@ -836,4 +834,3 @@ class TestDatabricksOpenAIWithGateway:
                 use_ai_gateway_native_api=True,
                 use_ai_gateway=True,
             )
-
