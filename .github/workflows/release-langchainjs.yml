@@ -10,7 +10,34 @@ on:
         type: boolean
 
 jobs:
+  resolve-deps:
+    if: false  # TEMPORARILY DISABLED - remove this line to re-enable
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/langchainjs
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Pin npm version
+        run: npm install -g npm@10.9.2
+
+      - name: Resolve dependencies
+        run: npm install
+
+      - name: Upload lockfile
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: package-lock-langchainjs
+          path: integrations/langchainjs/package-lock.json
+
   release:
+    needs: resolve-deps
     runs-on: ubuntu-latest
 
     permissions:
@@ -23,18 +50,24 @@ jobs:
       run:
         working-directory: integrations/langchainjs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Pin npm version
+        run: npm install -g npm@10.9.2
+
+      - name: Download resolved lockfile
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-lock-langchainjs
+          path: integrations/langchainjs/
 
       - name: Install dependencies
-        run: rm -f package-lock.json && npm install
+        run: npm ci
 
       - name: Get package version
         id: get-version

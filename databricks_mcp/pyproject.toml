@@ -17,18 +17,18 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "typing_extensions>=4.15.0",
-  "databricks-sdk>=0.49.0",
+  "typing_extensions==4.15.0",
+  "databricks-sdk==0.77.0",
   "ruff==0.14.10",
-  "ty>=0.0.11",
+  "ty==0.0.23",
   { include-group = "tests" },
 ]
 
 tests = [
-  "pytest>=9.0.0",
-  "pytest-asyncio>=1.3.0",
-  "pytest-timeout>=2.3.1",
-  "pytest-cov>=4.1.0",
+  "pytest==9.0.2",
+  "pytest-asyncio==1.3.0",
+  "pytest-timeout==2.3.1",
+  "pytest-cov==4.1.0",
 ]
 
 [build-system]

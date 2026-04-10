@@ -50,19 +50,19 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "^0.15.0",
-    "@types/node": "^22.0.0",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
-    "@vitest/coverage-v8": "^4.0.18",
-    "@vitest/ui": "^4.0.18",
-    "eslint": "^8.57.0",
-    "eslint-config-prettier": "^9.1.0",
-    "msw": "^2.0.0",
-    "prettier": "^3.0.0",
-    "tsdown": "^0.9.0",
-    "typescript": "^5.4.0",
-    "vitest": "^4.0.18"
+    "@arethetypeswrong/cli": "0.15.4",
+    "@types/node": "22.19.3",
+    "@typescript-eslint/eslint-plugin": "7.18.0",
+    "@typescript-eslint/parser": "7.18.0",
+    "@vitest/coverage-v8": "4.0.18",
+    "@vitest/ui": "4.0.18",
+    "eslint": "8.57.1",
+    "eslint-config-prettier": "9.1.2",
+    "msw": "2.12.7",
+    "prettier": "3.7.4",
+    "tsdown": "0.9.9",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
   },
   "author": {
     "name": "Databricks",
