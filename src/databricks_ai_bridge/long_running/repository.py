@@ -26,10 +26,7 @@ async def update_response_status(
     row's current status matches, avoiding concurrent-update races.
     """
     async with session_scope() as session:
-        stmt = (
-            update(Response)
-            .where(Response.response_id == response_id)
-        )
+        stmt = update(Response).where(Response.response_id == response_id)
         if expected_current_status is not None:
             stmt = stmt.where(Response.status == expected_current_status)
         stmt = stmt.values(status=status)
@@ -41,11 +38,7 @@ async def update_response_status(
 async def update_response_trace_id(response_id: str, trace_id: str) -> None:
     """Update response with trace_id (MLflow trace for observability)."""
     async with session_scope() as session:
-        stmt = (
-            update(Response)
-            .where(Response.response_id == response_id)
-            .values(trace_id=trace_id)
-        )
+        stmt = update(Response).where(Response.response_id == response_id).values(trace_id=trace_id)
         await session.execute(stmt)
         await session.commit()
 

@@ -84,9 +84,7 @@ class TestLongRunningSettings:
 
 class TestTransformStreamEvent:
     def test_default_is_noop(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         event = {"type": "response.output_item.done", "item": {"id": "fake_id"}}
         result = server.transform_stream_event(event, "resp_real")
@@ -96,14 +94,10 @@ class TestTransformStreamEvent:
         class CustomServer(LongRunningAgentServer):
             def transform_stream_event(self, event, response_id):
                 if isinstance(event, dict):
-                    return {
-                        k: response_id if v == "FAKE" else v for k, v in event.items()
-                    }
+                    return {k: response_id if v == "FAKE" else v for k, v in event.items()}
                 return event
 
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = CustomServer("ResponsesAgent")
         event = {"type": "response.created", "id": "FAKE"}
         result = server.transform_stream_event(event, "resp_real")
@@ -117,28 +111,22 @@ class TestAgentTypeValidation:
             LongRunningAgentServer("ChatAgent")
 
     def test_accepts_responses_agent(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         assert server.agent_type == "ResponsesAgent"
 
     def test_default_agent_type(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer()
         assert server.agent_type == "ResponsesAgent"
 
 
 class TestRouteRegistration:
     def test_routes_without_db(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
 
-        routes = [r.path for r in server.app.routes]
+        routes = [r.path for r in server.app.routes if hasattr(r, "path")]
         # Parent routes should exist
         assert "/invocations" in routes
         # Both endpoints are always registered
@@ -146,12 +134,10 @@ class TestRouteRegistration:
         assert "/responses/{response_id}/cancel" in routes
 
     def test_routes_with_db(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=True
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=True):
             server = LongRunningAgentServer("ResponsesAgent")
 
-        routes = [r.path for r in server.app.routes]
+        routes = [r.path for r in server.app.routes if hasattr(r, "path")]
         assert "/responses/{response_id}" in routes
         assert "/responses/{response_id}/cancel" in routes
 
@@ -196,14 +182,17 @@ class TestStartingAfterValidation:
         with patch(f"{MODULE}.is_db_configured", return_value=True):
             server = LongRunningAgentServer("ResponsesAgent")
 
-        with patch(
-            f"{MODULE}.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
-        ), patch(
-            f"{MODULE}.get_messages",
-            new_callable=AsyncMock,
-            return_value=[],
+        with (
+            patch(
+                f"{MODULE}.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
+            ),
+            patch(
+                f"{MODULE}.get_messages",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             client = TestClient(server.app, raise_server_exceptions=False)
             resp = client.get("/responses/resp_123?starting_after=0&stream=false")
@@ -213,17 +202,21 @@ class TestStartingAfterValidation:
 class TestDeferredMarkFailed:
     @pytest.mark.asyncio
     async def test_marks_response_failed(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[(0, None, {"type": "response.created"})],
-        ) as mock_get, patch(
-            "databricks_ai_bridge.long_running.server.append_message",
-            new_callable=AsyncMock,
-        ) as mock_append, patch(
-            "databricks_ai_bridge.long_running.server.update_response_status",
-            new_callable=AsyncMock,
-        ) as mock_update:
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[(0, None, {"type": "response.created"})],
+            ) as mock_get,
+            patch(
+                "databricks_ai_bridge.long_running.server.append_message",
+                new_callable=AsyncMock,
+            ) as mock_append,
+            patch(
+                "databricks_ai_bridge.long_running.server.update_response_status",
+                new_callable=AsyncMock,
+            ) as mock_update,
+        ):
             await _deferred_mark_failed("resp_123", delay=0.01)
 
             mock_get.assert_awaited_once()
@@ -250,9 +243,7 @@ class TestDeferredMarkFailed:
 class TestRetrieveRequest:
     @pytest.mark.asyncio
     async def test_not_found(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
 
         with patch(
@@ -263,26 +254,33 @@ class TestRetrieveRequest:
             from fastapi import HTTPException
 
             with pytest.raises(HTTPException) as exc_info:
-                await server._handle_retrieve_request("resp_missing", stream=False, starting_after=0)
+                await server._handle_retrieve_request(
+                    "resp_missing", stream=False, starting_after=0
+                )
             assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_completed_returns_output(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
 
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_123", "completed", datetime.now(timezone.utc), "trace_abc"),
-        ), patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[
-                (0, '{"text": "hi"}', {"type": "response.output_item.done", "item": {"text": "hi"}}),
-            ],
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_123", "completed", datetime.now(timezone.utc), "trace_abc"),
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[
+                    (
+                        0,
+                        '{"text": "hi"}',
+                        {"type": "response.output_item.done", "item": {"text": "hi"}},
+                    ),
+                ],
+            ),
         ):
             result = await server._handle_retrieve_request(
                 "resp_123", stream=False, starting_after=0
@@ -294,30 +292,31 @@ class TestRetrieveRequest:
 
     @pytest.mark.asyncio
     async def test_stale_run_detection(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
-            server = LongRunningAgentServer(
-                "ResponsesAgent", task_timeout_seconds=10.0
-            )
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent", task_timeout_seconds=10.0)
 
         from datetime import timedelta
 
         old_time = datetime.now(timezone.utc) - timedelta(seconds=100)  # well past timeout
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_stale", "in_progress", old_time, None),
-        ), patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[],
-        ), patch(
-            "databricks_ai_bridge.long_running.server.append_message",
-            new_callable=AsyncMock,
-        ) as mock_append, patch(
-            "databricks_ai_bridge.long_running.server.update_response_status",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_stale", "in_progress", old_time, None),
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.append_message",
+                new_callable=AsyncMock,
+            ) as mock_append,
+            patch(
+                "databricks_ai_bridge.long_running.server.update_response_status",
+                new_callable=AsyncMock,
+            ),
         ):
             result = await server._handle_retrieve_request(
                 "resp_stale", stream=False, starting_after=0
@@ -327,19 +326,20 @@ class TestRetrieveRequest:
 
     @pytest.mark.asyncio
     async def test_in_progress_returns_status(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
 
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
-        ), patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[],
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             result = await server._handle_retrieve_request(
                 "resp_123", stream=False, starting_after=0
@@ -350,24 +350,27 @@ class TestRetrieveRequest:
 class TestStreamRetrieve:
     @pytest.mark.asyncio
     async def test_completed_stream(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
-            server = LongRunningAgentServer(
-                "ResponsesAgent", poll_interval_seconds=0.01
-            )
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent", poll_interval_seconds=0.01)
 
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_123", "completed", datetime.now(timezone.utc), None),
-        ), patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[
-                (0, None, {"type": "response.created", "id": "resp_123"}),
-                (1, '{"text": "hi"}', {"type": "response.output_item.done", "item": {"text": "hi"}}),
-            ],
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_123", "completed", datetime.now(timezone.utc), None),
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[
+                    (0, None, {"type": "response.created", "id": "resp_123"}),
+                    (
+                        1,
+                        '{"text": "hi"}',
+                        {"type": "response.output_item.done", "item": {"text": "hi"}},
+                    ),
+                ],
+            ),
         ):
             events = []
             async for chunk in server._stream_retrieve("resp_123", starting_after=0):
@@ -381,23 +384,22 @@ class TestStreamRetrieve:
 
     @pytest.mark.asyncio
     async def test_failed_stream_stops(self):
-        with patch(
-            "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
-        ):
-            server = LongRunningAgentServer(
-                "ResponsesAgent", poll_interval_seconds=0.01
-            )
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent", poll_interval_seconds=0.01)
 
-        with patch(
-            "databricks_ai_bridge.long_running.server.get_response",
-            new_callable=AsyncMock,
-            return_value=("resp_123", "failed", datetime.now(timezone.utc), None),
-        ), patch(
-            "databricks_ai_bridge.long_running.server.get_messages",
-            new_callable=AsyncMock,
-            return_value=[
-                (0, None, {"type": "error", "error": {"message": "boom"}}),
-            ],
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=("resp_123", "failed", datetime.now(timezone.utc), None),
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                return_value=[
+                    (0, None, {"type": "error", "error": {"message": "boom"}}),
+                ],
+            ),
         ):
             events = []
             async for chunk in server._stream_retrieve("resp_123", starting_after=0):
@@ -424,11 +426,13 @@ class TestDoBackgroundStream:
             yield {"type": "response.output_text.delta", "delta": "hello"}
             yield {"type": "response.output_item.done", "item": {"text": "hello"}}
 
-        with patch(f"{MODULE}.get_stream_function", return_value=fake_stream), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update, \
-             patch(f"{MODULE}.ResponsesAgent") as mock_ra:
+        with (
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(f"{MODULE}.ResponsesAgent") as mock_ra,
+        ):
             mock_mlflow.start_span.return_value = span
             mock_ra.responses_agent_output_reducer.return_value = {"output": []}
 
@@ -461,11 +465,13 @@ class TestDoBackgroundStream:
             yield {"type": "response.created"}
             yield {"type": "response.output_text.delta", "delta": "x"}
 
-        with patch(f"{MODULE}.get_stream_function", return_value=fake_stream), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock), \
-             patch(f"{MODULE}.ResponsesAgent") as mock_ra:
+        with (
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock),
+            patch(f"{MODULE}.ResponsesAgent") as mock_ra,
+        ):
             mock_mlflow.start_span.return_value = span
             mock_ra.responses_agent_output_reducer.return_value = {"output": []}
 
@@ -477,15 +483,22 @@ class TestDoBackgroundStream:
             assert all(rid == "resp_t" for _, rid in transform_calls)
             # The transformed event is what gets persisted
             for call in mock_append.call_args_list:
-                evt = call.kwargs.get("stream_event") or call.args[3] if len(call.args) > 3 else call.kwargs.get("stream_event")
+                evt = (
+                    call.kwargs.get("stream_event") or call.args[3]
+                    if len(call.args) > 3
+                    else call.kwargs.get("stream_event")
+                )
+                assert evt is not None
                 assert evt.get("transformed") is True
 
     @pytest.mark.asyncio
     async def test_no_stream_fn_marks_failed(self):
         server = _make_server()
 
-        with patch(f"{MODULE}.get_stream_function", return_value=None), \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update:
+        with (
+            patch(f"{MODULE}.get_stream_function", return_value=None),
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+        ):
             state = {"seq": 0}
             with pytest.raises(RuntimeError, match="No stream function registered"):
                 await server._do_background_stream("resp_x", {}, False, state)
@@ -500,11 +513,13 @@ class TestDoBackgroundStream:
         async def fake_stream(request_data):
             yield {"type": "response.output_item.done", "item": {"text": "hi"}}
 
-        with patch(f"{MODULE}.get_stream_function", return_value=fake_stream), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock), \
-             patch(f"{MODULE}.ResponsesAgent") as mock_ra:
+        with (
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock),
+            patch(f"{MODULE}.ResponsesAgent") as mock_ra,
+        ):
             mock_mlflow.start_span.return_value = span
             mock_ra.responses_agent_output_reducer.return_value = {"output": []}
 
@@ -532,11 +547,13 @@ class TestDoBackgroundInvoke:
                 ]
             }
 
-        with patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update, \
-             patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock):
+        with (
+            patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock),
+        ):
             mock_mlflow.start_span.return_value = span
 
             state = {"seq": 0}
@@ -563,11 +580,13 @@ class TestDoBackgroundInvoke:
         async def fake_invoke(request_data):
             return {"output": [{"type": "message", "content": "done"}]}
 
-        with patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock), \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock), \
-             patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock) as mock_trace:
+        with (
+            patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock),
+            patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock) as mock_trace,
+        ):
             mock_mlflow.start_span.return_value = span
 
             state = {"seq": 0}
@@ -579,8 +598,10 @@ class TestDoBackgroundInvoke:
     async def test_no_invoke_fn_marks_failed(self):
         server = _make_server()
 
-        with patch(f"{MODULE}.get_invoke_function", return_value=None), \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update:
+        with (
+            patch(f"{MODULE}.get_invoke_function", return_value=None),
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+        ):
             state = {"seq": 0}
             with pytest.raises(RuntimeError, match="No invoke function registered"):
                 await server._do_background_invoke("resp_x", {}, False, state)
@@ -595,11 +616,13 @@ class TestDoBackgroundInvoke:
         def sync_invoke(request_data):
             return {"output": [{"type": "message", "content": "sync"}]}
 
-        with patch(f"{MODULE}.get_invoke_function", return_value=sync_invoke), \
-             patch(f"{MODULE}.mlflow") as mock_mlflow, \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update, \
-             patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock):
+        with (
+            patch(f"{MODULE}.get_invoke_function", return_value=sync_invoke),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock),
+        ):
             mock_mlflow.start_span.return_value = span
 
             state = {"seq": 0}
@@ -619,8 +642,10 @@ class TestTaskScope:
     async def test_timeout_schedules_deferred_mark_failed(self):
         server = _make_server(task_timeout_seconds=0.01, cleanup_timeout_seconds=6.0)
 
-        with patch(f"{MODULE}._deferred_mark_failed", new_callable=AsyncMock) as mock_deferred, \
-             patch(f"{MODULE}.asyncio.create_task") as mock_create_task:
+        with (
+            patch(f"{MODULE}._deferred_mark_failed", new_callable=AsyncMock) as mock_deferred,
+            patch(f"{MODULE}.asyncio.create_task") as mock_create_task,
+        ):
             state = {"seq": 0}
             async with server._task_scope("resp_timeout", state):
                 await asyncio.sleep(1)  # exceed the 0.01s timeout
@@ -635,12 +660,18 @@ class TestTaskScope:
     async def test_exception_writes_error_event_inline(self):
         server = _make_server()
 
-        with patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[
-            (0, None, {"type": "response.created"}),
-            (1, None, {"type": "response.output_text.delta"}),
-        ]), \
-             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append, \
-             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update:
+        with (
+            patch(
+                f"{MODULE}.get_messages",
+                new_callable=AsyncMock,
+                return_value=[
+                    (0, None, {"type": "response.created"}),
+                    (1, None, {"type": "response.output_text.delta"}),
+                ],
+            ),
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+        ):
             state = {"seq": 2}
             async with server._task_scope("resp_err", state):
                 raise ValueError("something broke")
@@ -658,9 +689,14 @@ class TestTaskScope:
     async def test_exception_falls_back_to_deferred_on_db_failure(self):
         server = _make_server()
 
-        with patch(f"{MODULE}.get_messages", new_callable=AsyncMock,
-                   side_effect=RuntimeError("DB down")), \
-             patch(f"{MODULE}.asyncio.create_task") as mock_create_task:
+        with (
+            patch(
+                f"{MODULE}.get_messages",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("DB down"),
+            ),
+            patch(f"{MODULE}.asyncio.create_task") as mock_create_task,
+        ):
             state = {"seq": 0}
             async with server._task_scope("resp_fallback", state):
                 raise ValueError("original error")
@@ -685,23 +721,27 @@ class TestIsDbConfigured:
 
     def test_no_vars(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         assert is_db_configured() is False
 
     def test_instance_name_only(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "my-instance")
         assert is_db_configured() is True
 
     def test_empty_instance_name(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "")
         assert is_db_configured() is False
 
     def test_autoscaling_both_set(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_PROJECT", "proj")
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_BRANCH", "branch")
@@ -709,18 +749,21 @@ class TestIsDbConfigured:
 
     def test_autoscaling_only_project(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_PROJECT", "proj")
         assert is_db_configured() is False
 
     def test_autoscaling_only_branch(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_BRANCH", "branch")
         assert is_db_configured() is False
 
     def test_autoscaling_empty_strings(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_PROJECT", "")
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_BRANCH", "branch")
@@ -728,12 +771,14 @@ class TestIsDbConfigured:
 
     def test_autoscaling_endpoint(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_ENDPOINT", "https://my-endpoint.com")
         assert is_db_configured() is True
 
     def test_autoscaling_endpoint_empty(self, monkeypatch):
         from databricks_ai_bridge.long_running.db import is_db_configured
+
         self._clean_env(monkeypatch)
         monkeypatch.setenv("LAKEBASE_AUTOSCALING_ENDPOINT", "")
         assert is_db_configured() is False
@@ -779,8 +824,10 @@ class TestLifespanPlumbing:
             )
 
         lifespan = server.app.router.lifespan_context
-        with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init, \
-             patch(f"{MODULE}.dispose_db", new_callable=AsyncMock) as mock_dispose:
+        with (
+            patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init,
+            patch(f"{MODULE}.dispose_db", new_callable=AsyncMock) as mock_dispose,
+        ):
             async with lifespan(MagicMock()):
                 mock_init.assert_awaited_once_with(
                     instance_name="inst",
@@ -800,8 +847,10 @@ class TestLifespanPlumbing:
             )
 
         lifespan = server.app.router.lifespan_context
-        with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init, \
-             patch(f"{MODULE}.dispose_db", new_callable=AsyncMock):
+        with (
+            patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init,
+            patch(f"{MODULE}.dispose_db", new_callable=AsyncMock),
+        ):
             async with lifespan(MagicMock()):
                 mock_init.assert_awaited_once_with(
                     instance_name=None,

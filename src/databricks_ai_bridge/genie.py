@@ -342,7 +342,7 @@ class Genie:
 
             # use MLflow client to get parent of any new spans we create from the current active span
             # (parenting keeps spans in the same trace)
-            client = mlflow.tracking.MlflowClient()  # ty:ignore[possibly-missing-attribute]
+            client = mlflow.tracking.MlflowClient()
             with mlflow.start_span(name="genie_timeline", span_type="CHAIN") as parent:
                 parent_trace_id = parent.trace_id if parent else None
                 parent_span_id = parent.span_id if parent else None

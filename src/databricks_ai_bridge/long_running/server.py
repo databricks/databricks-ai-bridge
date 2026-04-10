@@ -1,5 +1,10 @@
 """Long-running agent server with Lakebase persistence and background mode."""
 
+import sys
+
+if sys.version_info < (3, 11):
+    raise RuntimeError("The long_running module requires Python 3.11 or later.")
+
 import asyncio
 import inspect
 import json
@@ -234,7 +239,6 @@ class LongRunningAgentServer(AgentServer):
 
         self.app.router.lifespan_context = _db_lifespan
 
-
     async def _handle_invocations_request(
         self, request: Request
     ) -> dict[str, Any] | StreamingResponse:
@@ -259,9 +263,7 @@ class LongRunningAgentServer(AgentServer):
         is_background = data.get(BACKGROUND_KEY, False)
         is_streaming = data.get(MLFLOW_STREAM_KEY, False)
         data = {k: v for k, v in data.items() if k not in (BACKGROUND_KEY, MLFLOW_STREAM_KEY)}
-        return_trace_id = (
-            (get_request_headers().get(RETURN_TRACE_HEADER) or "").lower() == "true"
-        )
+        return_trace_id = (get_request_headers().get(RETURN_TRACE_HEADER) or "").lower() == "true"
 
         try:
             request_data = self.validator.validate_and_convert_request(data)
@@ -337,9 +339,7 @@ class LongRunningAgentServer(AgentServer):
                 self._settings.task_timeout_seconds,
             )
             asyncio.create_task(
-                _deferred_mark_failed(
-                    response_id, delay=self._settings.cleanup_timeout_seconds
-                ),
+                _deferred_mark_failed(response_id, delay=self._settings.cleanup_timeout_seconds),
                 name=f"deferred-fail-{response_id}",
             )
         except Exception as exc:
