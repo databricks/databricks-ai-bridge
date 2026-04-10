@@ -26,7 +26,7 @@ memory = [
   "psycopg[binary,pool]>=3.2.10",
   "sqlalchemy[asyncio]>=2.0.0",
 ]
-server = [
+agent-server = [
   "databricks-ai-bridge[memory]",
   "fastapi>=0.129.0",
   "mlflow>=3.10.0",

@@ -101,21 +101,43 @@ def _age_seconds(created_at: datetime) -> float:
 
 
 @experimental
-class LongRunningAgentServer(AgentServer):
+class AdvancedAgentServer(AgentServer):
     """AgentServer subclass adding background mode and retrieve endpoints.
 
     Only compatible with ``ResponsesAgent`` mode.
 
+    Background mode requires a Lakebase database for persistence. The database
+    connection can be configured via constructor arguments or environment variables:
+
+        - ``LAKEBASE_INSTANCE_NAME``: Provisioned Lakebase instance name.
+        - ``LAKEBASE_AUTOSCALING_ENDPOINT``: Lakebase autoscaling endpoint URL.
+        - ``LAKEBASE_AUTOSCALING_PROJECT``: Lakebase autoscaling project (must be
+          set together with ``LAKEBASE_AUTOSCALING_BRANCH``).
+        - ``LAKEBASE_AUTOSCALING_BRANCH``: Lakebase autoscaling branch (must be
+          set together with ``LAKEBASE_AUTOSCALING_PROJECT``).
+
+    At least one of the following must be set to enable background mode:
+    ``LAKEBASE_INSTANCE_NAME``, ``LAKEBASE_AUTOSCALING_ENDPOINT``, or both
+    ``LAKEBASE_AUTOSCALING_PROJECT`` and ``LAKEBASE_AUTOSCALING_BRANCH``.
+
     Args:
         enable_chat_proxy: Whether to enable the chat proxy endpoint.
-        db_instance_name: Lakebase provisioned instance name.
-        db_autoscaling_endpoint: Lakebase autoscaling endpoint URL.
-        db_project: Lakebase autoscaling project.
-        db_branch: Lakebase autoscaling branch.
+        db_instance_name: Lakebase provisioned instance name. Overrides
+            ``LAKEBASE_INSTANCE_NAME``.
+        db_autoscaling_endpoint: Lakebase autoscaling endpoint URL. Overrides
+            ``LAKEBASE_AUTOSCALING_ENDPOINT``.
+        db_project: Lakebase autoscaling project. Overrides
+            ``LAKEBASE_AUTOSCALING_PROJECT``.
+        db_branch: Lakebase autoscaling branch. Overrides
+            ``LAKEBASE_AUTOSCALING_BRANCH``.
         task_timeout_seconds: Max time for a background task before timeout.
+            Defaults to 3600 (1 hour).
         poll_interval_seconds: Interval between DB polls when streaming.
+            Defaults to 1.0.
         db_statement_timeout_ms: Postgres statement timeout.
+            Defaults to 5000 (5 seconds).
         cleanup_timeout_seconds: Timeout for DB cleanup after task failure.
+            Defaults to 7.0.
     """
 
     _SUPPORTED_AGENT_TYPE = "ResponsesAgent"
@@ -138,7 +160,7 @@ class LongRunningAgentServer(AgentServer):
     ):
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(
-                f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
+                f"AdvancedAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
                 f"got '{agent_type}'"
             )
         self._settings = LongRunningSettings(
@@ -161,7 +183,35 @@ class LongRunningAgentServer(AgentServer):
         """
         super()._setup_routes()
 
-        if not is_db_configured():
+        @self.app.post("/responses/{response_id}/cancel")
+        async def cancel_endpoint(response_id: str):
+            raise HTTPException(
+                status_code=501,
+                detail="Cancellation is not yet implemented.",
+            )
+
+        db_configured = is_db_configured()
+
+        @self.app.get("/responses/{response_id}")
+        async def retrieve_endpoint(
+            response_id: str,
+            stream: bool = Query(False, description="Stream results as SSE"),
+            starting_after: int = Query(
+                0, ge=0, description="Resume from sequence number (0 means fetch all)"
+            ),
+        ):
+            if not db_configured:
+                raise HTTPException(
+                    status_code=501,
+                    detail="Response retrieval requires a database configuration.",
+                )
+            return await self._handle_retrieve_request(
+                response_id,
+                stream=stream,
+                starting_after=starting_after,
+            )
+
+        if not db_configured:
             logger.warning("Database not configured. Background mode disabled.")
             return
 
@@ -179,19 +229,6 @@ class LongRunningAgentServer(AgentServer):
 
         self.app.router.lifespan_context = _db_lifespan
 
-        @self.app.get("/responses/{response_id}")
-        async def retrieve_endpoint(
-            response_id: str,
-            stream: bool = Query(False, description="Stream results as SSE"),
-            starting_after: int = Query(
-                0, ge=0, description="Resume from sequence number (0 means fetch all)"
-            ),
-        ):
-            return await self._handle_retrieve_request(
-                response_id,
-                stream=stream,
-                starting_after=starting_after,
-            )
 
     async def _handle_invocations_request(
         self, request: Request

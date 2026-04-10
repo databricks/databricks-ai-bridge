@@ -1,8 +1,8 @@
 """Long-running agent server with database persistence and background mode.
 
-Requires the ``[server]`` extra::
+Requires the ``[agent-server]`` extra::
 
-    pip install databricks-ai-bridge[server]
+    pip install databricks-ai-bridge[agent-server]
 """
 
 try:
@@ -10,8 +10,8 @@ try:
     import sqlalchemy  # noqa: F401
 except ImportError as e:
     raise ImportError(
-        "Long-running server requires databricks-ai-bridge[server]. "
-        "Please install with: pip install databricks-ai-bridge[server]"
+        "Long-running server requires databricks-ai-bridge[agent-server]. "
+        "Please install with: pip install databricks-ai-bridge[agent-server]"
     ) from e
 
 from databricks_ai_bridge.long_running.db import (
@@ -30,12 +30,12 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_status,
     update_response_trace_id,
 )
-from databricks_ai_bridge.long_running.server import LongRunningAgentServer
+from databricks_ai_bridge.long_running.server import AdvancedAgentServer
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 
 __all__ = [
     "Base",
-    "LongRunningAgentServer",
+    "AdvancedAgentServer",
     "LongRunningSettings",
     "Message",
     "Response",
