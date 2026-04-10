@@ -1,7 +1,5 @@
 import os
 from typing import Any, Generator
-from urllib.parse import urlparse
-
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
@@ -109,86 +107,10 @@ def _fix_empty_assistant_content_in_messages(messages: Any) -> None:
                 message["content"] = " "
 
 
-def _discover_ai_gateway_host(
-    http_client: Client,
-    host: str,
-) -> str | None:
-    """Discover the AI Gateway host URL (scheme + netloc only).
-
-    Calls GET /api/ai-gateway/v2/endpoints. If successful and endpoints exist,
-    extracts the ai_gateway_url from the first endpoint response and returns
-    just the scheme + netloc (no path). Returns None if gateway is not available.
-    """
-    try:
-        response = http_client.get(f"{host}/api/ai-gateway/v2/endpoints")
-        if response.status_code != 200:
-            return None
-        data = response.json()
-        endpoints = data.get("endpoints", [])
-        if not endpoints:
-            return None
-        gateway_url = endpoints[0].get("ai_gateway_url")
-        if not gateway_url:
-            return None
-        parsed = urlparse(gateway_url)
-        return f"{parsed.scheme}://{parsed.netloc}"
-    except Exception:
-        return None
-
-
-def _is_workspace_ai_gateway_available(
-    http_client: Client,
-    host: str,
-) -> bool:
-    """Check whether the workspace supports the /ai-gateway/ URL prefix.
-
-    Sends a lightweight GET to {host}/ai-gateway/mlflow/v1/chat/completions.
-
-    Two possible outcomes:
-      - Request reaches the AI Gateway backend: the backend responds with JSON
-        which means the route is live → return True.
-      - Proxy blocks the request: returns a bare 404 with no content-type,
-        meaning /ai-gateway/ is not configured on this workspace → return False.
-    """
-    try:
-        response = http_client.get(f"{host}/ai-gateway/mlflow/v1/chat/completions")
-        content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            return True
-        return response.status_code != 404
-    except Exception:
-        return False
-
-
-def _get_ai_gateway_base_url(
-    http_client: Client,
-    host: str,
-    api_path: str,
-) -> str | None:
-    """Return the AI Gateway base URL for the given API path.
-
-    Args:
-        http_client: Authorized HTTP client.
-        host: Workspace host URL.
-        api_path: API path prefix, e.g. "mlflow/v1" or "openai/v1".
-
-    Trickle-down resolution order:
-      1. New workspace URL: {host}/ai-gateway/{api_path}
-      2. Legacy *.ai-gateway.* host: {gateway_host}/{api_path}
-      3. None (gateway not available)
-    """
-    if _is_workspace_ai_gateway_available(http_client, host):
-        return f"{host}/ai-gateway/{api_path}"
-
-    gateway_host = _discover_ai_gateway_host(http_client, host)
-    return f"{gateway_host}/{api_path}" if gateway_host else None
-
-
 def _resolve_base_url(
     workspace_client: WorkspaceClient,
     base_url: str | None,
     use_ai_gateway: bool,
-    http_client: Client,
     use_ai_gateway_native_api: bool,
 ) -> str:
     """Resolve the target base URL for the OpenAI client."""
@@ -204,24 +126,11 @@ def _resolve_base_url(
 
     host = workspace_client.config.host
 
-    # AI Gateway routing
+    # AI Gateway routing: {host}/ai-gateway/{api_path}
     if use_ai_gateway_native_api:
-        api_path = "openai/v1"
-        flag_name = "use_ai_gateway_native_api"
+        return f"{host}/ai-gateway/openai/v1"
     elif use_ai_gateway:
-        api_path = "mlflow/v1"
-        flag_name = "use_ai_gateway"
-    else:
-        api_path = None
-
-    if api_path:
-        gateway_url = _get_ai_gateway_base_url(http_client, host, api_path)
-        if gateway_url:
-            return gateway_url
-        raise ValueError(
-            "Please ensure AI Gateway V2 is enabled for the workspace "
-            f"when {flag_name} is set to True."
-        )
+        return f"{host}/ai-gateway/mlflow/v1"
 
     # Fallback to using serving endpoints
     return f"{host}/serving-endpoints"
@@ -481,16 +390,15 @@ class DatabricksOpenAI(OpenAI):
 
         self._workspace_client = workspace_client
 
-        http_client = _get_authorized_http_client(workspace_client)
         target_base_url = _resolve_base_url(
-            workspace_client, base_url, use_ai_gateway, http_client, use_ai_gateway_native_api
+            workspace_client, base_url, use_ai_gateway, use_ai_gateway_native_api
         )
 
         # Authentication is handled via http_client, not api_key
         super().__init__(
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
-            http_client=http_client,
+            http_client=_get_authorized_http_client(workspace_client),
         )
 
     @override
@@ -643,9 +551,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
 
         self._workspace_client = workspace_client
 
-        sync_http_client = _get_authorized_http_client(workspace_client)
         target_base_url = _resolve_base_url(
-            workspace_client, base_url, use_ai_gateway, sync_http_client, use_ai_gateway_native_api
+            workspace_client, base_url, use_ai_gateway, use_ai_gateway_native_api
         )
 
         # Authentication is handled via http_client, not api_key
