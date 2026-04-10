@@ -9,10 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    __import__("sys").version_info < (3, 11),
-    reason="long_running requires Python 3.11+",
-)
+if __import__("sys").version_info < (3, 11):
+    pytest.skip("long_running requires Python 3.11+", allow_module_level=True)
 pytest.importorskip("fastapi")
 pytest.importorskip("psycopg")
 
