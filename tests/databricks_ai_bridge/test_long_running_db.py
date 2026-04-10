@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 pytest.importorskip("sqlalchemy")
+pytest.importorskip("psycopg")
 
 import databricks_ai_bridge.long_running.db as db_mod
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, session_scope

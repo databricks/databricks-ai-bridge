@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("psycopg")
 
 from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
