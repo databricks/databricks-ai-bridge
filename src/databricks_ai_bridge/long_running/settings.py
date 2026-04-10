@@ -1,11 +1,11 @@
-"""Settings for AdvancedAgentServer."""
+"""Settings for LongRunningAgentServer."""
 
 from dataclasses import dataclass
 
 
 @dataclass
 class LongRunningSettings:
-    """Configuration for :class:`AdvancedAgentServer`.
+    """Configuration for :class:`LongRunningAgentServer`.
 
     All values have sensible defaults. Callers override individual fields at
     construction time — environment-variable reading is the caller's concern.

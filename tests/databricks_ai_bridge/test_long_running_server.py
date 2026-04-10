@@ -1,4 +1,4 @@
-"""Tests for AdvancedAgentServer route registration, background handling, and SSE format."""
+"""Tests for LongRunningAgentServer route registration, background handling, and SSE format."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("fastapi")
 
 from databricks_ai_bridge.long_running.server import (
-    AdvancedAgentServer,
+    LongRunningAgentServer,
     _deferred_mark_failed,
     _sse_event,
 )
@@ -26,9 +26,9 @@ MODULE = "databricks_ai_bridge.long_running.server"
 
 
 def _make_server(**kwargs):
-    """Create a AdvancedAgentServer with DB disabled (no real Lakebase needed)."""
+    """Create a LongRunningAgentServer with DB disabled (no real Lakebase needed)."""
     with patch(f"{MODULE}.is_db_configured", return_value=False):
-        return AdvancedAgentServer("ResponsesAgent", **kwargs)
+        return LongRunningAgentServer("ResponsesAgent", **kwargs)
 
 
 def _mock_span():
@@ -87,13 +87,13 @@ class TestTransformStreamEvent:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
         event = {"type": "response.output_item.done", "item": {"id": "fake_id"}}
         result = server.transform_stream_event(event, "resp_real")
         assert result is event
 
     def test_subclass_override(self):
-        class CustomServer(AdvancedAgentServer):
+        class CustomServer(LongRunningAgentServer):
             def transform_stream_event(self, event, response_id):
                 if isinstance(event, dict):
                     return {
@@ -114,20 +114,20 @@ class TestTransformStreamEvent:
 class TestAgentTypeValidation:
     def test_rejects_non_responses_agent(self):
         with pytest.raises(ValueError, match="only supports 'ResponsesAgent'"):
-            AdvancedAgentServer("ChatAgent")
+            LongRunningAgentServer("ChatAgent")
 
     def test_accepts_responses_agent(self):
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
         assert server.agent_type == "ResponsesAgent"
 
     def test_default_agent_type(self):
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer()
+            server = LongRunningAgentServer()
         assert server.agent_type == "ResponsesAgent"
 
 
@@ -136,7 +136,7 @@ class TestRouteRegistration:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         routes = [r.path for r in server.app.routes]
         # Parent routes should exist
@@ -149,7 +149,7 @@ class TestRouteRegistration:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=True
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         routes = [r.path for r in server.app.routes]
         assert "/responses/{response_id}" in routes
@@ -176,6 +176,38 @@ class TestRetrieveWithoutDb:
         resp = client.get("/responses/resp_123")
         assert resp.status_code == 501
         assert "database" in resp.json()["detail"].lower()
+
+
+class TestStartingAfterValidation:
+    def test_starting_after_without_stream_returns_400(self):
+        from starlette.testclient import TestClient
+
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        client = TestClient(server.app, raise_server_exceptions=False)
+        resp = client.get("/responses/resp_123?starting_after=5&stream=false")
+        assert resp.status_code == 400
+        assert "starting_after" in resp.json()["detail"].lower()
+
+    def test_starting_after_zero_without_stream_is_allowed(self):
+        from starlette.testclient import TestClient
+
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        with patch(
+            f"{MODULE}.get_response",
+            new_callable=AsyncMock,
+            return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
+        ), patch(
+            f"{MODULE}.get_messages",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            client = TestClient(server.app, raise_server_exceptions=False)
+            resp = client.get("/responses/resp_123?starting_after=0&stream=false")
+            assert resp.status_code == 200
 
 
 class TestDeferredMarkFailed:
@@ -221,7 +253,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
@@ -239,7 +271,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
@@ -265,7 +297,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer(
+            server = LongRunningAgentServer(
                 "ResponsesAgent", task_timeout_seconds=10.0
             )
 
@@ -298,7 +330,7 @@ class TestRetrieveRequest:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         with patch(
             "databricks_ai_bridge.long_running.server.get_response",
@@ -321,7 +353,7 @@ class TestStreamRetrieve:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer(
+            server = LongRunningAgentServer(
                 "ResponsesAgent", poll_interval_seconds=0.01
             )
 
@@ -352,7 +384,7 @@ class TestStreamRetrieve:
         with patch(
             "databricks_ai_bridge.long_running.server.is_db_configured", return_value=False
         ):
-            server = AdvancedAgentServer(
+            server = LongRunningAgentServer(
                 "ResponsesAgent", poll_interval_seconds=0.01
             )
 
@@ -415,7 +447,7 @@ class TestDoBackgroundStream:
     async def test_calls_transform_stream_event(self):
         transform_calls = []
 
-        class TrackingServer(AdvancedAgentServer):
+        class TrackingServer(LongRunningAgentServer):
             def transform_stream_event(self, event, response_id):
                 transform_calls.append((event, response_id))
                 return {**event, "transformed": True}
@@ -736,7 +768,7 @@ class TestLifespanPlumbing:
     @pytest.mark.asyncio
     async def test_lifespan_calls_init_db_with_all_params(self):
         with patch(f"{MODULE}.is_db_configured", return_value=True):
-            server = AdvancedAgentServer(
+            server = LongRunningAgentServer(
                 "ResponsesAgent",
                 db_instance_name="inst",
                 db_autoscaling_endpoint="ep",
@@ -762,7 +794,7 @@ class TestLifespanPlumbing:
     @pytest.mark.asyncio
     async def test_lifespan_with_endpoint_only(self):
         with patch(f"{MODULE}.is_db_configured", return_value=True):
-            server = AdvancedAgentServer(
+            server = LongRunningAgentServer(
                 "ResponsesAgent",
                 db_autoscaling_endpoint="ep-only",
             )
@@ -782,7 +814,7 @@ class TestLifespanPlumbing:
     @pytest.mark.asyncio
     async def test_lifespan_not_set_when_db_not_configured(self):
         with patch(f"{MODULE}.is_db_configured", return_value=False):
-            server = AdvancedAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer("ResponsesAgent")
 
         with patch(f"{MODULE}.init_db", new_callable=AsyncMock) as mock_init:
             # The lifespan should be the default (not our custom _db_lifespan),

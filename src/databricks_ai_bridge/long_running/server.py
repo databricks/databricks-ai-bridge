@@ -101,7 +101,7 @@ def _age_seconds(created_at: datetime) -> float:
 
 
 @experimental
-class AdvancedAgentServer(AgentServer):
+class LongRunningAgentServer(AgentServer):
     """AgentServer subclass adding background mode and retrieve endpoints.
 
     Only compatible with ``ResponsesAgent`` mode.
@@ -160,7 +160,7 @@ class AdvancedAgentServer(AgentServer):
     ):
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(
-                f"AdvancedAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
+                f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
                 f"got '{agent_type}'"
             )
         self._settings = LongRunningSettings(
@@ -204,6 +204,11 @@ class AdvancedAgentServer(AgentServer):
                 raise HTTPException(
                     status_code=501,
                     detail="Response retrieval requires a database configuration.",
+                )
+            if starting_after != 0 and not stream:
+                raise HTTPException(
+                    status_code=400,
+                    detail="starting_after is only supported when stream=true.",
                 )
             return await self._handle_retrieve_request(
                 response_id,
@@ -404,7 +409,7 @@ class AdvancedAgentServer(AgentServer):
         all_chunks: list[dict[str, Any]] = []
         seq = 0
 
-        with mlflow.start_span(name=f"{func_name}") as span:
+        with mlflow.start_span(name=func_name) as span:
             span.set_inputs(request_data)
             async for event in stream_fn(request_data):
                 evt = self.validator.validate_and_convert_result(event, stream=True)
@@ -468,7 +473,7 @@ class AdvancedAgentServer(AgentServer):
 
         func_name = invoke_fn.__name__
 
-        with mlflow.start_span(name=f"{func_name}") as span:
+        with mlflow.start_span(name=func_name) as span:
             span.set_inputs(request_data)
             if inspect.iscoroutinefunction(invoke_fn):
                 result = await invoke_fn(request_data)
