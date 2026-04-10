@@ -1,5 +1,6 @@
 import os
 from typing import Any, Generator
+
 from databricks.sdk import WorkspaceClient
 from httpx import AsyncClient, Auth, Client, Request, Response
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
