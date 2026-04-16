@@ -160,10 +160,12 @@ async def test_get_messages(mock_session):
     result_mock.scalars.return_value.all.return_value = [msg1, msg2]
     mock_session.execute.return_value = result_mock
 
+    msg1.attempt_number = 1
+    msg2.attempt_number = 1
     messages = await get_messages("resp_abc123", after_sequence=None)
     assert len(messages) == 2
-    assert messages[0] == (0, '{"text": "hello"}', {"type": "response.output_item.done"})
-    assert messages[1] == (1, None, None)
+    assert messages[0] == (0, '{"text": "hello"}', {"type": "response.output_item.done"}, 1)
+    assert messages[1] == (1, None, None, 1)
 
 
 @pytest.mark.asyncio
@@ -175,6 +177,10 @@ async def test_get_response(mock_session):
 
     row.created_at = datetime(2009, 2, 13, 23, 31, 30, tzinfo=timezone.utc)
     row.trace_id = "trace_xyz"
+    row.owner_pod_id = None
+    row.heartbeat_at = None
+    row.attempt_number = 1
+    row.original_request = None
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = row
     mock_session.execute.return_value = result_mock
@@ -185,6 +191,10 @@ async def test_get_response(mock_session):
         "completed",
         datetime(2009, 2, 13, 23, 31, 30, tzinfo=timezone.utc),
         "trace_xyz",
+        None,  # owner_pod_id
+        None,  # heartbeat_at
+        1,  # attempt_number
+        None,  # original_request
     )
 
 
@@ -346,3 +356,110 @@ class TestSessionScope:
         monkeypatch.setattr(db_mod, "_session_factory", fake_factory)
         async with session_scope() as session:
             assert session is mock_session
+
+
+# ---------------------------------------------------------------------------
+# Durability metadata: owner_pod_id, heartbeat, claim, attempt_number
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_response_with_owner_and_original_request(mock_session):
+    """New background callers stamp pod id + serialized request on creation —
+    without these, a resumed pod can't re-invoke the handler."""
+    from databricks_ai_bridge.long_running.repository import create_response
+
+    await create_response(
+        "resp_abc",
+        "in_progress",
+        owner_pod_id="pod-1",
+        original_request={"input": [{"role": "user", "content": "hi"}]},
+    )
+    added = mock_session.add.call_args[0][0]
+    assert added.owner_pod_id == "pod-1"
+    assert added.heartbeat_at is not None
+    # original_request is JSON-encoded for Text storage.
+    assert '"role": "user"' in added.original_request
+
+
+@pytest.mark.asyncio
+async def test_create_response_without_durability_metadata(mock_session):
+    """Legacy/no-durability callers should still work and write no
+    owner/heartbeat (so the stale sweep can't accidentally claim them)."""
+    from databricks_ai_bridge.long_running.repository import create_response
+
+    await create_response("resp_x", "in_progress")
+    added = mock_session.add.call_args[0][0]
+    assert added.owner_pod_id is None
+    assert added.heartbeat_at is None
+    assert added.original_request is None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_response_updates_timestamp(mock_session):
+    from databricks_ai_bridge.long_running.repository import heartbeat_response
+
+    result_mock = MagicMock()
+    result_mock.rowcount = 1
+    mock_session.execute.return_value = result_mock
+
+    ok = await heartbeat_response("resp_abc", "pod-1")
+    assert ok is True
+    mock_session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_response_fails_when_not_owner(mock_session):
+    """If the CAS misses (owner changed / row deleted), heartbeat reports
+    failure so the caller can stop looping."""
+    from databricks_ai_bridge.long_running.repository import heartbeat_response
+
+    result_mock = MagicMock()
+    result_mock.rowcount = 0
+    mock_session.execute.return_value = result_mock
+
+    ok = await heartbeat_response("resp_abc", "pod-1")
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_claim_stale_response_returns_attempt_number(mock_session):
+    from databricks_ai_bridge.long_running.repository import claim_stale_response
+
+    row = MagicMock()
+    row.__iter__ = lambda self: iter([2])
+    row.__getitem__ = lambda self, i: 2
+    result_mock = MagicMock()
+    result_mock.first.return_value = row
+    mock_session.execute.return_value = result_mock
+
+    attempt = await claim_stale_response(
+        "resp_abc", new_owner_pod_id="pod-2", stale_threshold_seconds=15.0
+    )
+    assert attempt == 2
+
+
+@pytest.mark.asyncio
+async def test_claim_stale_response_returns_none_when_not_eligible(mock_session):
+    from databricks_ai_bridge.long_running.repository import claim_stale_response
+
+    result_mock = MagicMock()
+    result_mock.first.return_value = None
+    mock_session.execute.return_value = result_mock
+
+    attempt = await claim_stale_response(
+        "resp_abc", new_owner_pod_id="pod-2", stale_threshold_seconds=15.0
+    )
+    assert attempt is None
+
+
+@pytest.mark.asyncio
+async def test_append_message_with_attempt_number(mock_session):
+    """Resumed events must be tagged with the resume attempt so retrieve can
+    filter or the client can render the response.resumed boundary cleanly."""
+    from databricks_ai_bridge.long_running.repository import append_message
+
+    await append_message("resp_abc", 5, stream_event={"x": 1}, attempt_number=3)
+    added = mock_session.add.call_args[0][0]
+    assert added.attempt_number == 3
+    assert added.sequence_number == 5
