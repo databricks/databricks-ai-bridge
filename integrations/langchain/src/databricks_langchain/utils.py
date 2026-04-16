@@ -22,25 +22,43 @@ def get_deployment_client(target_uri: str) -> Any:
         ) from e
 
 
-def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
+def get_openai_client(
+    workspace_client: Any = None,
+    use_ai_gateway: bool = False,
+    use_ai_gateway_native_api: bool = False,
+    **kwargs,
+) -> OpenAI:
     """Get an OpenAI client configured for Databricks.
 
     Args:
         workspace_client: Optional WorkspaceClient instance to use for authentication.
             If not provided, creates a default WorkspaceClient.
+        use_ai_gateway: If True, route requests through AI Gateway V2 using the MLflow
+            API (``{host}/ai-gateway/mlflow/v1``). Cannot be combined with
+            ``use_ai_gateway_native_api``.
+        use_ai_gateway_native_api: If True, route requests through AI Gateway V2 using
+            the native OpenAI-compatible API (``{host}/ai-gateway/openai/v1``). Cannot
+            be combined with ``use_ai_gateway``.
         **kwargs: Additional keyword arguments to pass to get_open_ai_client(),
-            such as timeout and max_retries.
+            such as timeout and max_retries. Ignored when ``use_ai_gateway`` or
+            ``use_ai_gateway_native_api`` is True.
     """
     try:
         from databricks.sdk import WorkspaceClient
 
-        # If workspace_client is provided, use it directly
-        if workspace_client is not None:
-            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
-        else:
-            # Otherwise, create default workspace client
+        if workspace_client is None:
             workspace_client = WorkspaceClient()
-            return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
+
+        if use_ai_gateway or use_ai_gateway_native_api:
+            from databricks_openai import DatabricksOpenAI
+
+            return DatabricksOpenAI(
+                workspace_client=workspace_client,
+                use_ai_gateway=use_ai_gateway,
+                use_ai_gateway_native_api=use_ai_gateway_native_api,
+            )
+
+        return workspace_client.serving_endpoints.get_open_ai_client(**kwargs)
 
     except ImportError as e:
         raise ImportError(
@@ -50,24 +68,37 @@ def get_openai_client(workspace_client: Any = None, **kwargs) -> OpenAI:
         ) from e
 
 
-def get_async_openai_client(workspace_client: Any = None, **kwargs) -> AsyncOpenAI:
+def get_async_openai_client(
+    workspace_client: Any = None,
+    use_ai_gateway: bool = False,
+    use_ai_gateway_native_api: bool = False,
+    **kwargs,
+) -> AsyncOpenAI:
     """Get an async OpenAI client configured for Databricks using databricks-openai.
 
     Args:
         workspace_client: Optional WorkspaceClient instance to use for authentication.
             If not provided, creates a default WorkspaceClient.
+        use_ai_gateway: If True, route requests through AI Gateway V2 using the MLflow
+            API (``{host}/ai-gateway/mlflow/v1``). Cannot be combined with
+            ``use_ai_gateway_native_api``.
+        use_ai_gateway_native_api: If True, route requests through AI Gateway V2 using
+            the native OpenAI-compatible API (``{host}/ai-gateway/openai/v1``). Cannot
+            be combined with ``use_ai_gateway``.
         **kwargs: Additional keyword arguments to pass to AsyncDatabricksOpenAI(),
             such as timeout and max_retries.
     """
     from databricks.sdk import WorkspaceClient
 
-    # If workspace_client is provided, use it directly
-    if workspace_client is not None:
-        return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
-    else:
-        # Otherwise, create default workspace client and use it
+    if workspace_client is None:
         workspace_client = WorkspaceClient()
-        return AsyncDatabricksOpenAI(workspace_client=workspace_client, **kwargs)
+
+    return AsyncDatabricksOpenAI(
+        workspace_client=workspace_client,
+        use_ai_gateway=use_ai_gateway,
+        use_ai_gateway_native_api=use_ai_gateway_native_api,
+        **kwargs,
+    )
 
 
 # Utility function for Maximal Marginal Relevance (MMR) reranking.

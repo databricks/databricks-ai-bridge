@@ -170,6 +170,40 @@ def test_default_workspace_client() -> None:
     mock_get_client.assert_called_once_with(workspace_client=None)
 
 
+def test_use_ai_gateway_parameter() -> None:
+    """Test that use_ai_gateway flag is forwarded to get_openai_client."""
+    from unittest.mock import Mock, patch
+
+    mock_openai_client = Mock()
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        llm = ChatDatabricks(model="test-model", use_ai_gateway=True)
+        _ = llm.client
+
+    mock_get_client.assert_called_once_with(workspace_client=None, use_ai_gateway=True)
+    assert llm.use_ai_gateway is True
+    assert llm.use_ai_gateway_native_api is False
+
+
+def test_use_ai_gateway_native_api_parameter() -> None:
+    """Test that use_ai_gateway_native_api flag is forwarded to get_openai_client."""
+    from unittest.mock import Mock, patch
+
+    mock_openai_client = Mock()
+
+    with patch(
+        "databricks_langchain.chat_models.get_openai_client", return_value=mock_openai_client
+    ) as mock_get_client:
+        llm = ChatDatabricks(model="test-model", use_ai_gateway_native_api=True)
+        _ = llm.client
+
+    mock_get_client.assert_called_once_with(workspace_client=None, use_ai_gateway_native_api=True)
+    assert llm.use_ai_gateway is False
+    assert llm.use_ai_gateway_native_api is True
+
+
 def test_target_uri_deprecation_warning() -> None:
     """Test that using target_uri shows deprecation warning."""
     from unittest.mock import Mock, patch

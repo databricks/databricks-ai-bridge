@@ -60,3 +60,62 @@ def test_get_openai_client_without_timeout_and_retries() -> None:
 
     # Verify the client is returned
     assert client == mock_openai_client
+
+
+def test_get_openai_client_with_use_ai_gateway() -> None:
+    """Test use_ai_gateway=True constructs DatabricksOpenAI instead of the SDK helper."""
+
+    mock_workspace_client = Mock()
+    mock_databricks_openai_client = Mock()
+
+    with patch(
+        "databricks_openai.DatabricksOpenAI", return_value=mock_databricks_openai_client
+    ) as mock_databricks_openai:
+        client = get_openai_client(
+            workspace_client=mock_workspace_client, use_ai_gateway=True
+        )
+
+    mock_databricks_openai.assert_called_once_with(
+        workspace_client=mock_workspace_client,
+        use_ai_gateway=True,
+        use_ai_gateway_native_api=False,
+    )
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_not_called()
+    assert client == mock_databricks_openai_client
+
+
+def test_get_openai_client_with_use_ai_gateway_native_api() -> None:
+    """Test use_ai_gateway_native_api=True constructs DatabricksOpenAI with that flag."""
+
+    mock_workspace_client = Mock()
+    mock_databricks_openai_client = Mock()
+
+    with patch(
+        "databricks_openai.DatabricksOpenAI", return_value=mock_databricks_openai_client
+    ) as mock_databricks_openai:
+        client = get_openai_client(
+            workspace_client=mock_workspace_client, use_ai_gateway_native_api=True
+        )
+
+    mock_databricks_openai.assert_called_once_with(
+        workspace_client=mock_workspace_client,
+        use_ai_gateway=False,
+        use_ai_gateway_native_api=True,
+    )
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_not_called()
+    assert client == mock_databricks_openai_client
+
+
+def test_get_openai_client_without_gateway_uses_serving_endpoints() -> None:
+    """Test that DatabricksOpenAI is NOT constructed when no gateway flags are set."""
+
+    mock_workspace_client = Mock()
+    mock_openai_client = Mock()
+    mock_workspace_client.serving_endpoints.get_open_ai_client.return_value = mock_openai_client
+
+    with patch("databricks_openai.DatabricksOpenAI") as mock_databricks_openai:
+        client = get_openai_client(workspace_client=mock_workspace_client)
+
+    mock_databricks_openai.assert_not_called()
+    mock_workspace_client.serving_endpoints.get_open_ai_client.assert_called_once_with()
+    assert client == mock_openai_client
