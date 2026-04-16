@@ -108,6 +108,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
         sessions_table: str = "agent_sessions",
         messages_table: str = "agent_messages",
         use_cached_engine: bool = True,
+        schema: Optional[str] = None,
         **engine_kwargs,
     ) -> None:
         """
@@ -133,6 +134,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
             use_cached_engine: Whether to reuse a cached engine for the same
                 connection parameters and engine_kwargs combination. Set to False
                 to always create a new engine. Defaults to True.
+            schema: Optional PostgreSQL schema name. When provided, all tables
+                are created in and queried from this schema instead of ``public``.
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
@@ -142,6 +145,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 "Please install with: pip install databricks-openai[memory]"
             )
 
+        self._schema = schema
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
@@ -151,6 +155,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=engine_kwargs.pop("pool_recycle", DEFAULT_POOL_RECYCLE_SECONDS),
             use_cached_engine=use_cached_engine,
+            schema=schema,
             **engine_kwargs,
         )
 
@@ -168,6 +173,17 @@ class AsyncDatabricksSession(SQLAlchemySession):
             session_id,
         )
 
+    async def _ensure_tables(self) -> None:
+        """Ensure schema and tables are created before any database operations."""
+        if self._schema and self._create_tables:
+            from sqlalchemy import text
+
+            async with self._engine.begin() as conn:
+                await conn.execute(
+                    text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
+                )
+        await super()._ensure_tables()
+
     @classmethod
     def _build_cache_key(
         cls,
@@ -175,18 +191,20 @@ class AsyncDatabricksSession(SQLAlchemySession):
         autoscaling_endpoint: Optional[str] = None,
         project: Optional[str] = None,
         branch: Optional[str] = None,
+        schema: Optional[str] = None,
         **engine_kwargs: Any,
     ) -> str:
         """Build a cache key from connection parameters and engine_kwargs."""
         # Sort kwargs for deterministic key; use JSON for serializable values
         kwargs_key = json.dumps(engine_kwargs, sort_keys=True, default=str)
+        schema_suffix = f"::schema={schema}" if schema else ""
         if autoscaling_endpoint:
-            return f"endpoint::{autoscaling_endpoint}::{kwargs_key}"
+            return f"endpoint::{autoscaling_endpoint}::{kwargs_key}{schema_suffix}"
         if project and branch:
-            return f"autoscaling::{project}::{branch}::{kwargs_key}"
+            return f"autoscaling::{project}::{branch}::{kwargs_key}{schema_suffix}"
         if branch:
-            return f"autoscaling::{branch}::{kwargs_key}"
-        return f"provisioned::{instance_name}::{kwargs_key}"
+            return f"autoscaling::{branch}::{kwargs_key}{schema_suffix}"
+        return f"provisioned::{instance_name}::{kwargs_key}{schema_suffix}"
 
     @classmethod
     def _get_or_create_lakebase(
@@ -200,6 +218,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
         token_cache_duration_seconds: int,
         pool_recycle: int,
         use_cached_engine: bool = True,
+        schema: Optional[str] = None,
         **engine_kwargs,
     ) -> AsyncLakebaseSQLAlchemy:
         """Get cached AsyncLakebaseSQLAlchemy or create a new one.
@@ -210,6 +229,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             autoscaling_endpoint=autoscaling_endpoint,
             project=project,
             branch=branch,
+            schema=schema,
             pool_recycle=pool_recycle,
             **engine_kwargs,
         )
@@ -228,6 +248,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
             pool_recycle=pool_recycle,
+            schema=schema,
             **engine_kwargs,
         )
 

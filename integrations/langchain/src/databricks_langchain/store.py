@@ -42,6 +42,7 @@ class DatabricksStore(BaseStore):
         embedding_dims: int | None = None,
         embedding_fields: list[str] | None = None,
         embeddings: DatabricksEmbeddings | None = None,
+        schema: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize DatabricksStore with embedding support.
@@ -61,6 +62,8 @@ class DatabricksStore(BaseStore):
                 vectorizes the entire JSON value.
             embeddings: Optional pre-configured DatabricksEmbeddings instance. If provided,
                 takes precedence over embedding_endpoint.
+            schema: Optional PostgreSQL schema name. When provided, all tables
+                are created in and queried from this schema instead of ``public``.
             **pool_kwargs: Additional keyword arguments passed to LakebasePool.
         """
         if not _store_imports_available:
@@ -69,12 +72,14 @@ class DatabricksStore(BaseStore):
                 "Install with: pip install 'databricks-langchain[memory]'"
             )
 
+        self._schema = schema
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
+            schema=schema,
             **pool_kwargs,
         )
 
@@ -124,6 +129,15 @@ class DatabricksStore(BaseStore):
 
     def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
+        if self._schema:
+            from psycopg import sql
+
+            with self._lakebase.connection() as conn:
+                conn.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(self._schema)
+                    )
+                )
         return self._with_store(lambda s: s.setup())
 
     def batch(self, ops: Iterable[Op]) -> list[Result]:
@@ -167,6 +181,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
         embedding_dims: int | None = None,
         embedding_fields: list[str] | None = None,
         embeddings: DatabricksEmbeddings | None = None,
+        schema: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         """Initialize AsyncDatabricksStore with embedding support.
@@ -186,6 +201,8 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
                 vectorizes the entire JSON value.
             embeddings: Optional pre-configured DatabricksEmbeddings instance. If provided,
                 takes precedence over embedding_endpoint.
+            schema: Optional PostgreSQL schema name. When provided, all tables
+                are created in and queried from this schema instead of ``public``.
             **pool_kwargs: Additional keyword arguments passed to AsyncLakebasePool.
         """
         if not _store_imports_available:
@@ -196,12 +213,14 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         super().__init__()
 
+        self._schema = schema
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
             project=project,
             branch=branch,
             workspace_client=workspace_client,
+            schema=schema,
             **pool_kwargs,
         )
 
@@ -251,6 +270,15 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
     async def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
+        if self._schema:
+            from psycopg import sql
+
+            async with self._lakebase.connection() as conn:
+                await conn.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(self._schema)
+                    )
+                )
         return await self._with_store(lambda s: s.setup())
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:

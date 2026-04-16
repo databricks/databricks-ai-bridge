@@ -33,6 +33,7 @@ class CheckpointSaver(PostgresSaver):
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
+        schema: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         # Lazy imports
@@ -48,9 +49,24 @@ class CheckpointSaver(PostgresSaver):
             project=project,
             branch=branch,
             workspace_client=workspace_client,
+            schema=schema,
             **dict(pool_kwargs),
         )
+        self._schema = schema
         super().__init__(self._lakebase.pool)
+
+    def setup(self) -> None:
+        """Set up the checkpoint database, creating the schema if specified."""
+        if self._schema:
+            from psycopg import sql
+
+            with self._lakebase.connection() as conn:
+                conn.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(self._schema)
+                    )
+                )
+        super().setup()
 
     def __enter__(self):
         """Enter context manager."""
@@ -80,6 +96,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         project: str | None = None,
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
+        schema: str | None = None,
         **pool_kwargs: Any,
     ) -> None:
         # Lazy imports
@@ -95,9 +112,24 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
             project=project,
             branch=branch,
             workspace_client=workspace_client,
+            schema=schema,
             **dict(pool_kwargs),
         )
+        self._schema = schema
         super().__init__(self._lakebase.pool)
+
+    async def setup(self) -> None:
+        """Set up the checkpoint database asynchronously, creating the schema if specified."""
+        if self._schema:
+            from psycopg import sql
+
+            async with self._lakebase.connection() as conn:
+                await conn.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(self._schema)
+                    )
+                )
+        await super().setup()
 
     async def __aenter__(self):
         """Enter async context manager and open the connection pool."""

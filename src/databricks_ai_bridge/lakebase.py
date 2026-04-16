@@ -118,9 +118,11 @@ class _LakebaseBase:
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
     ) -> None:
         self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
+        self.schema: str | None = schema
 
         # --- Parameter validation ---
         is_autoscaling = (
@@ -393,6 +395,7 @@ class LakebasePool(_LakebaseBase):
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
         **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
@@ -402,6 +405,7 @@ class LakebasePool(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Sync lock for thread-safe token caching
@@ -441,6 +445,22 @@ class LakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
+        # Set search_path on each connection when a schema is specified
+        user_configure = pool_kwargs.pop("configure", None)
+        if self.schema:
+            _schema = self.schema
+
+            def configure(conn):
+                conn.execute(
+                    sql.SQL("SET search_path TO {}, public").format(
+                        sql.Identifier(_schema)
+                    )
+                )
+                if user_configure:
+                    user_configure(conn)
+        else:
+            configure = user_configure
+
         self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
@@ -449,6 +469,7 @@ class LakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=True,
             connection_class=RotatingConnection,
+            configure=configure,
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -506,6 +527,7 @@ class AsyncLakebasePool(_LakebaseBase):
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
         **pool_kwargs: object,
     ) -> None:
         super().__init__(
@@ -515,6 +537,7 @@ class AsyncLakebasePool(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Async lock for coroutine-safe token caching
@@ -553,6 +576,22 @@ class AsyncLakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
+        # Set search_path on each connection when a schema is specified
+        user_configure = pool_kwargs.pop("configure", None)
+        if self.schema:
+            _schema = self.schema
+
+            async def configure(conn):
+                await conn.execute(
+                    sql.SQL("SET search_path TO {}, public").format(
+                        sql.Identifier(_schema)
+                    )
+                )
+                if user_configure:
+                    await user_configure(conn)
+        else:
+            configure = user_configure
+
         self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
@@ -561,6 +600,7 @@ class AsyncLakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=False,  # Don't open yet, must be opened with await
             connection_class=AsyncRotatingConnection,
+            configure=configure,
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -1182,6 +1222,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
+        schema: str | None = None,
         **engine_kwargs,
     ) -> None:
         """
@@ -1199,6 +1240,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
                 Defaults to 15 minutes.
             pool_recycle: Connection pool recycle time in seconds.
                 Defaults to 14 minutes (before token cache expires).
+            schema: Optional PostgreSQL schema name. When provided, all tables
+                are created in and queried from this schema instead of ``public``.
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
@@ -1209,6 +1252,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Thread-safe lock for token caching (do_connect is sync context)
@@ -1280,5 +1324,17 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
                 token[-5:],
                 len(token),
             )
+
+        if self.schema:
+
+            @event.listens_for(engine.sync_engine, "connect")
+            def set_search_path(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute(
+                    sql.SQL("SET search_path TO {}, public").format(
+                        sql.Identifier(self.schema)
+                    )
+                )
+                cursor.close()
 
         return engine
