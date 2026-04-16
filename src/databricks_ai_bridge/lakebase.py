@@ -447,19 +447,17 @@ class LakebasePool(_LakebaseBase):
 
         # Set search_path on each connection when a schema is specified
         user_configure = pool_kwargs.pop("configure", None)
+        _configure_fn = None
         if self.schema:
             _schema = self.schema
+            _user_configure = user_configure
 
-            def configure(conn):
+            def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
                 conn.execute(
-                    sql.SQL("SET search_path TO {}, public").format(
-                        sql.Identifier(_schema)
-                    )
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
                 )
-                if user_configure:
-                    user_configure(conn)
-        else:
-            configure = user_configure
+                if _user_configure:
+                    _user_configure(conn)  # type: ignore[call-non-callable]
 
         self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
@@ -469,7 +467,7 @@ class LakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=True,
             connection_class=RotatingConnection,
-            configure=configure,
+            configure=_configure_fn,  # type: ignore[invalid-argument-type]
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -578,19 +576,17 @@ class AsyncLakebasePool(_LakebaseBase):
 
         # Set search_path on each connection when a schema is specified
         user_configure = pool_kwargs.pop("configure", None)
+        _configure_fn = None
         if self.schema:
             _schema = self.schema
+            _user_configure = user_configure
 
-            async def configure(conn):
+            async def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
                 await conn.execute(
-                    sql.SQL("SET search_path TO {}, public").format(
-                        sql.Identifier(_schema)
-                    )
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
                 )
-                if user_configure:
-                    await user_configure(conn)
-        else:
-            configure = user_configure
+                if _user_configure:
+                    await _user_configure(conn)  # type: ignore[call-non-callable]
 
         self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
@@ -600,7 +596,7 @@ class AsyncLakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=False,  # Don't open yet, must be opened with await
             connection_class=AsyncRotatingConnection,
-            configure=configure,
+            configure=_configure_fn,  # type: ignore[invalid-argument-type]
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -1326,14 +1322,13 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             )
 
         if self.schema:
+            _schema = self.schema
 
             @event.listens_for(engine.sync_engine, "connect")
             def set_search_path(dbapi_conn, connection_record):
                 cursor = dbapi_conn.cursor()
                 cursor.execute(
-                    sql.SQL("SET search_path TO {}, public").format(
-                        sql.Identifier(self.schema)
-                    )
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
                 )
                 cursor.close()
 
