@@ -1168,10 +1168,14 @@ class TestTryClaimAndResume:
         mock_run.assert_awaited_once()
         args, kwargs = mock_run.call_args
         resume_request = args[1] if len(args) > 1 else kwargs["request_data"]
-        assert resume_request["input"] == []
+        # resume_request is a ResponsesAgentRequest pydantic object after
+        # round-tripping through the validator so the handler still gets its
+        # declared arg type.
+        dumped = resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        assert dumped["input"] == []
         # Other request metadata is preserved so the handler can find
         # thread_id / conversation_id / user_id.
-        assert resume_request["custom_inputs"]["thread_id"] == "t1"
+        assert dumped["custom_inputs"]["thread_id"] == "t1"
         assert kwargs.get("attempt_number") == 2
 
 

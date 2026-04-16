@@ -123,8 +123,11 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-def _inject_conversation_id(request_data: dict[str, Any], response_id: str) -> dict[str, Any]:
+def _inject_conversation_id(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
     """Anchor the request to ``response_id`` as its conversation.
+
+    Operates on a plain dict — the caller is responsible for converting to/from
+    pydantic via ``model_dump()`` and the server's validator.
 
     Templates that back this server use ``context.conversation_id`` (and
     ``custom_inputs.thread_id`` / ``custom_inputs.session_id``) as priority-2
@@ -136,7 +139,7 @@ def _inject_conversation_id(request_data: dict[str, Any], response_id: str) -> d
 
     Client-supplied values take precedence and are left untouched.
     """
-    out = copy.deepcopy(request_data) if request_data else {}
+    out = copy.deepcopy(request_dict) if request_dict else {}
     custom_inputs = out.get("custom_inputs") or {}
     if custom_inputs.get("thread_id") or custom_inputs.get("session_id"):
         return out
@@ -330,13 +333,19 @@ class LongRunningAgentServer(AgentServer):
         """Start a new conversation and return response_id immediately."""
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
         # Anchor the conversation to response_id so any future replay from a
-        # different pod resolves to the same agent-SDK thread/session.
-        durable_request = _inject_conversation_id(request_data, response_id)
+        # different pod resolves to the same agent-SDK thread/session. We
+        # round-trip through dict + validator so the handler still receives a
+        # pydantic ResponsesAgentRequest (its declared arg type).
+        request_dict = (
+            request_data.model_dump() if hasattr(request_data, "model_dump") else dict(request_data)
+        )
+        durable_dict = _inject_conversation_id(request_dict, response_id)
+        durable_request = self.validator.validate_and_convert_request(durable_dict)
         await create_response(
             response_id,
             "in_progress",
             owner_pod_id=_POD_ID,
-            original_request=durable_request,
+            original_request=durable_dict,
         )
 
         logger.debug(
@@ -676,8 +685,9 @@ class LongRunningAgentServer(AgentServer):
         # (custom_inputs carrying thread_id, context.conversation_id), but null
         # out input so the handler passes {"messages": []} / [] to its agent.
         # This is the single line that makes the design framework-agnostic.
-        resume_request = dict(resp.original_request)
-        resume_request["input"] = []
+        resume_dict = dict(resp.original_request)
+        resume_dict["input"] = []
+        resume_request = self.validator.validate_and_convert_request(resume_dict)
 
         # Emit a marker so clients can reset any in-flight rendering from the
         # prior attempt before seeing new events.
