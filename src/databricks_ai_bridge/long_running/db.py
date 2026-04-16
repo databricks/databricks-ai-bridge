@@ -78,25 +78,41 @@ async def init_db(
     async with _engine.begin() as conn:
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENT_DB_SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)
-        # Idempotent migration for tables created by earlier versions: add any
-        # columns introduced for durable-resume support. Safe to run on a fresh
-        # schema (all columns exist) and on an upgraded one (only missing ones added).
-        for stmt in (
-            f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
-            "ADD COLUMN IF NOT EXISTS owner_pod_id TEXT",
-            f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
-            "ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
-            f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
-            "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
-            f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
-            "ADD COLUMN IF NOT EXISTS original_request TEXT",
-            f"ALTER TABLE {AGENT_DB_SCHEMA}.messages "
-            "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
-            f"CREATE INDEX IF NOT EXISTS idx_responses_stale "
-            f"ON {AGENT_DB_SCHEMA}.responses (status, heartbeat_at) "
-            "WHERE status = 'in_progress'",
-        ):
-            await conn.execute(text(stmt))
+
+    # Idempotent migration for tables created by earlier versions: add any
+    # columns introduced for durable-resume support. Each statement runs in
+    # its own transaction so an InsufficientPrivilege on one ALTER (another
+    # pod's SP owns the table but the schema is already migrated) doesn't
+    # poison the rest. A single mega-transaction would abort entirely on the
+    # first owner-check failure even with IF NOT EXISTS.
+    migration_stmts = (
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS owner_pod_id TEXT",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS original_request TEXT",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.messages "
+        "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
+        f"CREATE INDEX IF NOT EXISTS idx_responses_stale "
+        f"ON {AGENT_DB_SCHEMA}.responses (status, heartbeat_at) "
+        "WHERE status = 'in_progress'",
+    )
+    for stmt in migration_stmts:
+        try:
+            async with _engine.begin() as conn:
+                await conn.execute(text(stmt))
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficientprivilege" in msg or "must be owner" in msg:
+                logger.info(
+                    "[DB] Skipping migration (not owner, presumed already applied): %s",
+                    stmt.split("\n")[0],
+                )
+                continue
+            raise
 
     _initialized = True
     logger.info("[DB] Engine and schema ready")
