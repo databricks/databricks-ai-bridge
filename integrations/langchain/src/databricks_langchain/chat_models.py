@@ -108,6 +108,14 @@ class ChatDatabricks(BaseChatModel):
                 use_responses_api=True,
             )
 
+    For AI Gateway V2 endpoints, set ``use_ai_gateway=True`` (MLflow API) or
+    ``use_ai_gateway_native_api=True`` (native OpenAI API):
+        .. code-block:: python
+            llm = ChatDatabricks(
+                model="my-gateway-endpoint",
+                use_ai_gateway=True,
+            )
+
     **Invoke**:
 
         .. code-block:: python
@@ -294,6 +302,12 @@ class ChatDatabricks(BaseChatModel):
     """Any extra parameters to pass to the endpoint."""
     use_responses_api: bool = False
     """Whether to use the Responses API to format inputs and outputs."""
+    use_ai_gateway: bool = False
+    """If True, route requests through AI Gateway V2 using the MLflow API
+    (``{host}/ai-gateway/mlflow/v1``). Cannot be combined with use_ai_gateway_native_api."""
+    use_ai_gateway_native_api: bool = False
+    """If True, route requests through AI Gateway V2 using the native OpenAI API
+    (``{host}/ai-gateway/openai/v1``). Cannot be combined with use_ai_gateway."""
     timeout: Optional[float] = None
     """Timeout in seconds for the HTTP request. If None, uses the default timeout."""
     max_retries: Optional[int] = None
@@ -326,6 +340,10 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["timeout"] = self.timeout
         if self.max_retries is not None:
             openai_kwargs["max_retries"] = self.max_retries
+        if self.use_ai_gateway:
+            openai_kwargs["use_ai_gateway"] = True
+        if self.use_ai_gateway_native_api:
+            openai_kwargs["use_ai_gateway_native_api"] = True
         return openai_kwargs
 
     @cached_property
