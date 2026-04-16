@@ -804,7 +804,11 @@ class LongRunningAgentServer(AgentServer):
 
         messages = await get_messages(response_id, after_sequence=None)
         if not messages and status == "in_progress":
-            return {"id": response_id, "status": "in_progress"}
+            return {
+                "id": response_id,
+                "status": "in_progress",
+                "attempt_number": resp.attempt_number,
+            }
         if status == "completed" and messages:
             # Only consider items from the final (successful) attempt so that
             # abandoned in-progress items from crashed attempts don't leak
@@ -820,6 +824,7 @@ class LongRunningAgentServer(AgentServer):
                 "id": response_id,
                 "status": "completed",
                 "output": [o for o in output if o is not None],
+                "attempt_number": resp.attempt_number,
             }
             if trace_id:
                 result["metadata"] = {"trace_id": trace_id}
@@ -827,8 +832,17 @@ class LongRunningAgentServer(AgentServer):
         if status == "failed" and messages:
             for _, _, evt, _attempt in messages:
                 if evt and evt.get("type") == "error":
-                    return {"id": response_id, "status": "failed", "error": evt.get("error")}
-        return {"id": response_id, "status": status}
+                    return {
+                        "id": response_id,
+                        "status": "failed",
+                        "error": evt.get("error"),
+                        "attempt_number": resp.attempt_number,
+                    }
+        return {
+            "id": response_id,
+            "status": status,
+            "attempt_number": resp.attempt_number,
+        }
 
     async def _stream_retrieve(
         self,
