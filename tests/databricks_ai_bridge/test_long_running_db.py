@@ -293,9 +293,16 @@ class TestInitDb:
         with patch(f"{DB_MODULE}.AsyncLakebaseSQLAlchemy", mock_cls), patch(f"{DB_MODULE}.event"):
             await init_db(autoscaling_endpoint="ep")
 
-        mock_conn.execute.assert_awaited_once()
-        sql_arg = str(mock_conn.execute.call_args[0][0])
-        assert "CREATE SCHEMA IF NOT EXISTS" in sql_arg
+        # init_db runs: CREATE SCHEMA + run_sync(create_all) + a series of
+        # ADD COLUMN IF NOT EXISTS / CREATE INDEX IF NOT EXISTS to migrate
+        # the durability columns onto pre-existing tables.
+        all_sql = " | ".join(str(call.args[0]) for call in mock_conn.execute.call_args_list)
+        assert "CREATE SCHEMA IF NOT EXISTS" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS owner_pod_id" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS heartbeat_at" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS attempt_number" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS original_request" in all_sql
+        assert "idx_responses_stale" in all_sql
         mock_conn.run_sync.assert_awaited_once()
 
     @pytest.mark.asyncio
