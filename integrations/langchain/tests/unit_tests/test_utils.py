@@ -71,9 +71,7 @@ def test_get_openai_client_with_use_ai_gateway() -> None:
     with patch(
         "databricks_openai.DatabricksOpenAI", return_value=mock_databricks_openai_client
     ) as mock_databricks_openai:
-        client = get_openai_client(
-            workspace_client=mock_workspace_client, use_ai_gateway=True
-        )
+        client = get_openai_client(workspace_client=mock_workspace_client, use_ai_gateway=True)
 
     mock_databricks_openai.assert_called_once_with(
         workspace_client=mock_workspace_client,
