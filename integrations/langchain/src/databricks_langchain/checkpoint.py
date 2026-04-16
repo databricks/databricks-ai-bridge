@@ -62,9 +62,7 @@ class CheckpointSaver(PostgresSaver):
 
             with self._lakebase.connection() as conn:
                 conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self._schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
                 )
         super().setup()
 
@@ -125,9 +123,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
             async with self._lakebase.connection() as conn:
                 await conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self._schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
                 )
         await super().setup()
 

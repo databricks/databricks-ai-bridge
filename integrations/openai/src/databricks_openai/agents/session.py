@@ -179,9 +179,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             from sqlalchemy import text
 
             async with self._engine.begin() as conn:
-                await conn.execute(
-                    text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
-                )
+                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"'))
         await super()._ensure_tables()
 
     @classmethod

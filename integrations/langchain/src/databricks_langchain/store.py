@@ -134,9 +134,7 @@ class DatabricksStore(BaseStore):
 
             with self._lakebase.connection() as conn:
                 conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self._schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
                 )
         return self._with_store(lambda s: s.setup())
 
@@ -275,9 +273,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
             async with self._lakebase.connection() as conn:
                 await conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self._schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
                 )
         return await self._with_store(lambda s: s.setup())
 
