@@ -220,6 +220,11 @@ class LongRunningAgentServer(AgentServer):
         self._db_autoscaling_endpoint = db_autoscaling_endpoint
         self._db_project = db_project
         self._db_branch = db_branch
+        # Track in-flight background tasks per response_id so the debug-kill
+        # endpoint can simulate a pod crash without tearing the whole pod
+        # down. Not load-bearing for correctness — durability still relies on
+        # DB state, this is just a test affordance.
+        self._running_tasks: dict[str, asyncio.Task] = {}
         super().__init__(agent_type, enable_chat_proxy=enable_chat_proxy)
 
     def _setup_routes(self) -> None:
@@ -236,6 +241,31 @@ class LongRunningAgentServer(AgentServer):
                 status_code=501,
                 detail="Cancellation is not yet implemented.",
             )
+
+        # Debug endpoint for testing durable resume: cancels the in-flight
+        # asyncio task that owns the given response_id WITHOUT running the
+        # _task_scope cleanup, so the DB row stays in_progress with a
+        # going-stale heartbeat — exactly the shape a real pod crash leaves.
+        # Opt-in via env var so it's never exposed in production.
+        if os.getenv("LONG_RUNNING_ENABLE_DEBUG_KILL") == "1":
+
+            @self.app.post("/_debug/kill_task/{response_id}")
+            async def _debug_kill_task(response_id: str):
+                task = self._running_tasks.get(response_id)
+                if task is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=(
+                            "No in-flight task for that response_id on this pod "
+                            "(may already have finished or be running on another pod)."
+                        ),
+                    )
+                task.cancel()
+                return {
+                    "response_id": response_id,
+                    "pod_id": _POD_ID,
+                    "status": "task_cancelled",
+                }
 
         db_configured = is_db_configured()
 
@@ -365,24 +395,33 @@ class LongRunningAgentServer(AgentServer):
         }
 
         # Fire-and-forget is intentional — task status is persisted to the database.
+        # We still track the task handle so the debug-kill endpoint can simulate
+        # a crash (and so we know whether a claim target lives on this pod).
         if is_streaming:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._run_background_stream(
                     response_id, durable_request, return_trace_id, attempt_number=1
                 )
             )
+            self._track_task(response_id, task)
             return await self._handle_retrieve_request(
                 response_id,
                 stream=True,
                 starting_after=0,
             )
         else:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._run_background_invoke(
                     response_id, durable_request, return_trace_id, attempt_number=1
                 )
             )
+            self._track_task(response_id, task)
             return response_obj
+
+    def _track_task(self, response_id: str, task: asyncio.Task) -> None:
+        """Record a background task so the debug-kill endpoint can find it."""
+        self._running_tasks[response_id] = task
+        task.add_done_callback(lambda _t: self._running_tasks.pop(response_id, None))
 
     @asynccontextmanager
     async def _heartbeat(self, response_id: str) -> AsyncGenerator[None, None]:
@@ -709,13 +748,14 @@ class LongRunningAgentServer(AgentServer):
             response_id, new_attempt, _POD_ID,
         )
 
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._run_background_stream(
                 response_id, resume_request, return_trace_id=False,
                 attempt_number=new_attempt,
             ),
             name=f"resume-{response_id}-{new_attempt}",
         )
+        self._track_task(response_id, task)
         return new_attempt
 
     async def _handle_retrieve_request(

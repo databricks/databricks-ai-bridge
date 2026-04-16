@@ -388,7 +388,11 @@ class TestRetrieveRequest:
             result = await server._handle_retrieve_request(
                 "resp_123", stream=False, starting_after=0
             )
-            assert result == {"id": "resp_123", "status": "in_progress"}
+            assert result == {
+                "id": "resp_123",
+                "status": "in_progress",
+                "attempt_number": 1,
+            }
 
 
 class TestStreamRetrieve:
@@ -1273,3 +1277,66 @@ class TestSettingsHeartbeatValidation:
         s = LongRunningSettings()
         assert s.heartbeat_interval_seconds == 3.0
         assert s.heartbeat_stale_threshold_seconds == 15.0
+
+
+class TestDebugKillTask:
+    """The opt-in debug-kill endpoint lets integration tests simulate a crash
+    against a deployed pod without restarting the whole app. Off by default
+    because exposing task cancellation bypasses the normal cleanup path."""
+
+    def test_endpoint_absent_by_default(self):
+        from starlette.testclient import TestClient
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+        client = TestClient(server.app, raise_server_exceptions=False)
+        resp = client.post("/_debug/kill_task/resp_x")
+        assert resp.status_code == 404  # route not registered
+
+    def test_endpoint_registered_when_env_set(self, monkeypatch):
+        from starlette.testclient import TestClient
+        monkeypatch.setenv("LONG_RUNNING_ENABLE_DEBUG_KILL", "1")
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+        client = TestClient(server.app, raise_server_exceptions=False)
+        # No in-flight task for this response_id on this pod → 404, not 405.
+        resp = client.post("/_debug/kill_task/resp_missing")
+        assert resp.status_code == 404
+        assert "No in-flight task" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_cancels_tracked_task(self, monkeypatch):
+        """Direct-call variant: skip the TestClient (which is sync and blocks
+        the loop) and call the handler logic through _running_tasks directly.
+        Covers the important behavior: cancelling a tracked task propagates
+        CancelledError and the tracking dict is cleared by the done-callback.
+        """
+        monkeypatch.setenv("LONG_RUNNING_ENABLE_DEBUG_KILL", "1")
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        cancel_event = asyncio.Event()
+
+        async def long_running():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancel_event.set()
+                raise
+
+        task = asyncio.create_task(long_running())
+        server._track_task("resp_tracked", task)
+
+        # Yield once so the new task can start waiting on sleep(60).
+        await asyncio.sleep(0)
+        assert "resp_tracked" in server._running_tasks
+
+        task.cancel()
+        # Expect CancelledError from awaiting the task itself, and the cancel
+        # event set inside the except handler before the re-raise.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancel_event.is_set()
+        # done-callback (scheduled on loop) clears the registration after the
+        # task completes — give it one more tick.
+        await asyncio.sleep(0)
+        assert "resp_tracked" not in server._running_tasks
