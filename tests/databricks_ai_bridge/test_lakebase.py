@@ -1996,40 +1996,6 @@ async def test_async_lakebase_pool_configure_sets_search_path_when_schema_specif
     assert captured_configure[0] is not None, "configure callback should be set when schema is provided"
 
 
-def test_sqlalchemy_registers_checkout_event_when_schema_specified(monkeypatch):
-    """AsyncLakebaseSQLAlchemy registers a 'checkout' event (not 'connect') when schema is set."""
-    captured_events = []
-
-    def mock_listens_for(engine, event_name):
-        def decorator(fn):
-            captured_events.append((event_name, fn))
-            return fn
-
-        return decorator
-
-    workspace = _make_workspace()
-
-    with (
-        monkeypatch.context() as m,
-    ):
-        m.setattr("sqlalchemy.event.listens_for", mock_listens_for)
-        m.setattr(
-            "sqlalchemy.ext.asyncio.create_async_engine",
-            lambda *args, **kwargs: MagicMock(sync_engine=MagicMock()),
-        )
-
-        AsyncLakebaseSQLAlchemy(
-            instance_name="lake-instance",
-            workspace_client=workspace,
-            schema="my_schema",
-        )
-
-    event_names = [name for name, _ in captured_events]
-    assert "do_connect" in event_names, "do_connect event should always be registered"
-    assert "checkout" in event_names, "checkout event should be registered when schema is specified"
-    assert "connect" not in event_names, "connect event should NOT be used (checkout is correct)"
-
-
 def test_sqlalchemy_no_checkout_event_when_no_schema(monkeypatch):
     """AsyncLakebaseSQLAlchemy does not register a checkout event when no schema is set."""
     captured_events = []

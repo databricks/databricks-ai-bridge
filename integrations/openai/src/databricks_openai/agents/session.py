@@ -176,10 +176,16 @@ class AsyncDatabricksSession(SQLAlchemySession):
     async def _ensure_tables(self) -> None:
         """Ensure schema and tables are created before any database operations."""
         if self._schema and self._create_tables:
+            import re
+
             from sqlalchemy import text
 
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", self._schema):
+                raise ValueError(f"Invalid schema name: {self._schema!r}")
             async with self._engine.begin() as conn:
-                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"'))
+                await conn.execute(
+                    text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
+                )
         await super()._ensure_tables()
 
     @classmethod

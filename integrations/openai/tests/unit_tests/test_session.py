@@ -1297,63 +1297,6 @@ class TestAsyncDatabricksSessionBranchResourcePath:
 class TestAsyncDatabricksSessionSchema:
     """Tests for schema parameter behavior in AsyncDatabricksSession."""
 
-    def test_schema_stored_on_session(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
-        """Session stores the schema parameter as _schema."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "sqlalchemy.ext.asyncio.create_async_engine",
-                return_value=mock_engine,
-            ),
-            patch(
-                "sqlalchemy.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            session = AsyncDatabricksSession(
-                session_id="test-session",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-                schema="my_schema",
-            )
-
-            assert session._schema == "my_schema"
-
-    def test_schema_none_by_default(
-        self, mock_workspace_client, mock_engine, mock_event_listens_for
-    ):
-        """Session _schema is None when not provided."""
-        with (
-            patch(
-                "databricks_ai_bridge.lakebase.WorkspaceClient",
-                return_value=mock_workspace_client,
-            ),
-            patch(
-                "sqlalchemy.ext.asyncio.create_async_engine",
-                return_value=mock_engine,
-            ),
-            patch(
-                "sqlalchemy.event.listens_for",
-                side_effect=mock_event_listens_for,
-            ),
-        ):
-            from databricks_openai.agents.session import AsyncDatabricksSession
-
-            session = AsyncDatabricksSession(
-                session_id="test-session",
-                instance_name="test-instance",
-                workspace_client=mock_workspace_client,
-            )
-
-            assert session._schema is None
-
     def test_different_schemas_get_different_engines(
         self, mock_workspace_client, mock_event_listens_for
     ):

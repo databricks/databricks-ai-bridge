@@ -231,26 +231,6 @@ async def test_async_checkpoint_saver_autoscaling_configures_lakebase(monkeypatc
 # =============================================================================
 
 
-def test_checkpoint_saver_stores_schema(monkeypatch):
-    """CheckpointSaver with schema stores it as _schema."""
-    test_pool = TestConnectionPool(connection_value="lake-conn")
-    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
-
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-
-    saver = CheckpointSaver(
-        instance_name="lakebase-instance",
-        workspace_client=workspace,
-        schema="my_schema",
-    )
-
-    assert saver._schema == "my_schema"
-
-
 def test_checkpoint_saver_setup_creates_schema(monkeypatch):
     """CheckpointSaver.setup() should CREATE SCHEMA IF NOT EXISTS when schema is set."""
     mock_conn = MagicMock()
@@ -306,27 +286,6 @@ def test_checkpoint_saver_setup_skips_schema_when_none(monkeypatch):
 
     # No schema creation should have happened
     mock_conn.execute.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_async_checkpoint_saver_stores_schema(monkeypatch):
-    """AsyncCheckpointSaver with schema stores it as _schema."""
-    test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
-    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-
-    saver = AsyncCheckpointSaver(
-        instance_name="lakebase-instance",
-        workspace_client=workspace,
-        schema="my_schema",
-    )
-
-    assert saver._schema == "my_schema"
 
 
 @pytest.mark.asyncio

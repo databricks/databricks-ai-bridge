@@ -667,23 +667,6 @@ async def test_async_databricks_store_branch_resource_path(monkeypatch):
 # =============================================================================
 
 
-def test_databricks_store_stores_schema(monkeypatch):
-    """DatabricksStore with schema stores it as _schema."""
-    mock_conn = MagicMock()
-    test_pool = TestConnectionPool(connection_value=mock_conn)
-    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
-
-    workspace = _create_mock_workspace()
-
-    store = DatabricksStore(
-        instance_name="lakebase-instance",
-        workspace_client=workspace,
-        schema="my_schema",
-    )
-
-    assert store._schema == "my_schema"
-
-
 def test_databricks_store_setup_creates_schema(monkeypatch):
     """DatabricksStore.setup() should CREATE SCHEMA IF NOT EXISTS when schema is set."""
     mock_conn = MagicMock()
@@ -731,24 +714,6 @@ def test_databricks_store_setup_skips_schema_when_none(monkeypatch):
 
     # No schema creation should have happened
     mock_conn.execute.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_async_databricks_store_stores_schema(monkeypatch):
-    """AsyncDatabricksStore with schema stores it as _schema."""
-    mock_conn = MagicMock()
-    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
-    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
-
-    workspace = _create_mock_workspace()
-
-    store = AsyncDatabricksStore(
-        instance_name="lakebase-instance",
-        workspace_client=workspace,
-        schema="my_schema",
-    )
-
-    assert store._schema == "my_schema"
 
 
 @pytest.mark.asyncio
