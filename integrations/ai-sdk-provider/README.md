@@ -2,6 +2,11 @@
 
 Databricks provider for the [Vercel AI SDK](https://sdk.vercel.ai/docs).
 
+This package supports two integration styles:
+
+- **Language model provider** for Databricks serving endpoints
+- **Genie conversation client and custom agent** for Databricks Genie conversation APIs
+
 ## Features
 
 - 🚀 Support for all Databricks endpoint types:
@@ -10,6 +15,7 @@ Databricks provider for the [Vercel AI SDK](https://sdk.vercel.ai/docs).
   - **Chat Agent** (`agent/v2/chat`) - Legacy Databricks chat agent API ([docs](https://docs.databricks.com/aws/en/generative-ai/agent-framework/agent-legacy-schema))
 - 🔄 Stream and non-stream (generate) support for all endpoint types
 - 🛠️ Tool calling and agent support
+- 💬 Genie conversation helper and custom AI SDK agent support
 - 🔐 Flexible authentication (bring your own tokens/headers)
 - 🎯 Full TypeScript support
 
@@ -27,7 +33,7 @@ This package requires the following peer dependencies:
 npm install @ai-sdk/provider @ai-sdk/provider-utils
 ```
 
-To use the provider with AI SDK functions like `generateText` or `streamText`, also install:
+To use the custom Genie agent with AI SDK agent utilities, also install:
 
 ```bash
 npm install ai
@@ -58,6 +64,71 @@ const result = await generateText({
 console.log(result.text)
 ```
 
+## Genie Quick Start
+
+```typescript
+import { createAgentUIStreamResponse } from 'ai'
+import { createDatabricksGenieAgent } from '@databricks/ai-sdk-provider'
+
+const genieAgent = createDatabricksGenieAgent({
+  baseURL: 'https://your-workspace.databricks.com',
+  spaceId: 'your-genie-space-id',
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+})
+
+export async function POST(request: Request) {
+  const { messages } = await request.json()
+
+  return createAgentUIStreamResponse({
+    agent: genieAgent,
+    uiMessages: messages,
+  })
+}
+```
+
+The returned AI SDK result keeps Genie-specific metadata on `result.genie`, including:
+
+- `conversationId`
+- `messageId`
+- `status`
+- `text`
+- `sql`
+- `attachmentId`
+- `suggestedQuestions`
+- optional `queryResult`
+
+## Genie Live Smoke Test
+
+You can run a real end-to-end smoke test against your Databricks workspace with:
+
+```bash
+npm run test:genie:live
+```
+
+The test auto-loads `.env.local` from this package directory before execution. Set:
+
+```bash
+DATABRICKS_HOST="https://your-workspace.databricks.com"
+DATABRICKS_TOKEN="your-token"
+DATABRICKS_GENIE_SPACE_ID="your-genie-space-id"
+```
+
+Optional environment variables:
+
+- `DATABRICKS_GENIE_TEST_QUESTION`: override the first Genie question
+- `DATABRICKS_GENIE_TEST_FOLLOW_UP_QUESTION`: override the follow-up question sent through the agent
+
+The live smoke test:
+
+- auto-loads `.env.local`
+- starts with the Genie conversation client
+- logs raw and normalized attachment details
+- uses Genie-suggested follow-up questions when they are available
+- fetches tabular query results when Genie returns a query attachment
+- sends a second follow-up through the Genie agent using the returned `conversationId`
+
 ## Authentication
 
 The provider requires you to pass authentication headers:
@@ -70,6 +141,9 @@ const provider = createDatabricksProvider({
   },
 })
 ```
+
+The Genie conversation client and Genie agent use the same provider-style settings, but the `baseURL`
+should be your workspace host rather than `/serving-endpoints`.
 
 ## API Reference
 
@@ -93,6 +167,63 @@ Creates a Databricks provider instance.
 - `responses(modelId: string)`: Create a Responses model
 - `chatCompletions(modelId: string)`: Create a Chat Completions model
 - `chatAgent(modelId: string)`: Create a Chat Agent model
+
+### Genie Exports
+
+#### `createDatabricksGenieConversationClient(settings)`
+
+Creates a conversation-focused client for the Databricks Genie conversation API.
+
+**Parameters:**
+
+- `settings.baseURL` (string, required): Databricks workspace base URL
+- `settings.spaceId` (string, required): Genie space ID
+- `settings.headers` (object, optional): Custom headers to include in requests
+- `settings.fetch` (function, optional): Custom fetch implementation
+- `settings.formatUrl` (function, optional): Optional function to format the URL
+- `settings.timeoutMs` (number, optional): Polling timeout, default `600000`
+- `settings.initialPollIntervalMs` (number, optional): Initial polling delay, default `1000`
+- `settings.maxPollIntervalMs` (number, optional): Maximum polling delay, default `60000`
+- `settings.backoffMultiplier` (number, optional): Polling backoff multiplier, default `2`
+
+The conversation client exposes:
+
+- `startConversation(question)`
+- `createMessage(conversationId, question)`
+- `getMessage(conversationId, messageId)`
+- `waitForCompletion(conversationId, messageId, options)`
+- `getQueryResult(conversationId, messageId, attachmentId)`
+- `ask(question, options)`
+
+`ask(question, options)` returns a normalized result with:
+
+- `conversationId`
+- `messageId`
+- `status`
+- `text`
+- `sql`
+- `attachmentId`
+- `suggestedQuestions`
+- optional `queryResult`
+- the normalized raw `message`
+
+#### `createDatabricksGenieAgent(settings)`
+
+Creates a custom AI SDK agent backed directly by the Databricks Genie conversation API.
+
+The agent:
+
+- sends only the latest user message as the new Genie question
+- keeps Databricks conversation state via `conversationId`
+- returns normal assistant text plus structured Genie metadata in `result.genie`
+- supports `createAgentUIStreamResponse()` without requiring a new language-model provider
+
+Agent call options:
+
+- `conversationId?: string`
+- `fetchQueryResult?: boolean` default `false`
+- `headers?: Record<string, string>`
+- polling overrides: `timeoutMs`, `initialPollIntervalMs`, `maxPollIntervalMs`, `backoffMultiplier`
 
 ### Remote Tool Calling
 
