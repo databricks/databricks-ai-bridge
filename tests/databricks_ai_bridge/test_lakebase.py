@@ -1910,3 +1910,200 @@ def test_branch_plain_name_without_project_raises_error():
             branch="my-branch",
             workspace_client=workspace,
         )
+
+
+# =============================================================================
+# Schema (search_path) Tests
+# =============================================================================
+
+
+def test_lakebase_pool_configure_sets_search_path_when_schema_specified(monkeypatch):
+    """LakebasePool with schema passes a configure callback that sets search_path."""
+    captured_configure = [None]
+
+    class TestPool:
+        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
+            self.conninfo = conninfo
+            captured_configure[0] = configure
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+
+    assert captured_configure[0] is not None, "configure callback should be set when schema is provided"
+
+    # Simulate calling the configure callback
+    mock_conn = MagicMock()
+    captured_configure[0](mock_conn)
+    mock_conn.execute.assert_called_once()
+    executed_sql = mock_conn.execute.call_args[0][0]
+    # The SQL should reference the schema name
+    assert "my_schema" in str(executed_sql) or "search_path" in str(executed_sql)
+
+
+def test_lakebase_pool_no_configure_when_no_schema(monkeypatch):
+    """LakebasePool without schema passes no configure callback."""
+    captured_configure = [None]
+
+    class TestPool:
+        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
+            self.conninfo = conninfo
+            captured_configure[0] = configure
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+    )
+
+    assert captured_configure[0] is None, "configure callback should be None when no schema"
+
+
+@pytest.mark.asyncio
+async def test_async_lakebase_pool_configure_sets_search_path_when_schema_specified(monkeypatch):
+    """AsyncLakebasePool with schema passes a configure callback that sets search_path."""
+    captured_configure = [None]
+
+    class TestPool:
+        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
+            self.conninfo = conninfo
+            captured_configure[0] = configure
+            self._opened = False
+            self._closed = False
+
+        async def open(self):
+            self._opened = True
+
+        async def close(self):
+            self._closed = True
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    AsyncLakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+
+    assert captured_configure[0] is not None, "configure callback should be set when schema is provided"
+
+
+def test_sqlalchemy_registers_checkout_event_when_schema_specified(monkeypatch):
+    """AsyncLakebaseSQLAlchemy registers a 'checkout' event (not 'connect') when schema is set."""
+    captured_events = []
+
+    def mock_listens_for(engine, event_name):
+        def decorator(fn):
+            captured_events.append((event_name, fn))
+            return fn
+
+        return decorator
+
+    workspace = _make_workspace()
+
+    with (
+        monkeypatch.context() as m,
+    ):
+        m.setattr("sqlalchemy.event.listens_for", mock_listens_for)
+        m.setattr(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            lambda *args, **kwargs: MagicMock(sync_engine=MagicMock()),
+        )
+
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+            schema="my_schema",
+        )
+
+    event_names = [name for name, _ in captured_events]
+    assert "do_connect" in event_names, "do_connect event should always be registered"
+    assert "checkout" in event_names, "checkout event should be registered when schema is specified"
+    assert "connect" not in event_names, "connect event should NOT be used (checkout is correct)"
+
+
+def test_sqlalchemy_no_checkout_event_when_no_schema(monkeypatch):
+    """AsyncLakebaseSQLAlchemy does not register a checkout event when no schema is set."""
+    captured_events = []
+
+    def mock_listens_for(engine, event_name):
+        def decorator(fn):
+            captured_events.append((event_name, fn))
+            return fn
+
+        return decorator
+
+    workspace = _make_workspace()
+
+    with (
+        monkeypatch.context() as m,
+    ):
+        m.setattr("sqlalchemy.event.listens_for", mock_listens_for)
+        m.setattr(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            lambda *args, **kwargs: MagicMock(sync_engine=MagicMock()),
+        )
+
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+        )
+
+    event_names = [name for name, _ in captured_events]
+    assert "do_connect" in event_names
+    assert "checkout" not in event_names, "checkout event should not be registered without schema"
+
+
+def test_sqlalchemy_checkout_handler_sets_search_path(monkeypatch):
+    """The checkout event handler should execute SET search_path with the schema name."""
+    captured_events = []
+
+    def mock_listens_for(engine, event_name):
+        def decorator(fn):
+            captured_events.append((event_name, fn))
+            return fn
+
+        return decorator
+
+    workspace = _make_workspace()
+
+    with (
+        monkeypatch.context() as m,
+    ):
+        m.setattr("sqlalchemy.event.listens_for", mock_listens_for)
+        m.setattr(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            lambda *args, **kwargs: MagicMock(sync_engine=MagicMock()),
+        )
+
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=workspace,
+            schema="my_schema",
+        )
+
+    checkout_handlers = [(name, fn) for name, fn in captured_events if name == "checkout"]
+    assert len(checkout_handlers) == 1
+
+    handler = checkout_handlers[0][1]
+
+    # Simulate checkout event: handler(dbapi_conn, connection_record, connection_proxy)
+    mock_cursor = MagicMock()
+    mock_dbapi_conn = MagicMock()
+    mock_dbapi_conn.cursor.return_value = mock_cursor
+
+    handler(mock_dbapi_conn, MagicMock(), MagicMock())
+
+    mock_cursor.execute.assert_called_once()
+    mock_cursor.close.assert_called_once()
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert "search_path" in str(executed_sql).lower()
+    assert "my_schema" in str(executed_sql)
