@@ -1327,7 +1327,9 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             @event.listens_for(engine.sync_engine, "checkout")
             def set_search_path(dbapi_conn, connection_record, connection_proxy):
                 cursor = dbapi_conn.cursor()
-                cursor.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema)))
+                cursor.execute(
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
+                )
                 cursor.close()
 
         return engine

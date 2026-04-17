@@ -1935,7 +1935,9 @@ def test_lakebase_pool_configure_sets_search_path_when_schema_specified(monkeypa
         schema="my_schema",
     )
 
-    assert captured_configure[0] is not None, "configure callback should be set when schema is provided"
+    assert captured_configure[0] is not None, (
+        "configure callback should be set when schema is provided"
+    )
 
     # Simulate calling the configure callback
     mock_conn = MagicMock()
@@ -1993,7 +1995,9 @@ async def test_async_lakebase_pool_configure_sets_search_path_when_schema_specif
         schema="my_schema",
     )
 
-    assert captured_configure[0] is not None, "configure callback should be set when schema is provided"
+    assert captured_configure[0] is not None, (
+        "configure callback should be set when schema is provided"
+    )
 
 
 def test_sqlalchemy_no_checkout_event_when_no_schema(monkeypatch):

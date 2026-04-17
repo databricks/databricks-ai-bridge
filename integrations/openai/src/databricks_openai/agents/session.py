@@ -183,9 +183,7 @@ class AsyncDatabricksSession(SQLAlchemySession):
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", self._schema):
                 raise ValueError(f"Invalid schema name: {self._schema!r}")
             async with self._engine.begin() as conn:
-                await conn.execute(
-                    text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
-                )
+                await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"'))
         await super()._ensure_tables()
 
     @classmethod
