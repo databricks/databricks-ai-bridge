@@ -298,6 +298,10 @@ class ChatDatabricks(BaseChatModel):
     """Timeout in seconds for the HTTP request. If None, uses the default timeout."""
     max_retries: Optional[int] = None
     """Maximum number of retries for failed requests. If None, uses the default retry count."""
+    use_ai_gateway: bool = False
+    """If True, route requests through AI Gateway using the MLflow API."""
+    use_ai_gateway_native_api: bool = False
+    """If True, route requests through AI Gateway using the native OpenAI-compatible API."""
 
     @property
     def endpoint(self) -> str:
@@ -326,6 +330,10 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["timeout"] = self.timeout
         if self.max_retries is not None:
             openai_kwargs["max_retries"] = self.max_retries
+        if self.use_ai_gateway:
+            openai_kwargs["use_ai_gateway"] = True
+        if self.use_ai_gateway_native_api:
+            openai_kwargs["use_ai_gateway_native_api"] = True
         return openai_kwargs
 
     @cached_property
