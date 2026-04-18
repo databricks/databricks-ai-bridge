@@ -1,16 +1,20 @@
 """Test utilities module."""
 
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
 
 from databricks_langchain.utils import get_openai_client
 
 
-@pytest.mark.parametrize("kwargs,with_workspace_client", [
-    ({"timeout": 45.0, "max_retries": 3}, True),
-    ({"timeout": 30.0, "max_retries": 2}, False),
-    ({}, True),
-])
+@pytest.mark.parametrize(
+    "kwargs,with_workspace_client",
+    [
+        ({"timeout": 45.0, "max_retries": 3}, True),
+        ({"timeout": 30.0, "max_retries": 2}, False),
+        ({}, True),
+    ],
+)
 def test_get_openai_client(kwargs, with_workspace_client):
     mock_client = Mock()
     mock_workspace_client = Mock()
