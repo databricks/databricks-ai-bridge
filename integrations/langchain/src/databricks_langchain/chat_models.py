@@ -299,7 +299,7 @@ class ChatDatabricks(BaseChatModel):
     max_retries: Optional[int] = None
     """Maximum number of retries for failed requests. If None, uses the default retry count."""
     use_ai_gateway: bool = False
-    """If True, route requests through AI Gateway using the MLflow API."""
+    """If True, route requests through AI Gateway using the Supervisor API."""
     use_ai_gateway_native_api: bool = False
     """If True, route requests through AI Gateway using the native OpenAI-compatible API."""
 
