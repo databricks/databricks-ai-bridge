@@ -383,9 +383,11 @@ class LongRunningAgentServer(AgentServer):
             original_request=durable_dict,
         )
 
-        logger.debug(
-            "Background response created",
-            extra={"response_id": response_id, "stream": is_streaming, "pod": _POD_ID},
+        logger.info(
+            "Background response created response_id=%s stream=%s pod=%s",
+            response_id,
+            is_streaming,
+            _POD_ID,
         )
 
         response_obj: dict[str, Any] = {
