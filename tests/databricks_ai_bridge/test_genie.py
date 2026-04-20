@@ -890,6 +890,27 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             None,
             None,
         ),
+        # Multiple query attachments (self-correction) - should return the LAST one
+        (
+            {
+                "attachments": [
+                    {
+                        "attachment_id": "1",
+                        "query": {"query": "SELECT wrong", "description": "first attempt"},
+                    },
+                    {
+                        "attachment_id": "2",
+                        "query": {"query": "SELECT correct", "description": "corrected"},
+                    },
+                ]
+            },
+            {
+                "attachment_id": "2",
+                "query": {"query": "SELECT correct", "description": "corrected"},
+            },
+            None,
+            None,
+        ),
     ],
 )
 def test_parse_attachments(resp, exp_query, exp_text, exp_questions):
