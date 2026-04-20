@@ -85,7 +85,10 @@ async def _deferred_mark_failed(
                 },
             }
             await append_message(
-                response_id, next_seq, item=None, stream_event=error_event,
+                response_id,
+                next_seq,
+                item=None,
+                stream_event=error_event,
                 attempt_number=attempt,
             )
             await update_response_status(response_id, "failed")
@@ -365,10 +368,12 @@ class LongRunningAgentServer(AgentServer):
         # Anchor the conversation to response_id so any future replay from a
         # different pod resolves to the same agent-SDK thread/session. We
         # round-trip through dict + validator so the handler still receives a
-        # pydantic ResponsesAgentRequest (its declared arg type).
-        request_dict = (
-            request_data.model_dump() if hasattr(request_data, "model_dump") else dict(request_data)
-        )
+        # pydantic ResponsesAgentRequest (its declared arg type). The
+        # declared param type is ``dict`` but the runtime object is a pydantic
+        # model from ``validate_and_convert_request``; fall back to ``dict()``
+        # when tests pass a plain dict directly.
+        dump = getattr(request_data, "model_dump", None)
+        request_dict = dump() if callable(dump) else dict(request_data)
         durable_dict = _inject_conversation_id(request_dict, response_id)
         durable_request = self.validator.validate_and_convert_request(durable_dict)
         await create_response(
@@ -442,7 +447,8 @@ class LongRunningAgentServer(AgentServer):
                         await heartbeat_response(response_id, _POD_ID)
                     except Exception:
                         logger.warning(
-                            "Heartbeat write failed for %s; will retry", response_id,
+                            "Heartbeat write failed for %s; will retry",
+                            response_id,
                             exc_info=True,
                         )
                     try:
@@ -530,7 +536,10 @@ class LongRunningAgentServer(AgentServer):
         state: dict[str, Any] = {"seq": 0}
         async with self._task_scope(response_id, state), self._heartbeat(response_id):
             await self._do_background_stream(
-                response_id, request_data, return_trace_id, state,
+                response_id,
+                request_data,
+                return_trace_id,
+                state,
                 attempt_number=attempt_number,
             )
 
@@ -577,7 +586,9 @@ class LongRunningAgentServer(AgentServer):
                 logger.debug(
                     "SSE event (background)",
                     extra={
-                        "response_id": response_id, "seq": seq, "type": evt_type,
+                        "response_id": response_id,
+                        "seq": seq,
+                        "type": evt_type,
                         "attempt": attempt_number,
                     },
                 )
@@ -620,7 +631,10 @@ class LongRunningAgentServer(AgentServer):
         state: dict[str, Any] = {"seq": 0}
         async with self._task_scope(response_id, state), self._heartbeat(response_id):
             await self._do_background_invoke(
-                response_id, request_data, return_trace_id, state,
+                response_id,
+                request_data,
+                return_trace_id,
+                state,
                 attempt_number=attempt_number,
             )
 
@@ -706,7 +720,8 @@ class LongRunningAgentServer(AgentServer):
         if resp.original_request is None:
             # Nothing to replay from — the run predates durability metadata.
             logger.warning(
-                "Cannot resume %s: no original_request persisted (old row?)", response_id,
+                "Cannot resume %s: no original_request persisted (old row?)",
+                response_id,
             )
             return None
 
@@ -745,12 +760,16 @@ class LongRunningAgentServer(AgentServer):
 
         logger.info(
             "Claimed stale run %s as attempt %s (pod=%s)",
-            response_id, new_attempt, _POD_ID,
+            response_id,
+            new_attempt,
+            _POD_ID,
         )
 
         task = asyncio.create_task(
             self._run_background_stream(
-                response_id, resume_request, return_trace_id=False,
+                response_id,
+                resume_request,
+                return_trace_id=False,
                 attempt_number=new_attempt,
             ),
             name=f"resume-{response_id}-{new_attempt}",

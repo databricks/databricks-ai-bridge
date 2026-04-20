@@ -981,8 +981,9 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
 
         captured: dict = {}
 
-        async def fake_create_response(response_id, status, *, owner_pod_id=None,
-                                        original_request=None):
+        async def fake_create_response(
+            response_id, status, *, owner_pod_id=None, original_request=None
+        ):
             captured["response_id"] = response_id
             captured["status"] = status
             captured["owner_pod_id"] = owner_pod_id
@@ -1030,6 +1031,7 @@ class TestTryClaimAndResume:
             )
         # created 2s ago, no heartbeat yet → should NOT be claimed.
         from datetime import timedelta
+
         resp = _resp_info(
             status="in_progress",
             created_at=datetime.now(timezone.utc) - timedelta(seconds=2),
@@ -1047,6 +1049,7 @@ class TestTryClaimAndResume:
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
+
         resp = _resp_info(
             status="in_progress",
             created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
@@ -1064,6 +1067,7 @@ class TestTryClaimAndResume:
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
+
         resp = _resp_info(
             status="in_progress",
             created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
@@ -1071,8 +1075,9 @@ class TestTryClaimAndResume:
             original_request={"input": [{"role": "user"}]},
         )
         with (
-            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock,
-                  return_value=None) as mock_claim,
+            patch(
+                f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=None
+            ) as mock_claim,
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
         ):
             result = await server._try_claim_and_resume("resp_x", resp)
@@ -1085,6 +1090,7 @@ class TestTryClaimAndResume:
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
+
         resp = _resp_info(
             status="in_progress",
             created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
@@ -1097,17 +1103,18 @@ class TestTryClaimAndResume:
         )
         captured: dict = {}
 
-        async def fake_append(response_id, seq, *, item=None, stream_event=None,
-                              attempt_number=1):
+        async def fake_append(response_id, seq, *, item=None, stream_event=None, attempt_number=1):
             captured["seq"] = seq
             captured["event"] = stream_event
             captured["attempt_tag"] = attempt_number
 
         with (
-            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock,
-                  return_value=2),
-            patch(f"{MODULE}.get_messages", new_callable=AsyncMock,
-                  return_value=[_msg(0, None, {}), _msg(1, None, {})]),
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
+            patch(
+                f"{MODULE}.get_messages",
+                new_callable=AsyncMock,
+                return_value=[_msg(0, None, {}), _msg(1, None, {})],
+            ),
             patch(f"{MODULE}.append_message", side_effect=fake_append),
             patch("asyncio.create_task") as mock_create_task,
         ):
@@ -1130,6 +1137,7 @@ class TestTryClaimAndResume:
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
+
         resp = _resp_info(
             status="in_progress",
             created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
@@ -1147,8 +1155,12 @@ class TestTryClaimAndResume:
             captured_tasks.append((coro, name))
 
             class _Fake:
-                def cancel(self): pass
-                def add_done_callback(self, cb): pass
+                def cancel(self):
+                    pass
+
+                def add_done_callback(self, cb):
+                    pass
+
             return _Fake()
 
         with (
@@ -1165,7 +1177,6 @@ class TestTryClaimAndResume:
         # the captured coro with proper args. Simpler: check that the resume
         # coroutine was built with input=[]. Drive the coroutine so mock_run
         # receives the call args.
-        import asyncio as _a
         assert len(captured_tasks) == 1
         coro, _name = captured_tasks[0]
         await coro
@@ -1175,7 +1186,9 @@ class TestTryClaimAndResume:
         # resume_request is a ResponsesAgentRequest pydantic object after
         # round-tripping through the validator so the handler still gets its
         # declared arg type.
-        dumped = resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        dumped = (
+            resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        )
         assert dumped["input"] == []
         # Other request metadata is preserved so the handler can find
         # thread_id / conversation_id / user_id.
@@ -1193,8 +1206,9 @@ class TestRetrieveTriggersLazyClaim:
         with (
             patch(f"{MODULE}.get_response", new_callable=AsyncMock, return_value=resp),
             patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
-            patch.object(server, "_try_claim_and_resume", new_callable=AsyncMock,
-                          return_value=None) as mock_claim,
+            patch.object(
+                server, "_try_claim_and_resume", new_callable=AsyncMock, return_value=None
+            ) as mock_claim,
         ):
             await server._handle_retrieve_request("resp_x", stream=False, starting_after=0)
 
@@ -1206,7 +1220,8 @@ class TestHeartbeatContextManager:
     async def test_writes_heartbeat_periodically(self):
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer(
-                "ResponsesAgent", heartbeat_interval_seconds=0.05,
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
                 heartbeat_stale_threshold_seconds=1.0,
             )
 
@@ -1223,7 +1238,8 @@ class TestHeartbeatContextManager:
     async def test_stops_cleanly_on_exit(self):
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer(
-                "ResponsesAgent", heartbeat_interval_seconds=0.05,
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
                 heartbeat_stale_threshold_seconds=1.0,
             )
 
@@ -1245,13 +1261,17 @@ class TestHeartbeatContextManager:
         real death, so a transient write miss must not kill a live run."""
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer(
-                "ResponsesAgent", heartbeat_interval_seconds=0.05,
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
                 heartbeat_stale_threshold_seconds=1.0,
             )
 
         body_ran = False
-        with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock,
-                    side_effect=RuntimeError("db down")):
+        with patch(
+            f"{MODULE}.heartbeat_response",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db down"),
+        ):
             async with server._heartbeat("resp_x"):
                 await asyncio.sleep(0.1)
                 body_ran = True
@@ -1286,6 +1306,7 @@ class TestDebugKillTask:
 
     def test_endpoint_absent_by_default(self):
         from starlette.testclient import TestClient
+
         with patch(f"{MODULE}.is_db_configured", return_value=True):
             server = LongRunningAgentServer("ResponsesAgent")
         client = TestClient(server.app, raise_server_exceptions=False)
@@ -1294,6 +1315,7 @@ class TestDebugKillTask:
 
     def test_endpoint_registered_when_env_set(self, monkeypatch):
         from starlette.testclient import TestClient
+
         monkeypatch.setenv("LONG_RUNNING_ENABLE_DEBUG_KILL", "1")
         with patch(f"{MODULE}.is_db_configured", return_value=True):
             server = LongRunningAgentServer("ResponsesAgent")

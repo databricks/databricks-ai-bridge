@@ -31,9 +31,7 @@ class Response(Base):
     )
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_pod_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    heartbeat_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempt_number: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1", default=1
     )
