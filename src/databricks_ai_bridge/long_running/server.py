@@ -952,7 +952,9 @@ class LongRunningAgentServer(AgentServer):
 
             for seq, _, evt, _attempt in messages:
                 if evt is not None:
-                    evt = {**evt, "sequence_number": seq}
+                    # Tag every SSE frame with the response_id so proxies /
+                    # clients can discover it without parsing nested fields.
+                    evt = {**evt, "sequence_number": seq, "response_id": response_id}
                     event_type = evt.get("type", "message")
                     logger.debug(
                         "SSE event",
