@@ -945,6 +945,15 @@ class LongRunningAgentServer(AgentServer):
                 break
 
             status = resp.status
+            # Self-heal: if this response is still in_progress but its owning
+            # pod has gone silent past heartbeat_stale_threshold, try to claim
+            # + resume on this pod. A no-op if heartbeat is fresh or another
+            # pod already won. Without this, a stream opened before the crash
+            # would idle forever polling a dead run — since _try_claim_and_resume
+            # is only triggered by the outer retrieve handler on fresh GETs.
+            if status == "in_progress":
+                await self._try_claim_and_resume(response_id, resp)
+
             # starting_after=0 fetches all messages (sequence numbers start at 0).
             # We use after_sequence=-1 for the DB query so that seq 0 is included.
             after_seq = last_seq - 1 if last_seq == 0 else last_seq
