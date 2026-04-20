@@ -256,6 +256,11 @@ class LongRunningAgentServer(AgentServer):
             async def _debug_kill_task(response_id: str):
                 task = self._running_tasks.get(response_id)
                 if task is None:
+                    logger.info(
+                        "[durable] kill endpoint: no task response_id=%s on pod=%s",
+                        response_id,
+                        _POD_ID,
+                    )
                     raise HTTPException(
                         status_code=404,
                         detail=(
@@ -263,6 +268,11 @@ class LongRunningAgentServer(AgentServer):
                             "(may already have finished or be running on another pod)."
                         ),
                     )
+                logger.info(
+                    "[durable] kill endpoint: cancelling task response_id=%s pod=%s",
+                    response_id,
+                    _POD_ID,
+                )
                 task.cancel()
                 return {
                     "response_id": response_id,
@@ -443,13 +453,31 @@ class LongRunningAgentServer(AgentServer):
         stop = asyncio.Event()
 
         async def _beat():
+            beats = 0
+            logger.info(
+                "[durable] heartbeat start response_id=%s pod=%s interval=%.1fs",
+                response_id,
+                _POD_ID,
+                interval,
+            )
             try:
                 while not stop.is_set():
                     try:
                         await heartbeat_response(response_id, _POD_ID)
+                        beats += 1
+                        # Sampled heartbeat log so the lifecycle is visible
+                        # without spamming every interval. Every 5th (~15s
+                        # at 3s interval) is a good compromise.
+                        if beats % 5 == 1:
+                            logger.info(
+                                "[durable] heartbeat beat#%d response_id=%s pod=%s",
+                                beats,
+                                response_id,
+                                _POD_ID,
+                            )
                     except Exception:
                         logger.warning(
-                            "Heartbeat write failed for %s; will retry",
+                            "[durable] heartbeat write failed response_id=%s; will retry",
                             response_id,
                             exc_info=True,
                         )
@@ -459,6 +487,12 @@ class LongRunningAgentServer(AgentServer):
                         pass
             except asyncio.CancelledError:
                 pass
+            logger.info(
+                "[durable] heartbeat stop response_id=%s pod=%s total_beats=%d",
+                response_id,
+                _POD_ID,
+                beats,
+            )
 
         hb_task = asyncio.create_task(_beat(), name=f"heartbeat-{response_id}")
         try:
@@ -565,6 +599,13 @@ class LongRunningAgentServer(AgentServer):
             raise RuntimeError("No stream function registered; cannot run background stream")
 
         func_name = stream_fn.__name__
+        logger.info(
+            "[durable] background stream start response_id=%s attempt=%d pod=%s handler=%s",
+            response_id,
+            attempt_number,
+            _POD_ID,
+            func_name,
+        )
         all_chunks: list[dict[str, Any]] = []
         # Continue sequence numbering across attempts so the client's cursor
         # never rewinds on resume. First attempt starts at 0 and skips the DB
@@ -616,9 +657,13 @@ class LongRunningAgentServer(AgentServer):
                 )
 
         await update_response_status(response_id, "completed")
-        logger.debug(
-            "Background stream completed",
-            extra={"response_id": response_id, "total_events": seq},
+        logger.info(
+            "[durable] background stream completed response_id=%s attempt=%d "
+            "total_events=%d pod=%s",
+            response_id,
+            attempt_number,
+            seq,
+            _POD_ID,
         )
 
     async def _run_background_invoke(
@@ -717,16 +762,51 @@ class LongRunningAgentServer(AgentServer):
         # threshold. Otherwise a quick follow-up retrieve could hijack a
         # running pod before it ever writes its first heartbeat.
         if resp.heartbeat_at is None:
-            if _age_seconds(resp.created_at) < self._settings.heartbeat_stale_threshold_seconds:
+            age = _age_seconds(resp.created_at)
+            if age < self._settings.heartbeat_stale_threshold_seconds:
+                logger.debug(
+                    "[durable] claim skipped response_id=%s reason=grace_period "
+                    "age=%.1fs threshold=%.1fs",
+                    response_id,
+                    age,
+                    self._settings.heartbeat_stale_threshold_seconds,
+                )
                 return None
+        else:
+            hb_age = _age_seconds(resp.heartbeat_at)
+            if hb_age < self._settings.heartbeat_stale_threshold_seconds:
+                # Heartbeat is fresh — owner is alive. Common case, keep
+                # quiet at debug so we don't spam every poll iteration.
+                logger.debug(
+                    "[durable] claim skipped response_id=%s reason=heartbeat_fresh "
+                    "age=%.1fs threshold=%.1fs",
+                    response_id,
+                    hb_age,
+                    self._settings.heartbeat_stale_threshold_seconds,
+                )
+                return None
+            logger.info(
+                "[durable] stale heartbeat detected response_id=%s "
+                "heartbeat_age=%.1fs threshold=%.1fs current_owner=%s",
+                response_id,
+                hb_age,
+                self._settings.heartbeat_stale_threshold_seconds,
+                resp.owner_pod_id,
+            )
         if resp.original_request is None:
             # Nothing to replay from — the run predates durability metadata.
             logger.warning(
-                "Cannot resume %s: no original_request persisted (old row?)",
+                "[durable] cannot resume response_id=%s reason=no_original_request",
                 response_id,
             )
             return None
 
+        logger.info(
+            "[durable] attempting claim response_id=%s current_attempt=%d new_owner=%s",
+            response_id,
+            resp.attempt_number,
+            _POD_ID,
+        )
         new_attempt = await claim_stale_response(
             response_id,
             new_owner_pod_id=_POD_ID,
@@ -735,6 +815,10 @@ class LongRunningAgentServer(AgentServer):
         if new_attempt is None:
             # Someone else owns it, or the row was updated between the read and
             # the claim. Expected under contention.
+            logger.info(
+                "[durable] claim lost response_id=%s (another pod won or row changed)",
+                response_id,
+            )
             return None
 
         # Build a "resume" request: keep everything the handler cares about
@@ -761,10 +845,11 @@ class LongRunningAgentServer(AgentServer):
         )
 
         logger.info(
-            "Claimed stale run %s as attempt %s (pod=%s)",
+            "[durable] claim succeeded response_id=%s new_attempt=%d pod=%s resume_from_seq=%d",
             response_id,
             new_attempt,
             _POD_ID,
+            next_seq,
         )
 
         task = asyncio.create_task(
