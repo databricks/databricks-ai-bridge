@@ -204,7 +204,7 @@ class LongRunningAgentServer(AgentServer):
         db_statement_timeout_ms: int = 5000,
         cleanup_timeout_seconds: float = 7.0,
         heartbeat_interval_seconds: float = 3.0,
-        heartbeat_stale_threshold_seconds: float = 15.0,
+        heartbeat_stale_threshold_seconds: float = 10.0,
     ):
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(

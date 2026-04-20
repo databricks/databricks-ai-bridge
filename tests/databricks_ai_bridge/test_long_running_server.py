@@ -1296,7 +1296,7 @@ class TestSettingsHeartbeatValidation:
         # "reconnecting..." patience window.
         s = LongRunningSettings()
         assert s.heartbeat_interval_seconds == 3.0
-        assert s.heartbeat_stale_threshold_seconds == 15.0
+        assert s.heartbeat_stale_threshold_seconds == 10.0
 
 
 class TestDebugKillTask:

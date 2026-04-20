@@ -16,7 +16,7 @@ class LongRunningSettings:
     db_statement_timeout_ms: int = 5000
     cleanup_timeout_seconds: float = 7.0
     heartbeat_interval_seconds: float = 3.0
-    heartbeat_stale_threshold_seconds: float = 15.0
+    heartbeat_stale_threshold_seconds: float = 10.0
 
     def __post_init__(self) -> None:
         if self.task_timeout_seconds <= 0:
