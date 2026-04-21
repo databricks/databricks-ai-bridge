@@ -660,3 +660,55 @@ async def test_async_databricks_store_branch_resource_path(monkeypatch):
 
     assert "host=auto-db-host" in test_pool.conninfo
     assert store._lakebase._is_autoscaling is True
+
+
+# =============================================================================
+# Schema Tests
+# =============================================================================
+
+
+def test_databricks_store_setup_calls_create_schema(monkeypatch):
+    """DatabricksStore.setup() delegates schema creation to LakebasePool.create_schema()."""
+    test_pool = TestConnectionPool()
+    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
+
+    from langgraph.store.postgres import PostgresStore
+
+    monkeypatch.setattr(PostgresStore, "setup", MagicMock())
+
+    workspace = _create_mock_workspace()
+
+    store = DatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+    store._lakebase.create_schema = MagicMock()  # type: ignore[assignment]
+    store.setup()
+
+    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
+    """AsyncDatabricksStore.setup() delegates schema creation to AsyncLakebasePool.create_schema()."""
+    from unittest.mock import AsyncMock
+
+    test_pool = TestAsyncConnectionPool()
+    monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
+
+    from langgraph.store.postgres import AsyncPostgresStore
+
+    monkeypatch.setattr(AsyncPostgresStore, "setup", AsyncMock())
+
+    workspace = _create_mock_workspace()
+
+    store = AsyncDatabricksStore(
+        instance_name="lakebase-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+    store._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
+    await store.setup()
+
+    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]

@@ -1287,3 +1287,175 @@ class TestAsyncDatabricksSessionBranchResourcePath:
             mock_autoscaling_workspace_client.postgres.list_endpoints.assert_called_once_with(
                 parent="projects/my-project/branches/my-branch"
             )
+
+
+# =============================================================================
+# Schema Tests
+# =============================================================================
+
+
+class TestAsyncDatabricksSessionSchema:
+    """Tests for schema parameter behavior in AsyncDatabricksSession."""
+
+    def test_different_schemas_get_different_engines(
+        self, mock_workspace_client, mock_event_listens_for
+    ):
+        """Sessions with different schemas should get different cached engines."""
+        engine1 = MagicMock()
+        engine1.sync_engine = MagicMock()
+        engine2 = MagicMock()
+        engine2.sync_engine = MagicMock()
+
+        engines = [engine1, engine2]
+        engine_iter = iter(engines)
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=lambda *args, **kwargs: next(engine_iter),
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                schema="schema_a",
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                schema="schema_b",
+            )
+
+            assert mock_create_engine.call_count == 2
+            assert session1._engine is not session2._engine
+
+    def test_same_schema_shares_engine(
+        self, mock_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """Sessions with the same schema should share the cached engine."""
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ) as mock_create_engine,
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session1 = AsyncDatabricksSession(
+                session_id="session-1",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                schema="my_schema",
+            )
+            session2 = AsyncDatabricksSession(
+                session_id="session-2",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                schema="my_schema",
+            )
+
+            assert mock_create_engine.call_count == 1
+            assert session1._engine is session2._engine
+
+
+class TestAsyncDatabricksSessionEnsureTables:
+    """Tests for _ensure_tables with schema support."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_tables_calls_create_schema_when_specified(
+        self, mock_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """_ensure_tables delegates schema creation to lakebase.create_schema()."""
+        from unittest.mock import AsyncMock
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+            patch(
+                "agents.extensions.memory.SQLAlchemySession._ensure_tables",
+                return_value=None,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session = AsyncDatabricksSession(
+                session_id="test-session",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                schema="my_schema",
+                create_tables=True,
+            )
+            session._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
+
+            await session._ensure_tables()
+
+            session._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+
+    @pytest.mark.asyncio
+    async def test_ensure_tables_skips_schema_creation_when_no_schema(
+        self, mock_workspace_client, mock_engine, mock_event_listens_for
+    ):
+        """_ensure_tables should not create schema when schema is None."""
+        from unittest.mock import AsyncMock
+
+        with (
+            patch(
+                "databricks_ai_bridge.lakebase.WorkspaceClient",
+                return_value=mock_workspace_client,
+            ),
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                return_value=mock_engine,
+            ),
+            patch(
+                "sqlalchemy.event.listens_for",
+                side_effect=mock_event_listens_for,
+            ),
+            patch(
+                "agents.extensions.memory.SQLAlchemySession._ensure_tables",
+                return_value=None,
+            ),
+        ):
+            from databricks_openai.agents.session import AsyncDatabricksSession
+
+            session = AsyncDatabricksSession(
+                session_id="test-session",
+                instance_name="test-instance",
+                workspace_client=mock_workspace_client,
+                create_tables=True,
+            )
+            session._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
+
+            await session._ensure_tables()
+
+            session._lakebase.create_schema.assert_not_called()  # type: ignore[union-attr]
