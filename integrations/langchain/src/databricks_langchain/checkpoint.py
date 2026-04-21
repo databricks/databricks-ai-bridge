@@ -56,8 +56,7 @@ class CheckpointSaver(PostgresSaver):
 
     def setup(self) -> None:
         """Set up the checkpoint database, creating the schema if specified."""
-        if self._lakebase.schema:
-            LakebaseClient.create_schema(self._lakebase)
+        LakebaseClient.create_schema(self._lakebase)
         super().setup()
 
     def __enter__(self):
@@ -111,8 +110,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
     async def setup(self) -> None:
         """Set up the checkpoint database asynchronously, creating the schema if specified."""
-        if self._lakebase.schema:
-            await LakebaseClient.acreate_schema(self._lakebase)
+        await LakebaseClient.acreate_schema(self._lakebase)
         await super().setup()
 
     async def __aenter__(self):
