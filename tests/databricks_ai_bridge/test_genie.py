@@ -934,7 +934,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             },
             {"attachment_id": "4", "query": {"query": "SELECT correct"}},
             {"attachment_id": "5", "text": {"content": "explains correct"}},
-            {"attachment_id": "3", "suggested_questions": {"questions": ["Q1?"]}},
+            {"attachment_id": "7", "suggested_questions": {"questions": ["Q2?"]}},
         ),
     ],
 )

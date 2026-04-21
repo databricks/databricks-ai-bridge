@@ -215,7 +215,7 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
             result["text_attachment"] = a
             want_new_text = False
 
-        elif "suggested_questions" in a and result["suggested_questions_attachment"] is None:
+        elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
 
     return result
