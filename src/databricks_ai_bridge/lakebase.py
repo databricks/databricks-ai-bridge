@@ -195,6 +195,7 @@ class _LakebaseBase:
 
     def _search_path_sql(self) -> sql.Composed:
         """Return ``SET search_path TO <schema>, public`` as a psycopg sql.Composed."""
+        assert self.schema is not None, "_search_path_sql called without a schema"
         return sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
 
     # --- Host resolution ---

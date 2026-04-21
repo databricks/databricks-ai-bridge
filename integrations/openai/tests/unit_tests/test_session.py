@@ -1415,11 +1415,11 @@ class TestAsyncDatabricksSessionEnsureTables:
                 schema="my_schema",
                 create_tables=True,
             )
-            session._lakebase.create_schema = AsyncMock()
+            session._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
 
             await session._ensure_tables()
 
-            session._lakebase.create_schema.assert_called_once()
+            session._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
     async def test_ensure_tables_skips_schema_creation_when_no_schema(
@@ -1454,8 +1454,8 @@ class TestAsyncDatabricksSessionEnsureTables:
                 workspace_client=mock_workspace_client,
                 create_tables=True,
             )
-            session._lakebase.create_schema = AsyncMock()
+            session._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
 
             await session._ensure_tables()
 
-            session._lakebase.create_schema.assert_not_called()
+            session._lakebase.create_schema.assert_not_called()  # type: ignore[union-attr]

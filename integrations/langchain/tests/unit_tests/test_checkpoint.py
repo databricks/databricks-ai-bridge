@@ -256,10 +256,10 @@ def test_checkpoint_saver_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    saver._lakebase.create_schema = MagicMock()
+    saver._lakebase.create_schema = MagicMock()  # type: ignore[assignment]
     saver.setup()
 
-    saver._lakebase.create_schema.assert_called_once()
+    saver._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -281,10 +281,10 @@ async def test_async_checkpoint_saver_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    saver._lakebase.create_schema = AsyncMock()
+    saver._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
     await saver.setup()
 
-    saver._lakebase.create_schema.assert_called_once()
+    saver._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

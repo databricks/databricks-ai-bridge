@@ -683,10 +683,10 @@ def test_databricks_store_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    store._lakebase.create_schema = MagicMock()
+    store._lakebase.create_schema = MagicMock()  # type: ignore[assignment]
     store.setup()
 
-    store._lakebase.create_schema.assert_called_once()
+    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -708,7 +708,7 @@ async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    store._lakebase.create_schema = AsyncMock()
+    store._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
     await store.setup()
 
-    store._lakebase.create_schema.assert_called_once()
+    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
