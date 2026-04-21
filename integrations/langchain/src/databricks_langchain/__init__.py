@@ -18,7 +18,11 @@ from unitycatalog.ai.core.databricks import DatabricksFunctionClient
 from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit, UnityCatalogTool
 
 from databricks_langchain.chat_models import ChatDatabricks
-from databricks_langchain.checkpoint import AsyncCheckpointSaver, CheckpointSaver
+from databricks_langchain.checkpoint import (
+    AsyncCheckpointSaver,
+    CheckpointSaver,
+    build_tool_resume_repair,
+)
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
 from databricks_langchain.multi_server_mcp_client import (
@@ -48,4 +52,5 @@ __all__ = [
     "DatabricksMultiServerMCPClient",
     "DatabricksMCPServer",
     "MCPServer",
+    "build_tool_resume_repair",
 ]

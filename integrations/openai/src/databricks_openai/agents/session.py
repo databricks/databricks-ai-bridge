@@ -35,6 +35,11 @@ import logging
 from threading import Lock
 from typing import Any, Optional
 
+DEFAULT_REPAIR_SYNTHETIC_OUTPUT = (
+    "Tool call was interrupted by a durable resume and did not complete. "
+    "Please retry if still needed."
+)
+
 try:
     from agents.extensions.memory import SQLAlchemySession
     from databricks.sdk import WorkspaceClient
@@ -52,6 +57,21 @@ except ImportError:
     _session_imports_available = False
 
 logger = logging.getLogger(__name__)
+
+
+def _item_get(item: Any, key: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
+
+
+def _item_dict(item: Any) -> dict:
+    """Normalize a session item to a plain dict for re-persistence."""
+    if isinstance(item, dict):
+        return dict(item)
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    return dict(item.__dict__) if hasattr(item, "__dict__") else {}
 
 
 class AsyncDatabricksSession(SQLAlchemySession):
@@ -167,6 +187,92 @@ class AsyncDatabricksSession(SQLAlchemySession):
             "AsyncDatabricksSession initialized: session_id=%s",
             session_id,
         )
+
+    async def repair(self, synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT) -> int:
+        """Reconcile the session so the next LLM call sees a valid conversation.
+
+        Handles two failure modes that durable-resume and client history echo
+        can introduce:
+
+        1. **Orphan function_calls.** A kill mid-tool leaves a ``function_call``
+           item with no matching ``function_call_output``. The next LLM turn
+           fails with 'tool_calls must be followed by tool messages'.
+
+        2. **Duplicate items.** When the client re-sends prior history on a
+           resumed turn, the same ``call_id`` can land twice. Even with every
+           call_id eventually having an output, duplicates confuse the API.
+
+        Walks items in chronological order, dedupes ``function_call`` /
+        ``function_call_output`` by ``call_id``, and injects a synthetic
+        ``function_call_output`` immediately after any orphan ``function_call``.
+        No-op when the session is already consistent.
+
+        Args:
+            synthetic_output: Text used for the synthetic outputs inserted for
+                orphan tool calls. Defaults to an 'interrupted by resume'
+                message.
+
+        Returns:
+            The number of synthetic outputs injected (0 if the session was
+            already clean).
+        """
+        items = await self.get_items()
+        if not items:
+            return 0
+
+        call_ids_with_output: set[str] = set()
+        for item in items:
+            if _item_get(item, "type") == "function_call_output":
+                cid = _item_get(item, "call_id")
+                if cid:
+                    call_ids_with_output.add(cid)
+
+        sanitized: list[dict] = []
+        seen_calls: set[str] = set()
+        seen_outputs: set[str] = set()
+        injected_call_ids: list[str] = []
+
+        for item in items:
+            t = _item_get(item, "type")
+            cid = _item_get(item, "call_id")
+            if t == "function_call" and cid:
+                if cid in seen_calls:
+                    continue  # drop duplicate
+                seen_calls.add(cid)
+                sanitized.append(_item_dict(item))
+                if cid not in call_ids_with_output:
+                    sanitized.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": cid,
+                            "output": synthetic_output,
+                        }
+                    )
+                    injected_call_ids.append(cid)
+            elif t == "function_call_output" and cid:
+                if cid in seen_outputs:
+                    continue  # drop duplicate output
+                seen_outputs.add(cid)
+                sanitized.append(_item_dict(item))
+            else:
+                sanitized.append(_item_dict(item))
+
+        if len(sanitized) == len(items) and not injected_call_ids:
+            return 0
+
+        logger.info(
+            "AsyncDatabricksSession.repair session_id=%s original=%d sanitized=%d "
+            "injected=%d call_ids=%s",
+            self.session_id,
+            len(items),
+            len(sanitized),
+            len(injected_call_ids),
+            injected_call_ids,
+        )
+        await self.clear_session()
+        if sanitized:
+            await self.add_items(sanitized)
+        return len(injected_call_ids)
 
     @classmethod
     def _build_cache_key(
