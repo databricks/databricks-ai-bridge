@@ -2105,9 +2105,12 @@ def test_lakebase_pool_preserves_user_configure_when_no_schema(monkeypatch):
     )
 
 
-def test_lakebase_pool_create_schema(monkeypatch):
-    """LakebasePool.create_schema() executes CREATE SCHEMA when schema is set."""
+def test_lakebase_client_create_schema(monkeypatch):
+    """LakebaseClient.create_schema() executes CREATE SCHEMA via the client layer."""
+    mock_cursor = MagicMock()
     mock_conn = MagicMock()
+    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     class TestPool:
         def __init__(self, **kwargs):
@@ -2124,18 +2127,27 @@ def test_lakebase_pool_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    pool.create_schema()
+    LakebaseClient.create_schema(pool)
 
-    mock_conn.execute.assert_called_once()
-    executed_sql = str(mock_conn.execute.call_args[0][0])
+    mock_cursor.execute.assert_called_once()
+    executed_sql = str(mock_cursor.execute.call_args[0][0])
     assert "my_schema" in executed_sql
 
 
 @pytest.mark.asyncio
-async def test_async_lakebase_pool_create_schema(monkeypatch):
-    """AsyncLakebasePool.create_schema() executes CREATE SCHEMA when schema is set."""
+async def test_async_lakebase_client_acreate_schema(monkeypatch):
+    """LakebaseClient.acreate_schema() executes CREATE SCHEMA via the client layer."""
+    mock_cursor = AsyncMock()
+
+    class _AsyncCursorContextManager:
+        async def __aenter__(self):
+            return mock_cursor
+
+        async def __aexit__(self, *args):
+            return False
+
     mock_conn = MagicMock()
-    mock_conn.execute = AsyncMock()
+    mock_conn.cursor.return_value = _AsyncCursorContextManager()
 
     class TestPool:
         def __init__(self, **kwargs):
@@ -2158,10 +2170,10 @@ async def test_async_lakebase_pool_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    await pool.create_schema()
+    await LakebaseClient.acreate_schema(pool)
 
-    mock_conn.execute.assert_called_once()
-    executed_sql = str(mock_conn.execute.call_args[0][0])
+    mock_cursor.execute.assert_called_once()
+    executed_sql = str(mock_cursor.execute.call_args[0][0])
     assert "my_schema" in executed_sql
 
 

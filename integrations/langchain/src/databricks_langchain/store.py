@@ -6,7 +6,7 @@ from typing import Any, Iterable
 from databricks.sdk import WorkspaceClient
 
 try:
-    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
+    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebaseClient, LakebasePool
     from langgraph.store.base import BaseStore, Op, Result
     from langgraph.store.base.batch import AsyncBatchedBaseStore
     from langgraph.store.postgres import AsyncPostgresStore, PostgresStore
@@ -72,7 +72,6 @@ class DatabricksStore(BaseStore):
                 "Install with: pip install 'databricks-langchain[memory]'"
             )
 
-        self._schema = schema
         self._lakebase: LakebasePool = LakebasePool(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
@@ -129,7 +128,7 @@ class DatabricksStore(BaseStore):
 
     def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
-        self._lakebase.create_schema()
+        LakebaseClient.create_schema(self._lakebase)
         return self._with_store(lambda s: s.setup())
 
     def batch(self, ops: Iterable[Op]) -> list[Result]:
@@ -205,7 +204,6 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
         super().__init__()
 
-        self._schema = schema
         self._lakebase: AsyncLakebasePool = AsyncLakebasePool(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
@@ -262,7 +260,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
     async def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
-        await self._lakebase.create_schema()
+        await LakebaseClient.acreate_schema(self._lakebase)
         return await self._with_store(lambda s: s.setup())
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:

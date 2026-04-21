@@ -668,13 +668,18 @@ async def test_async_databricks_store_branch_resource_path(monkeypatch):
 
 
 def test_databricks_store_setup_calls_create_schema(monkeypatch):
-    """DatabricksStore.setup() delegates schema creation to LakebasePool.create_schema()."""
+    """DatabricksStore.setup() delegates schema creation to LakebaseClient.create_schema()."""
     test_pool = TestConnectionPool()
     monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
 
     from langgraph.store.postgres import PostgresStore
 
     monkeypatch.setattr(PostgresStore, "setup", MagicMock())
+
+    mock_create_schema = MagicMock()
+    monkeypatch.setattr(
+        "databricks_langchain.store.LakebaseClient.create_schema", mock_create_schema
+    )
 
     workspace = _create_mock_workspace()
 
@@ -683,15 +688,14 @@ def test_databricks_store_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    store._lakebase.create_schema = MagicMock()  # type: ignore[assignment]
     store.setup()
 
-    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+    mock_create_schema.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
-    """AsyncDatabricksStore.setup() delegates schema creation to AsyncLakebasePool.create_schema()."""
+    """AsyncDatabricksStore.setup() delegates schema creation to LakebaseClient.acreate_schema()."""
     from unittest.mock import AsyncMock
 
     test_pool = TestAsyncConnectionPool()
@@ -701,6 +705,11 @@ async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
 
     monkeypatch.setattr(AsyncPostgresStore, "setup", AsyncMock())
 
+    mock_acreate_schema = AsyncMock()
+    monkeypatch.setattr(
+        "databricks_langchain.store.LakebaseClient.acreate_schema", mock_acreate_schema
+    )
+
     workspace = _create_mock_workspace()
 
     store = AsyncDatabricksStore(
@@ -708,7 +717,6 @@ async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    store._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
     await store.setup()
 
-    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+    mock_acreate_schema.assert_called_once()

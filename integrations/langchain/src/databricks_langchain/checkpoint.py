@@ -5,7 +5,7 @@ from typing import Any
 from databricks.sdk import WorkspaceClient
 
 try:
-    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
+    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebaseClient, LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
@@ -52,12 +52,11 @@ class CheckpointSaver(PostgresSaver):
             schema=schema,
             **dict(pool_kwargs),
         )
-        self._schema = schema
         super().__init__(self._lakebase.pool)
 
     def setup(self) -> None:
         """Set up the checkpoint database, creating the schema if specified."""
-        self._lakebase.create_schema()
+        LakebaseClient.create_schema(self._lakebase)
         super().setup()
 
     def __enter__(self):
@@ -107,12 +106,11 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
             schema=schema,
             **dict(pool_kwargs),
         )
-        self._schema = schema
         super().__init__(self._lakebase.pool)
 
     async def setup(self) -> None:
         """Set up the checkpoint database asynchronously, creating the schema if specified."""
-        await self._lakebase.create_schema()
+        await LakebaseClient.acreate_schema(self._lakebase)
         await super().setup()
 
     async def __aenter__(self):

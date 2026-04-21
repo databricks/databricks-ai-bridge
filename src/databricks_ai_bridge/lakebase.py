@@ -505,15 +505,6 @@ class LakebasePool(_LakebaseBase):
         """Get a connection from the pool."""
         return self._pool.connection()
 
-    def create_schema(self) -> None:
-        """Create the schema if one was specified at init time. No-op otherwise."""
-        if not self.schema:
-            return
-        with self.connection() as conn:
-            conn.execute(
-                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
-            )
-
     def close(self) -> None:
         """Close the connection pool."""
         self._pool.close()
@@ -651,15 +642,6 @@ class AsyncLakebasePool(_LakebaseBase):
     async def open(self) -> None:
         """Open the connection pool."""
         await self._pool.open()
-
-    async def create_schema(self) -> None:
-        """Create the schema if one was specified at init time. No-op otherwise."""
-        if not self.schema:
-            return
-        async with self.connection() as conn:
-            await conn.execute(
-                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
-            )
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -837,6 +819,32 @@ class LakebaseClient:
                 if cur.description:
                     return cur.fetchall()
                 return None
+
+    # ---------------------------------------------------------
+    # Schema Management
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def create_schema(pool: LakebasePool) -> None:
+        """Create the schema if one was specified on the pool. No-op otherwise."""
+        if not pool.schema:
+            return
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
+                )
+
+    @staticmethod
+    async def acreate_schema(pool: AsyncLakebasePool) -> None:
+        """Async variant of create_schema for use with AsyncLakebasePool. No-op if no schema."""
+        if not pool.schema:
+            return
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
+                )
 
     # ---------------------------------------------------------
     # Permission / Role Management
