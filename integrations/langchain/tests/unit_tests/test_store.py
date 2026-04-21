@@ -695,7 +695,7 @@ def test_databricks_store_setup_calls_create_schema(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
-    """AsyncDatabricksStore.setup() delegates schema creation to AsyncLakebasePool.create_schema()."""
+    """AsyncDatabricksStore.setup() delegates schema creation to LakebaseClient.acreate_schema()."""
     from unittest.mock import AsyncMock
 
     test_pool = TestAsyncConnectionPool()
@@ -705,6 +705,11 @@ async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
 
     monkeypatch.setattr(AsyncPostgresStore, "setup", AsyncMock())
 
+    mock_acreate_schema = AsyncMock()
+    monkeypatch.setattr(
+        "databricks_langchain.store.LakebaseClient.acreate_schema", mock_acreate_schema
+    )
+
     workspace = _create_mock_workspace()
 
     store = AsyncDatabricksStore(
@@ -712,7 +717,6 @@ async def test_async_databricks_store_setup_calls_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    store._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
     await store.setup()
 
-    store._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+    mock_acreate_schema.assert_called_once()

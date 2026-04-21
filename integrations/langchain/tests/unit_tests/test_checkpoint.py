@@ -268,7 +268,7 @@ def test_checkpoint_saver_setup_calls_create_schema(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_checkpoint_saver_setup_calls_create_schema(monkeypatch):
-    """AsyncCheckpointSaver.setup() delegates schema creation to AsyncLakebasePool.create_schema()."""
+    """AsyncCheckpointSaver.setup() delegates schema creation to LakebaseClient.acreate_schema()."""
     from unittest.mock import AsyncMock
 
     test_pool = TestAsyncConnectionPool()
@@ -280,15 +280,19 @@ async def test_async_checkpoint_saver_setup_calls_create_schema(monkeypatch):
 
     monkeypatch.setattr(AsyncPostgresSaver, "setup", AsyncMock())
 
+    mock_acreate_schema = AsyncMock()
+    monkeypatch.setattr(
+        "databricks_langchain.checkpoint.LakebaseClient.acreate_schema", mock_acreate_schema
+    )
+
     saver = AsyncCheckpointSaver(
         instance_name="lakebase-instance",
         workspace_client=workspace,
         schema="my_schema",
     )
-    saver._lakebase.create_schema = AsyncMock()  # type: ignore[assignment]
     await saver.setup()
 
-    saver._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+    mock_acreate_schema.assert_called_once()
 
 
 @pytest.mark.asyncio

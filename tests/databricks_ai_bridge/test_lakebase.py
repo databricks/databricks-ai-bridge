@@ -2127,8 +2127,7 @@ def test_lakebase_client_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    client = LakebaseClient(pool=pool)
-    client.create_schema()
+    LakebaseClient.create_schema(pool)
 
     mock_cursor.execute.assert_called_once()
     executed_sql = str(mock_cursor.execute.call_args[0][0])
@@ -2136,8 +2135,8 @@ def test_lakebase_client_create_schema(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_lakebase_pool_create_schema(monkeypatch):
-    """AsyncLakebasePool.create_schema() executes CREATE SCHEMA when schema is set."""
+async def test_async_lakebase_client_acreate_schema(monkeypatch):
+    """LakebaseClient.acreate_schema() executes CREATE SCHEMA via the client layer."""
     mock_cursor = AsyncMock()
 
     class _AsyncCursorContextManager:
@@ -2171,7 +2170,7 @@ async def test_async_lakebase_pool_create_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-    await pool.create_schema()
+    await LakebaseClient.acreate_schema(pool)
 
     mock_cursor.execute.assert_called_once()
     executed_sql = str(mock_cursor.execute.call_args[0][0])

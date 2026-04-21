@@ -643,18 +643,6 @@ class AsyncLakebasePool(_LakebaseBase):
         """Open the connection pool."""
         await self._pool.open()
 
-    async def create_schema(self) -> None:
-        """Create the schema if one was specified at init time. No-op otherwise."""
-        if not self.schema:
-            return
-        async with self.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(self.schema)
-                    )
-                )
-
     async def close(self) -> None:
         """Close the connection pool."""
         await self._pool.close()
@@ -836,15 +824,31 @@ class LakebaseClient:
     # Schema Management
     # ---------------------------------------------------------
 
-    def create_schema(self) -> None:
-        """Create the schema if one was specified on the underlying pool. No-op otherwise."""
-        if not self._pool.schema:
+    @staticmethod
+    def create_schema(pool: LakebasePool) -> None:
+        """Create the schema if one was specified on the pool. No-op otherwise."""
+        if not pool.schema:
             return
-        self._execute_composed(
-            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                sql.Identifier(self._pool.schema)
-            )
-        )
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(pool.schema)
+                    )
+                )
+
+    @staticmethod
+    async def acreate_schema(pool: AsyncLakebasePool) -> None:
+        """Async variant of create_schema for use with AsyncLakebasePool. No-op if no schema."""
+        if not pool.schema:
+            return
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(pool.schema)
+                    )
+                )
 
     # ---------------------------------------------------------
     # Permission / Role Management
