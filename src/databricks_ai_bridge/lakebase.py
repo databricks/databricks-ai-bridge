@@ -832,9 +832,7 @@ class LakebaseClient:
         with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(pool.schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
                 )
 
     @staticmethod
@@ -845,9 +843,7 @@ class LakebaseClient:
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        sql.Identifier(pool.schema)
-                    )
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
                 )
 
     # ---------------------------------------------------------
