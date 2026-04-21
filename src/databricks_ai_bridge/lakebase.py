@@ -193,6 +193,10 @@ class _LakebaseBase:
         self._cached_token: str | None = None
         self._cache_ts: float | None = None
 
+    def _search_path_sql(self) -> sql.Composed:
+        """Return ``SET search_path TO <schema>, public`` as a psycopg sql.Composed."""
+        return sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
+
     # --- Host resolution ---
 
     def _resolve_provisioned_host(self) -> str:
@@ -450,13 +454,11 @@ class LakebasePool(_LakebaseBase):
         user_configure = pool_kwargs.pop("configure", None)
         _configure_fn = user_configure
         if self.schema:
-            _schema = self.schema
+            _set_path = self._search_path_sql()
             _user_configure = user_configure
 
             def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
-                conn.execute(
-                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
-                )
+                conn.execute(_set_path)
                 if _user_configure:
                     _user_configure(conn)  # type: ignore[call-non-callable]
 
@@ -589,13 +591,11 @@ class AsyncLakebasePool(_LakebaseBase):
         user_configure = pool_kwargs.pop("configure", None)
         _configure_fn = user_configure
         if self.schema:
-            _schema = self.schema
+            _set_path = self._search_path_sql()
             _user_configure = user_configure
 
             async def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
-                await conn.execute(
-                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
-                )
+                await conn.execute(_set_path)
                 if _user_configure:
                     await _user_configure(conn)  # type: ignore[call-non-callable]
 
@@ -1358,14 +1358,12 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             )
 
         if self.schema:
-            _schema = self.schema
+            _set_path = self._search_path_sql()
 
             @event.listens_for(engine.sync_engine, "checkout")
             def set_search_path(dbapi_conn, connection_record, connection_proxy):
                 cursor = dbapi_conn.cursor()
-                cursor.execute(
-                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(_schema))
-                )
+                cursor.execute(_set_path)
                 cursor.close()
 
         return engine
