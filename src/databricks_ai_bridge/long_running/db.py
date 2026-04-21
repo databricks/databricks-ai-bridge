@@ -98,6 +98,7 @@ async def init_db(
         f"ON {AGENT_DB_SCHEMA}.responses (status, heartbeat_at) "
         "WHERE status = 'in_progress'",
     )
+    skipped_migrations: list[str] = []
     for stmt in migration_stmts:
         try:
             async with _engine.begin() as conn:
@@ -105,14 +106,24 @@ async def init_db(
         except Exception as exc:
             msg = str(exc).lower()
             if "insufficientprivilege" in msg or "must be owner" in msg:
-                logger.info(
-                    "[DB] Skipping migration (not owner, presumed already applied): %s",
-                    stmt.split("\n")[0],
-                )
+                skipped_migrations.append(stmt.split("\n")[0])
                 continue
             raise
 
     _initialized = True
+    if skipped_migrations:
+        # WARN-level summary: if the DB was previously migrated by another SP
+        # this is fine, but if it's genuinely a new table and our SP lacks
+        # ALTER, claim/heartbeat queries will fail later with a confusing
+        # "column does not exist" — surface it clearly at startup.
+        logger.warning(
+            "[DB] Skipped %d durability migration(s) due to insufficient "
+            "privilege — assuming table was already migrated by another "
+            "service principal. Crash-resume will fail with 'column does "
+            "not exist' if this assumption is wrong. Skipped: %s",
+            len(skipped_migrations),
+            ", ".join(skipped_migrations),
+        )
     logger.info("[DB] Engine and schema ready")
 
 
