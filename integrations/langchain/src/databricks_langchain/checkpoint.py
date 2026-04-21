@@ -97,49 +97,68 @@ def build_tool_resume_repair(
     return [ToolMessage(tool_call_id=tc_id, content=synthetic_output) for tc_id in orphans]
 
 
-def build_tool_resume_repair_pre_model_hook(
+def build_tool_resume_repair_middleware(
     synthetic_output: str = DEFAULT_TOOL_RESUME_REPAIR_OUTPUT,
-) -> Callable[[dict], dict]:
-    """Return a LangGraph ``pre_model_hook`` that repairs orphan tool calls.
+) -> Any:
+    """Return a LangChain ``AgentMiddleware`` that repairs orphan tool calls.
 
-    Wires ``build_tool_resume_repair`` into the graph as a pre-model hook so
-    durable-resume recovery happens automatically before every LLM call. Keeps
-    repair logic off the handler — callers only add one argument to
-    ``create_agent``.
+    Wires ``build_tool_resume_repair`` into ``langchain.agents.create_agent``
+    via its middleware API so durable-resume recovery happens automatically
+    before every LLM call. Keeps repair logic off the handler — callers only
+    add one argument to ``create_agent``.
 
     Usage::
 
-        from databricks_langchain import build_tool_resume_repair_pre_model_hook
+        from databricks_langchain import build_tool_resume_repair_middleware
 
         agent = create_agent(
             model=model,
             tools=tools,
             checkpointer=checkpointer,
-            pre_model_hook=build_tool_resume_repair_pre_model_hook(),
+            middleware=[build_tool_resume_repair_middleware()],
         )
 
-    The hook fires on every model turn and is a no-op when state is clean, so
-    the happy path is free. On a mid-tool crash-resume, it injects synthetic
-    ``ToolMessage``s for any ``AIMessage.tool_calls`` in the trailing turn
-    whose paired ``ToolMessage`` never landed. Satisfies Anthropic's
-    ``tool_use`` ⇄ ``tool_result`` contract without needing manual
+    The middleware's ``before_model`` hook fires on every model turn and is a
+    no-op when state is clean, so the happy path is free. On a mid-tool
+    crash-resume, it injects synthetic ``ToolMessage``s for any
+    ``AIMessage.tool_calls`` in the trailing turn whose paired
+    ``ToolMessage`` never landed. Satisfies Anthropic's ``tool_use`` ⇄
+    ``tool_result`` contract without needing manual
     ``aupdate_state(..., as_node="tools")`` surgery.
 
     Args:
         synthetic_output: Text for each injected ``ToolMessage.content``.
 
     Returns:
-        A callable suitable to pass as ``pre_model_hook`` to
-        ``langchain.agents.create_agent`` (or ``create_react_agent``).
+        An ``AgentMiddleware`` instance suitable for the ``middleware=``
+        argument of ``langchain.agents.create_agent``.
+
+    Raises:
+        ImportError: If ``langchain.agents.middleware.AgentMiddleware`` is
+            unavailable (older langchain version or extra not installed).
     """
+    try:
+        from langchain.agents.middleware import AgentMiddleware
+    except ImportError as exc:
+        raise ImportError(
+            "build_tool_resume_repair_middleware requires langchain>=1.0 with "
+            "the agents extra. Install via `pip install langchain[agents]` or "
+            "equivalent."
+        ) from exc
 
-    def _hook(state: dict) -> dict:
-        repair = build_tool_resume_repair(
-            state.get("messages", []), synthetic_output=synthetic_output
-        )
-        return {"messages": repair} if repair else {}
+    class ToolResumeRepairMiddleware(AgentMiddleware):
+        """Repairs orphan tool_use AIMessages before each model invocation."""
 
-    return _hook
+        def before_model(self, state, runtime):  # type: ignore[override]
+            repair = build_tool_resume_repair(
+                state.get("messages", []), synthetic_output=synthetic_output
+            )
+            return {"messages": repair} if repair else None
+
+        async def abefore_model(self, state, runtime):  # type: ignore[override]
+            return self.before_model(state, runtime)
+
+    return ToolResumeRepairMiddleware()
 
 
 class CheckpointSaver(PostgresSaver):

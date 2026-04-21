@@ -22,7 +22,7 @@ from databricks_langchain.checkpoint import (
     AsyncCheckpointSaver,
     CheckpointSaver,
     build_tool_resume_repair,
-    build_tool_resume_repair_pre_model_hook,
+    build_tool_resume_repair_middleware,
 )
 from databricks_langchain.embeddings import DatabricksEmbeddings
 from databricks_langchain.genie import GenieAgent
@@ -54,5 +54,5 @@ __all__ = [
     "DatabricksMCPServer",
     "MCPServer",
     "build_tool_resume_repair",
-    "build_tool_resume_repair_pre_model_hook",
+    "build_tool_resume_repair_middleware",
 ]
