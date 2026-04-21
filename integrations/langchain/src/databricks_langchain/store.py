@@ -6,7 +6,7 @@ from typing import Any, Iterable
 from databricks.sdk import WorkspaceClient
 
 try:
-    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
+    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebaseClient, LakebasePool
     from langgraph.store.base import BaseStore, Op, Result
     from langgraph.store.base.batch import AsyncBatchedBaseStore
     from langgraph.store.postgres import AsyncPostgresStore, PostgresStore
@@ -129,7 +129,7 @@ class DatabricksStore(BaseStore):
     def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
         if self._lakebase.schema:
-            self._lakebase.create_schema()
+            LakebaseClient(pool=self._lakebase).create_schema()
         return self._with_store(lambda s: s.setup())
 
     def batch(self, ops: Iterable[Op]) -> list[Result]:

@@ -241,7 +241,7 @@ async def test_async_checkpoint_saver_autoscaling_configures_lakebase(monkeypatc
 
 
 def test_checkpoint_saver_setup_calls_create_schema(monkeypatch):
-    """CheckpointSaver.setup() delegates schema creation to LakebasePool.create_schema()."""
+    """CheckpointSaver.setup() delegates schema creation to LakebaseClient.create_schema()."""
     test_pool = TestConnectionPool()
     monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
 
@@ -251,15 +251,19 @@ def test_checkpoint_saver_setup_calls_create_schema(monkeypatch):
 
     monkeypatch.setattr(PostgresSaver, "setup", MagicMock())
 
+    mock_create_schema = MagicMock()
+    monkeypatch.setattr(
+        "databricks_langchain.checkpoint.LakebaseClient.create_schema", mock_create_schema
+    )
+
     saver = CheckpointSaver(
         instance_name="lakebase-instance",
         workspace_client=workspace,
         schema="my_schema",
     )
-    saver._lakebase.create_schema = MagicMock()  # type: ignore[assignment]
     saver.setup()
 
-    saver._lakebase.create_schema.assert_called_once()  # type: ignore[union-attr]
+    mock_create_schema.assert_called_once()
 
 
 @pytest.mark.asyncio

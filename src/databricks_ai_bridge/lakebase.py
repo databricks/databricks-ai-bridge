@@ -505,15 +505,6 @@ class LakebasePool(_LakebaseBase):
         """Get a connection from the pool."""
         return self._pool.connection()
 
-    def create_schema(self) -> None:
-        """Create the schema if one was specified at init time. No-op otherwise."""
-        if not self.schema:
-            return
-        with self.connection() as conn:
-            conn.execute(
-                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
-            )
-
     def close(self) -> None:
         """Close the connection pool."""
         self._pool.close()
@@ -657,9 +648,12 @@ class AsyncLakebasePool(_LakebaseBase):
         if not self.schema:
             return
         async with self.connection() as conn:
-            await conn.execute(
-                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
-            )
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                        sql.Identifier(self.schema)
+                    )
+                )
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -837,6 +831,20 @@ class LakebaseClient:
                 if cur.description:
                     return cur.fetchall()
                 return None
+
+    # ---------------------------------------------------------
+    # Schema Management
+    # ---------------------------------------------------------
+
+    def create_schema(self) -> None:
+        """Create the schema if one was specified on the underlying pool. No-op otherwise."""
+        if not self._pool.schema:
+            return
+        self._execute_composed(
+            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                sql.Identifier(self._pool.schema)
+            )
+        )
 
     # ---------------------------------------------------------
     # Permission / Role Management

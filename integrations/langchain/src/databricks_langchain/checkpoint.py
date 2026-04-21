@@ -5,7 +5,7 @@ from typing import Any
 from databricks.sdk import WorkspaceClient
 
 try:
-    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
+    from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebaseClient, LakebasePool
     from langgraph.checkpoint.postgres import PostgresSaver
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
@@ -57,7 +57,7 @@ class CheckpointSaver(PostgresSaver):
     def setup(self) -> None:
         """Set up the checkpoint database, creating the schema if specified."""
         if self._lakebase.schema:
-            self._lakebase.create_schema()
+            LakebaseClient(pool=self._lakebase).create_schema()
         super().setup()
 
     def __enter__(self):
