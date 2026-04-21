@@ -52,12 +52,12 @@ class CheckpointSaver(PostgresSaver):
             schema=schema,
             **dict(pool_kwargs),
         )
-        self._schema = schema
         super().__init__(self._lakebase.pool)
 
     def setup(self) -> None:
         """Set up the checkpoint database, creating the schema if specified."""
-        self._lakebase.create_schema()
+        if self._lakebase.schema:
+            self._lakebase.create_schema()
         super().setup()
 
     def __enter__(self):
@@ -107,12 +107,12 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
             schema=schema,
             **dict(pool_kwargs),
         )
-        self._schema = schema
         super().__init__(self._lakebase.pool)
 
     async def setup(self) -> None:
         """Set up the checkpoint database asynchronously, creating the schema if specified."""
-        await self._lakebase.create_schema()
+        if self._lakebase.schema:
+            await self._lakebase.create_schema()
         await super().setup()
 
     async def __aenter__(self):
