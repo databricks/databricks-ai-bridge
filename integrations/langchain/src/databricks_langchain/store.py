@@ -129,13 +129,7 @@ class DatabricksStore(BaseStore):
 
     def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
-        if self._schema:
-            from psycopg import sql
-
-            with self._lakebase.connection() as conn:
-                conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
-                )
+        self._lakebase.create_schema()
         return self._with_store(lambda s: s.setup())
 
     def batch(self, ops: Iterable[Op]) -> list[Result]:
@@ -268,13 +262,7 @@ class AsyncDatabricksStore(AsyncBatchedBaseStore):
 
     async def setup(self) -> None:
         """Instantiate the store, setting up necessary persistent storage."""
-        if self._schema:
-            from psycopg import sql
-
-            async with self._lakebase.connection() as conn:
-                await conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
-                )
+        await self._lakebase.create_schema()
         return await self._with_store(lambda s: s.setup())
 
     async def abatch(self, ops: Iterable[Op]) -> list[Result]:

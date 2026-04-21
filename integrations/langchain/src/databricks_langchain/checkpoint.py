@@ -57,13 +57,7 @@ class CheckpointSaver(PostgresSaver):
 
     def setup(self) -> None:
         """Set up the checkpoint database, creating the schema if specified."""
-        if self._schema:
-            from psycopg import sql
-
-            with self._lakebase.connection() as conn:
-                conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
-                )
+        self._lakebase.create_schema()
         super().setup()
 
     def __enter__(self):
@@ -118,13 +112,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
 
     async def setup(self) -> None:
         """Set up the checkpoint database asynchronously, creating the schema if specified."""
-        if self._schema:
-            from psycopg import sql
-
-            async with self._lakebase.connection() as conn:
-                await conn.execute(
-                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
-                )
+        await self._lakebase.create_schema()
         await super().setup()
 
     async def __aenter__(self):

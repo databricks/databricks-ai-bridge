@@ -445,9 +445,10 @@ class LakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        # Set search_path on each connection when a schema is specified
+        # Build configure callback: set search_path when schema is specified,
+        # and always preserve any user-provided configure callback.
         user_configure = pool_kwargs.pop("configure", None)
-        _configure_fn = None
+        _configure_fn = user_configure
         if self.schema:
             _schema = self.schema
             _user_configure = user_configure
@@ -500,6 +501,15 @@ class LakebasePool(_LakebaseBase):
     def connection(self):
         """Get a connection from the pool."""
         return self._pool.connection()
+
+    def create_schema(self) -> None:
+        """Create the schema if one was specified at init time. No-op otherwise."""
+        if not self.schema:
+            return
+        with self.connection() as conn:
+            conn.execute(
+                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
+            )
 
     def close(self) -> None:
         """Close the connection pool."""
@@ -574,9 +584,10 @@ class AsyncLakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
-        # Set search_path on each connection when a schema is specified
+        # Build configure callback: set search_path when schema is specified,
+        # and always preserve any user-provided configure callback.
         user_configure = pool_kwargs.pop("configure", None)
-        _configure_fn = None
+        _configure_fn = user_configure
         if self.schema:
             _schema = self.schema
             _user_configure = user_configure
@@ -639,6 +650,15 @@ class AsyncLakebasePool(_LakebaseBase):
     async def open(self) -> None:
         """Open the connection pool."""
         await self._pool.open()
+
+    async def create_schema(self) -> None:
+        """Create the schema if one was specified at init time. No-op otherwise."""
+        if not self.schema:
+            return
+        async with self.connection() as conn:
+            await conn.execute(
+                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self.schema))
+            )
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -1265,6 +1285,22 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
     def engine(self) -> "AsyncEngine":
         """The SQLAlchemy AsyncEngine."""
         return self._engine
+
+    async def create_schema(self) -> None:
+        """Create the schema if one was specified at init time. No-op otherwise."""
+        if not self.schema:
+            return
+        from sqlalchemy import text
+
+        # Use psycopg sql.Identifier for safe quoting, render without a connection
+        # (uses standard SQL quoting which is safe for PostgreSQL identifiers)
+        rendered = (
+            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}")
+            .format(sql.Identifier(self.schema))
+            .as_string(None)
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(text(rendered))
 
     def get_token(self) -> str:
         """Get cached token or mint a new one (thread-safe)."""

@@ -106,6 +106,15 @@ class TestAsyncConnectionPool:
         self._closed = True
 
 
+def _make_workspace():
+    workspace = MagicMock()
+    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
+    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
+    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
+    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    return workspace
+
+
 @pytest.mark.asyncio
 async def test_async_checkpoint_saver_configures_lakebase(monkeypatch):
     test_pool = TestAsyncConnectionPool(connection_value="async-lake-conn")
@@ -231,17 +240,12 @@ async def test_async_checkpoint_saver_autoscaling_configures_lakebase(monkeypatc
 # =============================================================================
 
 
-def test_checkpoint_saver_setup_creates_schema(monkeypatch):
-    """CheckpointSaver.setup() should CREATE SCHEMA IF NOT EXISTS when schema is set."""
-    mock_conn = MagicMock()
-    test_pool = TestConnectionPool(connection_value=mock_conn)
+def test_checkpoint_saver_setup_calls_create_schema(monkeypatch):
+    """CheckpointSaver.setup() delegates schema creation to LakebasePool.create_schema()."""
+    test_pool = TestConnectionPool()
     monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
 
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace = _make_workspace()
 
     from langgraph.checkpoint.postgres import PostgresSaver
 
@@ -252,57 +256,21 @@ def test_checkpoint_saver_setup_creates_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-
+    saver._lakebase.create_schema = MagicMock()
     saver.setup()
 
-    # Verify CREATE SCHEMA was executed on the connection
-    mock_conn.execute.assert_called_once()
-    executed_sql = str(mock_conn.execute.call_args[0][0])
-    assert "my_schema" in executed_sql
-
-
-def test_checkpoint_saver_setup_skips_schema_when_none(monkeypatch):
-    """CheckpointSaver.setup() should not create schema when schema is None."""
-    mock_conn = MagicMock()
-    test_pool = TestConnectionPool(connection_value=mock_conn)
-    monkeypatch.setattr(lakebase, "ConnectionPool", test_pool)
-
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
-
-    from langgraph.checkpoint.postgres import PostgresSaver
-
-    monkeypatch.setattr(PostgresSaver, "setup", MagicMock())
-
-    saver = CheckpointSaver(
-        instance_name="lakebase-instance",
-        workspace_client=workspace,
-    )
-
-    saver.setup()
-
-    # No schema creation should have happened
-    mock_conn.execute.assert_not_called()
+    saver._lakebase.create_schema.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_async_checkpoint_saver_setup_creates_schema(monkeypatch):
-    """AsyncCheckpointSaver.setup() should CREATE SCHEMA IF NOT EXISTS when schema is set."""
+async def test_async_checkpoint_saver_setup_calls_create_schema(monkeypatch):
+    """AsyncCheckpointSaver.setup() delegates schema creation to AsyncLakebasePool.create_schema()."""
     from unittest.mock import AsyncMock
 
-    mock_conn = MagicMock()
-    mock_conn.execute = AsyncMock(return_value=MagicMock())
-    test_pool = TestAsyncConnectionPool(connection_value=mock_conn)
+    test_pool = TestAsyncConnectionPool()
     monkeypatch.setattr(lakebase, "AsyncConnectionPool", test_pool)
 
-    workspace = MagicMock()
-    workspace.database.generate_database_credential.return_value = MagicMock(token="stub-token")
-    workspace.database.get_database_instance.return_value.read_write_dns = "db-host"
-    workspace.current_service_principal.me.side_effect = RuntimeError("no sp")
-    workspace.current_user.me.return_value = MagicMock(user_name="test@databricks.com")
+    workspace = _make_workspace()
 
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
@@ -313,13 +281,10 @@ async def test_async_checkpoint_saver_setup_creates_schema(monkeypatch):
         workspace_client=workspace,
         schema="my_schema",
     )
-
+    saver._lakebase.create_schema = AsyncMock()
     await saver.setup()
 
-    # Verify CREATE SCHEMA was executed
-    mock_conn.execute.assert_called_once()
-    executed_sql = str(mock_conn.execute.call_args[0][0])
-    assert "my_schema" in executed_sql
+    saver._lakebase.create_schema.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,6 +18,28 @@ from databricks_ai_bridge.lakebase import (
     SequencePrivilege,
     TablePrivilege,
 )
+
+
+class _ContextManager:
+    def __init__(self, value):
+        self._value = value
+
+    def __enter__(self):
+        return self._value
+
+    def __exit__(self, *args):
+        return False
+
+
+class _AsyncContextManager:
+    def __init__(self, value):
+        self._value = value
+
+    async def __aenter__(self):
+        return self._value
+
+    async def __aexit__(self, *args):
+        return False
 
 
 def _make_workspace(
@@ -1948,26 +1970,6 @@ def test_lakebase_pool_configure_sets_search_path_when_schema_specified(monkeypa
     assert "my_schema" in str(executed_sql) or "search_path" in str(executed_sql)
 
 
-def test_lakebase_pool_no_configure_when_no_schema(monkeypatch):
-    """LakebasePool without schema passes no configure callback."""
-    captured_configure = [None]
-
-    class TestPool:
-        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
-            self.conninfo = conninfo
-            captured_configure[0] = configure
-
-    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestPool)
-    workspace = _make_workspace()
-
-    LakebasePool(
-        instance_name="lake-instance",
-        workspace_client=workspace,
-    )
-
-    assert captured_configure[0] is None, "configure callback should be None when no schema"
-
-
 @pytest.mark.asyncio
 async def test_async_lakebase_pool_configure_sets_search_path_when_schema_specified(monkeypatch):
     """AsyncLakebasePool with schema passes a configure callback that sets search_path."""
@@ -2077,3 +2079,118 @@ def test_sqlalchemy_checkout_handler_sets_search_path(monkeypatch):
     executed_sql = mock_cursor.execute.call_args[0][0]
     assert "search_path" in str(executed_sql).lower()
     assert "my_schema" in str(executed_sql)
+
+
+def test_lakebase_pool_preserves_user_configure_when_no_schema(monkeypatch):
+    """LakebasePool without schema should still pass a user-provided configure callback."""
+    captured_configure = [None]
+
+    class TestPool:
+        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
+            self.conninfo = conninfo
+            captured_configure[0] = configure
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    user_fn = MagicMock()
+    LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        configure=user_fn,
+    )
+
+    assert captured_configure[0] is user_fn, (
+        "user-provided configure should be passed through when no schema is set"
+    )
+
+
+def test_lakebase_pool_create_schema(monkeypatch):
+    """LakebasePool.create_schema() executes CREATE SCHEMA when schema is set."""
+    mock_conn = MagicMock()
+
+    class TestPool:
+        def __init__(self, **kwargs):
+            pass
+
+        def connection(self):
+            return _ContextManager(mock_conn)
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    pool = LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+    pool.create_schema()
+
+    mock_conn.execute.assert_called_once()
+    executed_sql = str(mock_conn.execute.call_args[0][0])
+    assert "my_schema" in executed_sql
+
+
+@pytest.mark.asyncio
+async def test_async_lakebase_pool_create_schema(monkeypatch):
+    """AsyncLakebasePool.create_schema() executes CREATE SCHEMA when schema is set."""
+    mock_conn = MagicMock()
+    mock_conn.execute = AsyncMock()
+
+    class TestPool:
+        def __init__(self, **kwargs):
+            pass
+
+        def connection(self):
+            return _AsyncContextManager(mock_conn)
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    pool = AsyncLakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        schema="my_schema",
+    )
+    await pool.create_schema()
+
+    mock_conn.execute.assert_called_once()
+    executed_sql = str(mock_conn.execute.call_args[0][0])
+    assert "my_schema" in executed_sql
+
+
+@pytest.mark.asyncio
+async def test_async_lakebase_pool_preserves_user_configure_when_no_schema(monkeypatch):
+    """AsyncLakebasePool without schema should still pass a user-provided configure callback."""
+    captured_configure = [None]
+
+    class TestPool:
+        def __init__(self, *, conninfo, connection_class, configure=None, **kwargs):
+            self.conninfo = conninfo
+            captured_configure[0] = configure
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.AsyncConnectionPool", TestPool)
+    workspace = _make_workspace()
+
+    user_fn = AsyncMock()
+    AsyncLakebasePool(
+        instance_name="lake-instance",
+        workspace_client=workspace,
+        configure=user_fn,
+    )
+
+    assert captured_configure[0] is user_fn, (
+        "user-provided configure should be passed through when no schema is set"
+    )
