@@ -1067,15 +1067,39 @@ class TestCollectPriorAttemptToolEvents:
         assert len(out) == 1
         assert out[0]["call_id"] == "c1"
 
-    def test_returns_empty_when_prior_attempt_emitted_no_tool_events(self):
-        # Attempt 1 was just text, no tool calls.
+    def test_inherits_assistant_message_items(self):
+        # Completed assistant text messages inherit too, so the next attempt's
+        # LLM sees its prior narration and doesn't re-emit it from scratch.
         messages = [
             (
                 0,
                 None,
                 {
                     "type": "response.output_item.done",
-                    "item": {"type": "message", "role": "assistant"},
+                    "item": {"type": "message", "role": "assistant", "content": "Let me check"},
+                },
+                1,
+            ),
+            self._event(1, 1, "function_call", "c1"),
+            self._event(2, 1, "function_call_output", "c1", output="ok"),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        # 1 message + 1 function_call + 1 function_call_output
+        assert len(out) == 3
+        assert out[0]["type"] == "message"
+        assert out[1]["type"] == "function_call"
+        assert out[2]["type"] == "function_call_output"
+
+    def test_skips_unknown_item_types(self):
+        # Item types outside the allow-list (e.g., future event kinds) are
+        # dropped — safer than forwarding them to the handler.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "reasoning", "content": "think"},
                 },
                 1,
             )

@@ -138,22 +138,29 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
+_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
+
+
 def _collect_prior_attempt_tool_events(
     messages: list[tuple], prior_attempt_number: int
 ) -> list[dict]:
-    """Return ``function_call`` / ``function_call_output`` items that the
-    given prior attempt already emitted as ``response.output_item.done``.
+    """Return completed conversational items from the given prior attempt.
 
-    Lets the next resume attempt inherit already-completed tool results
-    instead of starting blank. Without this, the new attempt's LLM re-plans
-    from just the user's latest message and will re-emit tool calls that
-    already ran successfully — exactly what ``get_time then deep_research``
-    UI testing surfaced when only ``deep_research`` was interrupted.
+    Collects ``response.output_item.done`` events whose item is a
+    ``function_call``, ``function_call_output``, or assistant ``message``.
+    Letting the next attempt inherit these lets its LLM see the prior
+    attempt's completed work — tool results AND narrative text — so it can
+    continue from where things left off instead of re-planning from just
+    the user's latest message (which caused observed "re-run the whole
+    chain" behavior and regenerated narration in UI testing).
+
+    Note: only *fully completed* items are recoverable here. Mid-stream
+    partial text (``response.output_text.delta`` frames that never reached
+    ``output_item.done``) is lost by design — the event log doesn't carry
+    reassemblable partial items.
 
     ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
-    attempt_number)``. Only ``response.output_item.done`` events are
-    considered; other event types (text deltas, etc.) don't carry the
-    canonical item shape.
+    attempt_number)``.
     """
     out: list[dict] = []
     for _seq, _item_json, evt, attempt_tag in messages:
@@ -166,7 +173,7 @@ def _collect_prior_attempt_tool_events(
         item = evt.get("item")
         if not isinstance(item, dict):
             continue
-        if item.get("type") in ("function_call", "function_call_output"):
+        if item.get("type") in _INHERITABLE_ITEM_TYPES:
             out.append(item)
     return out
 
