@@ -74,6 +74,86 @@ def _item_dict(item: Any) -> dict:
     return dict(item.__dict__) if hasattr(item, "__dict__") else {}
 
 
+def _sanitize_items(
+    items: list[Any],
+    synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
+) -> list[Any]:
+    """Return a protocol-valid view of session items.
+
+    Walks items in chronological order, drops duplicate
+    ``function_call`` / ``function_call_output`` by ``call_id``, drops orphan
+    ``function_call_output`` items whose originating call is not present,
+    and injects a synthetic output immediately after any ``function_call``
+    whose matching output never landed.
+
+    Shared by ``repair()`` (destructive: rewrites the DB) and
+    ``get_items()`` (non-destructive: in-memory filter on read). Returning
+    the original ``items`` untouched when nothing needs repair lets callers
+    skip writes cheaply on the happy path.
+    """
+    if not items:
+        return items
+
+    call_ids_with_output: set[str] = set()
+    declared_call_ids: set[str] = set()
+    for item in items:
+        t = _item_get(item, "type")
+        cid = _item_get(item, "call_id")
+        if t == "function_call" and cid:
+            declared_call_ids.add(cid)
+        if t == "function_call_output" and cid:
+            call_ids_with_output.add(cid)
+
+    sanitized: list[Any] = []
+    seen_calls: set[str] = set()
+    seen_outputs: set[str] = set()
+    injected_call_ids: list[str] = []
+    dropped_orphan_outputs = 0
+
+    for item in items:
+        t = _item_get(item, "type")
+        cid = _item_get(item, "call_id")
+        if t == "function_call" and cid:
+            if cid in seen_calls:
+                continue
+            seen_calls.add(cid)
+            sanitized.append(item)
+            if cid not in call_ids_with_output:
+                sanitized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": cid,
+                        "output": synthetic_output,
+                    }
+                )
+                injected_call_ids.append(cid)
+        elif t == "function_call_output" and cid:
+            if cid in seen_outputs:
+                continue
+            if cid not in declared_call_ids:
+                dropped_orphan_outputs += 1
+                continue
+            seen_outputs.add(cid)
+            sanitized.append(item)
+        else:
+            sanitized.append(item)
+
+    if len(sanitized) == len(items) and not injected_call_ids and not dropped_orphan_outputs:
+        # Happy path — return the caller's list reference so they can
+        # cheaply skip any re-persistence.
+        return items
+
+    logger.info(
+        "[durable] session items sanitized: injected=%d dropped_orphan_outputs=%d "
+        "original=%d final=%d",
+        len(injected_call_ids),
+        dropped_orphan_outputs,
+        len(items),
+        len(sanitized),
+    )
+    return sanitized
+
+
 class AsyncDatabricksSession(SQLAlchemySession):
     """
     Async OpenAI Agents SDK Session implementation for Databricks Lakebase.
@@ -128,6 +208,8 @@ class AsyncDatabricksSession(SQLAlchemySession):
         sessions_table: str = "agent_sessions",
         messages_table: str = "agent_messages",
         use_cached_engine: bool = True,
+        auto_repair: bool = True,
+        auto_repair_synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
         **engine_kwargs,
     ) -> None:
         """
@@ -162,6 +244,9 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 "Please install with: pip install databricks-openai[memory]"
             )
 
+        self._auto_repair = auto_repair
+        self._auto_repair_synthetic_output = auto_repair_synthetic_output
+
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
@@ -188,24 +273,32 @@ class AsyncDatabricksSession(SQLAlchemySession):
             session_id,
         )
 
+    async def get_items(self, limit: Optional[int] = None) -> list[Any]:
+        """Return session items, repaired for protocol validity when enabled.
+
+        When ``auto_repair=True`` (default), the returned list has every
+        ``function_call`` paired with a ``function_call_output`` — orphans
+        from a durable-resume crash get a synthetic output appended, and
+        duplicates get deduped. The underlying DB rows are not modified;
+        this is a pure in-memory filter, cheap to re-run on every call.
+
+        Callers that want the raw persisted items can construct the session
+        with ``auto_repair=False``, or call ``repair()`` which writes the
+        sanitized state back to the DB.
+        """
+        items = await super().get_items(limit=limit)
+        if not self._auto_repair:
+            return items
+        return _sanitize_items(items, synthetic_output=self._auto_repair_synthetic_output)
+
     async def repair(self, synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT) -> int:
-        """Reconcile the session so the next LLM call sees a valid conversation.
+        """Reconcile the session DB so persisted rows are protocol-valid.
 
-        Handles two failure modes that durable-resume and client history echo
-        can introduce:
-
-        1. **Orphan function_calls.** A kill mid-tool leaves a ``function_call``
-           item with no matching ``function_call_output``. The next LLM turn
-           fails with 'tool_calls must be followed by tool messages'.
-
-        2. **Duplicate items.** When the client re-sends prior history on a
-           resumed turn, the same ``call_id`` can land twice. Even with every
-           call_id eventually having an output, duplicates confuse the API.
-
-        Walks items in chronological order, dedupes ``function_call`` /
-        ``function_call_output`` by ``call_id``, and injects a synthetic
-        ``function_call_output`` immediately after any orphan ``function_call``.
-        No-op when the session is already consistent.
+        Destructive — rewrites the ``agent_messages`` rows via
+        ``clear_session()`` + ``add_items(sanitized)``. Callers who only need
+        a clean view for the next LLM call should rely on ``get_items()``'s
+        auto-repair instead; ``repair()`` is for one-shot maintenance jobs
+        or tests that want to assert the DB itself is clean.
 
         Args:
             synthetic_output: Text used for the synthetic outputs inserted for
@@ -213,65 +306,34 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 message.
 
         Returns:
-            The number of synthetic outputs injected (0 if the session was
-            already clean).
+            The number of synthetic outputs injected (0 if already clean).
         """
-        items = await self.get_items()
+        # Bypass our auto-repair override so we see the raw items and can
+        # tell whether the DB is already clean.
+        items = await super().get_items()
         if not items:
             return 0
-
-        call_ids_with_output: set[str] = set()
-        for item in items:
-            if _item_get(item, "type") == "function_call_output":
-                cid = _item_get(item, "call_id")
-                if cid:
-                    call_ids_with_output.add(cid)
-
-        sanitized: list[dict] = []
-        seen_calls: set[str] = set()
-        seen_outputs: set[str] = set()
-        injected_call_ids: list[str] = []
-
-        for item in items:
-            t = _item_get(item, "type")
-            cid = _item_get(item, "call_id")
-            if t == "function_call" and cid:
-                if cid in seen_calls:
-                    continue  # drop duplicate
-                seen_calls.add(cid)
-                sanitized.append(_item_dict(item))
-                if cid not in call_ids_with_output:
-                    sanitized.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": cid,
-                            "output": synthetic_output,
-                        }
-                    )
-                    injected_call_ids.append(cid)
-            elif t == "function_call_output" and cid:
-                if cid in seen_outputs:
-                    continue  # drop duplicate output
-                seen_outputs.add(cid)
-                sanitized.append(_item_dict(item))
-            else:
-                sanitized.append(_item_dict(item))
-
-        if len(sanitized) == len(items) and not injected_call_ids:
+        sanitized = _sanitize_items(items, synthetic_output=synthetic_output)
+        # When _sanitize_items has nothing to do it returns ``items`` itself.
+        if sanitized is items:
             return 0
-
+        injected_call_ids = [
+            _item_get(s, "call_id")
+            for s in sanitized
+            if _item_get(s, "type") == "function_call_output"
+            and _item_get(s, "call_id") not in {_item_get(i, "call_id") for i in items}
+        ]
+        sanitized_dicts = [_item_dict(i) for i in sanitized]
         logger.info(
-            "AsyncDatabricksSession.repair session_id=%s original=%d sanitized=%d "
-            "injected=%d call_ids=%s",
+            "AsyncDatabricksSession.repair session_id=%s original=%d sanitized=%d injected=%d",
             self.session_id,
             len(items),
-            len(sanitized),
+            len(sanitized_dicts),
             len(injected_call_ids),
-            injected_call_ids,
         )
         await self.clear_session()
-        if sanitized:
-            await self.add_items(sanitized)
+        if sanitized_dicts:
+            await self.add_items(sanitized_dicts)
         return len(injected_call_ids)
 
     @classmethod
