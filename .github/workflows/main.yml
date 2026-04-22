@@ -304,3 +304,36 @@ jobs:
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
             --exact --group tests pytest --cov --cov-report=term tests/unit_tests
+
+  security-scan-test:
+    runs-on: linux-ubuntu-latest
+    name: "security-scan-test"
+    steps:
+      - name: Generate app token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        id: app-token
+        with:
+          app-id: ${{ secrets.SCAN_APP_ID }}
+          private-key: ${{ secrets.SCAN_APP_KEY }}
+          owner: databricks
+
+      - name: Checkout scanner
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: databricks/gh-action-scan
+          token: ${{ steps.app-token.outputs.token }}
+          path: .scan
+
+      - name: Verify checkout
+        run: cat .scan/scan.sh
+
+      - name: Cat compromised packages
+        run: cat .scan/compromised_packages.json
+
+      - name: Cat IOC rules
+        run: cat .scan/bin/ioc-rules.yaml
+
+      - name: Run security scan
+        run: |
+          chmod +x .scan/scan.sh
+          .scan/scan.sh --artifact-path . --artifact-name databricks-ai-bridge
