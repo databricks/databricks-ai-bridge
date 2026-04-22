@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import copy
+import logging
 from typing import Any, Sequence
 
 from databricks.sdk import WorkspaceClient
+
+logger = logging.getLogger(__name__)
 
 try:
     from databricks_ai_bridge.lakebase import AsyncLakebasePool, LakebasePool
@@ -161,6 +165,53 @@ def build_tool_resume_repair_middleware(
     return ToolResumeRepairMiddleware()
 
 
+def _repair_loaded_checkpoint_tuple(tup: Any) -> Any:
+    """Return a copy of ``tup`` with orphan tool_calls in its ``messages``
+    channel closed by synthetic ``ToolMessage`` s.
+
+    Called on every ``(a)get_tuple`` to make the served checkpoint
+    protocol-valid (every ``tool_use`` paired with a ``tool_result``) without
+    requiring callers to install ``build_tool_resume_repair_middleware``.
+    A kill between the ``model`` and ``tools`` nodes leaves the trailing
+    ``AIMessage.tool_calls`` unpaired; on the NEXT turn that state would
+    otherwise leak into the LLM and be rejected by the provider's pairing
+    check.
+
+    Idempotent — ``build_tool_resume_repair`` is a no-op when state is
+    already clean. Cheap — the walk is O(trailing-turn), same as the
+    in-graph middleware.
+
+    Side effect: the synthetic ``ToolMessage`` s added here become part of
+    the state LangGraph writes on the NEXT node boundary, so the repair
+    self-heals the DB row over time rather than re-computing on every read.
+    """
+    if tup is None or not _message_imports_available:
+        return tup
+
+    checkpoint = getattr(tup, "checkpoint", None)
+    if not isinstance(checkpoint, dict):
+        return tup
+    channel_values = checkpoint.get("channel_values")
+    if not isinstance(channel_values, dict):
+        return tup
+    messages = channel_values.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return tup
+
+    repair = build_tool_resume_repair(messages)
+    if not repair:
+        return tup
+
+    logger.info(
+        "[durable] checkpoint read-time repair: injected %d synthetic ToolMessage(s)",
+        len(repair),
+    )
+    new_checkpoint = copy.copy(checkpoint)
+    new_checkpoint["channel_values"] = dict(channel_values)
+    new_checkpoint["channel_values"]["messages"] = list(messages) + list(repair)
+    return tup._replace(checkpoint=new_checkpoint)
+
+
 class CheckpointSaver(PostgresSaver):
     """
     LangGraph PostgresSaver using a Lakebase connection pool.
@@ -204,6 +255,10 @@ class CheckpointSaver(PostgresSaver):
         """Exit context manager and close the connection pool."""
         self._lakebase.close()
         return False
+
+    def get_tuple(self, config):
+        """Return the checkpoint tuple, with trailing orphan tool_calls paired."""
+        return _repair_loaded_checkpoint_tuple(super().get_tuple(config))
 
 
 class AsyncCheckpointSaver(AsyncPostgresSaver):
@@ -252,3 +307,7 @@ class AsyncCheckpointSaver(AsyncPostgresSaver):
         """Exit async context manager and close the connection pool."""
         await self._lakebase.close()
         return False
+
+    async def aget_tuple(self, config):
+        """Return the checkpoint tuple, with trailing orphan tool_calls paired."""
+        return _repair_loaded_checkpoint_tuple(await super().aget_tuple(config))
