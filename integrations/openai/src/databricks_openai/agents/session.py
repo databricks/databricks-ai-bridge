@@ -36,8 +36,11 @@ from threading import Lock
 from typing import Any, Optional
 
 DEFAULT_REPAIR_SYNTHETIC_OUTPUT = (
-    "Tool call was interrupted by a durable resume and did not complete. "
-    "Please retry if still needed."
+    "[INTERRUPTED] This tool call did not complete due to a server "
+    "interruption, so no result is available. Other tool calls in the "
+    "conversation history completed normally and their results remain valid. "
+    "If the information is still needed, re-invoking only this specific tool "
+    "is usually sufficient."
 )
 
 try:

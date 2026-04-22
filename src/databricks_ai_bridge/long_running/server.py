@@ -53,11 +53,15 @@ logger = logging.getLogger(__name__)
 BACKGROUND_KEY = "background"
 
 # Synthetic output injected for an orphaned function_call whose matching
-# function_call_output was lost to a pod crash. "interrupted" is the most
-# honest label: the LLM decides whether to retry on the next turn.
+# function_call_output was lost to a pod crash. The text is prescriptive:
+# without the "do NOT re-invoke tools that already returned" guidance, models
+# tend to restart the whole tool sequence on resume.
 DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT = (
-    "Tool call was interrupted by a server-side event "
-    "(e.g., pod restart). No result was produced."
+    "[INTERRUPTED] This tool call did not complete due to a server "
+    "interruption, so no result is available. Other tool calls in the "
+    "conversation history completed normally and their results remain valid. "
+    "If the information is still needed, re-invoking only this specific tool "
+    "is usually sufficient."
 )
 
 # One ID per process so heartbeats + claims have a stable owner identity.
