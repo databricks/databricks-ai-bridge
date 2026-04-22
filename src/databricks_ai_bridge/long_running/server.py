@@ -52,6 +52,14 @@ logger = logging.getLogger(__name__)
 
 BACKGROUND_KEY = "background"
 
+# Synthetic output injected for an orphaned function_call whose matching
+# function_call_output was lost to a pod crash. "interrupted" is the most
+# honest label: the LLM decides whether to retry on the next turn.
+DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT = (
+    "Tool call was interrupted by a server-side event "
+    "(e.g., pod restart). No result was produced."
+)
+
 # One ID per process so heartbeats + claims have a stable owner identity.
 _POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
@@ -124,6 +132,165 @@ def _age_seconds(created_at: datetime) -> float:
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
     return (now - created_at).total_seconds()
+
+
+def _sanitize_request_input(
+    request_dict: dict[str, Any],
+    synthetic_output: str = DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
+) -> dict[str, Any]:
+    """Reconcile orphaned function_call / function_call_output items in input.
+
+    Walks ``request['input']`` end-to-end (not just the trailing turn) and:
+
+    * drops duplicate ``function_call`` items by ``call_id``;
+    * drops duplicate or orphan ``function_call_output`` items (no matching
+      ``function_call`` anywhere in the list);
+    * injects a synthetic ``function_call_output`` immediately after any
+      ``function_call`` that has no output, so every ``tool_use`` is paired.
+
+    Also supports chat-completions-shape assistant items
+    (``{role: "assistant", tool_calls: [...]}``) as declaring call_ids.
+
+    This is a pure transform on a dict — no pydantic round-trip, no DB I/O.
+    Returns the same dict (mutated in place on the ``input`` key) for caller
+    convenience.
+
+    Reason we walk the whole history: the LangGraph in-graph middleware can
+    only repair the trailing turn, but UI-echoed history can carry orphans
+    from prior crashed turns mid-list. See rotation-findings.md (Test E).
+    """
+    items = request_dict.get("input")
+    if not isinstance(items, list) or not items:
+        return request_dict
+
+    declared_call_ids: set[str] = set()
+    call_ids_with_output: set[str] = set()
+    for i in items:
+        if not isinstance(i, dict):
+            continue
+        t = i.get("type")
+        cid = i.get("call_id")
+        if t == "function_call" and cid:
+            declared_call_ids.add(cid)
+        if t == "function_call_output" and cid:
+            call_ids_with_output.add(cid)
+        if i.get("role") == "assistant" and isinstance(i.get("tool_calls"), list):
+            for tc in i["tool_calls"]:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = tc.get("id") or (tc.get("function") or {}).get("id")
+                if tc_id:
+                    declared_call_ids.add(tc_id)
+
+    sanitized: list[dict[str, Any]] = []
+    seen_calls: set[str] = set()
+    seen_outputs: set[str] = set()
+    injected = 0
+    dropped_orphan_outputs = 0
+    dropped_duplicates = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            sanitized.append(item)
+            continue
+        t = item.get("type")
+        cid = item.get("call_id")
+
+        if t == "function_call" and cid:
+            if cid in seen_calls:
+                dropped_duplicates += 1
+                continue
+            seen_calls.add(cid)
+            sanitized.append(item)
+            if cid not in call_ids_with_output:
+                sanitized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": cid,
+                        "output": synthetic_output,
+                    }
+                )
+                injected += 1
+        elif t == "function_call_output" and cid:
+            if cid in seen_outputs:
+                dropped_duplicates += 1
+                continue
+            if cid not in declared_call_ids:
+                dropped_orphan_outputs += 1
+                continue
+            seen_outputs.add(cid)
+            sanitized.append(item)
+        else:
+            sanitized.append(item)
+
+    if injected or dropped_orphan_outputs or dropped_duplicates:
+        logger.info(
+            "[durable] input sanitized: injected=%d dropped_orphan_outputs=%d "
+            "dropped_duplicates=%d original_items=%d final_items=%d",
+            injected,
+            dropped_orphan_outputs,
+            dropped_duplicates,
+            len(items),
+            len(sanitized),
+        )
+
+    request_dict["input"] = sanitized
+    return request_dict
+
+
+def _rotate_conversation_id(
+    request_dict: dict[str, Any],
+    new_attempt_number: int,
+    response_id: str,
+) -> dict[str, Any]:
+    """Rotate the conversation anchor to a per-attempt value.
+
+    After a crash, attempt N+1 should see a FRESH checkpointer / session so it
+    doesn't inherit mid-turn state that the SDK can't repair cleanly (most
+    notably the LangGraph stream-event attempt-boundary orphan artifact).
+    The handler's priority chain is:
+
+        1. custom_inputs.thread_id / session_id   (explicit, wins)
+        2. context.conversation_id                (fallback)
+        3. auto-generated                         (last resort)
+
+    We drop (1), pick the current base anchor, and write ``{base}::attempt-N``
+    into (2). The handler then resolves to a fresh key for this attempt while
+    still being deterministic across retries of the same attempt.
+
+    The LLM sees full turn history via ``original_request.input``, which was
+    captured at the initial POST — before any attempt ran, so it's clean by
+    construction.
+    """
+    custom_inputs = request_dict.get("custom_inputs")
+    if not isinstance(custom_inputs, dict):
+        custom_inputs = {}
+
+    base_anchor = (
+        custom_inputs.get("thread_id")
+        or custom_inputs.get("session_id")
+        or (request_dict.get("context") or {}).get("conversation_id")
+        or response_id
+    )
+
+    custom_inputs.pop("thread_id", None)
+    custom_inputs.pop("session_id", None)
+    request_dict["custom_inputs"] = custom_inputs
+
+    ctx = request_dict.get("context") or {}
+    ctx = dict(ctx)
+    rotated = f"{base_anchor}::attempt-{new_attempt_number}"
+    ctx["conversation_id"] = rotated
+    request_dict["context"] = ctx
+    logger.info(
+        "[durable] rotated conversation_id for resume response_id=%s "
+        "attempt=%d base=%s rotated=%s",
+        response_id,
+        new_attempt_number,
+        base_anchor,
+        rotated,
+    )
+    return request_dict
 
 
 def _inject_conversation_id(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
@@ -349,6 +516,9 @@ class LongRunningAgentServer(AgentServer):
         is_streaming = data.get(MLFLOW_STREAM_KEY, False)
         data = {k: v for k, v in data.items() if k not in (BACKGROUND_KEY, MLFLOW_STREAM_KEY)}
         return_trace_id = (get_request_headers().get(RETURN_TRACE_HEADER) or "").lower() == "true"
+
+        if self._settings.auto_sanitize_input:
+            data = _sanitize_request_input(data)
 
         try:
             request_data = self.validator.validate_and_convert_request(data)
@@ -821,12 +991,27 @@ class LongRunningAgentServer(AgentServer):
             )
             return None
 
-        # Build a "resume" request: keep everything the handler cares about
-        # (custom_inputs carrying thread_id, context.conversation_id), but null
-        # out input so the handler passes {"messages": []} / [] to its agent.
-        # This is the single line that makes the design framework-agnostic.
-        resume_dict = dict(resp.original_request)
-        resume_dict["input"] = []
+        # Build a "resume" request by REPLAYING the original POST's input on a
+        # ROTATED conversation anchor. Two coordinated moves:
+        #
+        # 1. Keep original_request["input"] intact — it was captured pre-crash
+        #    and is protocol-clean by construction. The LLM sees full history
+        #    via the input list, not via checkpointer state.
+        #
+        # 2. Rotate conversation_id so the handler's SDK helpers resolve to a
+        #    FRESH thread_id / session_id for this attempt. Without this, the
+        #    handler would reload the crashed attempt's mid-turn checkpoint,
+        #    which on LangGraph produces a stream-event orphan artifact at the
+        #    attempt boundary (rotation-findings.md stress test).
+        #
+        # Trade-off: attempt N+1 re-runs the LLM from scratch on the replayed
+        # input (one extra LLM call + any side-effectful tool re-run). This is
+        # strictly safer than resuming on a checkpointer that may have state
+        # the SDK can't fully repair.
+        resume_dict = copy.deepcopy(resp.original_request)
+        if self._settings.auto_sanitize_input:
+            resume_dict = _sanitize_request_input(resume_dict)
+        resume_dict = _rotate_conversation_id(resume_dict, new_attempt, response_id)
         resume_request = self.validator.validate_and_convert_request(resume_dict)
 
         # Emit a marker so clients can reset any in-flight rendering from the

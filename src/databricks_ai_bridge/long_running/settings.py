@@ -17,6 +17,10 @@ class LongRunningSettings:
     cleanup_timeout_seconds: float = 7.0
     heartbeat_interval_seconds: float = 3.0
     heartbeat_stale_threshold_seconds: float = 10.0
+    # Walk request.input[] on every request and drop/repair orphaned
+    # function_call / function_call_output pairs before the handler runs.
+    # Lets handlers stay framework-idiomatic without carrying repair logic.
+    auto_sanitize_input: bool = True
 
     def __post_init__(self) -> None:
         if self.task_timeout_seconds <= 0:

@@ -16,9 +16,12 @@ pytest.importorskip("psycopg")
 
 from databricks_ai_bridge.long_running.repository import ResponseInfo
 from databricks_ai_bridge.long_running.server import (
+    DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
     LongRunningAgentServer,
     _deferred_mark_failed,
     _inject_conversation_id,
+    _rotate_conversation_id,
+    _sanitize_request_input,
     _sse_event,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
@@ -932,6 +935,133 @@ class TestLifespanPlumbing:
 # ---------------------------------------------------------------------------
 
 
+class TestSanitizeRequestInput:
+    """Full-history orphan walker — catches mid-history orphans that neither
+    the LangGraph middleware (trailing-only) nor session.repair() (session-only)
+    cover. See rotation-findings.md Test E."""
+
+    def test_empty_input_is_noop(self):
+        assert _sanitize_request_input({}) == {}
+        assert _sanitize_request_input({"input": []}) == {"input": []}
+
+    def test_passes_through_paired_call_and_output(self):
+        items = [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            {"role": "assistant", "content": "done"},
+        ]
+        out = _sanitize_request_input({"input": list(items)})
+        assert out["input"] == items
+
+    def test_injects_synthetic_output_for_trailing_orphan_call(self):
+        items = [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+        ]
+        out = _sanitize_request_input({"input": items})
+        assert len(out["input"]) == 3
+        assert out["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
+        }
+
+    def test_injects_synthetic_output_for_midhistory_orphan_call(self):
+        # The case that today's middleware misses (Test E).
+        items = [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"role": "user", "content": "different question"},
+        ]
+        out = _sanitize_request_input({"input": items})
+        assert len(out["input"]) == 4
+        assert out["input"][1]["type"] == "function_call"
+        assert out["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
+        }
+        assert out["input"][3] == {"role": "user", "content": "different question"}
+
+    def test_drops_orphan_output_with_no_matching_call(self):
+        # The LangGraph stream-event attempt-boundary artifact.
+        items = [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call_output", "call_id": "c-ghost", "output": "x"},
+            {"role": "user", "content": "follow-up"},
+        ]
+        out = _sanitize_request_input({"input": items})
+        assert out["input"] == [
+            {"role": "user", "content": "hi"},
+            {"role": "user", "content": "follow-up"},
+        ]
+
+    def test_dedupes_duplicate_calls_and_outputs(self):
+        items = [
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        ]
+        out = _sanitize_request_input({"input": items})
+        assert len(out["input"]) == 2
+        assert out["input"][0]["type"] == "function_call"
+        assert out["input"][1]["type"] == "function_call_output"
+
+    def test_recognizes_chat_completions_shape_as_declaring_call_id(self):
+        # An assistant message with tool_calls counts as "declaring" a call_id,
+        # so a matching function_call_output further down is NOT dropped.
+        items = [
+            {
+                "role": "assistant",
+                "content": [],
+                "tool_calls": [
+                    {"id": "tc-1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"type": "function_call_output", "call_id": "tc-1", "output": "ok"},
+        ]
+        out = _sanitize_request_input({"input": list(items)})
+        assert out["input"] == items
+
+    def test_non_dict_items_pass_through(self):
+        items = [{"role": "user", "content": "hi"}, "not-a-dict", 42]
+        out = _sanitize_request_input({"input": list(items)})
+        assert out["input"] == items
+
+
+class TestRotateConversationId:
+    def test_rotate_drops_thread_id_and_sets_rotated_context(self):
+        r = {"custom_inputs": {"thread_id": "t1", "user_id": "u"}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert "thread_id" not in out["custom_inputs"]
+        assert out["custom_inputs"]["user_id"] == "u"
+        assert out["context"]["conversation_id"] == "t1::attempt-2"
+
+    def test_rotate_drops_session_id(self):
+        r = {"custom_inputs": {"session_id": "s1"}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert "session_id" not in out["custom_inputs"]
+        assert out["context"]["conversation_id"] == "s1::attempt-2"
+
+    def test_rotate_falls_back_to_context_conversation_id(self):
+        r = {"custom_inputs": {}, "context": {"conversation_id": "c-abc"}}
+        out = _rotate_conversation_id(r, new_attempt_number=3, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "c-abc::attempt-3"
+
+    def test_rotate_falls_back_to_response_id_as_last_resort(self):
+        r = {"custom_inputs": {}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "resp_x::attempt-2"
+
+    def test_rotate_handles_missing_custom_inputs_key(self):
+        r = {"context": {"conversation_id": "c-abc"}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "c-abc::attempt-2"
+        assert out["custom_inputs"] == {}
+
+
 class TestInjectConversationId:
     """Anchoring an otherwise-anonymous request to a response_id guarantees a
     resumed run on a new pod resolves to the same agent-SDK thread/session."""
@@ -1130,10 +1260,11 @@ class TestTryClaimAndResume:
         mock_create_task.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_resume_passes_empty_input_to_handler(self):
-        """The single line that makes the design framework-agnostic: input=[] so
-        LangGraph's checkpointer and databricks-openai Session resume cleanly
-        (verified by prototypes — see project memory)."""
+    async def test_resume_replays_input_and_rotates_conversation_id(self):
+        """Resume must replay original_request.input (not blank it) and rotate
+        the conversation anchor so the handler resolves to a fresh thread /
+        session for the new attempt. Prevents the LangGraph stream-event
+        attempt-boundary orphan artifact (rotation-findings.md)."""
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
@@ -1144,7 +1275,7 @@ class TestTryClaimAndResume:
             heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
             original_request={
                 "input": [{"role": "user", "content": "hi"}],
-                "custom_inputs": {"thread_id": "t1"},
+                "custom_inputs": {"thread_id": "t1", "user_id": "u"},
                 "context": {},
             },
         )
@@ -1172,28 +1303,84 @@ class TestTryClaimAndResume:
         ):
             await server._try_claim_and_resume("resp_x", resp)
 
-        # We can't execute the coro (mock_run is AsyncMock so awaiting it is fine),
-        # but we can inspect the scheduled coroutine's frame locals or just await
-        # the captured coro with proper args. Simpler: check that the resume
-        # coroutine was built with input=[]. Drive the coroutine so mock_run
-        # receives the call args.
         assert len(captured_tasks) == 1
         coro, _name = captured_tasks[0]
         await coro
         mock_run.assert_awaited_once()
         args, kwargs = mock_run.call_args
         resume_request = args[1] if len(args) > 1 else kwargs["request_data"]
-        # resume_request is a ResponsesAgentRequest pydantic object after
-        # round-tripping through the validator so the handler still gets its
-        # declared arg type.
         dumped = (
             resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
         )
-        assert dumped["input"] == []
-        # Other request metadata is preserved so the handler can find
-        # thread_id / conversation_id / user_id.
-        assert dumped["custom_inputs"]["thread_id"] == "t1"
+        # Input is REPLAYED (not blanked) — the LLM sees full pre-crash history.
+        # The MLflow validator normalizes the shape (adds "type": "message" etc.)
+        # so compare essentials.
+        assert len(dumped["input"]) == 1
+        assert dumped["input"][0]["role"] == "user"
+        assert dumped["input"][0]["content"] == "hi"
+        # thread_id was dropped so the handler's priority-2 fallback wins.
+        assert "thread_id" not in (dumped["custom_inputs"] or {})
+        # Other custom_inputs keys are preserved.
+        assert dumped["custom_inputs"]["user_id"] == "u"
+        # conversation_id is rotated to a per-attempt value anchored on t1.
+        assert dumped["context"]["conversation_id"] == "t1::attempt-2"
         assert kwargs.get("attempt_number") == 2
+
+    @pytest.mark.asyncio
+    async def test_resume_rotation_anchors_on_context_conversation_id(self):
+        """When the client didn't pin a thread_id/session_id, rotation uses
+        the injected context.conversation_id as the base anchor."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "hi"}],
+                "custom_inputs": {},
+                "context": {"conversation_id": "resp_x"},
+            },
+        )
+
+        captured_tasks = []
+
+        def capture_task(coro, *, name=None):
+            captured_tasks.append((coro, name))
+
+            class _Fake:
+                def cancel(self):
+                    pass
+
+                def add_done_callback(self, cb):
+                    pass
+
+            return _Fake()
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=3),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch.object(server, "_run_background_stream", new_callable=AsyncMock) as mock_run,
+        ):
+            await server._try_claim_and_resume("resp_x", resp)
+
+        assert len(captured_tasks) == 1
+        coro, _name = captured_tasks[0]
+        await coro
+        mock_run.assert_awaited_once()
+        args, kwargs = mock_run.call_args
+        resume_request = args[1] if len(args) > 1 else kwargs["request_data"]
+        dumped = (
+            resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        )
+        # Rotation anchors on the stored context.conversation_id (priority 2).
+        # Note: re-rotating in a subsequent attempt would re-anchor on the
+        # ORIGINAL stored value, not the previous rotation — no stacking.
+        assert dumped["context"]["conversation_id"] == "resp_x::attempt-3"
 
 
 class TestRetrieveTriggersLazyClaim:
