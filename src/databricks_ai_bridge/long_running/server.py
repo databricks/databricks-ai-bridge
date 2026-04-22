@@ -138,41 +138,110 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
+_INHERITABLE_ITEM_TYPES = (
+    "function_call",
+    "function_call_output",
+    "message",
+    "reasoning",
+)
+
+# Event types whose ``delta`` contributes to a specific in-progress item kind.
+# Single dict so a new partial-reassembly type is just two entries: a
+# reassembler below + an entry here.
+_DELTA_EVENTS_BY_ITEM_TYPE = {
+    "message": {"response.output_text.delta"},
+    "reasoning": {
+        "response.reasoning.delta",
+        "response.reasoning_summary_text.delta",
+    },
+    "function_call": {"response.function_call_arguments.delta"},
+}
+
+
+def _reassemble_message(text: str, template: dict) -> dict:
+    return {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {"type": "output_text", "text": text, "annotations": []},
+        ],
+    }
+
+
+def _reassemble_reasoning(text: str, template: dict) -> dict:
+    return {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": text}],
+    }
+
+
+def _reassemble_function_call(arguments_text: str, template: dict) -> dict | None:
+    """Rebuild a function_call from its added-event template + accumulated
+    argument-delta text.
+
+    Falls back to ``{}`` if the partial arguments don't parse as JSON, so the
+    item is still protocol-valid input (the sanitizer will pair it with a
+    synthetic "[INTERRUPTED]" output — the LLM reads that as "this call was
+    started but didn't finish" and can re-invoke cleanly).
+    """
+    call_id = template.get("call_id") or template.get("id")
+    if not call_id:
+        return None
+    try:
+        json.loads(arguments_text)
+        args = arguments_text
+    except Exception:
+        args = "{}"
+    return {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": template.get("name"),
+        "arguments": args,
+    }
+
+
+_PARTIAL_REASSEMBLERS = {
+    "message": _reassemble_message,
+    "reasoning": _reassemble_reasoning,
+    "function_call": _reassemble_function_call,
+}
 
 
 def _collect_prior_attempt_tool_events(
     messages: list[tuple], prior_attempt_number: int
 ) -> list[dict]:
     """Return conversational items the given prior attempt already emitted,
-    including partial-message reassembly.
+    including partial reassembly of messages, reasoning, and tool-call
+    argument streams.
 
     Two passes combined:
 
     1. **Completed items**: ``response.output_item.done`` events for
-       ``function_call`` / ``function_call_output`` / assistant ``message``.
-       These are the reliable, self-contained pieces the prior attempt
+       ``function_call`` / ``function_call_output`` / assistant ``message``
+       / ``reasoning``. Reliable self-contained pieces the prior attempt
        finished.
 
-    2. **Partial in-flight messages**: if the crash happened mid-stream on a
-       text response, the message has ``response.output_item.added`` +
-       ``response.output_text.delta`` events but no ``done``. We reassemble
-       the accumulated deltas into a synthetic ``message`` item so the next
-       attempt's LLM sees where the narration trailed off and can continue.
+    2. **Partial in-flight items**: if the crash happened mid-stream, an
+       item has ``response.output_item.added`` and a sequence of
+       type-specific delta frames (``output_text.delta``,
+       ``reasoning.delta`` / ``reasoning_summary_text.delta``,
+       ``function_call_arguments.delta``) but never reached ``done``.
+       We reassemble the deltas into a synthetic item so the next attempt's
+       LLM sees where narration / reasoning / tool-call args trailed off.
        Without this, a text-only crash leaves the LLM with just the user's
        message and it restarts from the top.
 
-    Events are walked in sequence_number order; partial items emit in the
-    position the attempt started them.
+    Events are walked in sequence_number order; partial items are emitted
+    last (after all completed items from the same attempt).
 
     ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
     attempt_number)``.
     """
     out: list[dict] = []
-    # Track in-progress message items by id so we can reassemble their
-    # deltas. When a matching .done lands, clear the tracker — the completed
-    # item was already captured by the "done" branch below.
-    in_progress_text: dict[str, list[str]] = {}
+    # Track in-progress items by their server-assigned id: type + chunks +
+    # the original added-event item shell (needed for function_call's
+    # name / call_id, which don't appear on delta frames).
+    in_progress: dict[str, dict] = {}
     in_progress_order: list[str] = []
 
     for _seq, _item_json, evt, attempt_tag in messages:
@@ -184,46 +253,53 @@ def _collect_prior_attempt_tool_events(
 
         if t == "response.output_item.done":
             item = evt.get("item")
-            if isinstance(item, dict) and item.get("type") in _INHERITABLE_ITEM_TYPES:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") in _INHERITABLE_ITEM_TYPES:
                 out.append(item)
-                if item.get("type") == "message":
-                    iid = item.get("id")
-                    if iid in in_progress_text:
-                        del in_progress_text[iid]
-                        in_progress_order.remove(iid)
+                # Drop matching in-progress tracker — the completed item is
+                # authoritative; no duplicate emission from deltas.
+                iid = item.get("id")
+                if iid in in_progress:
+                    del in_progress[iid]
+                    in_progress_order.remove(iid)
         elif t == "response.output_item.added":
             item = evt.get("item")
-            if isinstance(item, dict) and item.get("type") == "message":
-                iid = item.get("id")
-                if iid:
-                    in_progress_text.setdefault(iid, [])
-                    if iid not in in_progress_order:
-                        in_progress_order.append(iid)
-        elif t == "response.output_text.delta":
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            iid = item.get("id")
+            if iid and item_type in _PARTIAL_REASSEMBLERS:
+                in_progress[iid] = {
+                    "item_type": item_type,
+                    "chunks": [],
+                    "template": dict(item),
+                }
+                if iid not in in_progress_order:
+                    in_progress_order.append(iid)
+        else:
             iid = evt.get("item_id")
             delta = evt.get("delta")
-            if iid and isinstance(delta, str) and iid in in_progress_text:
-                in_progress_text[iid].append(delta)
+            if not (iid and isinstance(delta, str) and iid in in_progress):
+                continue
+            expected_events = _DELTA_EVENTS_BY_ITEM_TYPE.get(
+                in_progress[iid]["item_type"], set()
+            )
+            if t in expected_events:
+                in_progress[iid]["chunks"].append(delta)
 
-    # Emit synthetic message items for any never-completed in-progress text.
     for iid in in_progress_order:
-        chunks = in_progress_text.get(iid) or []
-        if not chunks:
+        tracked = in_progress.get(iid)
+        if not tracked or not tracked["chunks"]:
             continue
-        partial_text = "".join(chunks)
-        out.append(
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": partial_text,
-                        "annotations": [],
-                    }
-                ],
-            }
-        )
+        reassembler = _PARTIAL_REASSEMBLERS.get(tracked["item_type"])
+        if reassembler is None:
+            continue
+        joined = "".join(tracked["chunks"])
+        reassembled = reassembler(joined, tracked["template"])
+        if reassembled is not None:
+            out.append(reassembled)
+
     return out
 
 

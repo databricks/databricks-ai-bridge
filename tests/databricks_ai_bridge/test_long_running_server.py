@@ -1163,16 +1163,135 @@ class TestCollectPriorAttemptToolEvents:
         assert len(out) == 1
         assert out[0]["content"][0]["text"] == "Hello, world"
 
+    def test_reassembles_partial_reasoning(self):
+        # Mid-stream reasoning: added + reasoning.delta frames, no .done.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "reasoning", "id": "r_1"},
+                },
+                1,
+            ),
+            (
+                1,
+                None,
+                {
+                    "type": "response.reasoning.delta",
+                    "item_id": "r_1",
+                    "delta": "Let me think about ",
+                },
+                1,
+            ),
+            (
+                2,
+                None,
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "r_1",
+                    "delta": "this carefully.",
+                },
+                1,
+            ),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert len(out) == 1
+        assert out[0]["type"] == "reasoning"
+        assert out[0]["summary"][0]["text"] == "Let me think about this carefully."
+
+    def test_reassembles_partial_function_call_arguments(self):
+        # Tool call arg stream started but crash happened before .done.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_abc",
+                        "name": "get_weather",
+                    },
+                },
+                1,
+            ),
+            (
+                1,
+                None,
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": '{"city":',
+                },
+                1,
+            ),
+            (
+                2,
+                None,
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "delta": ' "Paris"}',
+                },
+                1,
+            ),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert len(out) == 1
+        assert out[0]["type"] == "function_call"
+        assert out[0]["call_id"] == "call_abc"
+        assert out[0]["name"] == "get_weather"
+        assert out[0]["arguments"] == '{"city": "Paris"}'
+
+    def test_partial_function_call_malformed_args_falls_back_to_empty_object(self):
+        # Args stream cut mid-JSON — not parseable. Fall back to {} so the
+        # function_call item stays protocol-valid; the sanitizer still pairs
+        # it with an INTERRUPTED output.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "type": "function_call",
+                        "id": "fc_2",
+                        "call_id": "call_xyz",
+                        "name": "get_weather",
+                    },
+                },
+                1,
+            ),
+            (
+                1,
+                None,
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_2",
+                    "delta": '{"city":',
+                },
+                1,
+            ),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert len(out) == 1
+        assert out[0]["arguments"] == "{}"
+        assert out[0]["call_id"] == "call_xyz"
+
     def test_skips_unknown_item_types(self):
-        # Item types outside the allow-list (e.g., future event kinds) are
-        # dropped — safer than forwarding them to the handler.
+        # Item types outside the allow-list (e.g., future event kinds like
+        # file_search_call / code_interpreter_call) are dropped — safer than
+        # forwarding them to the handler without review.
         messages = [
             (
                 0,
                 None,
                 {
                     "type": "response.output_item.done",
-                    "item": {"type": "reasoning", "content": "think"},
+                    "item": {"type": "file_search_call", "results": []},
                 },
                 1,
             )
