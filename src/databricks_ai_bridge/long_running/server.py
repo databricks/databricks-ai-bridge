@@ -138,6 +138,39 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
+def _collect_prior_attempt_tool_events(
+    messages: list[tuple], prior_attempt_number: int
+) -> list[dict]:
+    """Return ``function_call`` / ``function_call_output`` items that the
+    given prior attempt already emitted as ``response.output_item.done``.
+
+    Lets the next resume attempt inherit already-completed tool results
+    instead of starting blank. Without this, the new attempt's LLM re-plans
+    from just the user's latest message and will re-emit tool calls that
+    already ran successfully — exactly what ``get_time then deep_research``
+    UI testing surfaced when only ``deep_research`` was interrupted.
+
+    ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
+    attempt_number)``. Only ``response.output_item.done`` events are
+    considered; other event types (text deltas, etc.) don't carry the
+    canonical item shape.
+    """
+    out: list[dict] = []
+    for _seq, _item_json, evt, attempt_tag in messages:
+        if attempt_tag != prior_attempt_number:
+            continue
+        if not isinstance(evt, dict):
+            continue
+        if evt.get("type") != "response.output_item.done":
+            continue
+        item = evt.get("item")
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in ("function_call", "function_call_output"):
+            out.append(item)
+    return out
+
+
 def _sanitize_request_input(
     request_dict: dict[str, Any],
     synthetic_output: str = DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
@@ -1001,32 +1034,46 @@ class LongRunningAgentServer(AgentServer):
             return None
 
         # Build a "resume" request by REPLAYING the original POST's input on a
-        # ROTATED conversation anchor. Two coordinated moves:
+        # ROTATED conversation anchor, enriched with the prior attempt's
+        # already-emitted tool events:
         #
-        # 1. Keep original_request["input"] intact — it was captured pre-crash
-        #    and is protocol-clean by construction. The LLM sees full history
-        #    via the input list, not via checkpointer state.
+        # 1. Carry forward the prior attempt's function_call / function_call_output
+        #    items so the LLM sees what's already been done. Without this,
+        #    attempt N+1 re-plans from just the user's latest message and
+        #    re-emits tool calls that previously completed (e.g. it re-runs
+        #    get_time even though only deep_research was interrupted). The
+        #    interrupted tool's orphan function_call gets a synthetic
+        #    "interrupted" output via the sanitizer below.
         #
         # 2. Rotate conversation_id so the handler's SDK helpers resolve to a
         #    FRESH thread_id / session_id for this attempt. Without this, the
         #    handler would reload the crashed attempt's mid-turn checkpoint,
         #    which on LangGraph produces a stream-event orphan artifact at the
-        #    attempt boundary (rotation-findings.md stress test).
-        #
-        # Trade-off: attempt N+1 re-runs the LLM from scratch on the replayed
-        # input (one extra LLM call + any side-effectful tool re-run). This is
-        # strictly safer than resuming on a checkpointer that may have state
-        # the SDK can't fully repair.
+        #    attempt boundary (rotation-findings.md stress test). Attempt N+1
+        #    runs on a clean checkpointer; the prior-attempt tool events in
+        #    input[] are the single source of truth for what already ran.
+        existing = await get_messages(response_id, after_sequence=None)
+        next_seq = max((s for s, _, _, _ in existing), default=-1) + 1
+        prior_tool_events = _collect_prior_attempt_tool_events(
+            existing, prior_attempt_number=new_attempt - 1
+        )
+
         resume_dict = copy.deepcopy(resp.original_request)
+        if prior_tool_events:
+            resume_input = list(resume_dict.get("input") or [])
+            resume_input.extend(prior_tool_events)
+            resume_dict["input"] = resume_input
+            logger.info(
+                "[durable] resume inherited %d tool-event item(s) from attempt %d "
+                "response_id=%s",
+                len(prior_tool_events),
+                new_attempt - 1,
+                response_id,
+            )
         if self._settings.auto_sanitize_input:
             resume_dict = _sanitize_request_input(resume_dict)
         resume_dict = _rotate_conversation_id(resume_dict, new_attempt, response_id)
         resume_request = self.validator.validate_and_convert_request(resume_dict)
-
-        # Emit a marker so clients can reset any in-flight rendering from the
-        # prior attempt before seeing new events.
-        existing = await get_messages(response_id, after_sequence=None)
-        next_seq = max((s for s, _, _, _ in existing), default=-1) + 1
         await append_message(
             response_id,
             next_seq,

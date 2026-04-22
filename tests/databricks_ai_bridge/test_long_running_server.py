@@ -18,6 +18,7 @@ from databricks_ai_bridge.long_running.repository import ResponseInfo
 from databricks_ai_bridge.long_running.server import (
     DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
     LongRunningAgentServer,
+    _collect_prior_attempt_tool_events,
     _deferred_mark_failed,
     _inject_conversation_id,
     _rotate_conversation_id,
@@ -1029,6 +1030,58 @@ class TestSanitizeRequestInput:
         items = [{"role": "user", "content": "hi"}, "not-a-dict", 42]
         out = _sanitize_request_input({"input": list(items)})
         assert out["input"] == items
+
+
+class TestCollectPriorAttemptToolEvents:
+    """Gather function_call / function_call_output items emitted during a
+    prior attempt so the next attempt can inherit already-completed tool
+    results instead of re-running them from scratch."""
+
+    def _event(self, seq, attempt, item_type, call_id, output=None):
+        item = {"type": item_type, "call_id": call_id, "name": "f", "arguments": "{}"}
+        if output is not None:
+            item = {"type": item_type, "call_id": call_id, "output": output}
+        evt = {"type": "response.output_item.done", "item": item}
+        return (seq, None, evt, attempt)
+
+    def test_filters_to_requested_prior_attempt(self):
+        messages = [
+            self._event(0, 1, "function_call", "c1"),
+            self._event(1, 1, "function_call_output", "c1", output="ok"),
+            # attempt 2's events should not be returned when asking for attempt 1.
+            self._event(2, 2, "function_call", "c2"),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert [i["call_id"] for i in out] == ["c1", "c1"]
+        assert [i["type"] for i in out] == ["function_call", "function_call_output"]
+
+    def test_only_output_item_done_events_count(self):
+        noise = (
+            0,
+            None,
+            {"type": "response.output_text.delta", "delta": "hi"},
+            1,
+        )
+        messages = [noise, self._event(1, 1, "function_call", "c1")]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert len(out) == 1
+        assert out[0]["call_id"] == "c1"
+
+    def test_returns_empty_when_prior_attempt_emitted_no_tool_events(self):
+        # Attempt 1 was just text, no tool calls.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "message", "role": "assistant"},
+                },
+                1,
+            )
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert out == []
 
 
 class TestRotateConversationId:
