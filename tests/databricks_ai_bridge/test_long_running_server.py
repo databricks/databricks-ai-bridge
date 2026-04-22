@@ -1090,6 +1090,79 @@ class TestCollectPriorAttemptToolEvents:
         assert out[1]["type"] == "function_call"
         assert out[2]["type"] == "function_call_output"
 
+    def test_reassembles_partial_text_from_delta_events(self):
+        # Attempt crashed mid-stream: item.added + deltas but no item.done.
+        # The collector should synthesize a message item from accumulated deltas
+        # so the next attempt sees where narration trailed off.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "message", "id": "msg_1"},
+                },
+                1,
+            ),
+            (
+                1,
+                None,
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hello, "},
+                1,
+            ),
+            (
+                2,
+                None,
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "world"},
+                1,
+            ),
+            # No item.done — crash.
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        assert len(out) == 1
+        assert out[0]["type"] == "message"
+        assert out[0]["role"] == "assistant"
+        assert out[0]["content"][0]["text"] == "Hello, world"
+
+    def test_ignores_partial_text_if_item_eventually_completed(self):
+        # Deltas streamed, then item.done landed — the completed item is what
+        # we inherit; the deltas are just intermediate frames.
+        messages = [
+            (
+                0,
+                None,
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "message", "id": "msg_1"},
+                },
+                1,
+            ),
+            (
+                1,
+                None,
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hello"},
+                1,
+            ),
+            (
+                2,
+                None,
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Hello, world"}],
+                    },
+                },
+                1,
+            ),
+        ]
+        out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
+        # Only the completed item — NOT a duplicate from the partial deltas.
+        assert len(out) == 1
+        assert out[0]["content"][0]["text"] == "Hello, world"
+
     def test_skips_unknown_item_types(self):
         # Item types outside the allow-list (e.g., future event kinds) are
         # dropped — safer than forwarding them to the handler.

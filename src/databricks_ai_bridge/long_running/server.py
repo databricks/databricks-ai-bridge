@@ -144,37 +144,86 @@ _INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
 def _collect_prior_attempt_tool_events(
     messages: list[tuple], prior_attempt_number: int
 ) -> list[dict]:
-    """Return completed conversational items from the given prior attempt.
+    """Return conversational items the given prior attempt already emitted,
+    including partial-message reassembly.
 
-    Collects ``response.output_item.done`` events whose item is a
-    ``function_call``, ``function_call_output``, or assistant ``message``.
-    Letting the next attempt inherit these lets its LLM see the prior
-    attempt's completed work — tool results AND narrative text — so it can
-    continue from where things left off instead of re-planning from just
-    the user's latest message (which caused observed "re-run the whole
-    chain" behavior and regenerated narration in UI testing).
+    Two passes combined:
 
-    Note: only *fully completed* items are recoverable here. Mid-stream
-    partial text (``response.output_text.delta`` frames that never reached
-    ``output_item.done``) is lost by design — the event log doesn't carry
-    reassemblable partial items.
+    1. **Completed items**: ``response.output_item.done`` events for
+       ``function_call`` / ``function_call_output`` / assistant ``message``.
+       These are the reliable, self-contained pieces the prior attempt
+       finished.
+
+    2. **Partial in-flight messages**: if the crash happened mid-stream on a
+       text response, the message has ``response.output_item.added`` +
+       ``response.output_text.delta`` events but no ``done``. We reassemble
+       the accumulated deltas into a synthetic ``message`` item so the next
+       attempt's LLM sees where the narration trailed off and can continue.
+       Without this, a text-only crash leaves the LLM with just the user's
+       message and it restarts from the top.
+
+    Events are walked in sequence_number order; partial items emit in the
+    position the attempt started them.
 
     ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
     attempt_number)``.
     """
     out: list[dict] = []
+    # Track in-progress message items by id so we can reassemble their
+    # deltas. When a matching .done lands, clear the tracker — the completed
+    # item was already captured by the "done" branch below.
+    in_progress_text: dict[str, list[str]] = {}
+    in_progress_order: list[str] = []
+
     for _seq, _item_json, evt, attempt_tag in messages:
         if attempt_tag != prior_attempt_number:
             continue
         if not isinstance(evt, dict):
             continue
-        if evt.get("type") != "response.output_item.done":
+        t = evt.get("type")
+
+        if t == "response.output_item.done":
+            item = evt.get("item")
+            if isinstance(item, dict) and item.get("type") in _INHERITABLE_ITEM_TYPES:
+                out.append(item)
+                if item.get("type") == "message":
+                    iid = item.get("id")
+                    if iid in in_progress_text:
+                        del in_progress_text[iid]
+                        in_progress_order.remove(iid)
+        elif t == "response.output_item.added":
+            item = evt.get("item")
+            if isinstance(item, dict) and item.get("type") == "message":
+                iid = item.get("id")
+                if iid:
+                    in_progress_text.setdefault(iid, [])
+                    if iid not in in_progress_order:
+                        in_progress_order.append(iid)
+        elif t == "response.output_text.delta":
+            iid = evt.get("item_id")
+            delta = evt.get("delta")
+            if iid and isinstance(delta, str) and iid in in_progress_text:
+                in_progress_text[iid].append(delta)
+
+    # Emit synthetic message items for any never-completed in-progress text.
+    for iid in in_progress_order:
+        chunks = in_progress_text.get(iid) or []
+        if not chunks:
             continue
-        item = evt.get("item")
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") in _INHERITABLE_ITEM_TYPES:
-            out.append(item)
+        partial_text = "".join(chunks)
+        out.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": partial_text,
+                        "annotations": [],
+                    }
+                ],
+            }
+        )
     return out
 
 
