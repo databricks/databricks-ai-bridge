@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## databricks-ai-bridge 0.19.0 databricks-langchain 0.19.0 databricks-openai 0.15.0 databricks-mcp 0.10.0 (2026-04-22)
+## databricks-ai-bridge 0.19.0 databricks-langchain 0.19.0 databricks-openai 0.15.0 (2026-04-22)
 
 ### New Features
 - databricks-ai-bridge / databricks-langchain / databricks-openai: Agent Memory SDKs now allow custom schemas for Lakebase-backed checkpointers, stores, and sessions (#415)
