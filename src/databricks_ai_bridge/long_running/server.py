@@ -275,6 +275,11 @@ def _rotate_conversation_id(
 
     custom_inputs.pop("thread_id", None)
     custom_inputs.pop("session_id", None)
+    # Leave a breadcrumb so handlers that care about retry awareness (e.g.,
+    # injecting a "you are resuming a retry" system prompt, or opting-out of
+    # retry-unsafe tools) can branch on it. Absent from normal first-attempt
+    # requests — handlers should default to "1" if missing.
+    custom_inputs["attempt_number"] = new_attempt_number
     request_dict["custom_inputs"] = custom_inputs
 
     ctx = request_dict.get("context") or {}

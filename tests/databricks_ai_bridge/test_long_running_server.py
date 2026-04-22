@@ -1059,7 +1059,16 @@ class TestRotateConversationId:
         r = {"context": {"conversation_id": "c-abc"}}
         out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
         assert out["context"]["conversation_id"] == "c-abc::attempt-2"
-        assert out["custom_inputs"] == {}
+        # attempt_number breadcrumb is stamped even when custom_inputs was absent.
+        assert out["custom_inputs"] == {"attempt_number": 2}
+
+    def test_rotate_stamps_attempt_number_breadcrumb(self):
+        r = {"custom_inputs": {"user_id": "u"}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=3, response_id="resp_x")
+        # Handlers can branch on this to inject retry-aware behavior.
+        assert out["custom_inputs"]["attempt_number"] == 3
+        # Unrelated custom_inputs keys are preserved.
+        assert out["custom_inputs"]["user_id"] == "u"
 
 
 class TestInjectConversationId:
