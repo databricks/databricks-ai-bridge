@@ -21,6 +21,19 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+#: Default body for the synthetic ``function_call_output`` injected when a
+#: prior attempt's tool call has no matching output (e.g. the pod was killed
+#: between emitting the call and its result). Shared between the server-side
+#: input sanitizer and integration-side read-time repair paths so the user-
+#: visible text stays consistent across the durable-resume contract.
+DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT = (
+    "[INTERRUPTED] This tool call did not complete due to a server "
+    "interruption, so no result is available. Other tool calls in the "
+    "conversation history completed normally and their results remain valid. "
+    "If the information is still needed, re-invoking only this specific tool "
+    "is usually sufficient."
+)
+
 
 def _default_item_get(item: Any, key: str) -> Any:
     if isinstance(item, dict):
@@ -30,7 +43,7 @@ def _default_item_get(item: Any, key: str) -> Any:
 
 def sanitize_tool_items(
     items: list[Any],
-    synthetic_output: str,
+    synthetic_output: str = DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
     *,
     item_get: Callable[[Any, str], Any] = _default_item_get,
     log_prefix: str = "[durable] items sanitized",

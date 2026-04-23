@@ -35,14 +35,6 @@ import logging
 from threading import Lock
 from typing import Any, Optional
 
-DEFAULT_REPAIR_SYNTHETIC_OUTPUT = (
-    "[INTERRUPTED] This tool call did not complete due to a server "
-    "interruption, so no result is available. Other tool calls in the "
-    "conversation history completed normally and their results remain valid. "
-    "If the information is still needed, re-invoking only this specific tool "
-    "is usually sufficient."
-)
-
 try:
     from agents.extensions.memory import SQLAlchemySession
     from databricks.sdk import WorkspaceClient
@@ -64,24 +56,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _sanitize_items(
-    items: list[Any],
-    synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
-) -> list[Any]:
-    """Return a protocol-valid view of session items (thin wrapper around
-    the shared :func:`sanitize_tool_items` walker).
-
-    Kept as a private alias so existing ``self._sanitize_items`` call sites
-    in this module stay stable. Behaviour: drop duplicate / orphan tool
-    items, inject synthetic outputs for unpaired function_calls, return
-    the caller's list reference unchanged on the happy path so
-    ``repair()`` can short-circuit re-persistence.
+def _sanitize_items(items: list[Any]) -> list[Any]:
+    """Session-scoped wrapper around :func:`sanitize_tool_items` that only
+    sets the log prefix. Kept as a one-liner so existing
+    ``self._sanitize_items`` call sites stay stable.
     """
-    if not items:
-        return items
-    return sanitize_tool_items(
-        items, synthetic_output, log_prefix="[durable] session items sanitized"
-    )
+    return sanitize_tool_items(items, log_prefix="[durable] session items sanitized")
 
 
 class AsyncDatabricksSession(SQLAlchemySession):
@@ -138,8 +118,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
         sessions_table: str = "agent_sessions",
         messages_table: str = "agent_messages",
         use_cached_engine: bool = True,
-        auto_repair: bool = True,
-        auto_repair_synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
         **engine_kwargs,
     ) -> None:
         """
@@ -174,9 +152,6 @@ class AsyncDatabricksSession(SQLAlchemySession):
                 "Please install with: pip install databricks-openai[memory]"
             )
 
-        self._auto_repair = auto_repair
-        self._auto_repair_synthetic_output = auto_repair_synthetic_output
-
         self._lakebase = self._get_or_create_lakebase(
             instance_name=instance_name,
             autoscaling_endpoint=autoscaling_endpoint,
@@ -204,18 +179,16 @@ class AsyncDatabricksSession(SQLAlchemySession):
         )
 
     async def get_items(self, limit: Optional[int] = None) -> list[Any]:
-        """Return session items, repaired for protocol validity when enabled.
+        """Return session items, always repaired for protocol validity.
 
-        When ``auto_repair=True`` (default), the returned list has every
-        ``function_call`` paired with a ``function_call_output`` — orphans
-        from a durable-resume crash get a synthetic output appended, and
-        duplicates get deduped. The underlying DB rows are not modified;
-        this is a pure in-memory filter, cheap to re-run on every call.
+        The returned list has every ``function_call`` paired with a
+        ``function_call_output`` — orphans from a durable-resume crash get
+        a synthetic output appended, and duplicates get deduped. The
+        underlying DB rows are not modified; this is a pure in-memory
+        filter, cheap to re-run on every call.
         """
         items = await super().get_items(limit=limit)
-        if not self._auto_repair:
-            return items
-        return _sanitize_items(items, synthetic_output=self._auto_repair_synthetic_output)
+        return _sanitize_items(items)
 
     @classmethod
     def _build_cache_key(

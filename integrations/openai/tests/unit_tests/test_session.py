@@ -1368,27 +1368,22 @@ class TestSanitizeItems:
 
 
 class TestAsyncGetItemsAutoRepair:
-    """get_items() applies read-time repair when auto_repair=True. Uses a
-    minimal subclass that bypasses parent SQLAlchemySession init so we can
-    exercise the override without a DB."""
+    """get_items() always applies read-time repair. Uses a minimal subclass
+    that bypasses parent SQLAlchemySession init so we can exercise the
+    override without a DB."""
 
-    def _fake_session(self, items, auto_repair=True):
+    def _fake_session(self, items):
         from databricks_openai.agents.session import AsyncDatabricksSession, _sanitize_items
 
         class _FakeSession(AsyncDatabricksSession):
-            def __init__(self, stored, auto):
-                # Bypass parent init — only need the auto-repair flags.
-                self._auto_repair = auto
-                self._auto_repair_synthetic_output = "INTERRUPTED"
+            def __init__(self, stored):
+                # Bypass parent init — only need the stored items.
                 self._stored = stored
 
             async def get_items(self, limit=None):
-                items = list(self._stored)
-                if not self._auto_repair:
-                    return items
-                return _sanitize_items(items, synthetic_output=self._auto_repair_synthetic_output)
+                return _sanitize_items(list(self._stored))
 
-        return _FakeSession(items, auto_repair)
+        return _FakeSession(items)
 
     @pytest.mark.asyncio
     async def test_auto_repair_injects_synthetic_outputs(self):
@@ -1400,12 +1395,5 @@ class TestAsyncGetItemsAutoRepair:
             ]
         )
         items = await sess.get_items()
-        synth = [i for i in items if i.get("output") == "INTERRUPTED"]
+        synth = [i for i in items if i.get("type") == "function_call_output"]
         assert len(synth) == 2
-
-    @pytest.mark.asyncio
-    async def test_auto_repair_off_returns_raw_items(self):
-        raw = [{"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"}]
-        sess = self._fake_session(list(raw), auto_repair=False)
-        items = await sess.get_items()
-        assert items == raw

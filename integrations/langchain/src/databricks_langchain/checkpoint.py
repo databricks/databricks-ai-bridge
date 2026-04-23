@@ -5,6 +5,7 @@ import logging
 from typing import Any, Sequence
 
 from databricks.sdk import WorkspaceClient
+from databricks_ai_bridge.long_running.repair import DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +31,7 @@ except ImportError:
     _message_imports_available = False
 
 
-DEFAULT_TOOL_RESUME_REPAIR_OUTPUT = (
-    "[INTERRUPTED] This tool call did not complete due to a server "
-    "interruption, so no result is available. Other tool calls in the "
-    "conversation history completed normally and their results remain valid. "
-    "If the information is still needed, re-invoking only this specific tool "
-    "is usually sufficient."
-)
-
-
-def _build_tool_resume_repair(
-    messages: Sequence[Any],
-    synthetic_output: str = DEFAULT_TOOL_RESUME_REPAIR_OUTPUT,
-) -> list[Any]:
+def _build_tool_resume_repair(messages: Sequence[Any]) -> list[Any]:
     """Build synthetic ``ToolMessage`` responses for orphan tool calls.
 
     Internal helper used by ``_repair_loaded_checkpoint_tuple``. When a
@@ -85,7 +74,10 @@ def _build_tool_resume_repair(
                 answered.add(tcid)
 
     orphans = [tc_id for tc_id in tool_call_ids if tc_id not in answered]
-    return [ToolMessage(tool_call_id=tc_id, content=synthetic_output) for tc_id in orphans]
+    return [
+        ToolMessage(tool_call_id=tc_id, content=DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT)
+        for tc_id in orphans
+    ]
 
 
 def _repair_loaded_checkpoint_tuple(tup: Any) -> Any:

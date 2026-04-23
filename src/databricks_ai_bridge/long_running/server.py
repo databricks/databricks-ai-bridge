@@ -53,18 +53,6 @@ logger = logging.getLogger(__name__)
 
 BACKGROUND_KEY = "background"
 
-# Synthetic output injected for an orphaned function_call whose matching
-# function_call_output was lost to a pod crash. The text is prescriptive:
-# without the "do NOT re-invoke tools that already returned" guidance, models
-# tend to restart the whole tool sequence on resume.
-DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT = (
-    "[INTERRUPTED] This tool call did not complete due to a server "
-    "interruption, so no result is available. Other tool calls in the "
-    "conversation history completed normally and their results remain valid. "
-    "If the information is still needed, re-invoking only this specific tool "
-    "is usually sufficient."
-)
-
 # One ID per process so heartbeats + claims have a stable owner identity.
 _POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
@@ -261,10 +249,7 @@ def _collect_prior_attempt_tool_events(
     return tool_items + narrative_items
 
 
-def _sanitize_request_input(
-    request_dict: dict[str, Any],
-    synthetic_output: str = DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
-) -> dict[str, Any]:
+def _sanitize_request_input(request_dict: dict[str, Any]) -> dict[str, Any]:
     """Reconcile orphaned function_call / function_call_output items in
     ``request['input']`` via the shared :func:`sanitize_tool_items` walker.
 
@@ -277,7 +262,7 @@ def _sanitize_request_input(
     if not isinstance(items, list) or not items:
         return request_dict
     request_dict["input"] = sanitize_tool_items(
-        items, synthetic_output, log_prefix="[durable] input sanitized"
+        items, log_prefix="[durable] input sanitized"
     )
     return request_dict
 
@@ -396,6 +381,31 @@ class LongRunningAgentServer(AgentServer):
     emitted tool calls / outputs / narrative, and an ``[INTERRUPTED]`` synthetic
     output paired with any tool call that didn't finish. Completed work is
     preserved; only the interrupted step re-runs.
+
+    Args:
+        enable_chat_proxy: Whether to enable the chat proxy endpoint.
+        db_instance_name: Lakebase provisioned instance name. Overrides
+            ``LAKEBASE_INSTANCE_NAME``.
+        db_autoscaling_endpoint: Lakebase autoscaling endpoint URL. Overrides
+            ``LAKEBASE_AUTOSCALING_ENDPOINT``.
+        db_project: Lakebase autoscaling project. Overrides
+            ``LAKEBASE_AUTOSCALING_PROJECT``.
+        db_branch: Lakebase autoscaling branch. Overrides
+            ``LAKEBASE_AUTOSCALING_BRANCH``.
+        task_timeout_seconds: Max time for a background task before timeout.
+            Defaults to 3600 (1 hour).
+        poll_interval_seconds: Interval between DB polls when streaming.
+            Defaults to 1.0.
+        db_statement_timeout_ms: Postgres statement timeout.
+            Defaults to 5000 (5 seconds).
+        cleanup_timeout_seconds: Timeout for DB cleanup after task failure.
+            Defaults to 7.0.
+        heartbeat_interval_seconds: How often the owning pod writes
+            ``heartbeat_at`` while a run is in flight. Defaults to 3.0.
+        heartbeat_stale_threshold_seconds: Age at which a heartbeat is
+            considered stale and another pod may claim the run. Also used
+            as the grace window for a freshly-created run that hasn't
+            written its first heartbeat yet. Defaults to 10.0.
     """
 
     _SUPPORTED_AGENT_TYPE = "ResponsesAgent"
@@ -418,36 +428,6 @@ class LongRunningAgentServer(AgentServer):
         heartbeat_interval_seconds: float = 3.0,
         heartbeat_stale_threshold_seconds: float = 10.0,
     ):
-        """Create a durable-resume-enabled agent server.
-
-        Args:
-            agent_type: Must be ``"ResponsesAgent"``; this class is
-                Responses-API-shaped only.
-            enable_chat_proxy: Forwarded to the parent ``AgentServer``.
-            db_instance_name: Provisioned Lakebase instance name. Mutually
-                exclusive with the autoscaling options.
-            db_autoscaling_endpoint: Lakebase autoscaling endpoint URL.
-            db_project: Lakebase autoscaling project name (requires
-                ``db_branch``).
-            db_branch: Lakebase autoscaling branch name (requires
-                ``db_project``).
-            task_timeout_seconds: Max wall-clock time for a background run
-                before ``_task_scope`` fires a timeout and marks the
-                response ``failed``.
-            poll_interval_seconds: Interval between DB polls when streaming
-                cached events to a retrieve-endpoint client.
-            db_statement_timeout_ms: Postgres ``statement_timeout`` applied
-                to every DB statement from this process.
-            cleanup_timeout_seconds: Deadline for the post-crash error
-                write path before giving up and letting the stale-run
-                sweep mark the row failed.
-            heartbeat_interval_seconds: How often the owning pod writes
-                ``heartbeat_at`` while a run is in flight.
-            heartbeat_stale_threshold_seconds: Age at which a heartbeat is
-                considered stale and another pod may claim the run.
-                Also used as the grace window for a freshly-created run
-                that hasn't written its first heartbeat yet.
-        """
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(
                 f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
