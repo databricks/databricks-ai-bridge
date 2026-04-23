@@ -280,8 +280,8 @@ describe('createDatabricksGenieAgent', () => {
     )
     expect(result.genie.suggestedQuestions).toEqual(['Show the same view by month'])
     expect(result.genie.attachments.map((attachment) => attachment.type)).toEqual([
-      'query',
       'text',
+      'query',
       'suggested_questions',
     ])
   })

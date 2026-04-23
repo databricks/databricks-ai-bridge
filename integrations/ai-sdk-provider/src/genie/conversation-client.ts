@@ -1,9 +1,14 @@
 import { DatabricksGenieApiClient, type DatabricksGenieRequestOptions } from './client'
 import {
+  orderDatabricksGenieAttachments,
+} from './attachment-ordering'
+import {
   DATABRICKS_GENIE_TERMINAL_MESSAGE_STATUSES,
   type DatabricksGenieAttachment,
   type DatabricksGenieCreateConversationMessageRequest,
   type DatabricksGenieDeleteConversationRequest,
+  type DatabricksGenieDownloadQueryResultRequest,
+  type DatabricksGenieDownloadQueryResultResponse,
   type DatabricksGenieExecuteMessageAttachmentQueryRequest,
   type DatabricksGenieGenerateDownloadFullQueryResultRequest,
   type DatabricksGenieGenerateDownloadFullQueryResultResponse,
@@ -29,6 +34,7 @@ import {
 import {
   DEFAULT_GENIE_POLLING_SETTINGS,
   type DatabricksGeniePollingSettings,
+  type DatabricksGenieResolvedSettings,
   type DatabricksGenieSettings,
   resolveDatabricksGenieSettings,
   sleep,
@@ -140,6 +146,10 @@ export interface DatabricksGenieConversationClient {
     request: DatabricksGenieExecuteMessageAttachmentQueryRequest,
     options?: DatabricksGenieRequestOptions
   ): Promise<DatabricksGenieQueryResult>
+  refreshQueryAttachment(
+    request: DatabricksGenieExecuteMessageAttachmentQueryRequest,
+    options?: DatabricksGenieAskOptions
+  ): Promise<DatabricksGenieQueryResult>
   generateDownloadFullQueryResult(
     request: DatabricksGenieGenerateDownloadFullQueryResultRequest,
     options?: DatabricksGenieRequestOptions
@@ -148,6 +158,10 @@ export interface DatabricksGenieConversationClient {
     request: DatabricksGenieGetDownloadFullQueryResultRequest,
     options?: DatabricksGenieRequestOptions
   ): Promise<DatabricksGenieGetDownloadFullQueryResultResponse>
+  downloadQueryResult(
+    request: DatabricksGenieDownloadQueryResultRequest,
+    options?: DatabricksGenieAskOptions
+  ): Promise<DatabricksGenieDownloadQueryResultResponse>
   streamConversation(
     question: string,
     options?: DatabricksGenieAskOptions
@@ -165,21 +179,13 @@ function extractAskResult(
   message: DatabricksGenieMessage,
   queryResult?: DatabricksGenieQueryResult
 ): DatabricksGenieAskResult {
-  const textAttachments = message.normalizedAttachments.filter(
-    (attachment) => attachment.type === 'text'
-  )
-  const queryAttachments = message.normalizedAttachments.filter(
-    (attachment) => attachment.type === 'query'
-  )
-  const suggestedQuestionsAttachments = message.normalizedAttachments.filter(
-    (attachment) => attachment.type === 'suggested_questions'
-  )
+  const orderedAttachments = orderDatabricksGenieAttachments(message.normalizedAttachments)
+  const textAttachments = orderedAttachments.answerTextAttachments
+  const queryAttachments = orderedAttachments.queryAttachments
+  const suggestedQuestionsAttachments = orderedAttachments.suggestedQuestionAttachments
   const queryAttachment = queryAttachments[0]
-  const preferredTextAttachments = textAttachments.filter(
-    (attachment) => attachment.text?.purpose !== 'FOLLOW_UP_QUESTION'
-  )
   const textSourceAttachments =
-    preferredTextAttachments.length > 0 ? preferredTextAttachments : textAttachments
+    textAttachments.length > 0 ? textAttachments : orderedAttachments.followUpQuestionAttachments
   const text = textSourceAttachments
     .map((attachment) => attachment.text?.content?.trim())
     .filter((value): value is string => typeof value === 'string' && value.length > 0)
@@ -191,7 +197,7 @@ function extractAskResult(
   return {
     attachmentEntries: message.attachments,
     attachmentId: queryAttachment?.attachmentId,
-    attachments: message.normalizedAttachments,
+    attachments: orderedAttachments.orderedAttachments,
     conversationId: message.conversationId,
     message,
     messageId: message.messageId,
@@ -263,14 +269,90 @@ function isSerializedSpaceUnavailableError(error: unknown): boolean {
   )
 }
 
+function isUsableStreamedQueryResult(queryResult: DatabricksGenieQueryResult): boolean {
+  return (
+    queryResult.externalLinks.length > 0 ||
+    queryResult.rows.length > 0 ||
+    queryResult.statementState === 'SUCCEEDED'
+  )
+}
+
 class DefaultDatabricksGenieConversationClient implements DatabricksGenieConversationClient {
   private readonly client: DatabricksGenieApiClient
   private readonly polling: Required<DatabricksGeniePollingSettings>
+  private readonly settings: DatabricksGenieResolvedSettings
 
   constructor(settings: DatabricksGenieSettings) {
     const resolvedSettings = resolveDatabricksGenieSettings(settings)
+    this.settings = resolvedSettings
     this.client = new DatabricksGenieApiClient(resolvedSettings)
     this.polling = resolvedSettings.polling
+  }
+
+  private getPollingSettings(options: DatabricksGenieAskOptions = {}) {
+    return {
+      timeoutMs: options.timeoutMs ?? this.polling.timeoutMs,
+      initialPollIntervalMs:
+        options.initialPollIntervalMs ?? this.polling.initialPollIntervalMs,
+      maxPollIntervalMs: options.maxPollIntervalMs ?? this.polling.maxPollIntervalMs,
+      backoffMultiplier: options.backoffMultiplier ?? this.polling.backoffMultiplier,
+    }
+  }
+
+  private async fetchExternalQueryResultLink(
+    url: string,
+    headers: Record<string, string>,
+    options: DatabricksGenieRequestOptions
+  ): Promise<string> {
+    const response = await this.settings.fetch(url, {
+      method: 'GET',
+      headers,
+      signal: options.abortSignal,
+    })
+
+    if (!response.ok) {
+      let body = ''
+      try {
+        body = await response.text()
+      } catch {
+        // Ignore body parsing errors here and rely on status text.
+      }
+
+      throw new Error(
+        `Databricks Genie external result download failed with ${response.status} ${response.statusText}${
+          body ? `: ${body}` : ''
+        }`
+      )
+    }
+
+    return response.text()
+  }
+
+  private formatQueryResultAsCsv(queryResult: DatabricksGenieQueryResult): string {
+    const rows = [
+      queryResult.columns.map((column) => column.name),
+      ...queryResult.rows.map((row) =>
+        row.map((cell) => {
+          if (cell == null) {
+            return ''
+          }
+
+          return typeof cell === 'string' ? cell : JSON.stringify(cell)
+        })
+      ),
+    ]
+
+    return rows
+      .map((row) =>
+        row
+          .map((cell) => {
+            const normalizedCell = String(cell)
+            const escapedCell = normalizedCell.replace(/"/g, '""')
+            return /[",\n\r]/.test(escapedCell) ? `"${escapedCell}"` : escapedCell
+          })
+          .join(',')
+      )
+      .join('\n')
   }
 
   async getSpace(
@@ -369,11 +451,8 @@ class DefaultDatabricksGenieConversationClient implements DatabricksGenieConvers
     messageId: string,
     options: DatabricksGenieAskOptions = {}
   ): Promise<DatabricksGenieMessage> {
-    const timeoutMs = options.timeoutMs ?? this.polling.timeoutMs
-    const initialPollIntervalMs =
-      options.initialPollIntervalMs ?? this.polling.initialPollIntervalMs
-    const maxPollIntervalMs = options.maxPollIntervalMs ?? this.polling.maxPollIntervalMs
-    const backoffMultiplier = options.backoffMultiplier ?? this.polling.backoffMultiplier
+    const { timeoutMs, initialPollIntervalMs, maxPollIntervalMs, backoffMultiplier } =
+      this.getPollingSettings(options)
 
     let pollIntervalMs = initialPollIntervalMs
     const startedAt = Date.now()
@@ -453,6 +532,61 @@ class DefaultDatabricksGenieConversationClient implements DatabricksGenieConvers
     return this.client.executeMessageAttachmentQuery(request, options)
   }
 
+  async refreshQueryAttachment(
+    request: DatabricksGenieExecuteMessageAttachmentQueryRequest,
+    options: DatabricksGenieAskOptions = {}
+  ): Promise<DatabricksGenieQueryResult> {
+    const { timeoutMs, initialPollIntervalMs, maxPollIntervalMs, backoffMultiplier } =
+      this.getPollingSettings(options)
+    const startedAt = Date.now()
+    let pollIntervalMs = initialPollIntervalMs
+
+    let queryResult = await this.executeQueryAttachment(request, options)
+
+    for (;;) {
+      const statementState = queryResult.statementState
+
+      if (
+        queryResult.rows.length > 0 ||
+        queryResult.externalLinks.length > 0 ||
+        statementState === 'SUCCEEDED'
+      ) {
+        return queryResult
+      }
+
+      if (
+        statementState === 'FAILED' ||
+        statementState === 'CANCELED' ||
+        statementState === 'CLOSED'
+      ) {
+        throw new Error(
+          `Databricks Genie refreshed query result is not available (statement state: ${statementState})`
+        )
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `Databricks Genie refreshed query result timed out after ${Math.floor(
+            timeoutMs / 1000
+          )}s`
+        )
+      }
+
+      await sleep(pollIntervalMs, options.abortSignal)
+      pollIntervalMs = Math.min(
+        Math.max(pollIntervalMs * backoffMultiplier, initialPollIntervalMs),
+        maxPollIntervalMs
+      )
+
+      queryResult = await this.getQueryResult(
+        request.conversationId,
+        request.messageId,
+        request.attachmentId,
+        options
+      )
+    }
+  }
+
   async generateDownloadFullQueryResult(
     request: DatabricksGenieGenerateDownloadFullQueryResultRequest,
     options: DatabricksGenieRequestOptions = {}
@@ -465,6 +599,80 @@ class DefaultDatabricksGenieConversationClient implements DatabricksGenieConvers
     options: DatabricksGenieRequestOptions = {}
   ): Promise<DatabricksGenieGetDownloadFullQueryResultResponse> {
     return this.client.getDownloadFullQueryResult(request, options)
+  }
+
+  async downloadQueryResult(
+    request: DatabricksGenieDownloadQueryResultRequest,
+    options: DatabricksGenieAskOptions = {}
+  ): Promise<DatabricksGenieDownloadQueryResultResponse> {
+    const { timeoutMs, initialPollIntervalMs, maxPollIntervalMs, backoffMultiplier } =
+      this.getPollingSettings(options)
+    const startedAt = Date.now()
+    let pollIntervalMs = initialPollIntervalMs
+
+    const download = await this.generateDownloadFullQueryResult(request, options)
+
+    for (;;) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `Databricks Genie full query result download timed out after ${Math.floor(
+            timeoutMs / 1000
+          )}s`
+        )
+      }
+
+      const response = await this.getDownloadFullQueryResult(
+        {
+          ...request,
+          downloadId: download.downloadId,
+          downloadIdSignature: download.downloadIdSignature,
+        },
+        options
+      )
+      const queryResult = response.queryResult
+      const externalLink = queryResult.externalLinks[0]
+      const statementState = queryResult.statementState
+
+      if (externalLink?.externalLink) {
+        const content = await this.fetchExternalQueryResultLink(
+          externalLink.externalLink,
+          externalLink.httpHeaders ?? {},
+          options
+        )
+
+        return {
+          content,
+          contentType: 'text/csv; charset=utf-8',
+          fileName: `genie-query-result-${request.attachmentId}.csv`,
+          queryResult,
+        }
+      }
+
+      if (queryResult.rows.length > 0 || statementState === 'SUCCEEDED') {
+        return {
+          content: this.formatQueryResultAsCsv(queryResult),
+          contentType: 'text/csv; charset=utf-8',
+          fileName: `genie-query-result-${request.attachmentId}.csv`,
+          queryResult,
+        }
+      }
+
+      if (
+        statementState === 'FAILED' ||
+        statementState === 'CANCELED' ||
+        statementState === 'CLOSED'
+      ) {
+        throw new Error(
+          `Databricks Genie full query result download is not available (statement state: ${statementState})`
+        )
+      }
+
+      await sleep(pollIntervalMs, options.abortSignal)
+      pollIntervalMs = Math.min(
+        Math.max(pollIntervalMs * backoffMultiplier, initialPollIntervalMs),
+        maxPollIntervalMs
+      )
+    }
   }
 
   async *streamConversation(
@@ -524,20 +732,24 @@ class DefaultDatabricksGenieConversationClient implements DatabricksGenieConvers
         queryResultAttachmentId !== queryAttachment.attachmentId
       ) {
         try {
-          queryResult = await client.getQueryResult(
+          const nextQueryResult = await client.getQueryResult(
             message.conversationId,
             message.messageId,
             queryAttachment.attachmentId,
             options
           )
-          queryResultAttachmentId = queryAttachment.attachmentId
-          yield {
-            type: 'query-result',
-            attachmentId: queryAttachment.attachmentId,
-            conversationId: message.conversationId,
-            messageId: message.messageId,
-            message,
-            queryResult,
+
+          if (isUsableStreamedQueryResult(nextQueryResult)) {
+            queryResult = nextQueryResult
+            queryResultAttachmentId = queryAttachment.attachmentId
+            yield {
+              type: 'query-result',
+              attachmentId: queryAttachment.attachmentId,
+              conversationId: message.conversationId,
+              messageId: message.messageId,
+              message,
+              queryResult,
+            }
           }
         } catch (error) {
           if (!allowRetryableQueryResultErrors || !isRetryableQueryResultFetchError(error)) {

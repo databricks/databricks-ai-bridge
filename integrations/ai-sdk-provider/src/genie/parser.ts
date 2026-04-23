@@ -15,6 +15,7 @@ import {
   type DatabricksGenieQueryAttachmentThought,
   type DatabricksGenieQueryResult,
   type DatabricksGenieQueryResultColumn,
+  type DatabricksGenieQueryResultExternalLink,
   type DatabricksGenieResultMetadata,
   type DatabricksGenieSampleQuestion,
   type DatabricksGenieSerializedSpace,
@@ -79,6 +80,34 @@ function parseQueryAttachmentThought(
     content: getOptionalString(value.content),
     thoughtType: getOptionalString(value.thought_type),
     raw: value,
+  }
+}
+
+function parseQueryResultExternalLink(
+  value: unknown
+): DatabricksGenieQueryResultExternalLink | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const httpHeaders = isRecord(value.http_headers)
+    ? Object.fromEntries(
+        Object.entries(value.http_headers).filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string'
+        )
+      )
+    : undefined
+
+  return {
+    byteCount: getOptionalNumber(value.byte_count),
+    chunkIndex: getOptionalNumber(value.chunk_index),
+    expiration: getOptionalString(value.expiration),
+    externalLink: getOptionalString(value.external_link),
+    httpHeaders,
+    nextChunkIndex: getOptionalNumber(value.next_chunk_index),
+    nextChunkInternalLink: getOptionalString(value.next_chunk_internal_link),
+    rowCount: getOptionalNumber(value.row_count),
+    rowOffset: getOptionalNumber(value.row_offset),
   }
 }
 
@@ -412,8 +441,11 @@ export function parseQueryResult(value: unknown): DatabricksGenieQueryResult {
     ? statementResponse.result
     : undefined
   const rowsValue = resultValue && Array.isArray(resultValue.data_array) ? resultValue.data_array : []
+  const externalLinksValue =
+    resultValue && Array.isArray(resultValue.external_links) ? resultValue.external_links : []
   const rowCount =
     getOptionalNumber(record.row_count) ??
+    getOptionalNumber(resultValue?.row_count) ??
     getOptionalNumber(manifest?.total_row_count) ??
     rowsValue.length
   const truncated =
@@ -434,8 +466,30 @@ export function parseQueryResult(value: unknown): DatabricksGenieQueryResult {
 
       return result
     }, []),
+    byteCount: getOptionalNumber(resultValue?.byte_count),
+    chunkIndex: getOptionalNumber(resultValue?.chunk_index),
+    externalLinks: externalLinksValue.reduce<DatabricksGenieQueryResultExternalLink[]>(
+      (result, link) => {
+        const parsedLink = parseQueryResultExternalLink(link)
+
+        if (parsedLink) {
+          result.push(parsedLink)
+        }
+
+        return result
+      },
+      []
+    ),
+    nextChunkIndex: getOptionalNumber(resultValue?.next_chunk_index),
+    nextChunkInternalLink: getOptionalString(resultValue?.next_chunk_internal_link),
     rows: rowsValue.filter((row): row is unknown[][][number] => Array.isArray(row)),
     rowCount,
+    rowOffset: getOptionalNumber(resultValue?.row_offset),
+    statementId: getOptionalString(statementResponse?.statement_id),
+    statementState:
+      statementResponse && isRecord(statementResponse.status)
+        ? getOptionalString(statementResponse.status.state)
+        : undefined,
     truncated,
     statementResponse,
     raw: record,

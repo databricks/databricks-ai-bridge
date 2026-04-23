@@ -3,6 +3,9 @@ import {
   createDatabricksGenieAgent,
   createDatabricksGenieConversationClient,
   createDatabricksProvider,
+  isLikelyDatabricksGenieFollowUpQuestionAttachment,
+  isLikelyDatabricksGenieFollowUpQuestionText,
+  orderDatabricksGenieAttachments,
 } from '../src'
 
 describe('genie package exports', () => {
@@ -10,5 +13,8 @@ describe('genie package exports', () => {
     expect(typeof createDatabricksProvider).toBe('function')
     expect(typeof createDatabricksGenieConversationClient).toBe('function')
     expect(typeof createDatabricksGenieAgent).toBe('function')
+    expect(typeof orderDatabricksGenieAttachments).toBe('function')
+    expect(typeof isLikelyDatabricksGenieFollowUpQuestionAttachment).toBe('function')
+    expect(typeof isLikelyDatabricksGenieFollowUpQuestionText).toBe('function')
   })
 })

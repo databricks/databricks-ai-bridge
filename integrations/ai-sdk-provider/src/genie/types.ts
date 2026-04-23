@@ -199,10 +199,30 @@ export interface DatabricksGenieQueryResultColumn {
   typeName?: string
 }
 
+export interface DatabricksGenieQueryResultExternalLink {
+  byteCount?: number
+  chunkIndex?: number
+  expiration?: string
+  externalLink?: string
+  httpHeaders?: Record<string, string>
+  nextChunkIndex?: number
+  nextChunkInternalLink?: string
+  rowCount?: number
+  rowOffset?: number
+}
+
 export interface DatabricksGenieQueryResult {
   columns: DatabricksGenieQueryResultColumn[]
+  byteCount?: number
+  chunkIndex?: number
+  externalLinks: DatabricksGenieQueryResultExternalLink[]
+  nextChunkIndex?: number
+  nextChunkInternalLink?: string
   rows: unknown[][]
   rowCount: number
+  rowOffset?: number
+  statementId?: string
+  statementState?: string
   truncated: boolean
   statementResponse?: Record<string, unknown>
   raw: Record<string, unknown>
@@ -217,6 +237,19 @@ export interface DatabricksGenieGenerateDownloadFullQueryResultResponse {
 export interface DatabricksGenieGetDownloadFullQueryResultResponse {
   queryResult: DatabricksGenieQueryResult
   raw: Record<string, unknown>
+}
+
+export interface DatabricksGenieDownloadQueryResultRequest {
+  attachmentId: string
+  conversationId: string
+  messageId: string
+}
+
+export interface DatabricksGenieDownloadQueryResultResponse {
+  content: string
+  contentType: string
+  fileName: string
+  queryResult: DatabricksGenieQueryResult
 }
 
 export interface DatabricksGenieStartConversationRequest {
