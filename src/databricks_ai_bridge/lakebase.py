@@ -118,9 +118,11 @@ class _LakebaseBase:
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
     ) -> None:
         self.workspace_client: WorkspaceClient = workspace_client or WorkspaceClient()
         self.token_cache_duration_seconds: int = token_cache_duration_seconds
+        self.schema: str | None = schema
 
         # --- Parameter validation ---
         is_autoscaling = (
@@ -190,6 +192,11 @@ class _LakebaseBase:
 
         self._cached_token: str | None = None
         self._cache_ts: float | None = None
+
+    def _search_path_sql(self) -> sql.Composed:
+        """Return ``SET search_path TO <schema>, public`` as a psycopg sql.Composed."""
+        assert self.schema is not None, "_search_path_sql called without a schema"
+        return sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
 
     # --- Host resolution ---
 
@@ -393,6 +400,7 @@ class LakebasePool(_LakebaseBase):
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
         **pool_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(
@@ -402,6 +410,7 @@ class LakebasePool(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Sync lock for thread-safe token caching
@@ -441,6 +450,19 @@ class LakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
+        # Build configure callback: set search_path when schema is specified,
+        # and always preserve any user-provided configure callback.
+        user_configure = pool_kwargs.pop("configure", None)
+        _configure_fn = user_configure
+        if self.schema:
+            _set_path = self._search_path_sql()
+            _user_configure = user_configure
+
+            def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
+                conn.execute(_set_path)
+                if _user_configure:
+                    _user_configure(conn)  # type: ignore[call-non-callable]
+
         self._pool: ConnectionPool[psycopg.Connection[DictRow]] = ConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
@@ -449,6 +471,7 @@ class LakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=True,
             connection_class=RotatingConnection,
+            configure=_configure_fn,  # type: ignore[invalid-argument-type]
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -506,6 +529,7 @@ class AsyncLakebasePool(_LakebaseBase):
         branch: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
+        schema: str | None = None,
         **pool_kwargs: object,
     ) -> None:
         super().__init__(
@@ -515,6 +539,7 @@ class AsyncLakebasePool(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Async lock for coroutine-safe token caching
@@ -553,6 +578,19 @@ class AsyncLakebasePool(_LakebaseBase):
         max_size = pool_kwargs.pop("max_size", DEFAULT_MAX_SIZE)
         timeout = pool_kwargs.pop("timeout", DEFAULT_TIMEOUT)
 
+        # Build configure callback: set search_path when schema is specified,
+        # and always preserve any user-provided configure callback.
+        user_configure = pool_kwargs.pop("configure", None)
+        _configure_fn = user_configure
+        if self.schema:
+            _set_path = self._search_path_sql()
+            _user_configure = user_configure
+
+            async def _configure_fn(conn):  # type: ignore[misc]  # noqa: F811
+                await conn.execute(_set_path)
+                if _user_configure:
+                    await _user_configure(conn)  # type: ignore[call-non-callable]
+
         self._pool: AsyncConnectionPool[psycopg.AsyncConnection[DictRow]] = AsyncConnectionPool(  # type: ignore[invalid-assignment]
             conninfo=self._conninfo(),
             kwargs=default_kwargs,
@@ -561,6 +599,7 @@ class AsyncLakebasePool(_LakebaseBase):
             timeout=timeout,  # type: ignore[invalid-argument-type]
             open=False,  # Don't open yet, must be opened with await
             connection_class=AsyncRotatingConnection,
+            configure=_configure_fn,  # type: ignore[invalid-argument-type]
             **pool_kwargs,  # type: ignore[invalid-argument-type]
         )
 
@@ -780,6 +819,32 @@ class LakebaseClient:
                 if cur.description:
                     return cur.fetchall()
                 return None
+
+    # ---------------------------------------------------------
+    # Schema Management
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def create_schema(pool: LakebasePool) -> None:
+        """Create the schema if one was specified on the pool. No-op otherwise."""
+        if not pool.schema:
+            return
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
+                )
+
+    @staticmethod
+    async def acreate_schema(pool: AsyncLakebasePool) -> None:
+        """Async variant of create_schema for use with AsyncLakebasePool. No-op if no schema."""
+        if not pool.schema:
+            return
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(pool.schema))
+                )
 
     # ---------------------------------------------------------
     # Permission / Role Management
@@ -1182,6 +1247,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
         workspace_client: WorkspaceClient | None = None,
         token_cache_duration_seconds: int = DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         pool_recycle: int = DEFAULT_POOL_RECYCLE_SECONDS,
+        schema: str | None = None,
         **engine_kwargs,
     ) -> None:
         """
@@ -1199,6 +1265,8 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
                 Defaults to 15 minutes.
             pool_recycle: Connection pool recycle time in seconds.
                 Defaults to 14 minutes (before token cache expires).
+            schema: Optional PostgreSQL schema name. When provided, all tables
+                are created in and queried from this schema instead of ``public``.
             **engine_kwargs: Additional keyword arguments passed to
                 SQLAlchemy's create_async_engine().
         """
@@ -1209,6 +1277,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             branch=branch,
             workspace_client=workspace_client,
             token_cache_duration_seconds=token_cache_duration_seconds,
+            schema=schema,
         )
 
         # Thread-safe lock for token caching (do_connect is sync context)
@@ -1225,6 +1294,22 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
     def engine(self) -> "AsyncEngine":
         """The SQLAlchemy AsyncEngine."""
         return self._engine
+
+    async def create_schema(self) -> None:
+        """Create the schema if one was specified at init time. No-op otherwise."""
+        if not self.schema:
+            return
+        from sqlalchemy import text
+
+        # Use psycopg sql.Identifier for safe quoting, render without a connection
+        # (uses standard SQL quoting which is safe for PostgreSQL identifiers)
+        rendered = (
+            sql.SQL("CREATE SCHEMA IF NOT EXISTS {}")
+            .format(sql.Identifier(self.schema))
+            .as_string(None)
+        )
+        async with self._engine.begin() as conn:
+            await conn.execute(text(rendered))
 
     def get_token(self) -> str:
         """Get cached token or mint a new one (thread-safe)."""
@@ -1280,5 +1365,14 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
                 token[-5:],
                 len(token),
             )
+
+        if self.schema:
+            _set_path = self._search_path_sql()
+
+            @event.listens_for(engine.sync_engine, "checkout")
+            def set_search_path(dbapi_conn, connection_record, connection_proxy):
+                cursor = dbapi_conn.cursor()
+                cursor.execute(_set_path)
+                cursor.close()
 
         return engine

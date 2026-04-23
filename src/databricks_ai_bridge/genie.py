@@ -199,17 +199,23 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(attachments, list):
         return result
 
+    # Genie may self-correct, producing multiple query+text pairs. We want
+    # the final query and its paired text (the first text attachment following
+    # the final query).
+    want_new_text = True
     for a in attachments:
         if not isinstance(a, dict):
             continue
 
-        if "query" in a and result["query_attachment"] is None:
+        if "query" in a:
             result["query_attachment"] = a
+            want_new_text = True
 
-        elif "text" in a and result["text_attachment"] is None:
+        elif "text" in a and want_new_text:
             result["text_attachment"] = a
+            want_new_text = False
 
-        elif "suggested_questions" in a and result["suggested_questions_attachment"] is None:
+        elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
 
     return result

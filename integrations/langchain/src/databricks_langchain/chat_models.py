@@ -66,7 +66,7 @@ from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseStreamEvent, ResponseUsage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import override
 
 from databricks_langchain.utils import get_async_openai_client, get_openai_client
@@ -298,6 +298,23 @@ class ChatDatabricks(BaseChatModel):
     """Timeout in seconds for the HTTP request. If None, uses the default timeout."""
     max_retries: Optional[int] = None
     """Maximum number of retries for failed requests. If None, uses the default retry count."""
+    use_ai_gateway: bool = False
+    """If True, auto-detect AI Gateway V2 availability and route requests through it using the
+    MLflow API. Defaults to False."""
+    use_ai_gateway_native_api: bool = False
+    """If True, auto-detect AI Gateway V2 and route requests through its native
+    OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of provider-native
+    features not available through the MLflow API. Cannot be combined with ``base_url`` or
+    ``use_ai_gateway``. Defaults to False."""
+
+    @model_validator(mode="after")
+    def _validate_ai_gateway_flags(self) -> "ChatDatabricks":
+        if self.use_ai_gateway and self.use_ai_gateway_native_api:
+            raise ValueError(
+                "Cannot set both `use_ai_gateway` and `use_ai_gateway_native_api` to True. "
+                "Please set only one of them."
+            )
+        return self
 
     @property
     def endpoint(self) -> str:
@@ -326,6 +343,10 @@ class ChatDatabricks(BaseChatModel):
             openai_kwargs["timeout"] = self.timeout
         if self.max_retries is not None:
             openai_kwargs["max_retries"] = self.max_retries
+        if self.use_ai_gateway:
+            openai_kwargs["use_ai_gateway"] = True
+        if self.use_ai_gateway_native_api:
+            openai_kwargs["use_ai_gateway_native_api"] = True
         return openai_kwargs
 
     @cached_property

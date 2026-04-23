@@ -890,6 +890,52 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             None,
             None,
         ),
+        # Multiple query attachments (self-correction) - should return the LAST one
+        (
+            {
+                "attachments": [
+                    {
+                        "attachment_id": "1",
+                        "query": {"query": "SELECT wrong", "description": "first attempt"},
+                    },
+                    {
+                        "attachment_id": "2",
+                        "query": {"query": "SELECT correct", "description": "corrected"},
+                    },
+                ]
+            },
+            {
+                "attachment_id": "2",
+                "query": {"query": "SELECT correct", "description": "corrected"},
+            },
+            None,
+            None,
+        ),
+        # Self-correction with paired text attachments - text should be paired
+        # with the final query (i.e., the first text AFTER the last query), not
+        # the first text overall or the final text (which may be a follow-up).
+        (
+            {
+                "attachments": [
+                    {"attachment_id": "1", "query": {"query": "SELECT wrong"}},
+                    {"attachment_id": "2", "text": {"content": "explains wrong"}},
+                    {
+                        "attachment_id": "3",
+                        "suggested_questions": {"questions": ["Q1?"]},
+                    },
+                    {"attachment_id": "4", "query": {"query": "SELECT correct"}},
+                    {"attachment_id": "5", "text": {"content": "explains correct"}},
+                    {"attachment_id": "6", "text": {"content": "follow-up prompt"}},
+                    {
+                        "attachment_id": "7",
+                        "suggested_questions": {"questions": ["Q2?"]},
+                    },
+                ]
+            },
+            {"attachment_id": "4", "query": {"query": "SELECT correct"}},
+            {"attachment_id": "5", "text": {"content": "explains correct"}},
+            {"attachment_id": "7", "suggested_questions": {"questions": ["Q2?"]}},
+        ),
     ],
 )
 def test_parse_attachments(resp, exp_query, exp_text, exp_questions):
