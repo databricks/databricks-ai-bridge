@@ -457,10 +457,12 @@ class TestAutoscalingProjectBranch:
         assert store._lakebase.pool.closed
 
     def test_checkpoint_write_and_read(self, cleanup_all_tables_project_branch):
-        """Test CheckpointSaver: context manager auto-setup + put + get_tuple."""
+        """Test CheckpointSaver: setup + put + get_tuple + pool cleanup."""
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(project=get_project(), branch=get_branch()) as saver:
+            saver.setup()
+
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = _make_checkpoint()
             saver.put(config, checkpoint, CheckpointMetadata(), {})
@@ -473,10 +475,12 @@ class TestAutoscalingProjectBranch:
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_write_and_read(self, cleanup_all_tables_project_branch):
-        """Test AsyncCheckpointSaver: async context manager auto-setup + put + get_tuple."""
+        """Test AsyncCheckpointSaver: setup + put + get_tuple + pool cleanup."""
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(project=get_project(), branch=get_branch()) as saver:
+            await saver.setup()
+
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = _make_checkpoint()
             await saver.aput(config, checkpoint, CheckpointMetadata(), {})
@@ -526,10 +530,12 @@ class TestAutoscalingEndpoint:
         assert store._lakebase.pool.closed
 
     def test_checkpoint_write_and_read(self, cleanup_all_tables_endpoint):
-        """Test CheckpointSaver: endpoint context manager auto-setup + put + get_tuple."""
+        """Test CheckpointSaver: setup + put + get_tuple + pool cleanup."""
         thread_id = uuid.uuid4().hex
 
         with CheckpointSaver(autoscaling_endpoint=get_autoscaling_endpoint()) as saver:
+            saver.setup()
+
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = _make_checkpoint()
             saver.put(config, checkpoint, CheckpointMetadata(), {})
@@ -542,10 +548,12 @@ class TestAutoscalingEndpoint:
 
     @pytest.mark.asyncio
     async def test_async_checkpoint_write_and_read(self, cleanup_all_tables_endpoint):
-        """Test AsyncCheckpointSaver: async endpoint pool lifecycle."""
+        """Test AsyncCheckpointSaver: setup + put + get_tuple + pool cleanup."""
         thread_id = uuid.uuid4().hex
 
         async with AsyncCheckpointSaver(autoscaling_endpoint=get_autoscaling_endpoint()) as saver:
+            await saver.setup()
+
             config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
             checkpoint = _make_checkpoint()
             await saver.aput(config, checkpoint, CheckpointMetadata(), {})
