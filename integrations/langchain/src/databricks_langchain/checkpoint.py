@@ -39,40 +39,24 @@ DEFAULT_TOOL_RESUME_REPAIR_OUTPUT = (
 )
 
 
-def build_tool_resume_repair(
+def _build_tool_resume_repair(
     messages: Sequence[Any],
     synthetic_output: str = DEFAULT_TOOL_RESUME_REPAIR_OUTPUT,
 ) -> list[Any]:
     """Build synthetic ``ToolMessage`` responses for orphan tool calls.
 
-    When a LangGraph run is killed mid-tool, the checkpointer preserves the
-    trailing ``AIMessage.tool_calls`` but the paired ``ToolMessage``s never
-    land. Replaying that state to the LLM on resume fails because the API
-    (Anthropic in particular) requires every ``tool_use`` to be immediately
-    followed by a matching ``tool_result``.
+    Internal helper used by ``_repair_loaded_checkpoint_tuple``. When a
+    LangGraph run is killed mid-tool, the checkpointer preserves the
+    trailing ``AIMessage.tool_calls`` but the paired ``ToolMessage``s
+    never land. Replaying that state to the LLM fails because the API
+    (Anthropic in particular) requires every ``tool_use`` to be
+    immediately followed by a matching ``tool_result``.
 
     Walks the trailing assistant turn (the last contiguous block of
-    ``AIMessage`` / ``ToolMessage``) and returns a synthetic ``ToolMessage``
-    for each ``tool_call`` id that lacks a matching
-    ``ToolMessage.tool_call_id``. Appending the returned list via the
-    ``add_messages`` reducer restores a valid conversation.
-
-    Example::
-
-        from databricks_langchain import build_tool_resume_repair
-
-        state = await graph.aget_state(config)
-        repair = build_tool_resume_repair(state.values.get("messages", []))
-        if repair:
-            await graph.aupdate_state(config, {"messages": repair})
-
-    Args:
-        messages: The current ``messages`` list from graph state.
-        synthetic_output: Text for each injected ``ToolMessage.content``.
-
-    Returns:
-        A list of ``ToolMessage`` instances (possibly empty). Empty means
-        the state is already consistent — no repair needed.
+    ``AIMessage`` / ``ToolMessage``) and returns a synthetic
+    ``ToolMessage`` for each ``tool_call`` id that lacks a matching
+    ``ToolMessage.tool_call_id``. The caller appends these to the
+    ``messages`` channel before the next model call.
     """
     if not _message_imports_available or not messages:
         return []
@@ -115,7 +99,7 @@ def _repair_loaded_checkpoint_tuple(tup: Any) -> Any:
     state would otherwise leak into the LLM and be rejected by the
     provider's pairing check.
 
-    Idempotent — ``build_tool_resume_repair`` is a no-op when state is
+    Idempotent — ``_build_tool_resume_repair`` is a no-op when state is
     already clean. Cheap — the walk is O(trailing-turn).
 
     Side effect: the synthetic ``ToolMessage`` s added here become part of
@@ -135,7 +119,7 @@ def _repair_loaded_checkpoint_tuple(tup: Any) -> Any:
     if not isinstance(messages, list) or not messages:
         return tup
 
-    repair = build_tool_resume_repair(messages)
+    repair = _build_tool_resume_repair(messages)
     if not repair:
         return tup
 
