@@ -43,15 +43,25 @@ try:
         DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         AsyncLakebaseSQLAlchemy,
     )
+    from databricks_ai_bridge.tool_repair import sanitize_tool_items
 
     _session_imports_available = True
 except ImportError:
     SQLAlchemySession = object  # type: ignore
     DEFAULT_TOKEN_CACHE_DURATION_SECONDS = None  # type: ignore
     DEFAULT_POOL_RECYCLE_SECONDS = None  # type: ignore
+    sanitize_tool_items = None  # type: ignore
     _session_imports_available = False
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_items(items: list[Any]) -> list[Any]:
+    """Session-scoped wrapper around :func:`sanitize_tool_items` that only
+    sets the log prefix. Kept as a one-liner so existing
+    ``self._sanitize_items`` call sites stay stable.
+    """
+    return sanitize_tool_items(items, log_prefix="[durable] session items sanitized")
 
 
 class AsyncDatabricksSession(SQLAlchemySession):
@@ -178,6 +188,18 @@ class AsyncDatabricksSession(SQLAlchemySession):
         if self._schema and self._create_tables:
             await self._lakebase.create_schema()
         await super()._ensure_tables()
+
+    async def get_items(self, limit: Optional[int] = None) -> list[Any]:
+        """Return session items, always repaired for protocol validity.
+
+        The returned list has every ``function_call`` paired with a
+        ``function_call_output`` — orphans from a durable-resume crash get
+        a synthetic output appended, and duplicates get deduped. The
+        underlying DB rows are not modified; this is a pure in-memory
+        filter, cheap to re-run on every call.
+        """
+        items = await super().get_items(limit=limit)
+        return _sanitize_items(items)
 
     @classmethod
     def _build_cache_key(
