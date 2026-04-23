@@ -125,9 +125,14 @@ async def _current_attempt(response_id: str) -> int:
 
 
 def _sse_event(event_type: str, data: dict[str, Any] | str) -> str:
-    """Format an SSE event per Open Responses spec."""
+    """Emit ``data:``-only SSE frames. Match the non-durable stream format
+    so downstream SSE parsers dispatch on the payload's ``type`` field
+    rather than a leading ``event:`` name line. Claude's multi-response
+    stream (one response.created/completed pair per tool iteration) plus
+    the event-name prefix confuses the AI SDK's Databricks provider into
+    a retry loop."""
     payload = data if isinstance(data, str) else json.dumps(data)
-    return f"event: {event_type}\ndata: {payload}\n\n"
+    return f"data: {payload}\n\n"
 
 
 def _age_seconds(created_at: datetime) -> float:

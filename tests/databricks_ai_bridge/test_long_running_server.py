@@ -95,8 +95,8 @@ def _mock_validator(server):
 class TestSSEEvent:
     def test_dict_data(self):
         result = _sse_event("response.created", {"id": "resp_123", "status": "in_progress"})
-        assert result.startswith("event: response.created\n")
-        assert "data: " in result
+        assert result.startswith("data: ")
+        assert "event:" not in result
         assert result.endswith("\n\n")
         data_line = result.split("data: ")[1].strip()
         parsed = json.loads(data_line)
@@ -104,8 +104,8 @@ class TestSSEEvent:
 
     def test_string_data(self):
         result = _sse_event("error", "something went wrong")
-        assert "event: error\n" in result
-        assert "data: something went wrong\n\n" in result
+        assert "event:" not in result
+        assert result == "data: something went wrong\n\n"
 
 
 class TestLongRunningSettings:
