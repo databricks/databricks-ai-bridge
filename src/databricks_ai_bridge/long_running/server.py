@@ -898,6 +898,11 @@ class LongRunningAgentServer(AgentServer):
                 )
                 seq += 1
                 state["seq"] = seq
+                # Explicit yield so task.cancel() propagates promptly on
+                # tight event streams. The OpenAI Agents Runner's
+                # stream_events() awaits a queue that empties fast enough
+                # that cancellation can sit for tens of seconds without this.
+                await asyncio.sleep(0)
 
             span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
             span.set_outputs(ResponsesAgent.responses_agent_output_reducer(all_chunks))
