@@ -520,11 +520,12 @@ class LongRunningAgentServer(AgentServer):
     Durable resume: when ``GET /responses/{id}`` sees an ``in_progress`` run
     whose owning pod has stopped heartbeating for more than
     ``heartbeat_stale_threshold_seconds``, the retrieving pod atomically claims
-    the run and re-invokes the registered handler with ``input=[]`` plus the
-    stamped ``conversation_id``. Agent SDKs (LangGraph checkpointer,
-    databricks-openai Session) load prior progress and continue — completed
-    tool calls are not re-executed. Tools interrupted mid-call may re-run; this
-    is the accepted best-effort tradeoff.
+    the run and re-invokes the registered handler with a rotated
+    ``conversation_id`` (so the agent SDK resolves to a fresh thread/session),
+    the original request's ``input`` enriched with the prior attempt's already
+    emitted tool calls / outputs / narrative, and an ``[INTERRUPTED]`` synthetic
+    output paired with any tool call that didn't finish. Completed work is
+    preserved; only the interrupted step re-runs.
     """
 
     _SUPPORTED_AGENT_TYPE = "ResponsesAgent"
@@ -1091,8 +1092,10 @@ class LongRunningAgentServer(AgentServer):
         """If ``resp`` is a stale in-progress run, attempt an atomic claim.
 
         On success, kick off a new background task that re-invokes the handler
-        with ``input=[]`` and returns the new ``attempt_number``. On failure
-        (another pod won, or the run is no longer stale), returns ``None``.
+        on a rotated conversation anchor with the replayed input enriched by
+        the prior attempt's emitted items, and returns the new
+        ``attempt_number``. On failure (another pod won, or the run is no
+        longer stale), returns ``None``.
 
         This is the lazy resume path: triggered by a client retrieve. Pods
         don't poll for stale work proactively in v1 — if no client ever calls
