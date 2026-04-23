@@ -14,7 +14,6 @@ if __import__("sys").version_info < (3, 11):
 pytest.importorskip("fastapi")
 pytest.importorskip("psycopg")
 
-from databricks_ai_bridge.long_running.repair import DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT
 from databricks_ai_bridge.long_running.repository import ResponseInfo
 from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
@@ -26,6 +25,7 @@ from databricks_ai_bridge.long_running.server import (
     _sse_event,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
+from databricks_ai_bridge.tool_repair import DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT
 
 # ---------------------------------------------------------------------------
 # Shared helpers

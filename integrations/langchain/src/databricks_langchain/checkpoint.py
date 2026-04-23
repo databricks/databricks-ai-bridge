@@ -5,7 +5,7 @@ import logging
 from typing import Any, Sequence
 
 from databricks.sdk import WorkspaceClient
-from databricks_ai_bridge.long_running.repair import DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT
+from databricks_ai_bridge.tool_repair import DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT
 
 logger = logging.getLogger(__name__)
 

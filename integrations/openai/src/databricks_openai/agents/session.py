@@ -43,7 +43,7 @@ try:
         DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         AsyncLakebaseSQLAlchemy,
     )
-    from databricks_ai_bridge.long_running.repair import sanitize_tool_items
+    from databricks_ai_bridge.tool_repair import sanitize_tool_items
 
     _session_imports_available = True
 except ImportError:

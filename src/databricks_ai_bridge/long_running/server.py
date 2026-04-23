@@ -35,7 +35,6 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.tracing.constant import SpanAttributeKey
 
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
-from databricks_ai_bridge.long_running.repair import sanitize_tool_items
 from databricks_ai_bridge.long_running.repository import (
     append_message,
     claim_stale_response,
@@ -47,6 +46,7 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_trace_id,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
+from databricks_ai_bridge.tool_repair import sanitize_tool_items
 from databricks_ai_bridge.utils.annotations import experimental
 
 logger = logging.getLogger(__name__)
