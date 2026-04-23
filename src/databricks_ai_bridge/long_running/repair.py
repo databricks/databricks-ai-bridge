@@ -17,7 +17,7 @@ The LangChain checkpointer has its own repair path
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,7 @@ def sanitize_tool_items(
         return items
 
     logger.info(
-        "%s: injected=%d dropped_orphan_outputs=%d dropped_duplicates=%d "
-        "original=%d final=%d",
+        "%s: injected=%d dropped_orphan_outputs=%d dropped_duplicates=%d original=%d final=%d",
         log_prefix,
         injected,
         dropped_orphan_outputs,

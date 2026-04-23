@@ -154,9 +154,7 @@ def _iter_attempt_events(messages: list[tuple], attempt: int):
         yield evt.get("type"), evt
 
 
-def _extract_completed_items(
-    messages: list[tuple], attempt: int
-) -> tuple[list[dict], list[dict]]:
+def _extract_completed_items(messages: list[tuple], attempt: int) -> tuple[list[dict], list[dict]]:
     """Scan ``.done`` events and partition into (tool pairs, narrative)."""
     tool_items: list[dict] = []
     narrative_items: list[dict] = []
@@ -261,9 +259,7 @@ def _sanitize_request_input(request_dict: dict[str, Any]) -> dict[str, Any]:
     items = request_dict.get("input")
     if not isinstance(items, list) or not items:
         return request_dict
-    request_dict["input"] = sanitize_tool_items(
-        items, log_prefix="[durable] input sanitized"
-    )
+    request_dict["input"] = sanitize_tool_items(items, log_prefix="[durable] input sanitized")
     return request_dict
 
 
@@ -312,8 +308,7 @@ def _rotate_conversation_id(
     ctx["conversation_id"] = rotated
     request_dict["context"] = ctx
     logger.info(
-        "[durable] rotated conversation_id for resume response_id=%s "
-        "attempt=%d base=%s rotated=%s",
+        "[durable] rotated conversation_id for resume response_id=%s attempt=%d base=%s rotated=%s",
         response_id,
         new_attempt_number,
         base_anchor,
@@ -1084,8 +1079,7 @@ class LongRunningAgentServer(AgentServer):
             resume_input.extend(prior_tool_events)
             resume_dict["input"] = resume_input
             logger.info(
-                "[durable] resume inherited %d tool-event item(s) from attempt %d "
-                "response_id=%s",
+                "[durable] resume inherited %d tool-event item(s) from attempt %d response_id=%s",
                 len(prior_tool_events),
                 new_attempt - 1,
                 response_id,
