@@ -35,6 +35,7 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.tracing.constant import SpanAttributeKey
 
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
+from databricks_ai_bridge.long_running.repair import sanitize_tool_items
 from databricks_ai_bridge.long_running.repository import (
     append_message,
     claim_stale_response,
@@ -143,67 +144,62 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
+# Tool-pair items are collected into the main inheritance bucket and
+# preserved in event-log order. Narrative ``message`` items are routed
+# separately in the collector (see ``_collect_prior_attempt_tool_events``)
+# so they can be hoisted past the tool pairs for Anthropic adapter
+# compatibility — adding ``"message"`` here would break that hoist.
+_TOOL_PAIR_TYPES = ("function_call", "function_call_output")
 
 
-def _collect_prior_attempt_tool_events(
-    messages: list[tuple], prior_attempt_number: int
-) -> list[dict]:
-    """Return conversational items the given prior attempt already emitted,
-    reordered so the replay is a valid provider message sequence.
+def _iter_attempt_events(messages: list[tuple], attempt: int):
+    """Yield ``(event_type, event_dict)`` pairs for the given attempt.
 
-    Collected pieces:
-
-    1. **Completed tool pairs**: ``response.output_item.done`` events for
-       ``function_call`` + ``function_call_output``.
-    2. **Completed narrative messages**: ``response.output_item.done``
-       events for assistant ``message`` items.
-    3. **Partial assistant text**: if the crash happened mid-stream on a
-       text response, the message has ``output_item.added`` +
-       ``output_text.delta`` frames but no ``done``. We reassemble the
-       deltas into a synthetic ``message`` item so the next attempt's LLM
-       sees where narration trailed off and can continue.
-
-    The emitted order is (tool pairs in event order) → (narrative messages
-    in event order) → (partial reassembled message). Claude's raw stream
-    interleaves narrative `message` items between function_call and its
-    function_call_output, which in Anthropic format would look like
-    ``assistant(tool_use)`` → ``assistant(text)`` → ``user(tool_result)``
-    and trip the provider's "tool_use must be immediately followed by
-    tool_result" rule (HTTP 400). Hoisting narrative messages to the end
-    keeps each function_call adjacent to its output and lets the narrative
-    flow as a trailing assistant block.
-
-    ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
-    attempt_number)``.
+    Skips rows from other attempts and non-dict event payloads so callers
+    can write single-concern walkers without repeating the same filter.
     """
-    tool_items: list[dict] = []
-    narrative_items: list[dict] = []
-    # Track in-progress message items by id: accumulated text chunks. Reset
-    # when a matching .done arrives — that completed item is authoritative.
-    in_progress_text: dict[str, list[str]] = {}
-    in_progress_order: list[str] = []
-
     for _seq, _item_json, evt, attempt_tag in messages:
-        if attempt_tag != prior_attempt_number:
+        if attempt_tag != attempt:
             continue
         if not isinstance(evt, dict):
             continue
-        t = evt.get("type")
+        yield evt.get("type"), evt
 
-        if t == "response.output_item.done":
-            item = evt.get("item")
-            if isinstance(item, dict):
-                itype = item.get("type")
-                if itype == "message":
-                    narrative_items.append(item)
-                elif itype in _INHERITABLE_ITEM_TYPES:
-                    tool_items.append(item)
-                iid = item.get("id")
-                if iid in in_progress_text:
-                    del in_progress_text[iid]
-                    in_progress_order.remove(iid)
-        elif t == "response.output_item.added":
+
+def _extract_completed_items(
+    messages: list[tuple], attempt: int
+) -> tuple[list[dict], list[dict]]:
+    """Scan ``.done`` events and partition into (tool pairs, narrative)."""
+    tool_items: list[dict] = []
+    narrative_items: list[dict] = []
+    for t, evt in _iter_attempt_events(messages, attempt):
+        if t != "response.output_item.done":
+            continue
+        item = evt.get("item")
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type")
+        if itype == "message":
+            narrative_items.append(item)
+        elif itype in _TOOL_PAIR_TYPES:
+            tool_items.append(item)
+    return tool_items, narrative_items
+
+
+def _reassemble_partial_message(messages: list[tuple], attempt: int) -> dict | None:
+    """Return a synthetic assistant message if the attempt ended with a
+    never-completed in-flight text item, else ``None``.
+
+    Tracks ``output_item.added`` for message items, accumulates their
+    ``output_text.delta`` frames, and drops the tracker when a matching
+    ``.done`` arrives (that item is authoritative). Anything left at the
+    end is an unfinished message whose deltas we stitch into a synthetic
+    item so the next attempt's LLM can continue the prior narration.
+    """
+    in_progress_text: dict[str, list[str]] = {}
+    in_progress_order: list[str] = []
+    for t, evt in _iter_attempt_events(messages, attempt):
+        if t == "response.output_item.added":
             item = evt.get("item")
             if isinstance(item, dict) and item.get("type") == "message":
                 iid = item.get("id")
@@ -211,6 +207,13 @@ def _collect_prior_attempt_tool_events(
                     in_progress_text.setdefault(iid, [])
                     if iid not in in_progress_order:
                         in_progress_order.append(iid)
+        elif t == "response.output_item.done":
+            item = evt.get("item")
+            if isinstance(item, dict):
+                iid = item.get("id")
+                if iid in in_progress_text:
+                    del in_progress_text[iid]
+                    in_progress_order.remove(iid)
         elif t == "response.output_text.delta":
             iid = evt.get("item_id")
             delta = evt.get("delta")
@@ -221,17 +224,40 @@ def _collect_prior_attempt_tool_events(
         chunks = in_progress_text.get(iid) or []
         if not chunks:
             continue
-        narrative_items.append(
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "".join(chunks), "annotations": []},
-                ],
-            }
-        )
-    # Tool pairs first (each function_call immediately followed by its
-    # function_call_output in the event-log order), narrative after.
+        return {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "".join(chunks), "annotations": []},
+            ],
+        }
+    return None
+
+
+def _collect_prior_attempt_tool_events(
+    messages: list[tuple], prior_attempt_number: int
+) -> list[dict]:
+    """Return items the given prior attempt emitted, reordered to be a
+    valid provider message sequence on replay.
+
+    Composition: (completed tool pairs in event order) → (completed
+    narrative messages in event order) → (partial reassembled message, if
+    any). Claude's raw stream interleaves narrative ``message`` items
+    between each ``function_call`` and its ``function_call_output``, which
+    in Anthropic format would look like ``assistant(tool_use)`` →
+    ``assistant(text)`` → ``user(tool_result)`` and trip the provider's
+    "tool_use must be immediately followed by tool_result" rule (HTTP
+    400). Hoisting narrative past the tool pairs keeps each function_call
+    adjacent to its output and lets the narrative flow as a trailing
+    assistant block.
+
+    ``messages`` is the repository's tuples ``(seq, item_json,
+    stream_event, attempt_number)``.
+    """
+    tool_items, narrative_items = _extract_completed_items(messages, prior_attempt_number)
+    partial = _reassemble_partial_message(messages, prior_attempt_number)
+    if partial is not None:
+        narrative_items.append(partial)
     return tool_items + narrative_items
 
 
@@ -239,103 +265,20 @@ def _sanitize_request_input(
     request_dict: dict[str, Any],
     synthetic_output: str = DEFAULT_SYNTHETIC_INTERRUPTED_OUTPUT,
 ) -> dict[str, Any]:
-    """Reconcile orphaned function_call / function_call_output items in input.
+    """Reconcile orphaned function_call / function_call_output items in
+    ``request['input']`` via the shared :func:`sanitize_tool_items` walker.
 
-    Walks ``request['input']`` end-to-end (not just the trailing turn) and:
-
-    * drops duplicate ``function_call`` items by ``call_id``;
-    * drops duplicate or orphan ``function_call_output`` items (no matching
-      ``function_call`` anywhere in the list);
-    * injects a synthetic ``function_call_output`` immediately after any
-      ``function_call`` that has no output, so every ``tool_use`` is paired.
-
-    Also supports chat-completions-shape assistant items
-    (``{role: "assistant", tool_calls: [...]}``) as declaring call_ids.
-
-    This is a pure transform on a dict — no pydantic round-trip, no DB I/O.
-    Returns the same dict (mutated in place on the ``input`` key) for caller
-    convenience.
-
-    Reason we walk the whole history: the LangGraph in-graph middleware can
-    only repair the trailing turn, but UI-echoed history can carry orphans
-    from prior crashed turns mid-list. See rotation-findings.md (Test E).
+    Walks the whole history (not just the trailing turn) because UI-echoed
+    history can carry orphans from prior crashed turns mid-list.
+    Mutates ``request_dict['input']`` in place and returns the dict for
+    caller convenience.
     """
     items = request_dict.get("input")
     if not isinstance(items, list) or not items:
         return request_dict
-
-    declared_call_ids: set[str] = set()
-    call_ids_with_output: set[str] = set()
-    for i in items:
-        if not isinstance(i, dict):
-            continue
-        t = i.get("type")
-        cid = i.get("call_id")
-        if t == "function_call" and cid:
-            declared_call_ids.add(cid)
-        if t == "function_call_output" and cid:
-            call_ids_with_output.add(cid)
-        if i.get("role") == "assistant" and isinstance(i.get("tool_calls"), list):
-            for tc in i["tool_calls"]:
-                if not isinstance(tc, dict):
-                    continue
-                tc_id = tc.get("id") or (tc.get("function") or {}).get("id")
-                if tc_id:
-                    declared_call_ids.add(tc_id)
-
-    sanitized: list[dict[str, Any]] = []
-    seen_calls: set[str] = set()
-    seen_outputs: set[str] = set()
-    injected = 0
-    dropped_orphan_outputs = 0
-    dropped_duplicates = 0
-
-    for item in items:
-        if not isinstance(item, dict):
-            sanitized.append(item)
-            continue
-        t = item.get("type")
-        cid = item.get("call_id")
-
-        if t == "function_call" and cid:
-            if cid in seen_calls:
-                dropped_duplicates += 1
-                continue
-            seen_calls.add(cid)
-            sanitized.append(item)
-            if cid not in call_ids_with_output:
-                sanitized.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": cid,
-                        "output": synthetic_output,
-                    }
-                )
-                injected += 1
-        elif t == "function_call_output" and cid:
-            if cid in seen_outputs:
-                dropped_duplicates += 1
-                continue
-            if cid not in declared_call_ids:
-                dropped_orphan_outputs += 1
-                continue
-            seen_outputs.add(cid)
-            sanitized.append(item)
-        else:
-            sanitized.append(item)
-
-    if injected or dropped_orphan_outputs or dropped_duplicates:
-        logger.info(
-            "[durable] input sanitized: injected=%d dropped_orphan_outputs=%d "
-            "dropped_duplicates=%d original_items=%d final_items=%d",
-            injected,
-            dropped_orphan_outputs,
-            dropped_duplicates,
-            len(items),
-            len(sanitized),
-        )
-
-    request_dict["input"] = sanitized
+    request_dict["input"] = sanitize_tool_items(
+        items, synthetic_output, log_prefix="[durable] input sanitized"
+    )
     return request_dict
 
 
@@ -475,6 +418,36 @@ class LongRunningAgentServer(AgentServer):
         heartbeat_interval_seconds: float = 3.0,
         heartbeat_stale_threshold_seconds: float = 10.0,
     ):
+        """Create a durable-resume-enabled agent server.
+
+        Args:
+            agent_type: Must be ``"ResponsesAgent"``; this class is
+                Responses-API-shaped only.
+            enable_chat_proxy: Forwarded to the parent ``AgentServer``.
+            db_instance_name: Provisioned Lakebase instance name. Mutually
+                exclusive with the autoscaling options.
+            db_autoscaling_endpoint: Lakebase autoscaling endpoint URL.
+            db_project: Lakebase autoscaling project name (requires
+                ``db_branch``).
+            db_branch: Lakebase autoscaling branch name (requires
+                ``db_project``).
+            task_timeout_seconds: Max wall-clock time for a background run
+                before ``_task_scope`` fires a timeout and marks the
+                response ``failed``.
+            poll_interval_seconds: Interval between DB polls when streaming
+                cached events to a retrieve-endpoint client.
+            db_statement_timeout_ms: Postgres ``statement_timeout`` applied
+                to every DB statement from this process.
+            cleanup_timeout_seconds: Deadline for the post-crash error
+                write path before giving up and letting the stale-run
+                sweep mark the row failed.
+            heartbeat_interval_seconds: How often the owning pod writes
+                ``heartbeat_at`` while a run is in flight.
+            heartbeat_stale_threshold_seconds: Age at which a heartbeat is
+                considered stale and another pod may claim the run.
+                Also used as the grace window for a freshly-created run
+                that hasn't written its first heartbeat yet.
+        """
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(
                 f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "

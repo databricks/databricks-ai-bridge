@@ -51,101 +51,37 @@ try:
         DEFAULT_TOKEN_CACHE_DURATION_SECONDS,
         AsyncLakebaseSQLAlchemy,
     )
+    from databricks_ai_bridge.long_running.repair import sanitize_tool_items
 
     _session_imports_available = True
 except ImportError:
     SQLAlchemySession = object  # type: ignore
     DEFAULT_TOKEN_CACHE_DURATION_SECONDS = None  # type: ignore
     DEFAULT_POOL_RECYCLE_SECONDS = None  # type: ignore
+    sanitize_tool_items = None  # type: ignore
     _session_imports_available = False
 
 logger = logging.getLogger(__name__)
-
-
-def _item_get(item: Any, key: str) -> Any:
-    if isinstance(item, dict):
-        return item.get(key)
-    return getattr(item, key, None)
 
 
 def _sanitize_items(
     items: list[Any],
     synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
 ) -> list[Any]:
-    """Return a protocol-valid view of session items.
+    """Return a protocol-valid view of session items (thin wrapper around
+    the shared :func:`sanitize_tool_items` walker).
 
-    Walks items in chronological order, drops duplicate
-    ``function_call`` / ``function_call_output`` by ``call_id``, drops orphan
-    ``function_call_output`` items whose originating call is not present,
-    and injects a synthetic output immediately after any ``function_call``
-    whose matching output never landed.
-
-    Shared by ``repair()`` (destructive: rewrites the DB) and
-    ``get_items()`` (non-destructive: in-memory filter on read). Returning
-    the original ``items`` untouched when nothing needs repair lets callers
-    skip writes cheaply on the happy path.
+    Kept as a private alias so existing ``self._sanitize_items`` call sites
+    in this module stay stable. Behaviour: drop duplicate / orphan tool
+    items, inject synthetic outputs for unpaired function_calls, return
+    the caller's list reference unchanged on the happy path so
+    ``repair()`` can short-circuit re-persistence.
     """
     if not items:
         return items
-
-    call_ids_with_output: set[str] = set()
-    declared_call_ids: set[str] = set()
-    for item in items:
-        t = _item_get(item, "type")
-        cid = _item_get(item, "call_id")
-        if t == "function_call" and cid:
-            declared_call_ids.add(cid)
-        if t == "function_call_output" and cid:
-            call_ids_with_output.add(cid)
-
-    sanitized: list[Any] = []
-    seen_calls: set[str] = set()
-    seen_outputs: set[str] = set()
-    injected_call_ids: list[str] = []
-    dropped_orphan_outputs = 0
-
-    for item in items:
-        t = _item_get(item, "type")
-        cid = _item_get(item, "call_id")
-        if t == "function_call" and cid:
-            if cid in seen_calls:
-                continue
-            seen_calls.add(cid)
-            sanitized.append(item)
-            if cid not in call_ids_with_output:
-                sanitized.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": cid,
-                        "output": synthetic_output,
-                    }
-                )
-                injected_call_ids.append(cid)
-        elif t == "function_call_output" and cid:
-            if cid in seen_outputs:
-                continue
-            if cid not in declared_call_ids:
-                dropped_orphan_outputs += 1
-                continue
-            seen_outputs.add(cid)
-            sanitized.append(item)
-        else:
-            sanitized.append(item)
-
-    if len(sanitized) == len(items) and not injected_call_ids and not dropped_orphan_outputs:
-        # Happy path — return the caller's list reference so they can
-        # cheaply skip any re-persistence.
-        return items
-
-    logger.info(
-        "[durable] session items sanitized: injected=%d dropped_orphan_outputs=%d "
-        "original=%d final=%d",
-        len(injected_call_ids),
-        dropped_orphan_outputs,
-        len(items),
-        len(sanitized),
+    return sanitize_tool_items(
+        items, synthetic_output, log_prefix="[durable] session items sanitized"
     )
-    return sanitized
 
 
 class AsyncDatabricksSession(SQLAlchemySession):
