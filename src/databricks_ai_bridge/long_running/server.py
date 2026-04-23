@@ -143,30 +143,41 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
+# Only tool pairs are inherited as completed items. Completed `message`
+# items are intentionally excluded — Claude (via openai-agents → Anthropic
+# adapter) emits a narrative `message` between each function_call and its
+# function_call_output, and preserving that order in the replay produces
+# an Anthropic message sequence where `tool_use` is not immediately
+# followed by `tool_result`, which the provider rejects (HTTP 400).
+# Dropping the narrative messages leaves tool_call/tool_result pairs
+# adjacent in the replay. Partial mid-stream text (text-only crash) is a
+# separate path below and still reassembled.
+_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output")
 
 
 def _collect_prior_attempt_tool_events(
     messages: list[tuple], prior_attempt_number: int
 ) -> list[dict]:
-    """Return conversational items the given prior attempt already emitted.
+    """Return tool-related items the given prior attempt already emitted.
 
     Collects:
 
-    1. **Completed items**: ``response.output_item.done`` events for
-       ``function_call`` / ``function_call_output`` / assistant ``message``.
-       Reliable self-contained pieces the prior attempt finished.
+    1. **Completed tool pairs**: ``response.output_item.done`` events for
+       ``function_call`` / ``function_call_output``. Completed narrative
+       ``message`` items are skipped on purpose — see
+       ``_INHERITABLE_ITEM_TYPES`` for the Anthropic-adapter ordering
+       reason.
 
     2. **Partial assistant text**: if the crash happened mid-stream on a
        text response, the message has ``response.output_item.added`` +
        ``response.output_text.delta`` frames but no ``done``. We reassemble
        the deltas into a synthetic ``message`` item so the next attempt's
        LLM sees where narration trailed off and can continue. Without this,
-       a text-only crash leaves the LLM with just the user's message and it
+       a text-only crash leaves the LLM with just the user's message and
        restarts from the top.
 
-    Events are walked in sequence_number order; partial items emit last
-    (after all completed items from the same attempt).
+    Events are walked in sequence_number order; the partial message, if
+    any, emits last.
 
     ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
     attempt_number)``.
@@ -186,8 +197,13 @@ def _collect_prior_attempt_tool_events(
 
         if t == "response.output_item.done":
             item = evt.get("item")
-            if isinstance(item, dict) and item.get("type") in _INHERITABLE_ITEM_TYPES:
-                out.append(item)
+            if isinstance(item, dict):
+                if item.get("type") in _INHERITABLE_ITEM_TYPES:
+                    out.append(item)
+                # Always clear the partial-text tracker when a matching .done
+                # arrives, even if the completed item isn't on the inherit
+                # list. Otherwise a message that fully streamed would still
+                # get reassembled as a "partial" at the end.
                 iid = item.get("id")
                 if iid in in_progress_text:
                     del in_progress_text[iid]

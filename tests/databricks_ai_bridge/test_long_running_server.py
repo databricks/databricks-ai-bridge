@@ -1067,9 +1067,11 @@ class TestCollectPriorAttemptToolEvents:
         assert len(out) == 1
         assert out[0]["call_id"] == "c1"
 
-    def test_inherits_assistant_message_items(self):
-        # Completed assistant text messages inherit too, so the next attempt's
-        # LLM sees its prior narration and doesn't re-emit it from scratch.
+    def test_completed_assistant_message_items_are_skipped(self):
+        # Narrative `message` items Claude interleaves between tool calls
+        # would break Anthropic's "tool_use immediately followed by
+        # tool_result" rule if inherited. Only function_call/output pairs
+        # flow through; completed messages are dropped.
         messages = [
             (
                 0,
@@ -1084,11 +1086,11 @@ class TestCollectPriorAttemptToolEvents:
             self._event(2, 1, "function_call_output", "c1", output="ok"),
         ]
         out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
-        # 1 message + 1 function_call + 1 function_call_output
-        assert len(out) == 3
-        assert out[0]["type"] == "message"
-        assert out[1]["type"] == "function_call"
-        assert out[2]["type"] == "function_call_output"
+        # Only the function_call + function_call_output pair — the message
+        # is intentionally skipped.
+        assert len(out) == 2
+        assert out[0]["type"] == "function_call"
+        assert out[1]["type"] == "function_call_output"
 
     def test_reassembles_partial_text_from_delta_events(self):
         # Attempt crashed mid-stream: item.added + deltas but no item.done.
@@ -1125,8 +1127,10 @@ class TestCollectPriorAttemptToolEvents:
         assert out[0]["content"][0]["text"] == "Hello, world"
 
     def test_ignores_partial_text_if_item_eventually_completed(self):
-        # Deltas streamed, then item.done landed — the completed item is what
-        # we inherit; the deltas are just intermediate frames.
+        # Deltas streamed, then item.done landed — since completed message
+        # items are no longer inherited at all, and the partial reassembly
+        # only fires when .done is missing, this case produces an empty
+        # inherited list.
         messages = [
             (
                 0,
@@ -1159,9 +1163,9 @@ class TestCollectPriorAttemptToolEvents:
             ),
         ]
         out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
-        # Only the completed item — NOT a duplicate from the partial deltas.
-        assert len(out) == 1
-        assert out[0]["content"][0]["text"] == "Hello, world"
+        # Completed messages are intentionally NOT inherited, and partial
+        # reassembly cleared its tracker when .done arrived → empty list.
+        assert out == []
 
     def test_skips_unknown_item_types(self):
         # Item types outside the allow-list (e.g., future event kinds like
