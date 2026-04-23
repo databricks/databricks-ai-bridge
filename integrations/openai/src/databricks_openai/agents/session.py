@@ -68,15 +68,6 @@ def _item_get(item: Any, key: str) -> Any:
     return getattr(item, key, None)
 
 
-def _item_dict(item: Any) -> dict:
-    """Normalize a session item to a plain dict for re-persistence."""
-    if isinstance(item, dict):
-        return dict(item)
-    if hasattr(item, "model_dump"):
-        return item.model_dump()
-    return dict(item.__dict__) if hasattr(item, "__dict__") else {}
-
-
 def _sanitize_items(
     items: list[Any],
     synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT,
@@ -284,60 +275,11 @@ class AsyncDatabricksSession(SQLAlchemySession):
         from a durable-resume crash get a synthetic output appended, and
         duplicates get deduped. The underlying DB rows are not modified;
         this is a pure in-memory filter, cheap to re-run on every call.
-
-        Callers that want the raw persisted items can construct the session
-        with ``auto_repair=False``, or call ``repair()`` which writes the
-        sanitized state back to the DB.
         """
         items = await super().get_items(limit=limit)
         if not self._auto_repair:
             return items
         return _sanitize_items(items, synthetic_output=self._auto_repair_synthetic_output)
-
-    async def repair(self, synthetic_output: str = DEFAULT_REPAIR_SYNTHETIC_OUTPUT) -> int:
-        """Reconcile the session DB so persisted rows are protocol-valid.
-
-        Destructive — rewrites the ``agent_messages`` rows via
-        ``clear_session()`` + ``add_items(sanitized)``. Callers who only need
-        a clean view for the next LLM call should rely on ``get_items()``'s
-        auto-repair instead; ``repair()`` is for one-shot maintenance jobs
-        or tests that want to assert the DB itself is clean.
-
-        Args:
-            synthetic_output: Text used for the synthetic outputs inserted for
-                orphan tool calls. Defaults to an 'interrupted by resume'
-                message.
-
-        Returns:
-            The number of synthetic outputs injected (0 if already clean).
-        """
-        # Bypass our auto-repair override so we see the raw items and can
-        # tell whether the DB is already clean.
-        items = await super().get_items()
-        if not items:
-            return 0
-        sanitized = _sanitize_items(items, synthetic_output=synthetic_output)
-        # When _sanitize_items has nothing to do it returns ``items`` itself.
-        if sanitized is items:
-            return 0
-        injected_call_ids = [
-            _item_get(s, "call_id")
-            for s in sanitized
-            if _item_get(s, "type") == "function_call_output"
-            and _item_get(s, "call_id") not in {_item_get(i, "call_id") for i in items}
-        ]
-        sanitized_dicts = [_item_dict(i) for i in sanitized]
-        logger.info(
-            "AsyncDatabricksSession.repair session_id=%s original=%d sanitized=%d injected=%d",
-            self.session_id,
-            len(items),
-            len(sanitized_dicts),
-            len(injected_call_ids),
-        )
-        await self.clear_session()
-        if sanitized_dicts:
-            await self.add_items(sanitized_dicts)
-        return len(injected_call_ids)
 
     @classmethod
     def _build_cache_key(

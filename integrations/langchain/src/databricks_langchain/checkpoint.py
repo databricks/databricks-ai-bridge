@@ -104,85 +104,19 @@ def build_tool_resume_repair(
     return [ToolMessage(tool_call_id=tc_id, content=synthetic_output) for tc_id in orphans]
 
 
-def build_tool_resume_repair_middleware(
-    synthetic_output: str = DEFAULT_TOOL_RESUME_REPAIR_OUTPUT,
-) -> Any:
-    """Return a LangChain ``AgentMiddleware`` that repairs orphan tool calls.
-
-    Wires ``build_tool_resume_repair`` into ``langchain.agents.create_agent``
-    via its middleware API so durable-resume recovery happens automatically
-    before every LLM call. Keeps repair logic off the handler — callers only
-    add one argument to ``create_agent``.
-
-    Usage::
-
-        from databricks_langchain import build_tool_resume_repair_middleware
-
-        agent = create_agent(
-            model=model,
-            tools=tools,
-            checkpointer=checkpointer,
-            middleware=[build_tool_resume_repair_middleware()],
-        )
-
-    The middleware's ``before_model`` hook fires on every model turn and is a
-    no-op when state is clean, so the happy path is free. On a mid-tool
-    crash-resume, it injects synthetic ``ToolMessage``s for any
-    ``AIMessage.tool_calls`` in the trailing turn whose paired
-    ``ToolMessage`` never landed. Satisfies Anthropic's ``tool_use`` ⇄
-    ``tool_result`` contract without needing manual
-    ``aupdate_state(..., as_node="tools")`` surgery.
-
-    Args:
-        synthetic_output: Text for each injected ``ToolMessage.content``.
-
-    Returns:
-        An ``AgentMiddleware`` instance suitable for the ``middleware=``
-        argument of ``langchain.agents.create_agent``.
-
-    Raises:
-        ImportError: If ``langchain.agents.middleware.AgentMiddleware`` is
-            unavailable (older langchain version or extra not installed).
-    """
-    try:
-        from langchain.agents.middleware import AgentMiddleware
-    except ImportError as exc:
-        raise ImportError(
-            "build_tool_resume_repair_middleware requires langchain>=1.0 with "
-            "the agents extra. Install via `pip install langchain[agents]` or "
-            "equivalent."
-        ) from exc
-
-    class ToolResumeRepairMiddleware(AgentMiddleware):
-        """Repairs orphan tool_use AIMessages before each model invocation."""
-
-        def before_model(self, state, runtime):  # type: ignore[override]
-            repair = build_tool_resume_repair(
-                state.get("messages", []), synthetic_output=synthetic_output
-            )
-            return {"messages": repair} if repair else None
-
-        async def abefore_model(self, state, runtime):  # type: ignore[override]
-            return self.before_model(state, runtime)
-
-    return ToolResumeRepairMiddleware()
-
-
 def _repair_loaded_checkpoint_tuple(tup: Any) -> Any:
     """Return a copy of ``tup`` with orphan tool_calls in its ``messages``
     channel closed by synthetic ``ToolMessage`` s.
 
     Called on every ``(a)get_tuple`` to make the served checkpoint
-    protocol-valid (every ``tool_use`` paired with a ``tool_result``) without
-    requiring callers to install ``build_tool_resume_repair_middleware``.
-    A kill between the ``model`` and ``tools`` nodes leaves the trailing
-    ``AIMessage.tool_calls`` unpaired; on the NEXT turn that state would
-    otherwise leak into the LLM and be rejected by the provider's pairing
-    check.
+    protocol-valid (every ``tool_use`` paired with a ``tool_result``)
+    transparently. A kill between the ``model`` and ``tools`` nodes leaves
+    the trailing ``AIMessage.tool_calls`` unpaired; on the NEXT turn that
+    state would otherwise leak into the LLM and be rejected by the
+    provider's pairing check.
 
     Idempotent — ``build_tool_resume_repair`` is a no-op when state is
-    already clean. Cheap — the walk is O(trailing-turn), same as the
-    in-graph middleware.
+    already clean. Cheap — the walk is O(trailing-turn).
 
     Side effect: the synthetic ``ToolMessage`` s added here become part of
     the state LangGraph writes on the NEXT node boundary, so the repair
