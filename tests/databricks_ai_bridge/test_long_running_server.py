@@ -1067,30 +1067,50 @@ class TestCollectPriorAttemptToolEvents:
         assert len(out) == 1
         assert out[0]["call_id"] == "c1"
 
-    def test_completed_assistant_message_items_are_skipped(self):
-        # Narrative `message` items Claude interleaves between tool calls
-        # would break Anthropic's "tool_use immediately followed by
-        # tool_result" rule if inherited. Only function_call/output pairs
-        # flow through; completed messages are dropped.
+    def test_messages_hoisted_after_tool_pairs(self):
+        # Claude interleaves narrative `message` items between function_call
+        # and function_call_output in its event stream. Preserving that
+        # ordering in the replay would violate Anthropic's "tool_use
+        # immediately followed by tool_result" rule. Collector hoists all
+        # narrative messages to the end so tool pairs stay adjacent.
         messages = [
+            self._event(0, 1, "function_call", "c1"),
             (
-                0,
+                1,
                 None,
                 {
                     "type": "response.output_item.done",
-                    "item": {"type": "message", "role": "assistant", "content": "Let me check"},
+                    "item": {"type": "message", "role": "assistant", "content": "step one"},
                 },
                 1,
             ),
-            self._event(1, 1, "function_call", "c1"),
             self._event(2, 1, "function_call_output", "c1", output="ok"),
+            self._event(3, 1, "function_call", "c2"),
+            (
+                4,
+                None,
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "message", "role": "assistant", "content": "step two"},
+                },
+                1,
+            ),
+            self._event(5, 1, "function_call_output", "c2", output="ok"),
         ]
         out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
-        # Only the function_call + function_call_output pair — the message
-        # is intentionally skipped.
-        assert len(out) == 2
-        assert out[0]["type"] == "function_call"
-        assert out[1]["type"] == "function_call_output"
+        # 2 pairs + 2 messages.
+        assert len(out) == 6
+        assert [i["type"] for i in out] == [
+            "function_call",
+            "function_call_output",
+            "function_call",
+            "function_call_output",
+            "message",
+            "message",
+        ]
+        # call_ids paired up (c1,c1,c2,c2) and narrative in event order.
+        assert out[0]["call_id"] == "c1" and out[1]["call_id"] == "c1"
+        assert out[2]["call_id"] == "c2" and out[3]["call_id"] == "c2"
 
     def test_reassembles_partial_text_from_delta_events(self):
         # Attempt crashed mid-stream: item.added + deltas but no item.done.
@@ -1163,9 +1183,12 @@ class TestCollectPriorAttemptToolEvents:
             ),
         ]
         out = _collect_prior_attempt_tool_events(messages, prior_attempt_number=1)
-        # Completed messages are intentionally NOT inherited, and partial
-        # reassembly cleared its tracker when .done arrived → empty list.
-        assert out == []
+        # Completed message inherits via the narrative bucket; partial
+        # reassembly cleared its tracker when .done arrived so it does NOT
+        # also synthesize a duplicate from the deltas.
+        assert len(out) == 1
+        assert out[0]["type"] == "message"
+        assert out[0]["content"][0]["text"] == "Hello, world"
 
     def test_skips_unknown_item_types(self):
         # Item types outside the allow-list (e.g., future event kinds like

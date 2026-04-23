@@ -143,46 +143,42 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-# Only tool pairs are inherited as completed items. Completed `message`
-# items are intentionally excluded — Claude (via openai-agents → Anthropic
-# adapter) emits a narrative `message` between each function_call and its
-# function_call_output, and preserving that order in the replay produces
-# an Anthropic message sequence where `tool_use` is not immediately
-# followed by `tool_result`, which the provider rejects (HTTP 400).
-# Dropping the narrative messages leaves tool_call/tool_result pairs
-# adjacent in the replay. Partial mid-stream text (text-only crash) is a
-# separate path below and still reassembled.
-_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output")
+_INHERITABLE_ITEM_TYPES = ("function_call", "function_call_output", "message")
 
 
 def _collect_prior_attempt_tool_events(
     messages: list[tuple], prior_attempt_number: int
 ) -> list[dict]:
-    """Return tool-related items the given prior attempt already emitted.
+    """Return conversational items the given prior attempt already emitted,
+    reordered so the replay is a valid provider message sequence.
 
-    Collects:
+    Collected pieces:
 
     1. **Completed tool pairs**: ``response.output_item.done`` events for
-       ``function_call`` / ``function_call_output``. Completed narrative
-       ``message`` items are skipped on purpose — see
-       ``_INHERITABLE_ITEM_TYPES`` for the Anthropic-adapter ordering
-       reason.
+       ``function_call`` + ``function_call_output``.
+    2. **Completed narrative messages**: ``response.output_item.done``
+       events for assistant ``message`` items.
+    3. **Partial assistant text**: if the crash happened mid-stream on a
+       text response, the message has ``output_item.added`` +
+       ``output_text.delta`` frames but no ``done``. We reassemble the
+       deltas into a synthetic ``message`` item so the next attempt's LLM
+       sees where narration trailed off and can continue.
 
-    2. **Partial assistant text**: if the crash happened mid-stream on a
-       text response, the message has ``response.output_item.added`` +
-       ``response.output_text.delta`` frames but no ``done``. We reassemble
-       the deltas into a synthetic ``message`` item so the next attempt's
-       LLM sees where narration trailed off and can continue. Without this,
-       a text-only crash leaves the LLM with just the user's message and
-       restarts from the top.
-
-    Events are walked in sequence_number order; the partial message, if
-    any, emits last.
+    The emitted order is (tool pairs in event order) → (narrative messages
+    in event order) → (partial reassembled message). Claude's raw stream
+    interleaves narrative `message` items between function_call and its
+    function_call_output, which in Anthropic format would look like
+    ``assistant(tool_use)`` → ``assistant(text)`` → ``user(tool_result)``
+    and trip the provider's "tool_use must be immediately followed by
+    tool_result" rule (HTTP 400). Hoisting narrative messages to the end
+    keeps each function_call adjacent to its output and lets the narrative
+    flow as a trailing assistant block.
 
     ``messages`` is the repository's tuples: ``(seq, item_json, stream_event,
     attempt_number)``.
     """
-    out: list[dict] = []
+    tool_items: list[dict] = []
+    narrative_items: list[dict] = []
     # Track in-progress message items by id: accumulated text chunks. Reset
     # when a matching .done arrives — that completed item is authoritative.
     in_progress_text: dict[str, list[str]] = {}
@@ -198,12 +194,11 @@ def _collect_prior_attempt_tool_events(
         if t == "response.output_item.done":
             item = evt.get("item")
             if isinstance(item, dict):
-                if item.get("type") in _INHERITABLE_ITEM_TYPES:
-                    out.append(item)
-                # Always clear the partial-text tracker when a matching .done
-                # arrives, even if the completed item isn't on the inherit
-                # list. Otherwise a message that fully streamed would still
-                # get reassembled as a "partial" at the end.
+                itype = item.get("type")
+                if itype == "message":
+                    narrative_items.append(item)
+                elif itype in _INHERITABLE_ITEM_TYPES:
+                    tool_items.append(item)
                 iid = item.get("id")
                 if iid in in_progress_text:
                     del in_progress_text[iid]
@@ -226,7 +221,7 @@ def _collect_prior_attempt_tool_events(
         chunks = in_progress_text.get(iid) or []
         if not chunks:
             continue
-        out.append(
+        narrative_items.append(
             {
                 "type": "message",
                 "role": "assistant",
@@ -235,7 +230,9 @@ def _collect_prior_attempt_tool_events(
                 ],
             }
         )
-    return out
+    # Tool pairs first (each function_call immediately followed by its
+    # function_call_output in the event-log order), narrative after.
+    return tool_items + narrative_items
 
 
 def _sanitize_request_input(
