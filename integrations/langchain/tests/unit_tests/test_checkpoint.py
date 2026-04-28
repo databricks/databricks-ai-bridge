@@ -446,3 +446,82 @@ async def test_async_checkpoint_saver_branch_resource_path(monkeypatch):
 
     assert "host=auto-db-host" in test_pool.conninfo
     assert saver._lakebase._is_autoscaling is True
+
+
+class TestReadTimeCheckpointRepair:
+    """Read-time repair: aget_tuple / get_tuple returns a state where every
+    trailing ``AIMessage.tool_calls`` is paired with a ``ToolMessage``. Keeps
+    user-space free of middleware when the app is built on our savers."""
+
+    def _make_tuple(self, messages):
+        from collections import namedtuple
+
+        FakeTuple = namedtuple(
+            "CheckpointTuple",
+            ["config", "checkpoint", "metadata", "parent_config", "pending_writes"],
+        )
+        return FakeTuple(
+            config={},
+            checkpoint={
+                "v": 1,
+                "id": "ckpt",
+                "channel_values": {"messages": list(messages)},
+            },
+            metadata={},
+            parent_config=None,
+            pending_writes=None,
+        )
+
+    def test_repairs_trailing_orphan_tool_call(self):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from databricks_langchain.checkpoint import _repair_loaded_checkpoint_tuple
+
+        tup = self._make_tuple(
+            [
+                HumanMessage("hi"),
+                AIMessage(content="", tool_calls=[{"id": "c1", "name": "f", "args": {}}]),
+            ]
+        )
+        repaired = _repair_loaded_checkpoint_tuple(tup)
+        msgs = repaired.checkpoint["channel_values"]["messages"]
+        assert len(msgs) == 3
+        assert isinstance(msgs[-1], ToolMessage)
+        assert msgs[-1].tool_call_id == "c1"
+
+    def test_noop_when_state_is_clean(self):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from databricks_langchain.checkpoint import _repair_loaded_checkpoint_tuple
+
+        tup = self._make_tuple(
+            [
+                HumanMessage("hi"),
+                AIMessage(content="", tool_calls=[{"id": "c1", "name": "f", "args": {}}]),
+                ToolMessage(tool_call_id="c1", content="ok"),
+                AIMessage(content="done"),
+            ]
+        )
+        repaired = _repair_loaded_checkpoint_tuple(tup)
+        # No repair added → tuple unchanged.
+        assert repaired is tup
+
+    def test_none_tuple_passes_through(self):
+        from databricks_langchain.checkpoint import _repair_loaded_checkpoint_tuple
+
+        assert _repair_loaded_checkpoint_tuple(None) is None
+
+    def test_does_not_mutate_original_messages_list(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from databricks_langchain.checkpoint import _repair_loaded_checkpoint_tuple
+
+        original_messages = [
+            HumanMessage("hi"),
+            AIMessage(content="", tool_calls=[{"id": "c1", "name": "f", "args": {}}]),
+        ]
+        tup = self._make_tuple(original_messages)
+        original_len = len(original_messages)
+        _repair_loaded_checkpoint_tuple(tup)
+        # Calling repair must NOT mutate the caller's original list.
+        assert len(original_messages) == original_len
