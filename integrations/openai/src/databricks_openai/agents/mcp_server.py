@@ -274,8 +274,18 @@ class McpServer(MCPServerStreamableHttp):
         )
 
     @mlflow.trace(span_type=SpanType.TOOL)
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
-        return await super().call_tool(tool_name, arguments)
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> CallToolResult:
+        # Forward any extra kwargs (e.g. ``meta``) added by newer openai-agents
+        # versions so the override stays compatible across SDK releases. Older
+        # parents that don't accept these kwargs aren't sent any — the SDK only
+        # passes them when the corresponding feature is in use — so empty kwargs
+        # forward cleanly.
+        return await super().call_tool(tool_name, arguments, **kwargs)
 
     def create_streams(
         self,
