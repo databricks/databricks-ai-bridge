@@ -1,0 +1,423 @@
+# LongRunningAgentServer
+
+Durable, crash-resumable agent execution for MLflow `ResponsesAgent` handlers.
+
+This document describes:
+1. What `LongRunningAgentServer` does and the guarantees it gives callers ([§1](#1-what-this-module-does)).
+2. The four customer journeys it covers, with sequence diagrams ([§2](#2-customer-journeys)).
+3. The architecture: storage layout, claim mechanism, recovery, and stream resume ([§3](#3-architecture)).
+4. Author-side requirements: what changes (and doesn't) when a handler opts into durable mode ([§4](#4-author-side-requirements)).
+5. The interface today and how it's expected to evolve when [TaskFlow](https://github.com/databricks-eng/universe/tree/master/experimental/taskflow) lands ([§5](#5-future-direction-taskflow)).
+
+## 1. What this module does
+
+`LongRunningAgentServer` extends MLflow's `AgentServer` for `ResponsesAgent` handlers with three capabilities:
+
+1. **Background execution.** A `POST /responses` request with `background: true` returns a `response_id` immediately; the agent loop runs detached from the HTTP connection. State persists to Lakebase Postgres.
+2. **Streaming retrieval.** `GET /responses/{response_id}?stream=true&starting_after=N` replays events past sequence `N` and tails new ones until the run finishes. Reconnects without losing events.
+3. **Crash-resumable execution.** If the pod running an agent loop dies, another pod atomically claims the run and finishes the work via **prose recovery**: the new attempt receives a single user message narrating the crashed attempt's completed tool calls, results, and partial output, and continues from there on a freshly-rotated SDK session. Tool results that completed before the crash are preserved through the prose narrative.
+
+Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, others) is opaque to the server.
+
+### Guarantees
+
+- **At-most-once durable claim.** Only one pod runs a given response at a time. The handoff uses an atomic CAS on `attempt_number`.
+- **Append-only event log.** Every SSE frame is persisted to `agent_server.messages` keyed by `(response_id, attempt_number, sequence_number)`. Clients cursor-resume from `starting_after`.
+- **SDK-agnostic recovery.** The resumed attempt receives a flat prose narrative — no provider-specific tool-pair structure, no synthetic tool events, no per-SDK adapter code.
+- **SDK-agnostic UI-echo dedup.** When the chatbot client echoes prior conversation history in `request.input`, the server detects this (presence of an `assistant`-role message) and trims to the latest user message. The SDK's session/checkpointer storage is treated as authoritative for prior turns.
+- **Best-effort tool execution.** A tool call interrupted mid-flight may re-run on the resumed attempt. Idempotency is the tool author's responsibility.
+- **No agent code changes required.** Templates that subclass `LongRunningAgentServer` keep using `@invoke()` / `@stream()` decorators. All durability lives below the handler boundary.
+
+### Non-goals
+
+- Cross-region failover. Pods are assumed to share one Lakebase.
+- Tool-level checkpointing / exactly-once tool execution.
+- A workflow DSL. Handlers are ordinary async generators / coroutines.
+
+## 2. Customer journeys
+
+### CUJ 1: Author writes a long-running agent
+
+The author subclasses `LongRunningAgentServer` and registers `@invoke()` / `@stream()` handlers like a regular MLflow agent server. **No durability code in `agent.py`.**
+
+```python
+from databricks_ai_bridge.long_running import LongRunningAgentServer
+from mlflow.genai.agent_server import invoke, stream
+
+agent_server = LongRunningAgentServer(
+    "ResponsesAgent",
+    db_instance_name="my-lakebase-instance",
+)
+
+@stream()
+async def stream_handler(request):
+    # ordinary agent code: build messages, call SDK, yield events
+    ...
+
+@invoke()
+async def invoke_handler(request):
+    ...
+
+app = agent_server.app
+```
+
+The agent author writes their handler exactly the same way they would for the non-durable `AgentServer`. `LongRunningAgentServer` adds the durable wiring transparently.
+
+### CUJ 2: Pod crashes mid-tool, client polls
+
+A client posts a long-running request, the owning pod dies mid-tool, another pod takes over via prose recovery, and the client gets the final output without restarting.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as Pod A (owner)
+    participant DB as Lakebase<br/>(agent_server.*)
+    participant B as Pod B
+    participant SDK as SDK store<br/>(rotated session)
+
+    C->>A: POST /responses<br/>{input, background:true, stream:true}
+    A->>DB: INSERT response_id, owner=A,<br/>original_request (full input), attempt=1
+    A-->>C: 200 {id: resp_xxx, status: in_progress}
+    activate A
+    Note over A: heartbeat loop (every 3s)
+    A->>DB: UPDATE heartbeat_at WHERE owner=A
+
+    par Streaming
+        A->>SDK: write to session T (original conv_id)
+        A->>DB: append events seq=0..N (attempt=1)
+    and Polling
+        C->>A: GET /responses/{id}?stream=true&starting_after=N
+        A-->>C: SSE events
+    end
+
+    Note over A: 💥 pod crashes mid-tool<br/>(after tool_use, before tool_result)
+    deactivate A
+    Note over DB: heartbeat_at goes stale (>10s old)
+
+    C->>B: GET /responses/{id}?stream=true&starting_after=K
+    B->>DB: SELECT heartbeat_at, attempt
+    Note over B: heartbeat stale → claim
+    B->>DB: CAS UPDATE owner=B, attempt=2<br/>WHERE attempt=1 (atomic)
+    B->>DB: SELECT prior events WHERE attempt=1
+    Note over B: build resume input:<br/>· original_request.input (full prior turns)<br/>· + prose recovery message narrating attempt 1<br/>· rotate conv_id → ::attempt-2
+    B->>DB: append response.resumed sentinel<br/>{conversation_id: rotated value}
+    B->>B: re-invoke @stream() handler<br/>(fresh rotated SDK session)
+    activate B
+    B->>SDK: write to T::attempt-2 (clean)
+    B->>DB: append events seq=K+1..M (attempt=2)
+    B-->>C: SSE events (response.resumed, then attempt-2 events)
+    deactivate B
+```
+
+**What the client observes:** a single SSE stream that may pause briefly during the heartbeat-stale window (~10s by default), then resumes. The `response.resumed` sentinel marks the attempt boundary and carries the rotated `conversation_id` so the chatbot can use the rotated session for subsequent turns.
+
+**What the agent author observes:** their handler is invoked once for the original POST; a second time on resume. The second invocation's `request.input` contains the original input plus a single prose user message describing what happened in attempt 1. The handler doesn't have to know any of this is durable resume — to the model, it just looks like a user said "the prior attempt crashed, here's what had happened, please continue."
+
+### CUJ 3: Subsequent turn after a crashed turn
+
+After a successful crash + resume, the next turn from the client lands on a fresh `POST /responses`. The chatbot uses the **rotated** `conversation_id` (captured from the `response.resumed` sentinel) so the handler resolves to the rotated SDK session — which was populated cleanly during attempt 2's prose-recovery run.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Chatbot
+    participant S as Server (any pod)
+    participant SDK as SDK store
+
+    Note over SDK: state at original conv_id T:<br/>incomplete (orphan tool_use)<br/>state at T::attempt-2:<br/>complete (prose + resumed turn output)
+
+    C->>C: lookup alias map:<br/>chat_id → T::attempt-2
+    C->>S: POST /responses<br/>{input: [echo of full UI history, new user msg],<br/> context.conversation_id: T::attempt-2}
+    S->>S: _trim_echoed_history<br/>(detects assistant in input → trim to last user)
+    S->>S: handler resolves session_id = T::attempt-2
+    S->>SDK: load history at T::attempt-2
+    SDK-->>S: clean state (prose + attempt-2 emissions)
+    S->>S: model receives [clean history] + [new user msg]
+    Note over S: turn succeeds normally
+
+    Note over SDK: original session T is now orphaned forever<br/>(never read again — chatbot uses rotated alias)
+```
+
+Three things make this work without per-SDK repair code:
+
+1. **Server emits the rotated conv_id in `response.resumed`.** The chatbot reads it and updates its `Map<chat_id, conversation_id>` alias.
+2. **Server-side trim of UI-echoed history.** The presence of an `assistant`-role item in `request.input` is a reliable proxy for "client is echoing prior history." Trim to the latest user message; trust the SDK's session as authoritative for prior turns.
+3. **Always-rotate.** The rotated session was the one populated during attempt 2's run. Subsequent turns land on it. The original poisoned session is never read.
+
+### CUJ 4: Multi-pod stale-claim contention
+
+Two pods each see the same response in `in_progress` with a stale heartbeat. Only one wins the CAS.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Pod B
+    participant DB as Lakebase
+    participant C as Pod C
+
+    Note over B,C: both pods see response in_progress, heartbeat stale
+    par
+        B->>DB: UPDATE responses SET owner=B, attempt=N+1<br/>WHERE response_id=R AND attempt=N
+    and
+        C->>DB: UPDATE responses SET owner=C, attempt=N+1<br/>WHERE response_id=R AND attempt=N
+    end
+    Note over DB: only one row matches; the other UPDATE returns 0 rows
+    DB-->>B: RETURNING attempt_number=N+1
+    DB-->>C: RETURNING (no row)
+    Note over B: B wins, builds resume input + spawns handler
+    Note over C: C aborts cleanly, returns to its retrieve loop
+```
+
+The `claim_stale_response` function (`repository.py`) executes a single `UPDATE … WHERE attempt_number = :current AND ((heartbeat_at IS NULL) OR (heartbeat_at < now() - interval))` with `RETURNING`. Postgres serializes the writes; only the pod whose `current` value was unmodified at commit time gets the `RETURNING` row.
+
+## 3. Architecture
+
+### 3.1 Storage layout
+
+Two tables in the `agent_server` schema:
+
+```mermaid
+erDiagram
+    responses {
+        text response_id PK
+        text status "in_progress / completed / failed"
+        timestamptz created_at
+        text owner_pod_id
+        timestamptz heartbeat_at
+        int attempt_number
+        text original_request "JSON of initial POST (full input)"
+        text trace_id
+    }
+    messages {
+        text response_id FK
+        int sequence_number
+        int attempt_number
+        text item "JSON of output item"
+        text stream_event "JSON of SSE frame"
+    }
+    responses ||--o{ messages : "has"
+```
+
+- `responses.attempt_number` is the CAS guard for claim atomicity.
+- `responses.original_request` stores the **full untrimmed input** so the resume path can recover the entire prior-turn history when the rotated SDK session starts empty.
+- `messages.attempt_number` tags every event so retrieval can filter to the latest attempt's output (avoiding partial output from a crashed attempt leaking into the final response body).
+- Schema migrations are idempotent (`ADD COLUMN IF NOT EXISTS`) so an existing deployment upgrades without downtime.
+
+### 3.2 The four key flows
+
+```mermaid
+flowchart TD
+    POST["POST /responses<br/>background=true"] --> CR[create_response<br/>store FULL original_request]
+    CR --> TRIM[deepcopy + _trim_echoed_history<br/>for handler invocation]
+    TRIM --> SPAWN[spawn @stream handler]
+    SPAWN --> HB[heartbeat loop<br/>every 3s]
+    SPAWN --> EMIT[append SSE events<br/>to messages table]
+    EMIT --> DONE{handler<br/>exits?}
+    DONE -- yes --> COMPLETE[update status=completed]
+    DONE -- crash --> STALE[heartbeat stops<br/>row goes stale]
+
+    GET["GET /responses/&#123;id&#125;<br/>?stream=true&starting_after=N"] --> CHECK[check heartbeat age]
+    CHECK -->|fresh or terminal| READ[read events from messages<br/>where seq > N]
+    CHECK -->|stale| CLAIM[CAS claim<br/>attempt += 1]
+    CLAIM -->|won| BUILD[build prose recovery message<br/>rotate conv_id<br/>append rotated id to response.resumed]
+    CLAIM -->|lost| READ
+    BUILD --> SPAWN
+    READ --> STREAM[SSE stream to client]
+
+    KILL["POST /_debug/kill_task/&#123;id&#125;<br/>(test-only)"] --> CANCEL[cancel asyncio task<br/>without status update]
+    CANCEL --> STALE
+```
+
+### 3.3 Resume input construction
+
+When a stale-claim CAS succeeds, the new owner builds the resume input from the prior attempt's emitted events as a flat prose narrative:
+
+```mermaid
+flowchart LR
+    PRIOR[prior attempt's events<br/>from messages table] --> WALK[_build_prose_recovery_message]
+    WALK --> CALLS[walk completed function_call /<br/>function_call_output items by call_id]
+    WALK --> NARR[walk completed message items<br/>extract text]
+    WALK --> PARTIAL[walk in-progress message deltas<br/>concat as 'was generating: ...']
+
+    CALLS --> COMPOSE
+    NARR --> COMPOSE
+    PARTIAL --> COMPOSE[compose single user message:<br/>'[RECOVERY] previous attempt crashed.<br/>Here is what had completed:<br/>- Called f(...) and got result: ...<br/>- Called g(...) — interrupted before result<br/>- Was generating: ...']
+
+    ROT[_rotate_conversation_id<br/>::attempt-N suffix] --> SUBMIT
+    COMPOSE --> SUBMIT[append to original_request.input<br/>spawn handler with rotated request<br/>emit response.resumed sentinel]
+```
+
+Why prose: the LLM reads it as a recovery instruction and decides what to do (re-run the interrupted tool, skip completed ones, summarize from there). No structural carry-forward, no synthetic tool events, no per-SDK pairing rules. Trades cache hit rate (the prose is a fresh user message, not a stable structural prefix) for SDK-agnostic simplicity.
+
+Why rotation: the original SDK session may carry mid-turn state from the crashed attempt (orphan `tool_use`, partial checkpoint) that's hard to repair from outside the SDK. Rotating to `{base}::attempt-N` opens a fresh, empty session for the resumed attempt; the prose narrative is the single source of truth for what already happened.
+
+Why the sentinel carries the rotated conv_id: cooperating chat clients capture it (via SSE) and use the rotated session for subsequent turns, so the original orphan-poisoned session is never read again.
+
+### 3.4 SDK-agnostic UI-echo dedup
+
+```mermaid
+flowchart LR
+    REQ[POST /responses<br/>request.input from client] --> CHECK{any item<br/>has role: assistant?}
+    CHECK -->|no| PASS[pass through unchanged<br/>typical first-turn POST]
+    CHECK -->|yes| TRIM[client is echoing history<br/>find last role: user index<br/>slice items from there]
+    TRIM --> RESULT[result: latest user message only]
+    PASS --> HANDLER
+    RESULT --> HANDLER[handler invocation]
+```
+
+The trim is the SDK-agnostic equivalent of a per-SDK "is this a continuation turn?" probe. By inspecting input shape, the server avoids:
+- Querying the SDK's storage to ask "do you have prior turns?" (per-SDK call)
+- Walking provider-specific tool-pair structure
+- Any SDK adapter code
+
+The trim runs on every `POST /responses` and is a no-op when input has no assistant message (first-turn POSTs or the resume path's `[original_input + prose_msg]` payload, which contains only `role:user` items by construction).
+
+### 3.5 Heartbeat and stale threshold
+
+Defaults are tuned for a single Lakebase deployment with low-latency writes.
+
+| Setting | Default | Rationale |
+|---|---|---|
+| `heartbeat_interval_seconds` | 3.0 | Frequent enough that short pauses (GC, tokio task waits) don't trip stale detection |
+| `heartbeat_stale_threshold_seconds` | 10.0 | Three missed heartbeats = unambiguously dead. Validated stale > interval at startup. |
+| `task_timeout_seconds` | 3600 | Hard ceiling. After this, a stuck `in_progress` row is force-failed regardless of heartbeat. |
+| `poll_interval_seconds` | 1.0 | Stream-retrieve polls the messages table at this rate while waiting for new events. |
+
+The stale threshold also applies as a grace period for newly-created responses that haven't written their first heartbeat yet — protects against an over-eager retrieve hijacking a still-starting handler.
+
+### 3.6 Claim atomicity
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Pod as Pod B (claimer)
+    participant DB as Lakebase
+
+    Pod->>DB: SELECT attempt_number, heartbeat_at, status<br/>FROM responses WHERE response_id=R
+    DB-->>Pod: attempt=1, heartbeat_at=12s ago, status=in_progress
+    Note over Pod: stale → attempt CAS
+    Pod->>DB: UPDATE responses<br/>SET owner_pod_id=B, attempt_number=2, heartbeat_at=now()<br/>WHERE response_id=R AND attempt_number=1<br/>AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '10s')<br/>RETURNING attempt_number
+    alt match
+        DB-->>Pod: attempt_number=2
+        Note over Pod: claim succeeded
+    else no match (another pod beat us)
+        DB-->>Pod: (empty)
+        Note over Pod: claim lost — back off
+    end
+```
+
+Postgres row locking ensures only one of N concurrent UPDATEs matches, so at most one pod ends up owning a given resume.
+
+## 4. Author-side requirements
+
+### 4.1 What's invisible to authors
+
+| Concern | Where it lives | Author-visible? |
+|---|---|---|
+| Heartbeat + claim | `LongRunningAgentServer` | No |
+| Conversation_id rotation | `LongRunningAgentServer._rotate_conversation_id` | No |
+| Prose recovery message construction | `LongRunningAgentServer._build_prose_recovery_message` | No |
+| UI-echo dedup | `LongRunningAgentServer._trim_echoed_history` | No |
+| Stream resume cursor | `LongRunningAgentServer._stream_retrieve` | No |
+| Tool/SDK selection | `agent.py` | Yes (this is the author's actual code) |
+
+The author's `agent.py` is unchanged from a non-durable agent. They construct an `AsyncCheckpointSaver` (LangGraph) or `AsyncDatabricksSession` (OpenAI) and use it normally. Durability fires entirely above the SDK boundary — the SDK adapters themselves contain zero durability code.
+
+### 4.2 Author-visible client cooperation (chat-UI side)
+
+For the always-rotate flow to work cross-turn, a cooperating chat UI needs to:
+
+1. **Capture the rotated `conversation_id` from the SSE `response.resumed` event** when one is emitted during a streaming retrieve.
+2. **Use the rotated value as `context.conversation_id` on subsequent requests** for the same chat.
+
+The Express proxy in `e2e-chatbot-app-next/packages/ai-sdk-providers/src/providers-server.ts` does this with an in-memory `Map<chat_id, rotated_conversation_id>`. A multi-pod chatbot deployment would persist this on the chat row.
+
+Without client cooperation: the next turn lands on the original (orphan-poisoned) session and the LLM call fails on the provider's `tool_use ↔ tool_result` pairing rule. The bridge does not silently repair this — the cross-turn property requires the alias.
+
+### 4.3 Settings worth exposing to authors
+
+- `db_instance_name` / `db_autoscaling_endpoint` / `db_project` + `db_branch` — Lakebase connection config.
+- `heartbeat_interval_seconds` / `heartbeat_stale_threshold_seconds` — for tuning under heavy load.
+- `task_timeout_seconds` — per-attempt ceiling.
+
+Everything else is internal.
+
+## 5. Future direction: TaskFlow
+
+[TaskFlow](https://sourcegraph.prod.databricks-corp.com/databricks-eng/universe/-/tree/experimental/taskflow) is a Rust-core durable-task engine being built in `experimental/taskflow`. It provides exactly the primitives `LongRunningAgentServer` hand-rolls today (heartbeat, CAS claim, recovery worker, event log with stream resume) — but as a library with WAL-first durability and proactive (not lazy-on-GET) recovery.
+
+When TaskFlow is production-ready, `LongRunningAgentServer` is expected to keep its **HTTP surface and author-visible API unchanged**, swapping only the engine internals.
+
+### Mapping today → TaskFlow
+
+```mermaid
+flowchart LR
+    subgraph TODAY[LongRunningAgentServer today]
+        T1[create_response + asyncio.create_task]
+        T2[_heartbeat async CM]
+        T3[_try_claim_and_resume CAS]
+        T4[_build_prose_recovery_message]
+        T5[/responses/&#123;id&#125;?stream=true]
+        T6[/_debug/kill_task]
+    end
+
+    subgraph TF[TaskFlow]
+        F1[Taskflow.start name input user_id]
+        F2[built-in executor heartbeat]
+        F3[built-in recovery worker + claim_for_recovery]
+        F4[TaskHandler.recover ctx previous_events]
+        F5[Taskflow.subscribe key last_seq]
+        F6[Taskflow.simulate_crash key]
+    end
+
+    T1 --> F1
+    T2 --> F2
+    T3 --> F3
+    T4 --> F4
+    T5 --> F5
+    T6 --> F6
+```
+
+### What stays in `LongRunningAgentServer` after the swap
+
+- `POST /responses` / `GET /responses/{id}` HTTP routes (and their schemas).
+- The MLflow `@invoke()` / `@stream()` handler convention.
+- `_build_prose_recovery_message` — prose construction is handler-policy, not engine-internals; lives in the adapter that bridges MLflow handlers to TaskFlow's `recover()`.
+- `_rotate_conversation_id` and `_inject_conversation_id` — same reason.
+- `_trim_echoed_history` — input cleanup happens at the HTTP boundary regardless of engine.
+- Author-visible settings (db config, heartbeat tuning, task timeout).
+
+### What gets deleted
+
+- The hand-rolled heartbeat task and CAS claim CTE — replaced by TaskFlow's executor heartbeat + `claim_for_recovery`.
+- The `_try_claim_and_resume` lazy-claim path — TaskFlow's recovery worker handles this proactively and across pods, fixing the documented "claim only fires on GET" limitation.
+- The `agent_server.responses` + `agent_server.messages` schema — TaskFlow owns its storage layer.
+- The stream-cursor logic in `_stream_retrieve` — `Taskflow.subscribe(key, last_seq)` is the cursor-based stream resume.
+
+### What requires a small TaskFlow API addition
+
+TaskFlow derives idempotency keys as `SHA256(name + canonical_input + user_id)`. The HTTP surface uses a server-generated `resp_{uuid}`. We've requested an `idempotency_key: Option<String>` parameter on `Taskflow.submit()` so we can keep the existing HTTP contract while submitting to TaskFlow. See [`engine.rs:317`](https://sourcegraph.prod.databricks-corp.com/databricks-eng/universe/-/blob/experimental/taskflow/engine/src/engine.rs?L317) for the current `generate_key` call site; the override would slot in there.
+
+### Migration sequencing
+
+1. Add `LongRunningAgentServer(backend="taskflow"|"builtin")` knob, default `"builtin"`. HTTP surface unchanged on either backend.
+2. Port `agent-non-conversational` (the simplest template) to `backend="taskflow"`. Run the full crash-resume matrix.
+3. Port the advanced templates. **Zero changes to `agent.py`** — the swap is the constructor argument.
+4. Flip default to `"taskflow"`. Deprecate `"builtin"`.
+5. Delete the heartbeat / claim / repository code. Big delete PR.
+
+The point of the `LongRunningAgentServer` abstraction is exactly this kind of swap: callers should never have to care which engine is underneath.
+
+---
+
+## Quick reference
+
+- **Code:** `src/databricks_ai_bridge/long_running/`
+- **Tests:** `tests/databricks_ai_bridge/test_long_running_server.py`, `test_long_running_db.py`
+- **Settings:** `LongRunningSettings` in `settings.py`
+- **Model:** `Response` and `Message` in `models.py`
+- **HTTP routes:** registered in `LongRunningAgentServer._setup_routes`
+- **Prose recovery:** `_build_prose_recovery_message` in `server.py`
+- **UI-echo dedup:** `_trim_echoed_history` in `server.py`
+- **Conversation rotation:** `_rotate_conversation_id` / `_inject_conversation_id` in `server.py`
