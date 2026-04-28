@@ -79,7 +79,51 @@ async def init_db(
         await conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {AGENT_DB_SCHEMA}"))
         await conn.run_sync(Base.metadata.create_all)
 
+    # Idempotent migration for tables created by earlier versions: add any
+    # columns introduced for durable-resume support. Each statement runs in
+    # its own transaction so an InsufficientPrivilege on one ALTER (another
+    # pod's SP owns the table but the schema is already migrated) doesn't
+    # poison the rest. A single mega-transaction would abort entirely on the
+    # first owner-check failure even with IF NOT EXISTS.
+    migration_stmts = (
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS owner_pod_id TEXT",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
+        "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS original_request TEXT",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.messages "
+        "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
+        f"CREATE INDEX IF NOT EXISTS idx_responses_stale "
+        f"ON {AGENT_DB_SCHEMA}.responses (status, heartbeat_at) "
+        "WHERE status = 'in_progress'",
+    )
+    skipped_migrations: list[str] = []
+    for stmt in migration_stmts:
+        try:
+            async with _engine.begin() as conn:
+                await conn.execute(text(stmt))
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficientprivilege" in msg or "must be owner" in msg:
+                skipped_migrations.append(stmt.split("\n")[0])
+                continue
+            raise
+
     _initialized = True
+    if skipped_migrations:
+        # WARN-level summary: if the DB was previously migrated by another SP
+        # this is fine, but if it's genuinely a new table and our SP lacks
+        # ALTER, claim/heartbeat queries will fail later with a confusing
+        # "column does not exist" — surface it clearly at startup.
+        logger.warning(
+            "[DB] Skipped %d durability migration(s) due to insufficient "
+            "privilege — assuming table was already migrated by another "
+            "service principal. Crash-resume will fail with 'column does "
+            "not exist' if this assumption is wrong. Skipped: %s",
+            len(skipped_migrations),
+            ", ".join(skipped_migrations),
+        )
     logger.info("[DB] Engine and schema ready")
 
 

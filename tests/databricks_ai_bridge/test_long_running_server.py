@@ -14,10 +14,15 @@ if __import__("sys").version_info < (3, 11):
 pytest.importorskip("fastapi")
 pytest.importorskip("psycopg")
 
+from databricks_ai_bridge.long_running.repository import ResponseInfo
 from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
+    _build_prose_recovery_message,
     _deferred_mark_failed,
+    _inject_conversation_id,
+    _rotate_conversation_id,
     _sse_event,
+    _trim_echoed_history,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 
@@ -32,6 +37,40 @@ def _make_server(**kwargs):
     """Create a LongRunningAgentServer with DB disabled (no real Lakebase needed)."""
     with patch(f"{MODULE}.is_db_configured", return_value=False):
         return LongRunningAgentServer("ResponsesAgent", **kwargs)
+
+
+def _resp_info(
+    response_id: str = "resp_123",
+    status: str = "in_progress",
+    created_at=None,
+    trace_id: str | None = None,
+    owner_pod_id: str | None = None,
+    heartbeat_at=None,
+    attempt_number: int = 1,
+    original_request: dict | None = None,
+) -> ResponseInfo:
+    """Build a ResponseInfo with sensible defaults for tests.
+
+    Mirrors the server's repository model so test setups stay terse even as
+    durability columns grow over time.
+    """
+    if created_at is None:
+        created_at = datetime.now(timezone.utc)
+    return ResponseInfo(
+        response_id=response_id,
+        status=status,
+        created_at=created_at,
+        trace_id=trace_id,
+        owner_pod_id=owner_pod_id,
+        heartbeat_at=heartbeat_at,
+        attempt_number=attempt_number,
+        original_request=original_request,
+    )
+
+
+def _msg(seq: int, item=None, evt=None, attempt: int = 1):
+    """Build a (seq, item, stream_event, attempt_number) tuple for get_messages mocks."""
+    return (seq, item, evt, attempt)
 
 
 def _mock_span():
@@ -55,8 +94,8 @@ def _mock_validator(server):
 class TestSSEEvent:
     def test_dict_data(self):
         result = _sse_event("response.created", {"id": "resp_123", "status": "in_progress"})
-        assert result.startswith("event: response.created\n")
-        assert "data: " in result
+        assert result.startswith("data: ")
+        assert "event:" not in result
         assert result.endswith("\n\n")
         data_line = result.split("data: ")[1].strip()
         parsed = json.loads(data_line)
@@ -64,8 +103,8 @@ class TestSSEEvent:
 
     def test_string_data(self):
         result = _sse_event("error", "something went wrong")
-        assert "event: error\n" in result
-        assert "data: something went wrong\n\n" in result
+        assert "event:" not in result
+        assert result == "data: something went wrong\n\n"
 
 
 class TestLongRunningSettings:
@@ -189,7 +228,7 @@ class TestStartingAfterValidation:
             patch(
                 f"{MODULE}.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
+                return_value=_resp_info("resp_123", "in_progress"),
             ),
             patch(
                 f"{MODULE}.get_messages",
@@ -209,8 +248,13 @@ class TestDeferredMarkFailed:
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
                 new_callable=AsyncMock,
-                return_value=[(0, None, {"type": "response.created"})],
+                return_value=[_msg(0, None, {"type": "response.created"})],
             ) as mock_get,
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                return_value=_resp_info(),
+            ),
             patch(
                 "databricks_ai_bridge.long_running.server.append_message",
                 new_callable=AsyncMock,
@@ -271,13 +315,13 @@ class TestRetrieveRequest:
             patch(
                 "databricks_ai_bridge.long_running.server.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_123", "completed", datetime.now(timezone.utc), "trace_abc"),
+                return_value=_resp_info("resp_123", "completed", trace_id="trace_abc"),
             ),
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
                 new_callable=AsyncMock,
                 return_value=[
-                    (
+                    _msg(
                         0,
                         '{"text": "hi"}',
                         {"type": "response.output_item.done", "item": {"text": "hi"}},
@@ -305,7 +349,7 @@ class TestRetrieveRequest:
             patch(
                 "databricks_ai_bridge.long_running.server.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_stale", "in_progress", old_time, None),
+                return_value=_resp_info("resp_stale", "in_progress", created_at=old_time),
             ),
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
@@ -336,7 +380,7 @@ class TestRetrieveRequest:
             patch(
                 "databricks_ai_bridge.long_running.server.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_123", "in_progress", datetime.now(timezone.utc), None),
+                return_value=_resp_info("resp_123", "in_progress"),
             ),
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
@@ -347,7 +391,11 @@ class TestRetrieveRequest:
             result = await server._handle_retrieve_request(
                 "resp_123", stream=False, starting_after=0
             )
-            assert result == {"id": "resp_123", "status": "in_progress"}
+            assert result == {
+                "id": "resp_123",
+                "status": "in_progress",
+                "attempt_number": 1,
+            }
 
 
 class TestStreamRetrieve:
@@ -360,14 +408,14 @@ class TestStreamRetrieve:
             patch(
                 "databricks_ai_bridge.long_running.server.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_123", "completed", datetime.now(timezone.utc), None),
+                return_value=_resp_info("resp_123", "completed"),
             ),
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
                 new_callable=AsyncMock,
                 return_value=[
-                    (0, None, {"type": "response.created", "id": "resp_123"}),
-                    (
+                    _msg(0, None, {"type": "response.created", "id": "resp_123"}),
+                    _msg(
                         1,
                         '{"text": "hi"}',
                         {"type": "response.output_item.done", "item": {"text": "hi"}},
@@ -394,13 +442,13 @@ class TestStreamRetrieve:
             patch(
                 "databricks_ai_bridge.long_running.server.get_response",
                 new_callable=AsyncMock,
-                return_value=("resp_123", "failed", datetime.now(timezone.utc), None),
+                return_value=_resp_info("resp_123", "failed"),
             ),
             patch(
                 "databricks_ai_bridge.long_running.server.get_messages",
                 new_callable=AsyncMock,
                 return_value=[
-                    (0, None, {"type": "error", "error": {"message": "boom"}}),
+                    _msg(0, None, {"type": "error", "error": {"message": "boom"}}),
                 ],
             ),
         ):
@@ -668,9 +716,14 @@ class TestTaskScope:
                 f"{MODULE}.get_messages",
                 new_callable=AsyncMock,
                 return_value=[
-                    (0, None, {"type": "response.created"}),
-                    (1, None, {"type": "response.output_text.delta"}),
+                    _msg(0, None, {"type": "response.created"}),
+                    _msg(1, None, {"type": "response.output_text.delta"}),
                 ],
+            ),
+            patch(
+                f"{MODULE}.get_response",
+                new_callable=AsyncMock,
+                return_value=_resp_info(),
             ),
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
             patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
@@ -875,3 +928,670 @@ class TestLifespanPlumbing:
             routes = [r.path for r in server.app.routes if hasattr(r, "path")]
             assert "/responses/{response_id}" in routes
             mock_init.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Durable resume: claim/heartbeat/attempt_number/sentinel
+# ---------------------------------------------------------------------------
+
+
+class TestBuildProseRecoveryMessage:
+    """Prose recovery serializer: walk a prior attempt's events and produce a
+    single Responses-API user-message item narrating what happened, for the
+    next attempt's LLM to read as a recovery instruction."""
+
+    def _done(self, seq, attempt, item):
+        return (seq, None, {"type": "response.output_item.done", "item": item}, attempt)
+
+    def test_returns_user_message_shape(self):
+        out = _build_prose_recovery_message([], prior_attempt_number=1)
+        assert out["type"] == "message"
+        assert out["role"] == "user"
+        assert isinstance(out["content"], str)
+        assert "[RECOVERY]" in out["content"]
+
+    def test_completed_call_with_output(self):
+        messages = [
+            self._done(
+                0, 1, {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"}
+            ),
+            self._done(1, 1, {"type": "function_call_output", "call_id": "c1", "output": "ok"}),
+        ]
+        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
+        body = out["content"]
+        assert "Called `f({})`" in body
+        assert "got result: ok" in body
+
+    def test_call_without_output_marked_interrupted(self):
+        messages = [
+            self._done(
+                0,
+                1,
+                {
+                    "type": "function_call",
+                    "call_id": "c1",
+                    "name": "deep_research",
+                    "arguments": "",
+                },
+            ),
+        ]
+        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
+        assert "interrupted before a result was returned" in out["content"]
+
+    def test_filters_other_attempts(self):
+        messages = [
+            self._done(
+                0, 1, {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"}
+            ),
+            self._done(
+                1, 2, {"type": "function_call", "call_id": "c2", "name": "g", "arguments": "{}"}
+            ),
+        ]
+        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
+        assert "f({})" in out["content"]
+        assert "g(" not in out["content"]
+
+    def test_partial_text_from_deltas(self):
+        messages = [
+            (
+                0,
+                None,
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
+                1,
+            ),
+            (
+                1,
+                None,
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hello, "},
+                1,
+            ),
+            (2, None, {"type": "response.output_text.delta", "item_id": "m1", "delta": "world"}, 1),
+        ]
+        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
+        assert "Was generating" in out["content"]
+        assert "Hello, world" in out["content"]
+
+    def test_empty_attempt_falls_back_to_default_recovery(self):
+        out = _build_prose_recovery_message([], prior_attempt_number=1)
+        assert "interrupted before any tool calls" in out["content"]
+
+
+class TestTrimEchoedHistory:
+    """SDK-agnostic dedup: when request input contains an assistant message,
+    the client is echoing prior conversation history; trim to the latest
+    user message and trust the SDK's session/checkpointer storage as
+    authoritative for prior turns."""
+
+    def test_first_turn_passthrough(self):
+        items = [{"role": "user", "content": "hi"}]
+        assert _trim_echoed_history(items) is items
+
+    def test_first_turn_with_no_assistant_passthrough(self):
+        # Multi-message input but no assistant role yet — first turn from a
+        # client preserving its own prior user turns. Pass through.
+        items = [
+            {"role": "user", "content": "u1"},
+            {"role": "user", "content": "u2"},
+        ]
+        assert _trim_echoed_history(items) is items
+
+    def test_continuation_trims_to_last_user(self):
+        items = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+        ]
+        out = _trim_echoed_history(items)
+        assert len(out) == 1
+        assert out[0]["role"] == "user"
+        assert out[0]["content"] == "u2"
+
+    def test_continuation_with_tool_history_trims_correctly(self):
+        items = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"},
+        ]
+        out = _trim_echoed_history(items)
+        assert len(out) == 1
+        assert out[0]["content"] == "u3"
+
+    def test_resume_path_passthrough(self):
+        # Resume-built input: original input + prose user message, no
+        # assistant role. Trim is a no-op so the prose recovery payload is
+        # preserved.
+        items = [
+            {"role": "user", "content": "original"},
+            {"type": "message", "role": "user", "content": "[RECOVERY] ..."},
+        ]
+        out = _trim_echoed_history(items)
+        assert out is items
+
+    def test_empty_input(self):
+        assert _trim_echoed_history([]) == []
+
+
+class TestRotateConversationId:
+    def test_rotate_drops_thread_id_and_sets_rotated_context(self):
+        r = {"custom_inputs": {"thread_id": "t1", "user_id": "u"}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert "thread_id" not in out["custom_inputs"]
+        assert out["custom_inputs"]["user_id"] == "u"
+        assert out["context"]["conversation_id"] == "t1::attempt-2"
+
+    def test_rotate_drops_session_id(self):
+        r = {"custom_inputs": {"session_id": "s1"}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert "session_id" not in out["custom_inputs"]
+        assert out["context"]["conversation_id"] == "s1::attempt-2"
+
+    def test_rotate_falls_back_to_context_conversation_id(self):
+        r = {"custom_inputs": {}, "context": {"conversation_id": "c-abc"}}
+        out = _rotate_conversation_id(r, new_attempt_number=3, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "c-abc::attempt-3"
+
+    def test_rotate_falls_back_to_response_id_as_last_resort(self):
+        r = {"custom_inputs": {}, "context": {}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "resp_x::attempt-2"
+
+    def test_rotate_handles_missing_custom_inputs_key(self):
+        r = {"context": {"conversation_id": "c-abc"}}
+        out = _rotate_conversation_id(r, new_attempt_number=2, response_id="resp_x")
+        assert out["context"]["conversation_id"] == "c-abc::attempt-2"
+        assert out["custom_inputs"] == {}
+
+
+class TestInjectConversationId:
+    """Anchoring an otherwise-anonymous request to a response_id guarantees a
+    resumed run on a new pod resolves to the same agent-SDK thread/session."""
+
+    def test_injects_when_nothing_set(self):
+        r = {"input": [], "custom_inputs": {}, "context": {}}
+        out = _inject_conversation_id(r, "resp_abc")
+        assert out["context"]["conversation_id"] == "resp_abc"
+
+    def test_respects_existing_conversation_id(self):
+        r = {"input": [], "context": {"conversation_id": "user-set"}}
+        out = _inject_conversation_id(r, "resp_abc")
+        assert out["context"]["conversation_id"] == "user-set"
+
+    def test_respects_thread_id_from_custom_inputs(self):
+        r = {"input": [], "custom_inputs": {"thread_id": "t-1"}, "context": {}}
+        out = _inject_conversation_id(r, "resp_abc")
+        # When the client already pinned a thread, we don't overwrite — the
+        # template's _get_or_create_thread_id picks up custom_inputs first.
+        assert "conversation_id" not in (out["context"] or {})
+
+    def test_respects_session_id_from_custom_inputs(self):
+        r = {"input": [], "custom_inputs": {"session_id": "s-1"}, "context": {}}
+        out = _inject_conversation_id(r, "resp_abc")
+        assert "conversation_id" not in (out["context"] or {})
+
+    def test_handles_missing_context_key(self):
+        r = {"input": [], "custom_inputs": {}}
+        out = _inject_conversation_id(r, "resp_abc")
+        assert out["context"]["conversation_id"] == "resp_abc"
+
+    def test_does_not_mutate_input(self):
+        r = {"input": [], "custom_inputs": {}, "context": {}}
+        _inject_conversation_id(r, "resp_abc")
+        assert r["context"] == {}  # original untouched
+
+
+class TestHandleBackgroundRequestPersistsDurabilityState:
+    """Background request entry point should now stamp the response row with
+    the caller's pod, the original request body, and a conversation anchor."""
+
+    @pytest.mark.asyncio
+    async def test_persists_owner_and_original_request(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+        _mock_validator(server)
+
+        captured: dict = {}
+
+        async def fake_create_response(
+            response_id, status, *, owner_pod_id=None, original_request=None
+        ):
+            captured["response_id"] = response_id
+            captured["status"] = status
+            captured["owner_pod_id"] = owner_pod_id
+            captured["original_request"] = original_request
+
+        with (
+            patch(f"{MODULE}.create_response", side_effect=fake_create_response),
+            patch("asyncio.create_task") as mock_create_task,
+        ):
+            result = await server._handle_background_request(
+                {"input": [{"role": "user", "content": "hi"}]},
+                is_streaming=False,
+                return_trace_id=False,
+            )
+
+        assert captured["status"] == "in_progress"
+        assert captured["owner_pod_id"]  # non-empty
+        # original_request should include input + injected conversation_id.
+        orig = captured["original_request"]
+        assert orig["input"] == [{"role": "user", "content": "hi"}]
+        assert orig["context"]["conversation_id"] == captured["response_id"]
+        # Return shape: immediate response_obj, not a stream.
+        assert result["id"] == captured["response_id"]
+        assert result["status"] == "in_progress"
+        mock_create_task.assert_called_once()
+
+
+class TestTryClaimAndResume:
+    @pytest.mark.asyncio
+    async def test_no_op_when_completed(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        resp = _resp_info(status="completed")
+        with patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock) as mock_claim:
+            result = await server._try_claim_and_resume("resp_x", resp)
+        assert result is None
+        mock_claim.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_grace_period_for_fresh_run(self):
+        """Just-started runs get a grace window before they're claim-eligible."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer(
+                "ResponsesAgent", heartbeat_stale_threshold_seconds=15.0
+            )
+        # created 2s ago, no heartbeat yet → should NOT be claimed.
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+            heartbeat_at=None,
+            original_request={"input": []},
+        )
+        with patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock) as mock_claim:
+            result = await server._try_claim_and_resume("resp_x", resp)
+        assert result is None
+        mock_claim.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_op_without_original_request(self):
+        """Legacy rows created before durability metadata can't be resumed."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=None,
+            original_request=None,
+        )
+        with patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock) as mock_claim:
+            result = await server._try_claim_and_resume("resp_x", resp)
+        assert result is None
+        mock_claim.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_claim_fails_returns_none(self):
+        """Another pod won the race — we quietly step aside."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            original_request={"input": [{"role": "user"}]},
+        )
+        with (
+            patch(
+                f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=None
+            ) as mock_claim,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+        ):
+            result = await server._try_claim_and_resume("resp_x", resp)
+        assert result is None
+        mock_claim.assert_awaited_once()
+        mock_append.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_claim_spawns_resume_and_emits_sentinel(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "hi"}],
+                "custom_inputs": {"user_id": "u"},
+                "context": {"conversation_id": "resp_x"},
+            },
+        )
+        captured: dict = {}
+
+        async def fake_append(response_id, seq, *, item=None, stream_event=None, attempt_number=1):
+            captured["seq"] = seq
+            captured["event"] = stream_event
+            captured["attempt_tag"] = attempt_number
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
+            patch(
+                f"{MODULE}.get_messages",
+                new_callable=AsyncMock,
+                return_value=[_msg(0, None, {}), _msg(1, None, {})],
+            ),
+            patch(f"{MODULE}.append_message", side_effect=fake_append),
+            patch("asyncio.create_task") as mock_create_task,
+        ):
+            attempt = await server._try_claim_and_resume("resp_x", resp)
+
+        assert attempt == 2
+        # Sentinel is written at next_seq (existing seqs were 0 and 1).
+        assert captured["seq"] == 2
+        assert captured["event"]["type"] == "response.resumed"
+        assert captured["event"]["attempt"] == 2
+        assert captured["attempt_tag"] == 2
+        # A resume task is spawned; it was not awaited synchronously.
+        mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_resume_replays_input_and_rotates_conversation_id(self):
+        """Resume must replay original_request.input (not blank it) and rotate
+        the conversation anchor so the handler resolves to a fresh thread /
+        session for the new attempt. Prevents the LangGraph stream-event
+        attempt-boundary orphan artifact (rotation-findings.md)."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "hi"}],
+                "custom_inputs": {"thread_id": "t1", "user_id": "u"},
+                "context": {},
+            },
+        )
+
+        captured_tasks = []
+
+        def capture_task(coro, *, name=None):
+            captured_tasks.append((coro, name))
+
+            class _Fake:
+                def cancel(self):
+                    pass
+
+                def add_done_callback(self, cb):
+                    pass
+
+            return _Fake()
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch.object(server, "_run_background_stream", new_callable=AsyncMock) as mock_run,
+        ):
+            await server._try_claim_and_resume("resp_x", resp)
+
+        assert len(captured_tasks) == 1
+        coro, _name = captured_tasks[0]
+        await coro
+        mock_run.assert_awaited_once()
+        args, kwargs = mock_run.call_args
+        resume_request = args[1] if len(args) > 1 else kwargs["request_data"]
+        dumped = (
+            resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        )
+        # Input is REPLAYED (not blanked) and a prose-recovery user message is
+        # appended so attempt N+1's LLM sees the original request plus a
+        # narrative of what happened. The MLflow validator normalizes the shape.
+        assert len(dumped["input"]) == 2
+        assert dumped["input"][0]["role"] == "user"
+        assert dumped["input"][0]["content"] == "hi"
+        assert dumped["input"][1]["role"] == "user"
+        assert "[RECOVERY]" in dumped["input"][1]["content"]
+        # thread_id was dropped so the handler's priority-2 fallback wins.
+        assert "thread_id" not in (dumped["custom_inputs"] or {})
+        # Other custom_inputs keys are preserved.
+        assert dumped["custom_inputs"]["user_id"] == "u"
+        # conversation_id is rotated to a per-attempt value anchored on t1.
+        assert dumped["context"]["conversation_id"] == "t1::attempt-2"
+        assert kwargs.get("attempt_number") == 2
+
+    @pytest.mark.asyncio
+    async def test_resume_rotation_anchors_on_context_conversation_id(self):
+        """When the client didn't pin a thread_id/session_id, rotation uses
+        the injected context.conversation_id as the base anchor."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+        from datetime import timedelta
+
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "hi"}],
+                "custom_inputs": {},
+                "context": {"conversation_id": "resp_x"},
+            },
+        )
+
+        captured_tasks = []
+
+        def capture_task(coro, *, name=None):
+            captured_tasks.append((coro, name))
+
+            class _Fake:
+                def cancel(self):
+                    pass
+
+                def add_done_callback(self, cb):
+                    pass
+
+            return _Fake()
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=3),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock),
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch.object(server, "_run_background_stream", new_callable=AsyncMock) as mock_run,
+        ):
+            await server._try_claim_and_resume("resp_x", resp)
+
+        assert len(captured_tasks) == 1
+        coro, _name = captured_tasks[0]
+        await coro
+        mock_run.assert_awaited_once()
+        args, kwargs = mock_run.call_args
+        resume_request = args[1] if len(args) > 1 else kwargs["request_data"]
+        dumped = (
+            resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
+        )
+        # Rotation anchors on the stored context.conversation_id (priority 2).
+        # Note: re-rotating in a subsequent attempt would re-anchor on the
+        # ORIGINAL stored value, not the previous rotation — no stacking.
+        assert dumped["context"]["conversation_id"] == "resp_x::attempt-3"
+
+
+class TestRetrieveTriggersLazyClaim:
+    @pytest.mark.asyncio
+    async def test_retrieve_calls_try_claim(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        resp = _resp_info("resp_x", "in_progress")
+        with (
+            patch(f"{MODULE}.get_response", new_callable=AsyncMock, return_value=resp),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                server, "_try_claim_and_resume", new_callable=AsyncMock, return_value=None
+            ) as mock_claim,
+        ):
+            await server._handle_retrieve_request("resp_x", stream=False, starting_after=0)
+
+        mock_claim.assert_awaited_once()
+
+
+class TestHeartbeatContextManager:
+    @pytest.mark.asyncio
+    async def test_writes_heartbeat_periodically(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
+                heartbeat_stale_threshold_seconds=1.0,
+            )
+
+        with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock) as mock_hb:
+            async with server._heartbeat("resp_x"):
+                await asyncio.sleep(0.2)  # enough time for 2+ heartbeats
+
+        # Heartbeat interval is 0.05s so we should see at least 2 writes.
+        assert mock_hb.await_count >= 2
+        for call in mock_hb.await_args_list:
+            assert call.args[0] == "resp_x"
+
+    @pytest.mark.asyncio
+    async def test_stops_cleanly_on_exit(self):
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
+                heartbeat_stale_threshold_seconds=1.0,
+            )
+
+        with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock) as mock_hb:
+            async with server._heartbeat("resp_x"):
+                pass  # immediate exit
+
+            # Give the heartbeat loop a chance to observe the stop signal.
+            await asyncio.sleep(0.1)
+            writes_after_exit = mock_hb.await_count
+
+            await asyncio.sleep(0.15)
+            # No new writes after the scope closed.
+            assert mock_hb.await_count == writes_after_exit
+
+    @pytest.mark.asyncio
+    async def test_db_error_does_not_interrupt_body(self):
+        """Heartbeat failures are logged, not raised — the stale check catches
+        real death, so a transient write miss must not kill a live run."""
+        with patch(f"{MODULE}.is_db_configured", return_value=False):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                heartbeat_interval_seconds=0.05,
+                heartbeat_stale_threshold_seconds=1.0,
+            )
+
+        body_ran = False
+        with patch(
+            f"{MODULE}.heartbeat_response",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db down"),
+        ):
+            async with server._heartbeat("resp_x"):
+                await asyncio.sleep(0.1)
+                body_ran = True
+        assert body_ran
+
+
+class TestSettingsHeartbeatValidation:
+    def test_stale_must_exceed_interval(self):
+        with pytest.raises(ValueError, match="heartbeat_stale_threshold_seconds"):
+            LongRunningSettings(
+                heartbeat_interval_seconds=5.0,
+                heartbeat_stale_threshold_seconds=5.0,
+            )
+
+    def test_interval_must_be_positive(self):
+        with pytest.raises(ValueError, match="heartbeat_interval_seconds must be positive"):
+            LongRunningSettings(heartbeat_interval_seconds=0)
+
+    def test_defaults_match_chat_ux(self):
+        # 3s interval + 15s stale gives ~5 heartbeats before a pod is considered
+        # dead — snug enough to recover conversations within a user's
+        # "reconnecting..." patience window.
+        s = LongRunningSettings()
+        assert s.heartbeat_interval_seconds == 3.0
+        assert s.heartbeat_stale_threshold_seconds == 10.0
+
+
+class TestDebugKillTask:
+    """The opt-in debug-kill endpoint lets integration tests simulate a crash
+    against a deployed pod without restarting the whole app. Off by default
+    because exposing task cancellation bypasses the normal cleanup path."""
+
+    def test_endpoint_absent_by_default(self):
+        from starlette.testclient import TestClient
+
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+        client = TestClient(server.app, raise_server_exceptions=False)
+        resp = client.post("/_debug/kill_task/resp_x")
+        assert resp.status_code == 404  # route not registered
+
+    def test_endpoint_registered_when_env_set(self, monkeypatch):
+        from starlette.testclient import TestClient
+
+        monkeypatch.setenv("LONG_RUNNING_ENABLE_DEBUG_KILL", "1")
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+        client = TestClient(server.app, raise_server_exceptions=False)
+        # No in-flight task for this response_id on this pod → 404, not 405.
+        resp = client.post("/_debug/kill_task/resp_missing")
+        assert resp.status_code == 404
+        assert "No in-flight task" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_cancels_tracked_task(self, monkeypatch):
+        """Direct-call variant: skip the TestClient (which is sync and blocks
+        the loop) and call the handler logic through _running_tasks directly.
+        Covers the important behavior: cancelling a tracked task propagates
+        CancelledError and the tracking dict is cleared by the done-callback.
+        """
+        monkeypatch.setenv("LONG_RUNNING_ENABLE_DEBUG_KILL", "1")
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer("ResponsesAgent")
+
+        cancel_event = asyncio.Event()
+
+        async def long_running():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancel_event.set()
+                raise
+
+        task = asyncio.create_task(long_running())
+        server._track_task("resp_tracked", task)
+
+        # Yield once so the new task can start waiting on sleep(60).
+        await asyncio.sleep(0)
+        assert "resp_tracked" in server._running_tasks
+
+        task.cancel()
+        # Expect CancelledError from awaiting the task itself, and the cancel
+        # event set inside the except handler before the re-raise.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cancel_event.is_set()
+        # done-callback (scheduled on loop) clears the registration after the
+        # task completes — give it one more tick.
+        await asyncio.sleep(0)
+        assert "resp_tracked" not in server._running_tasks
