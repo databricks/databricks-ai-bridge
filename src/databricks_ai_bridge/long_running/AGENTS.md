@@ -183,9 +183,8 @@ erDiagram
         text response_id PK
         text status "in_progress / completed / failed"
         timestamptz created_at
-        text owner_pod_id
         timestamptz heartbeat_at
-        int attempt_number
+        int attempt_number "CAS guard for claim atomicity"
         text original_request "JSON of initial POST (full input)"
         text trace_id
     }
@@ -199,7 +198,7 @@ erDiagram
     responses ||--o{ messages : "has"
 ```
 
-- `responses.attempt_number` is the CAS guard for claim atomicity.
+- `responses.attempt_number` is the CAS guard for claim atomicity. **There is no `owner_pod_id` column** — ownership is implicit. The pod that last successfully heartbeats at the current `attempt_number` is the de facto owner. A heartbeat write at attempt N stops working the moment another pod has CAS-bumped the row to N+1, so the prior owner detects it has lost the claim on its next heartbeat (rowcount=0) and shuts down its heartbeat task.
 - `responses.original_request` stores the **full untrimmed input** so the resume path can recover the entire prior-turn history when the rotated SDK session starts empty.
 - `messages.attempt_number` tags every event so retrieval can filter to the latest attempt's output (avoiding partial output from a crashed attempt leaking into the final response body).
 - Schema migrations are idempotent (`ADD COLUMN IF NOT EXISTS`) so an existing deployment upgrades without downtime.
@@ -273,7 +272,24 @@ The trim is the SDK-agnostic equivalent of a per-SDK "is this a continuation tur
 
 The trim runs on every `POST /responses` and is a no-op when input has no assistant message (first-turn POSTs or the resume path's `[original_input + prose_msg]` payload, which contains only `role:user` items by construction).
 
-### 3.5 Heartbeat and stale threshold
+### 3.5 Proactive stale-scan loop
+
+In addition to the lazy-on-GET claim path (a stale heartbeat is detected when a client GETs `/responses/{id}`), each pod runs a background **scanner** that periodically queries for in-progress responses with stale heartbeats and tries to claim+resume them. This means crashed responses get recovered even when no client is actively polling.
+
+```mermaid
+flowchart LR
+    A[every ~30s ± 50% jitter] --> B[SELECT response_id FROM responses<br/>WHERE status='in_progress'<br/>AND heartbeat_at < now-threshold<br/>LIMIT 50]
+    B --> C{any rows?}
+    C -->|no| A
+    C -->|yes| D[for each id: get_response<br/>+ _try_claim_and_resume]
+    D --> A
+```
+
+Each pod jitters its scan interval (`stale_scan_jitter_fraction = 0.5` by default) so multiple pods don't synchronize their queries. CAS-claim semantics ensure only one pod succeeds in claiming any given stale response.
+
+The scanner is a background task spawned in the FastAPI lifespan (alongside `init_db`) and cancelled on shutdown.
+
+### 3.6 Heartbeat and stale threshold
 
 Defaults are tuned for a single Lakebase deployment with low-latency writes.
 
@@ -340,8 +356,21 @@ Without client cooperation: the next turn lands on the original (orphan-poisoned
 - `db_instance_name` / `db_autoscaling_endpoint` / `db_project` + `db_branch` — Lakebase connection config.
 - `heartbeat_interval_seconds` / `heartbeat_stale_threshold_seconds` — for tuning under heavy load.
 - `task_timeout_seconds` — per-attempt ceiling.
+- `stale_scan_interval_seconds` / `stale_scan_jitter_fraction` — controls how often (and with how much randomness) each pod scans the DB for stale responses to claim. Defaults to 30s with ±50% jitter.
 
 Everything else is internal.
+
+### 4.4 Test-only debug endpoint: `/_debug/kill_task/{response_id}`
+
+Cancels the in-flight asyncio task that owns the given response on this pod **without** running the `_task_scope` cleanup. The DB row stays `in_progress` with a heartbeat that's about to go stale — exactly the shape a real pod crash leaves. Used in integration tests to simulate a pod crash without restarting the container.
+
+Opt-in via env var: only registered when `LONG_RUNNING_ENABLE_DEBUG_KILL=1`. Never exposed in production.
+
+Returns 404 if no in-flight task for that response exists on this specific pod (the task may already have finished, or it may be running on a different pod).
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" "$APP_URL/_debug/kill_task/$RID"
+```
 
 ## 5. Future direction: TaskFlow
 

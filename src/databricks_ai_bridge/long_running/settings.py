@@ -17,6 +17,13 @@ class LongRunningSettings:
     cleanup_timeout_seconds: float = 7.0
     heartbeat_interval_seconds: float = 3.0
     heartbeat_stale_threshold_seconds: float = 10.0
+    # Proactive stale-scan loop: how often (on average) each pod queries the
+    # responses table for stale-heartbeat rows and tries to claim+resume them.
+    # Each pod jitters this interval so multiple pods don't all hit the DB at
+    # once. The loop is the proactive counterpart to the lazy-on-GET claim
+    # path; it ensures crashed responses get recovered even if no client polls.
+    stale_scan_interval_seconds: float = 30.0
+    stale_scan_jitter_fraction: float = 0.5
 
     def __post_init__(self) -> None:
         if self.task_timeout_seconds <= 0:
@@ -44,3 +51,7 @@ class LongRunningSettings:
                 f"strictly greater than db_statement_timeout_ms converted to seconds "
                 f"({db_timeout_s})"
             )
+        if self.stale_scan_interval_seconds <= 0:
+            raise ValueError("stale_scan_interval_seconds must be positive")
+        if not 0 <= self.stale_scan_jitter_fraction < 1:
+            raise ValueError("stale_scan_jitter_fraction must be in [0, 1)")

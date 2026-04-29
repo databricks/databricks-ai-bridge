@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 import os
+import random
 import socket
 import time
 import uuid
@@ -39,6 +40,7 @@ from databricks_ai_bridge.long_running.repository import (
     append_message,
     claim_stale_response,
     create_response,
+    find_stale_response_ids,
     get_messages,
     get_response,
     heartbeat_response,
@@ -52,8 +54,9 @@ logger = logging.getLogger(__name__)
 
 BACKGROUND_KEY = "background"
 
-# One ID per process so heartbeats + claims have a stable owner identity.
-_POD_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+# Process-local identifier for log lines. Not stored in the DB — heartbeat
+# ownership is implicit via attempt_number CAS.
+_POD_LOG_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
 async def _deferred_mark_failed(
@@ -131,124 +134,34 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-def _extract_text_from_message(item: dict) -> str:
-    """Pull text out of a Responses-API message item's content array."""
-    content = item.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for c in content:
-            if isinstance(c, dict):
-                t = c.get("text")
-                if isinstance(t, str):
-                    parts.append(t)
-        return "".join(parts)
-    return ""
-
-
 def _build_prose_recovery_message(
     messages: list[tuple], prior_attempt_number: int
 ) -> dict[str, Any]:
-    """Narrate the prior attempt's events as a single user message.
+    """Build a single user message containing the prior attempt's raw event
+    log + a directive that asks the LLM to figure out what already completed
+    and continue.
 
-    Walks the repository's ``(seq, item, stream_event, attempt)`` tuples
-    for the given prior attempt and produces a single Responses-API user
-    message item whose content is a flat prose summary of completed tool
-    calls, their outputs, narrative messages, and any partial in-flight
-    assistant text.
-
-    This replaces the structured carry-forward of completed tool pairs +
-    synthetic ``[INTERRUPTED]`` outputs with a single recovery prompt the
-    LLM reads as: "the prior attempt crashed, here's what had happened,
-    please continue." Trades structural protocol fidelity for SDK-agnostic
-    simplicity — no provider-specific pairing rules, no synthetic events.
+    The body is `json.dumps(events)` of the prior attempt's stream events
+    wrapped in a recovery prompt. SDK-agnostic — no provider-specific pairing
+    rules, no structured carry-forward, no synthetic events. The model reads
+    the JSON, decides which tool calls succeeded, which were interrupted, and
+    continues.
     """
-    completed_calls: dict[str, dict[str, Any]] = {}
-    call_order: list[str] = []
-    narrative_texts: list[str] = []
-    in_progress_text: dict[str, list[str]] = {}
-    in_progress_order: list[str] = []
-
-    for _seq, _item_json, evt, attempt_tag in messages:
-        if attempt_tag != prior_attempt_number or not isinstance(evt, dict):
-            continue
-        t = evt.get("type")
-        item = evt.get("item")
-
-        if t == "response.output_item.added" and isinstance(item, dict):
-            if item.get("type") == "message" and (iid := item.get("id")):
-                in_progress_text.setdefault(iid, [])
-                if iid not in in_progress_order:
-                    in_progress_order.append(iid)
-
-        elif t == "response.output_item.done" and isinstance(item, dict):
-            itype = item.get("type")
-            if itype == "function_call":
-                cid = item.get("call_id")
-                if cid:
-                    slot = completed_calls.setdefault(cid, {})
-                    slot["name"] = item.get("name")
-                    slot["args"] = item.get("arguments")
-                    if cid not in call_order:
-                        call_order.append(cid)
-            elif itype == "function_call_output":
-                cid = item.get("call_id")
-                if cid:
-                    slot = completed_calls.setdefault(cid, {})
-                    slot["output"] = item.get("output")
-                    if cid not in call_order:
-                        call_order.append(cid)
-            elif itype == "message":
-                text = _extract_text_from_message(item)
-                if text:
-                    narrative_texts.append(text)
-                # The done event makes prior added/delta tracking moot.
-                iid = item.get("id")
-                if iid in in_progress_text:
-                    in_progress_text.pop(iid, None)
-                    if iid in in_progress_order:
-                        in_progress_order.remove(iid)
-
-        elif t == "response.output_text.delta":
-            iid = evt.get("item_id")
-            delta = evt.get("delta")
-            if iid and isinstance(delta, str) and iid in in_progress_text:
-                in_progress_text[iid].append(delta)
-
-    lines: list[str] = []
-    for cid in call_order:
-        info = completed_calls[cid]
-        name = info.get("name", "<unknown_tool>")
-        args = info.get("args", "")
-        if "output" in info:
-            lines.append(f"- Called `{name}({args})` and got result: {info['output']}")
-        else:
-            lines.append(f"- Called `{name}({args})` — interrupted before a result was returned.")
-    for text in narrative_texts:
-        lines.append(f"- Said: {text}")
-    for iid in in_progress_order:
-        chunks = in_progress_text.get(iid) or []
-        partial = "".join(chunks).strip()
-        if partial:
-            lines.append(f"- Was generating: {partial!r} when the run was interrupted.")
-
-    if lines:
-        body = (
-            "[RECOVERY] The previous attempt of this agent task crashed mid-execution. "
-            "Here is what had completed before the crash:\n\n"
-            + "\n".join(lines)
-            + "\n\nPlease continue from where the prior attempt left off. "
-            "If a tool call was interrupted, you may re-invoke it if its result "
-            "is still needed."
-        )
-    else:
-        body = (
-            "[RECOVERY] The previous attempt of this agent task was interrupted "
-            "before any tool calls or assistant output completed. Please proceed "
-            "with the original user request."
-        )
-
+    prior_events = [
+        evt
+        for _seq, _item_json, evt, attempt_tag in messages
+        if attempt_tag == prior_attempt_number and isinstance(evt, dict)
+    ]
+    body = (
+        "[RECOVERY] The previous attempt of this agent task crashed "
+        "mid-execution. Below is the raw stream-event log from that attempt "
+        "as JSON. Some tool calls may have completed and some may have been "
+        "interrupted before returning a result. Inspect the events, figure "
+        "out what is already done versus in-progress / not completed, and "
+        "continue the task from where it left off. If a tool call was "
+        "interrupted, you may re-invoke it if its result is still needed.\n\n"
+        f"Events:\n{json.dumps(prior_events)}"
+    )
     return {
         "type": "message",
         "role": "user",
@@ -346,35 +259,6 @@ def _rotate_conversation_id(
         rotated,
     )
     return request_dict
-
-
-def _inject_conversation_id(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
-    """Anchor the request to ``response_id`` as its conversation.
-
-    Operates on a plain dict — the caller is responsible for converting to/from
-    pydantic via ``model_dump()`` and the server's validator.
-
-    Templates that back this server use ``context.conversation_id`` (and
-    ``custom_inputs.thread_id`` / ``custom_inputs.session_id``) as priority-2
-    fallbacks to derive their stateful thread/session key. If neither is
-    provided by the client, a resumed invocation from another pod would
-    generate a *fresh* ID and miss the checkpoint entirely — so we stamp the
-    conversation_id here before persisting the request, guaranteeing that
-    every replay hits the same memory store.
-
-    Client-supplied values take precedence and are left untouched.
-    """
-    out = copy.deepcopy(request_dict) if request_dict else {}
-    custom_inputs = out.get("custom_inputs") or {}
-    if custom_inputs.get("thread_id") or custom_inputs.get("session_id"):
-        return out
-    ctx = out.get("context") or {}
-    if ctx.get("conversation_id"):
-        return out
-    ctx = dict(ctx)
-    ctx["conversation_id"] = response_id
-    out["context"] = ctx
-    return out
 
 
 @experimental
@@ -507,7 +391,7 @@ class LongRunningAgentServer(AgentServer):
                     logger.info(
                         "[durable] kill endpoint: no task response_id=%s on pod=%s",
                         response_id,
-                        _POD_ID,
+                        _POD_LOG_ID,
                     )
                     raise HTTPException(
                         status_code=404,
@@ -519,12 +403,12 @@ class LongRunningAgentServer(AgentServer):
                 logger.info(
                     "[durable] kill endpoint: cancelling task response_id=%s pod=%s",
                     response_id,
-                    _POD_ID,
+                    _POD_LOG_ID,
                 )
                 task.cancel()
                 return {
                     "response_id": response_id,
-                    "pod_id": _POD_ID,
+                    "pod_id": _POD_LOG_ID,
                     "status": "task_cancelled",
                 }
 
@@ -567,8 +451,19 @@ class LongRunningAgentServer(AgentServer):
                 branch=self._db_branch,
                 db_statement_timeout_ms=self._settings.db_statement_timeout_ms,
             )
-            yield
-            await dispose_db()
+            scanner_task = asyncio.create_task(
+                self._stale_response_scanner_loop(),
+                name="durable-stale-scanner",
+            )
+            try:
+                yield
+            finally:
+                scanner_task.cancel()
+                try:
+                    await scanner_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                await dispose_db()
 
         self.app.router.lifespan_context = _db_lifespan
 
@@ -643,7 +538,6 @@ class LongRunningAgentServer(AgentServer):
         # when tests pass a plain dict directly.
         dump = getattr(request_data, "model_dump", None)
         request_dict = dump() if callable(dump) else dict(request_data)
-        durable_dict = _inject_conversation_id(request_dict, response_id)
         # Store the FULL request (untrimmed) as `original_request` so resume can
         # recover the entire prior-turn history. The handler invocation below
         # uses a trimmed copy to avoid duplicating turns the SDK's session has
@@ -653,14 +547,14 @@ class LongRunningAgentServer(AgentServer):
         await create_response(
             response_id,
             "in_progress",
-            owner_pod_id=_POD_ID,
-            original_request=durable_dict,
+            durable=True,
+            original_request=request_dict,
         )
 
-        # Build a TRIMMED handler request from the same durable dict — drops
-        # echoed history that the SDK's session already has. Original_request
-        # above stays untrimmed for resume.
-        handler_dict = copy.deepcopy(durable_dict)
+        # Build a TRIMMED handler request from the same dict — drops echoed
+        # history that the SDK's session already has. Original_request above
+        # stays untrimmed for resume.
+        handler_dict = copy.deepcopy(request_dict)
         handler_items = handler_dict.get("input")
         if isinstance(handler_items, list):
             handler_dict["input"] = _trim_echoed_history(handler_items)
@@ -670,7 +564,7 @@ class LongRunningAgentServer(AgentServer):
             "Background response created response_id=%s stream=%s pod=%s",
             response_id,
             is_streaming,
-            _POD_ID,
+            _POD_LOG_ID,
         )
 
         response_obj: dict[str, Any] = {
@@ -713,14 +607,70 @@ class LongRunningAgentServer(AgentServer):
         self._running_tasks[response_id] = task
         task.add_done_callback(lambda _t: self._running_tasks.pop(response_id, None))
 
+    async def _stale_response_scanner_loop(self) -> None:
+        """Periodically scan for in_progress responses with stale heartbeats and
+        try to claim+resume them. The proactive counterpart to the lazy claim
+        path on ``GET /responses/{id}``.
+
+        Each iteration sleeps for a jittered interval so multiple pods don't
+        synchronize their reads. Runs until cancelled (in the lifespan
+        teardown).
+        """
+        base = self._settings.stale_scan_interval_seconds
+        jitter = self._settings.stale_scan_jitter_fraction
+        threshold = self._settings.heartbeat_stale_threshold_seconds
+        logger.info(
+            "[durable] stale-scan loop start interval=%.1fs jitter=±%.0f%% threshold=%.1fs pod=%s",
+            base,
+            jitter * 100,
+            threshold,
+            _POD_LOG_ID,
+        )
+        try:
+            while True:
+                # Jittered sleep — random scaling of base interval centered on 1.0.
+                delay = base * (1.0 + random.uniform(-jitter, jitter))
+                await asyncio.sleep(delay)
+                try:
+                    stale_ids = await find_stale_response_ids(threshold)
+                    if not stale_ids:
+                        continue
+                    logger.info(
+                        "[durable] stale-scan found %d candidate(s): %s",
+                        len(stale_ids),
+                        stale_ids,
+                    )
+                    for response_id in stale_ids:
+                        try:
+                            resp = await get_response(response_id)
+                            if resp:
+                                await self._try_claim_and_resume(response_id, resp)
+                        except Exception:
+                            logger.exception(
+                                "[durable] stale-scan resume failed response_id=%s",
+                                response_id,
+                            )
+                except Exception:
+                    # Don't let an iteration failure kill the loop.
+                    logger.exception("[durable] stale-scan iteration failed")
+        except asyncio.CancelledError:
+            logger.info("[durable] stale-scan loop stopped pod=%s", _POD_LOG_ID)
+            raise
+
     @asynccontextmanager
-    async def _heartbeat(self, response_id: str) -> AsyncGenerator[None, None]:
+    async def _heartbeat(self, response_id: str, attempt_number: int) -> AsyncGenerator[None, None]:
         """Keep the response row's heartbeat_at fresh while the body runs.
 
         A background task writes ``heartbeat_at = now()`` every
-        ``heartbeat_interval_seconds`` for the owning pod. It stops when the
-        body returns/raises. Heartbeat write failures are logged but do not
-        interrupt the agent run — the stale-run check will detect a dead pod.
+        ``heartbeat_interval_seconds``, scoped to ``attempt_number``. The
+        update only matches if ``attempt_number`` still equals the value the
+        heartbeat was started with — if another pod has CAS-claimed the
+        row (bumping attempt_number), this heartbeat returns 0 rows and the
+        task knows it has lost ownership and stops.
+
+        Implicit-ownership model: there is no ``owner_pod_id`` column. The
+        last pod to successfully heartbeat at the current attempt is the
+        de facto owner.
         """
         interval = self._settings.heartbeat_interval_seconds
         stop = asyncio.Event()
@@ -728,25 +678,42 @@ class LongRunningAgentServer(AgentServer):
         async def _beat():
             beats = 0
             logger.info(
-                "[durable] heartbeat start response_id=%s pod=%s interval=%.1fs",
+                "[durable] heartbeat start response_id=%s attempt=%d pod=%s interval=%.1fs",
                 response_id,
-                _POD_ID,
+                attempt_number,
+                _POD_LOG_ID,
                 interval,
             )
             try:
                 while not stop.is_set():
                     try:
-                        await heartbeat_response(response_id, _POD_ID)
+                        ok = await heartbeat_response(response_id, attempt_number)
+                        if not ok:
+                            # CAS failed → attempt_number has moved past us,
+                            # another pod owns this response now. Stop the
+                            # heartbeat task; the handler is still running but
+                            # its emissions to the message log will be tagged
+                            # with this attempt and ignored on the resumed
+                            # path's filter (which keys on the new attempt).
+                            logger.info(
+                                "[durable] heartbeat lost ownership response_id=%s "
+                                "attempt=%d (another pod claimed); stopping",
+                                response_id,
+                                attempt_number,
+                            )
+                            stop.set()
+                            break
                         beats += 1
                         # Sampled heartbeat log so the lifecycle is visible
                         # without spamming every interval. Every 5th (~15s
                         # at 3s interval) is a good compromise.
                         if beats % 5 == 1:
                             logger.info(
-                                "[durable] heartbeat beat#%d response_id=%s pod=%s",
+                                "[durable] heartbeat beat#%d response_id=%s attempt=%d pod=%s",
                                 beats,
                                 response_id,
-                                _POD_ID,
+                                attempt_number,
+                                _POD_LOG_ID,
                             )
                     except Exception:
                         logger.warning(
@@ -761,9 +728,10 @@ class LongRunningAgentServer(AgentServer):
             except asyncio.CancelledError:
                 pass
             logger.info(
-                "[durable] heartbeat stop response_id=%s pod=%s total_beats=%d",
+                "[durable] heartbeat stop response_id=%s attempt=%d pod=%s total_beats=%d",
                 response_id,
-                _POD_ID,
+                attempt_number,
+                _POD_LOG_ID,
                 beats,
             )
 
@@ -843,7 +811,10 @@ class LongRunningAgentServer(AgentServer):
     ) -> None:
         """Timeout-guarded wrapper around the streaming agent loop."""
         state: dict[str, Any] = {"seq": 0}
-        async with self._task_scope(response_id, state), self._heartbeat(response_id):
+        async with (
+            self._task_scope(response_id, state),
+            self._heartbeat(response_id, attempt_number),
+        ):
             await self._do_background_stream(
                 response_id,
                 request_data,
@@ -876,7 +847,7 @@ class LongRunningAgentServer(AgentServer):
             "[durable] background stream start response_id=%s attempt=%d pod=%s handler=%s",
             response_id,
             attempt_number,
-            _POD_ID,
+            _POD_LOG_ID,
             func_name,
         )
         all_chunks: list[dict[str, Any]] = []
@@ -941,7 +912,7 @@ class LongRunningAgentServer(AgentServer):
             response_id,
             attempt_number,
             seq,
-            _POD_ID,
+            _POD_LOG_ID,
         )
 
     async def _run_background_invoke(
@@ -954,7 +925,10 @@ class LongRunningAgentServer(AgentServer):
     ) -> None:
         """Timeout-guarded wrapper around the invoke agent loop."""
         state: dict[str, Any] = {"seq": 0}
-        async with self._task_scope(response_id, state), self._heartbeat(response_id):
+        async with (
+            self._task_scope(response_id, state),
+            self._heartbeat(response_id, attempt_number),
+        ):
             await self._do_background_invoke(
                 response_id,
                 request_data,
@@ -1067,11 +1041,10 @@ class LongRunningAgentServer(AgentServer):
                 return None
             logger.info(
                 "[durable] stale heartbeat detected response_id=%s "
-                "heartbeat_age=%.1fs threshold=%.1fs current_owner=%s",
+                "heartbeat_age=%.1fs threshold=%.1fs",
                 response_id,
                 hb_age,
                 self._settings.heartbeat_stale_threshold_seconds,
-                resp.owner_pod_id,
             )
         if resp.original_request is None:
             # Nothing to replay from — the run predates durability metadata.
@@ -1085,11 +1058,10 @@ class LongRunningAgentServer(AgentServer):
             "[durable] attempting claim response_id=%s current_attempt=%d new_owner=%s",
             response_id,
             resp.attempt_number,
-            _POD_ID,
+            _POD_LOG_ID,
         )
         new_attempt = await claim_stale_response(
             response_id,
-            new_owner_pod_id=_POD_ID,
             stale_threshold_seconds=self._settings.heartbeat_stale_threshold_seconds,
         )
         if new_attempt is None:
@@ -1152,7 +1124,7 @@ class LongRunningAgentServer(AgentServer):
             "[durable] claim succeeded response_id=%s new_attempt=%d pod=%s resume_from_seq=%d",
             response_id,
             new_attempt,
-            _POD_ID,
+            _POD_LOG_ID,
             next_seq,
         )
 

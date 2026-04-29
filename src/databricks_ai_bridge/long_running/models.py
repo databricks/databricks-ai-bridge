@@ -16,9 +16,11 @@ class Base(DeclarativeBase):
 class Response(Base):
     """Response status tracking for background agent tasks.
 
-    Durability columns (``owner_pod_id``, ``heartbeat_at``, ``attempt_number``,
-    ``original_request``) support crash-resume: another pod can atomically
-    claim a stale in-progress row and replay the agent loop.
+    Durability columns (``heartbeat_at``, ``attempt_number``,
+    ``original_request``) support crash-resume: another pod atomically
+    claims a stale in-progress row by CAS-ing on ``attempt_number`` and
+    replays the agent loop. The owning pod is implicit — it's whatever
+    pod last successfully heartbeat at the current attempt_number.
     """
 
     __tablename__ = "responses"
@@ -30,7 +32,6 @@ class Response(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    owner_pod_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempt_number: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="1", default=1

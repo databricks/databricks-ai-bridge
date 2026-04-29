@@ -19,7 +19,6 @@ from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
     _build_prose_recovery_message,
     _deferred_mark_failed,
-    _inject_conversation_id,
     _rotate_conversation_id,
     _sse_event,
     _trim_echoed_history,
@@ -44,7 +43,6 @@ def _resp_info(
     status: str = "in_progress",
     created_at=None,
     trace_id: str | None = None,
-    owner_pod_id: str | None = None,
     heartbeat_at=None,
     attempt_number: int = 1,
     original_request: dict | None = None,
@@ -61,7 +59,6 @@ def _resp_info(
         status=status,
         created_at=created_at,
         trace_id=trace_id,
-        owner_pod_id=owner_pod_id,
         heartbeat_at=heartbeat_at,
         attempt_number=attempt_number,
         original_request=original_request,
@@ -936,9 +933,9 @@ class TestLifespanPlumbing:
 
 
 class TestBuildProseRecoveryMessage:
-    """Prose recovery serializer: walk a prior attempt's events and produce a
-    single Responses-API user-message item narrating what happened, for the
-    next attempt's LLM to read as a recovery instruction."""
+    """Prose recovery serializer: produce a single Responses-API user-message
+    item containing the prior attempt's stream events as JSON, plus a
+    directive that asks the LLM to figure out what's done vs interrupted."""
 
     def _done(self, seq, attempt, item):
         return (seq, None, {"type": "response.output_item.done", "item": item}, attempt)
@@ -950,7 +947,7 @@ class TestBuildProseRecoveryMessage:
         assert isinstance(out["content"], str)
         assert "[RECOVERY]" in out["content"]
 
-    def test_completed_call_with_output(self):
+    def test_includes_events_json(self):
         messages = [
             self._done(
                 0, 1, {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"}
@@ -959,24 +956,10 @@ class TestBuildProseRecoveryMessage:
         ]
         out = _build_prose_recovery_message(messages, prior_attempt_number=1)
         body = out["content"]
-        assert "Called `f({})`" in body
-        assert "got result: ok" in body
-
-    def test_call_without_output_marked_interrupted(self):
-        messages = [
-            self._done(
-                0,
-                1,
-                {
-                    "type": "function_call",
-                    "call_id": "c1",
-                    "name": "deep_research",
-                    "arguments": "",
-                },
-            ),
-        ]
-        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
-        assert "interrupted before a result was returned" in out["content"]
+        # Body should contain the raw events JSON-serialized.
+        assert '"call_id": "c1"' in body
+        assert '"output": "ok"' in body
+        assert '"name": "f"' in body
 
     def test_filters_other_attempts(self):
         messages = [
@@ -988,32 +971,16 @@ class TestBuildProseRecoveryMessage:
             ),
         ]
         out = _build_prose_recovery_message(messages, prior_attempt_number=1)
-        assert "f({})" in out["content"]
-        assert "g(" not in out["content"]
+        body = out["content"]
+        assert '"call_id": "c1"' in body
+        # attempt 2 events excluded
+        assert '"call_id": "c2"' not in body
 
-    def test_partial_text_from_deltas(self):
-        messages = [
-            (
-                0,
-                None,
-                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
-                1,
-            ),
-            (
-                1,
-                None,
-                {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hello, "},
-                1,
-            ),
-            (2, None, {"type": "response.output_text.delta", "item_id": "m1", "delta": "world"}, 1),
-        ]
-        out = _build_prose_recovery_message(messages, prior_attempt_number=1)
-        assert "Was generating" in out["content"]
-        assert "Hello, world" in out["content"]
-
-    def test_empty_attempt_falls_back_to_default_recovery(self):
+    def test_empty_attempt_emits_empty_events_array(self):
         out = _build_prose_recovery_message([], prior_attempt_number=1)
-        assert "interrupted before any tool calls" in out["content"]
+        # Body still contains the recovery directive and an empty events array.
+        assert "[RECOVERY]" in out["content"]
+        assert "Events:\n[]" in out["content"]
 
 
 class TestTrimEchoedHistory:
@@ -1106,49 +1073,12 @@ class TestRotateConversationId:
         assert out["custom_inputs"] == {}
 
 
-class TestInjectConversationId:
-    """Anchoring an otherwise-anonymous request to a response_id guarantees a
-    resumed run on a new pod resolves to the same agent-SDK thread/session."""
-
-    def test_injects_when_nothing_set(self):
-        r = {"input": [], "custom_inputs": {}, "context": {}}
-        out = _inject_conversation_id(r, "resp_abc")
-        assert out["context"]["conversation_id"] == "resp_abc"
-
-    def test_respects_existing_conversation_id(self):
-        r = {"input": [], "context": {"conversation_id": "user-set"}}
-        out = _inject_conversation_id(r, "resp_abc")
-        assert out["context"]["conversation_id"] == "user-set"
-
-    def test_respects_thread_id_from_custom_inputs(self):
-        r = {"input": [], "custom_inputs": {"thread_id": "t-1"}, "context": {}}
-        out = _inject_conversation_id(r, "resp_abc")
-        # When the client already pinned a thread, we don't overwrite — the
-        # template's _get_or_create_thread_id picks up custom_inputs first.
-        assert "conversation_id" not in (out["context"] or {})
-
-    def test_respects_session_id_from_custom_inputs(self):
-        r = {"input": [], "custom_inputs": {"session_id": "s-1"}, "context": {}}
-        out = _inject_conversation_id(r, "resp_abc")
-        assert "conversation_id" not in (out["context"] or {})
-
-    def test_handles_missing_context_key(self):
-        r = {"input": [], "custom_inputs": {}}
-        out = _inject_conversation_id(r, "resp_abc")
-        assert out["context"]["conversation_id"] == "resp_abc"
-
-    def test_does_not_mutate_input(self):
-        r = {"input": [], "custom_inputs": {}, "context": {}}
-        _inject_conversation_id(r, "resp_abc")
-        assert r["context"] == {}  # original untouched
-
-
 class TestHandleBackgroundRequestPersistsDurabilityState:
-    """Background request entry point should now stamp the response row with
-    the caller's pod, the original request body, and a conversation anchor."""
+    """Background request entry point should stamp the response row with the
+    full original_request body so resume can recover full prior-turn history."""
 
     @pytest.mark.asyncio
-    async def test_persists_owner_and_original_request(self):
+    async def test_persists_durable_flag_and_original_request(self):
         with patch(f"{MODULE}.is_db_configured", return_value=True):
             server = LongRunningAgentServer("ResponsesAgent")
         _mock_validator(server)
@@ -1156,11 +1086,11 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         captured: dict = {}
 
         async def fake_create_response(
-            response_id, status, *, owner_pod_id=None, original_request=None
+            response_id, status, *, durable=False, original_request=None
         ):
             captured["response_id"] = response_id
             captured["status"] = status
-            captured["owner_pod_id"] = owner_pod_id
+            captured["durable"] = durable
             captured["original_request"] = original_request
 
         with (
@@ -1174,11 +1104,11 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
             )
 
         assert captured["status"] == "in_progress"
-        assert captured["owner_pod_id"]  # non-empty
-        # original_request should include input + injected conversation_id.
+        assert captured["durable"] is True
+        # original_request preserves the input the client sent (no
+        # conversation_id injection — the client owns that decision).
         orig = captured["original_request"]
         assert orig["input"] == [{"role": "user", "content": "hi"}]
-        assert orig["context"]["conversation_id"] == captured["response_id"]
         # Return shape: immediate response_obj, not a stream.
         assert result["id"] == captured["response_id"]
         assert result["status"] == "in_progress"
@@ -1459,7 +1389,7 @@ class TestHeartbeatContextManager:
             )
 
         with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock) as mock_hb:
-            async with server._heartbeat("resp_x"):
+            async with server._heartbeat("resp_x", attempt_number=1):
                 await asyncio.sleep(0.2)  # enough time for 2+ heartbeats
 
         # Heartbeat interval is 0.05s so we should see at least 2 writes.
@@ -1477,7 +1407,7 @@ class TestHeartbeatContextManager:
             )
 
         with patch(f"{MODULE}.heartbeat_response", new_callable=AsyncMock) as mock_hb:
-            async with server._heartbeat("resp_x"):
+            async with server._heartbeat("resp_x", attempt_number=1):
                 pass  # immediate exit
 
             # Give the heartbeat loop a chance to observe the stop signal.
@@ -1505,7 +1435,7 @@ class TestHeartbeatContextManager:
             new_callable=AsyncMock,
             side_effect=RuntimeError("db down"),
         ):
-            async with server._heartbeat("resp_x"):
+            async with server._heartbeat("resp_x", attempt_number=1):
                 await asyncio.sleep(0.1)
                 body_ran = True
         assert body_ran

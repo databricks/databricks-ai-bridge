@@ -15,22 +15,21 @@ async def create_response(
     response_id: str,
     status: str,
     *,
-    owner_pod_id: str | None = None,
+    durable: bool = False,
     original_request: dict[str, Any] | None = None,
 ) -> None:
     """Insert a new response row.
 
-    ``owner_pod_id`` and ``original_request`` are optional so that non-durable
-    callers (tests, legacy flows) can still create rows without durability
-    metadata. When present, they enable heartbeat + crash-resume semantics.
+    When ``durable=True``, ``heartbeat_at`` is initialized to ``now()`` so
+    the row doesn't immediately look stale. Non-durable callers (tests,
+    legacy flows) skip the heartbeat init.
     """
     async with session_scope() as session:
         session.add(
             Response(
                 response_id=response_id,
                 status=status,
-                owner_pod_id=owner_pod_id,
-                heartbeat_at=datetime.now().astimezone() if owner_pod_id else None,
+                heartbeat_at=datetime.now().astimezone() if durable else None,
                 original_request=(
                     json.dumps(original_request) if original_request is not None else None
                 ),
@@ -65,16 +64,22 @@ async def update_response_trace_id(response_id: str, trace_id: str) -> None:
         await session.commit()
 
 
-async def heartbeat_response(response_id: str, pod_id: str) -> bool:
-    """Update heartbeat_at for a response IFF this pod owns it.
+async def heartbeat_response(response_id: str, expected_attempt_number: int) -> bool:
+    """Update heartbeat_at for a response IFF the attempt is still ours.
 
-    Returns True on success. A False result means the claim has been lost
-    (another pod took over, or the run finished and heartbeat should stop).
+    Returns True on success. A False result means the claim has been lost —
+    another pod CAS-bumped ``attempt_number``, so this pod is no longer the
+    owner and the heartbeat task should stop. Implicit-ownership model:
+    whichever pod last successfully heartbeats at the current
+    ``attempt_number`` is the de facto owner.
     """
     async with session_scope() as session:
         stmt = (
             update(Response)
-            .where(Response.response_id == response_id, Response.owner_pod_id == pod_id)
+            .where(
+                Response.response_id == response_id,
+                Response.attempt_number == expected_attempt_number,
+            )
             .values(heartbeat_at=datetime.now().astimezone())
         )
         result = await session.execute(stmt)
@@ -84,18 +89,19 @@ async def heartbeat_response(response_id: str, pod_id: str) -> bool:
 
 async def claim_stale_response(
     response_id: str,
-    new_owner_pod_id: str,
     stale_threshold_seconds: float,
 ) -> int | None:
     """Atomically claim an in-progress response whose heartbeat has gone stale.
 
     Uses a single conditional UPDATE so exactly one caller wins on contention:
     claim only succeeds if status is ``in_progress`` AND
-    (``owner_pod_id IS NULL`` OR ``heartbeat_at`` is older than the threshold).
+    (``heartbeat_at IS NULL`` OR ``heartbeat_at`` is older than the threshold).
+    The new attempt_number is the previous + 1; the prior attempt's heartbeat
+    task will detect this on its next heartbeat (rowcount=0) and stop.
 
     Returns the new ``attempt_number`` on success, or ``None`` if the row did
-    not satisfy the claim conditions (already completed, already claimed by a
-    live pod, or nonexistent).
+    not satisfy the claim conditions (already completed, heartbeat still fresh,
+    or nonexistent).
     """
     # Raw SQL because SQLAlchemy's ORM-level update doesn't expose RETURNING for
     # the incremented column as ergonomically. Using a single statement keeps the
@@ -103,29 +109,58 @@ async def claim_stale_response(
     stmt = text(
         f"""
         UPDATE {AGENT_DB_SCHEMA}.responses
-           SET owner_pod_id = :pod,
-               heartbeat_at = now(),
+           SET heartbeat_at = now(),
                attempt_number = attempt_number + 1
          WHERE response_id = :rid
            AND status = 'in_progress'
-           AND (owner_pod_id IS NULL
-                OR heartbeat_at IS NULL
+           AND (heartbeat_at IS NULL
                 OR heartbeat_at < now() - make_interval(secs => :threshold))
      RETURNING attempt_number
         """
     ).bindparams(
-        bindparam("pod", type_=None),
         bindparam("rid", type_=None),
         bindparam("threshold", type_=None),
     )
     async with session_scope() as session:
         result = await session.execute(
             stmt,
-            {"pod": new_owner_pod_id, "rid": response_id, "threshold": stale_threshold_seconds},
+            {"rid": response_id, "threshold": stale_threshold_seconds},
         )
         row = result.first()
         await session.commit()
         return int(row[0]) if row else None
+
+
+async def find_stale_response_ids(
+    stale_threshold_seconds: float,
+    limit: int = 50,
+) -> list[str]:
+    """Return ids of in_progress responses whose heartbeat is older than the
+    threshold. Used by the proactive scanner to find candidates for resume
+    without waiting for a client GET.
+
+    Limited to ``limit`` rows per scan to bound DB load. Ordered by
+    ``heartbeat_at`` ascending so the oldest staleness is handled first.
+    """
+    stmt = text(
+        f"""
+        SELECT response_id FROM {AGENT_DB_SCHEMA}.responses
+        WHERE status = 'in_progress'
+          AND heartbeat_at IS NOT NULL
+          AND heartbeat_at < now() - make_interval(secs => :threshold)
+        ORDER BY heartbeat_at ASC
+        LIMIT :limit
+        """
+    ).bindparams(
+        bindparam("threshold", type_=None),
+        bindparam("limit", type_=None),
+    )
+    async with session_scope() as session:
+        result = await session.execute(
+            stmt,
+            {"threshold": stale_threshold_seconds, "limit": limit},
+        )
+        return [row[0] for row in result.all()]
 
 
 async def append_message(
@@ -181,7 +216,6 @@ class ResponseInfo(NamedTuple):
     status: str
     created_at: datetime
     trace_id: str | None
-    owner_pod_id: str | None
     heartbeat_at: datetime | None
     attempt_number: int
     original_request: dict[str, Any] | None
@@ -198,7 +232,6 @@ async def get_response(response_id: str) -> ResponseInfo | None:
                 row.status,
                 row.created_at,
                 row.trace_id,
-                row.owner_pod_id,
                 row.heartbeat_at,
                 row.attempt_number,
                 json.loads(row.original_request) if row.original_request else None,

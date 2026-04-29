@@ -86,7 +86,6 @@ async def init_db(
     # poison the rest. A single mega-transaction would abort entirely on the
     # first owner-check failure even with IF NOT EXISTS.
     migration_stmts = (
-        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS owner_pod_id TEXT",
         f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
         "ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ",
         f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
