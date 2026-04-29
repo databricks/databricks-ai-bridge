@@ -381,36 +381,41 @@ class LongRunningAgentServer(AgentServer):
         # asyncio task that owns the given response_id WITHOUT running the
         # _task_scope cleanup, so the DB row stays in_progress with a
         # going-stale heartbeat — exactly the shape a real pod crash leaves.
-        # Opt-in via env var so it's never exposed in production.
-        if os.getenv("LONG_RUNNING_ENABLE_DEBUG_KILL") == "1":
-
-            @self.app.post("/_debug/kill_task/{response_id}")
-            async def _debug_kill_task(response_id: str):
-                task = self._running_tasks.get(response_id)
-                if task is None:
-                    logger.info(
-                        "[durable] kill endpoint: no task response_id=%s on pod=%s",
-                        response_id,
-                        _POD_LOG_ID,
-                    )
-                    raise HTTPException(
-                        status_code=404,
-                        detail=(
-                            "No in-flight task for that response_id on this pod "
-                            "(may already have finished or be running on another pod)."
-                        ),
-                    )
+        # Opt-in via env var so it's never exposed in production. Env var
+        # is checked at request time (not registration time) because some
+        # platforms inject env vars after the FastAPI app object is built.
+        @self.app.post("/_debug/kill_task/{response_id}")
+        async def _debug_kill_task(response_id: str):
+            if os.getenv("LONG_RUNNING_ENABLE_DEBUG_KILL") != "1":
+                raise HTTPException(
+                    status_code=404,
+                    detail="Debug kill endpoint is disabled.",
+                )
+            task = self._running_tasks.get(response_id)
+            if task is None:
                 logger.info(
-                    "[durable] kill endpoint: cancelling task response_id=%s pod=%s",
+                    "[durable] kill endpoint: no task response_id=%s on pod=%s",
                     response_id,
                     _POD_LOG_ID,
                 )
-                task.cancel()
-                return {
-                    "response_id": response_id,
-                    "pod_id": _POD_LOG_ID,
-                    "status": "task_cancelled",
-                }
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "No in-flight task for that response_id on this pod "
+                        "(may already have finished or be running on another pod)."
+                    ),
+                )
+            logger.info(
+                "[durable] kill endpoint: cancelling task response_id=%s pod=%s",
+                response_id,
+                _POD_LOG_ID,
+            )
+            task.cancel()
+            return {
+                "response_id": response_id,
+                "pod_id": _POD_LOG_ID,
+                "status": "task_cancelled",
+            }
 
         db_configured = is_db_configured()
 
