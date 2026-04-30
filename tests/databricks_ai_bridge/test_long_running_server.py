@@ -21,7 +21,6 @@ from databricks_ai_bridge.long_running.server import (
     _deferred_mark_failed,
     _rotate_conversation_id,
     _sse_event,
-    _trim_echoed_history,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 
@@ -981,65 +980,6 @@ class TestBuildProseRecoveryMessage:
         # Body still contains the recovery directive and an empty events array.
         assert "[RECOVERY]" in out["content"]
         assert "Events:\n[]" in out["content"]
-
-
-class TestTrimEchoedHistory:
-    """SDK-agnostic dedup: when request input contains an assistant message,
-    the client is echoing prior conversation history; trim to the latest
-    user message and trust the SDK's session/checkpointer storage as
-    authoritative for prior turns."""
-
-    def test_first_turn_passthrough(self):
-        items = [{"role": "user", "content": "hi"}]
-        assert _trim_echoed_history(items) is items
-
-    def test_first_turn_with_no_assistant_passthrough(self):
-        # Multi-message input but no assistant role yet — first turn from a
-        # client preserving its own prior user turns. Pass through.
-        items = [
-            {"role": "user", "content": "u1"},
-            {"role": "user", "content": "u2"},
-        ]
-        assert _trim_echoed_history(items) is items
-
-    def test_continuation_trims_to_last_user(self):
-        items = [
-            {"role": "user", "content": "u1"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "user", "content": "u2"},
-        ]
-        out = _trim_echoed_history(items)
-        assert len(out) == 1
-        assert out[0]["role"] == "user"
-        assert out[0]["content"] == "u2"
-
-    def test_continuation_with_tool_history_trims_correctly(self):
-        items = [
-            {"role": "user", "content": "u1"},
-            {"role": "assistant", "content": "a1"},
-            {"role": "user", "content": "u2"},
-            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
-            {"role": "assistant", "content": "a2"},
-            {"role": "user", "content": "u3"},
-        ]
-        out = _trim_echoed_history(items)
-        assert len(out) == 1
-        assert out[0]["content"] == "u3"
-
-    def test_resume_path_passthrough(self):
-        # Resume-built input: original input + prose user message, no
-        # assistant role. Trim is a no-op so the prose recovery payload is
-        # preserved.
-        items = [
-            {"role": "user", "content": "original"},
-            {"type": "message", "role": "user", "content": "[RECOVERY] ..."},
-        ]
-        out = _trim_echoed_history(items)
-        assert out is items
-
-    def test_empty_input(self):
-        assert _trim_echoed_history([]) == []
 
 
 class TestRotateConversationId:

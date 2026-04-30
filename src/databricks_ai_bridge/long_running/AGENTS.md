@@ -24,7 +24,7 @@ Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, othe
 - **At-most-once durable claim.** Only one pod runs a given response at a time. The handoff uses an atomic CAS on `attempt_number`.
 - **Append-only event log.** Every SSE frame is persisted to `agent_server.messages` keyed by `(response_id, attempt_number, sequence_number)`. Clients cursor-resume from `starting_after`.
 - **SDK-agnostic recovery.** The resumed attempt receives a flat prose narrative — no provider-specific tool-pair structure, no synthetic tool events, no per-SDK adapter code.
-- **SDK-agnostic UI-echo dedup.** When the chatbot client echoes prior conversation history in `request.input`, the server detects this (presence of an `assistant`-role message) and trims to the latest user message. The SDK's session/checkpointer storage is treated as authoritative for prior turns.
+- **Per-template UI-echo dedup.** The bridge does NOT trim echoed history. When the chat client echoes the full prior conversation in `request.input`, the agent handler is responsible for deduping its input against the SDK's session/checkpointer state — typically by forwarding only the latest user message when the session already has prior turns. See the templates in `app-templates/agent-{openai,langgraph}-advanced/` for the canonical 1-2 line shape.
 - **Best-effort tool execution.** A tool call interrupted mid-flight may re-run on the resumed attempt. Idempotency is the tool author's responsibility.
 - **No agent code changes required.** Templates that subclass `LongRunningAgentServer` keep using `@invoke()` / `@stream()` decorators. All durability lives below the handler boundary.
 
@@ -129,7 +129,7 @@ sequenceDiagram
 
     C->>C: lookup alias map:<br/>chat_id → T::attempt-2
     C->>S: POST /responses<br/>{input: [echo of full UI history, new user msg],<br/> context.conversation_id: T::attempt-2}
-    S->>S: _trim_echoed_history<br/>(detects assistant in input → trim to last user)
+    S->>S: handler dedupes UI echo<br/>(forwards only latest user when session has history)
     S->>S: handler resolves session_id = T::attempt-2
     S->>SDK: load history at T::attempt-2
     SDK-->>S: clean state (prose + attempt-2 emissions)
@@ -142,7 +142,7 @@ sequenceDiagram
 Three things make this work without per-SDK repair code:
 
 1. **Server emits the rotated conv_id in `response.resumed`.** The chatbot reads it and updates its `Map<chat_id, conversation_id>` alias.
-2. **Server-side trim of UI-echoed history.** The presence of an `assistant`-role item in `request.input` is a reliable proxy for "client is echoing prior history." Trim to the latest user message; trust the SDK's session as authoritative for prior turns.
+2. **Per-template UI-echo dedup in the handler.** When the SDK's session/checkpointer already has prior-turn state, the agent forwards only the latest user message (not the full echoed history). This prevents `Runner.run` from sending duplicates of session items + input items to the LLM.
 3. **Always-rotate.** The rotated session was the one populated during attempt 2's run. Subsequent turns land on it. The original poisoned session is never read.
 
 ### CUJ 4: Multi-pod stale-claim contention
@@ -208,8 +208,7 @@ erDiagram
 ```mermaid
 flowchart TD
     POST["POST /responses<br/>background=true"] --> CR[create_response<br/>store FULL original_request]
-    CR --> TRIM[deepcopy + _trim_echoed_history<br/>for handler invocation]
-    TRIM --> SPAWN[spawn @stream handler]
+    CR --> SPAWN[spawn @stream handler<br/>handler dedupes UI echo against SDK session]
     SPAWN --> HB[heartbeat loop<br/>every 3s]
     SPAWN --> EMIT[append SSE events<br/>to messages table]
     EMIT --> DONE{handler<br/>exits?}
@@ -253,24 +252,34 @@ Why rotation: the original SDK session may carry mid-turn state from the crashed
 
 Why the sentinel carries the rotated conv_id: cooperating chat clients capture it (via SSE) and use the rotated session for subsequent turns, so the original orphan-poisoned session is never read again.
 
-### 3.4 SDK-agnostic UI-echo dedup
+### 3.4 Per-template UI-echo dedup (NOT in the bridge)
 
-```mermaid
-flowchart LR
-    REQ[POST /responses<br/>request.input from client] --> CHECK{any item<br/>has role: assistant?}
-    CHECK -->|no| PASS[pass through unchanged<br/>typical first-turn POST]
-    CHECK -->|yes| TRIM[client is echoing history<br/>find last role: user index<br/>slice items from there]
-    TRIM --> RESULT[result: latest user message only]
-    PASS --> HANDLER
-    RESULT --> HANDLER[handler invocation]
+The bridge does **not** trim UI echo from `request.input`. Echo dedup is the agent handler's responsibility — it owns its SDK session/checkpointer and is the right layer to know what's already persisted vs what's a new turn.
+
+The canonical shape, per template:
+
+**OpenAI Agents SDK** (`agent-openai-advanced/agent_server/utils.py`):
+```python
+session_items = await session.get_items()
+if session_items and len(messages) > 1:
+    return [messages[-1]]
+return messages
 ```
 
-The trim is the SDK-agnostic equivalent of a per-SDK "is this a continuation turn?" probe. By inspecting input shape, the server avoids:
-- Querying the SDK's storage to ask "do you have prior turns?" (per-SDK call)
-- Walking provider-specific tool-pair structure
-- Any SDK adapter code
+**LangGraph** (`agent-langgraph-advanced/agent_server/agent.py`):
+```python
+state = await agent.aget_state(config)
+if state and state.values.get("messages") and input_state["messages"]:
+    last_user = next(
+        (m for m in reversed(input_state["messages"]) if m.get("role") == "user"),
+        None,
+    )
+    input_state["messages"] = [last_user] if last_user else []
+```
 
-The trim runs on every `POST /responses` and is a no-op when input has no assistant message (first-turn POSTs or the resume path's `[original_input + prose_msg]` payload, which contains only `role:user` items by construction).
+Both: when the SDK store already has prior turns, forward only the latest user message and let the SDK prepend its own history. Without dedup, `Runner.run` (OpenAI) or `add_messages` (LangGraph) end up combining session+input → duplicate items → malformed assistant.tool_calls block → 400.
+
+Bridge's role here is just to pass `request.input` through untouched.
 
 ### 3.5 Proactive stale-scan loop
 
@@ -334,7 +343,7 @@ Postgres row locking ensures only one of N concurrent UPDATEs matches, so at mos
 | Heartbeat + claim | `LongRunningAgentServer` | No |
 | Conversation_id rotation | `LongRunningAgentServer._rotate_conversation_id` | No |
 | Prose recovery message construction | `LongRunningAgentServer._build_prose_recovery_message` | No |
-| UI-echo dedup | `LongRunningAgentServer._trim_echoed_history` | No |
+| UI-echo dedup | per-template handler (see §3.4) | Yes — 1-2 lines in `agent.py` / `utils.py` |
 | Stream resume cursor | `LongRunningAgentServer._stream_retrieve` | No |
 | Tool/SDK selection | `agent.py` | Yes (this is the author's actual code) |
 
@@ -414,7 +423,6 @@ flowchart LR
 - The MLflow `@invoke()` / `@stream()` handler convention.
 - `_build_prose_recovery_message` — prose construction is handler-policy, not engine-internals; lives in the adapter that bridges MLflow handlers to TaskFlow's `recover()`.
 - `_rotate_conversation_id` and `_inject_conversation_id` — same reason.
-- `_trim_echoed_history` — input cleanup happens at the HTTP boundary regardless of engine.
 - Author-visible settings (db config, heartbeat tuning, task timeout).
 
 ### What gets deleted

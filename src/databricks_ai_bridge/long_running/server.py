@@ -169,44 +169,6 @@ def _build_prose_recovery_message(
     }
 
 
-def _trim_echoed_history(items: list[Any]) -> list[Any]:
-    """If request.input contains an assistant message, the client is echoing
-    prior conversation history — trust the SDK's own session/checkpointer
-    storage as authoritative for prior turns and forward only the latest
-    user message.
-
-    SDK-agnostic equivalent of the per-SDK dedup hooks templates used to
-    carry (OpenAI Session.get_items() comparison; LangGraph
-    agent.aget_state() comparison). The presence of any ``role:assistant``
-    item is a reliable proxy for "this request is a continuation echo from
-    the chat UI" — first-turn POSTs have a single user message, while
-    continuations include the prior turns' assistant replies.
-
-    Resume-path inputs built by ``_try_claim_and_resume`` are
-    [original_input + prose_msg] (both ``role:user``), so the trim is a
-    correct no-op there.
-    """
-    if not items:
-        return items
-    has_assistant = any(
-        isinstance(item, dict) and item.get("role") == "assistant" for item in items
-    )
-    if not has_assistant:
-        return items
-    user_idxs = [
-        i for i, item in enumerate(items) if isinstance(item, dict) and item.get("role") == "user"
-    ]
-    if len(user_idxs) <= 1:
-        return items
-    trimmed = items[user_idxs[-1] :]
-    logger.info(
-        "[durable] trimmed echoed history: original=%d final=%d (kept latest user turn)",
-        len(items),
-        len(trimmed),
-    )
-    return trimmed
-
-
 def _rotate_conversation_id(
     request_dict: dict[str, Any],
     new_attempt_number: int,
@@ -498,17 +460,6 @@ class LongRunningAgentServer(AgentServer):
         data = {k: v for k, v in data.items() if k not in (BACKGROUND_KEY, MLFLOW_STREAM_KEY)}
         return_trace_id = (get_request_headers().get(RETURN_TRACE_HEADER) or "").lower() == "true"
 
-        # For background+DB requests, trim happens INSIDE _handle_background_request
-        # AFTER storing the untrimmed input as original_request — so resume can
-        # recover the full prior-turn history. For non-background requests we
-        # trim here in place since there's no persistence step that needs the
-        # untrimmed copy.
-        is_background_with_db = is_background and is_db_configured()
-        if not is_background_with_db:
-            items = data.get("input")
-            if isinstance(items, list):
-                data["input"] = _trim_echoed_history(items)
-
         try:
             request_data = self.validator.validate_and_convert_request(data)
         except ValueError as e:
@@ -517,7 +468,7 @@ class LongRunningAgentServer(AgentServer):
                 detail=f"Invalid parameters for {self.agent_type}: {e}",
             ) from None
 
-        if is_background_with_db:
+        if is_background and is_db_configured():
             return await self._handle_background_request(
                 request_data, is_streaming, return_trace_id
             )
@@ -544,26 +495,16 @@ class LongRunningAgentServer(AgentServer):
         dump = getattr(request_data, "model_dump", None)
         request_dict = dump() if callable(dump) else dict(request_data)
         # Store the FULL request (untrimmed) as `original_request` so resume can
-        # recover the entire prior-turn history. The handler invocation below
-        # uses a trimmed copy to avoid duplicating turns the SDK's session has
-        # already persisted, but on resume the rotated SDK session is empty —
-        # only the full conversation in `original_request.input` lets the model
-        # reconstruct what came before the crashed turn.
+        # recover the entire prior-turn history. Per-template handlers are
+        # responsible for deduping their own UI-echoed input against the SDK's
+        # session/checkpointer state — the bridge no longer trims input.
         await create_response(
             response_id,
             "in_progress",
             durable=True,
             original_request=request_dict,
         )
-
-        # Build a TRIMMED handler request from the same dict — drops echoed
-        # history that the SDK's session already has. Original_request above
-        # stays untrimmed for resume.
-        handler_dict = copy.deepcopy(request_dict)
-        handler_items = handler_dict.get("input")
-        if isinstance(handler_items, list):
-            handler_dict["input"] = _trim_echoed_history(handler_items)
-        durable_request = self.validator.validate_and_convert_request(handler_dict)
+        durable_request = self.validator.validate_and_convert_request(request_dict)
 
         logger.info(
             "Background response created response_id=%s stream=%s pod=%s",
