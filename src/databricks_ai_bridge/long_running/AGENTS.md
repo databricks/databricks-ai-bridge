@@ -15,7 +15,7 @@ This document describes:
 
 1. **Background execution.** A `POST /responses` request with `background: true` returns a `response_id` immediately; the agent loop runs detached from the HTTP connection. State persists to Lakebase Postgres.
 2. **Streaming retrieval.** `GET /responses/{response_id}?stream=true&starting_after=N` replays events past sequence `N` and tails new ones until the run finishes. Reconnects without losing events.
-3. **Crash-resumable execution.** If the pod running an agent loop dies, another pod atomically claims the run and finishes the work via **prose recovery**: the new attempt receives a single user message narrating the crashed attempt's completed tool calls, results, and partial output, and continues from there on a freshly-rotated SDK session. Tool results that completed before the crash are preserved through the prose narrative.
+3. **Crash-resumable execution.** If the pod running an agent loop dies, another pod atomically claims the run and finishes the work via **prose recovery**: the new attempt receives a single user message containing `json.dumps(events)` of the crashed attempt's stream-event log plus a directive asking the LLM to figure out what's done vs interrupted and continue. The handler runs on a freshly-rotated SDK session.
 
 Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, others) is opaque to the server.
 
@@ -77,11 +77,11 @@ sequenceDiagram
     participant SDK as SDK store<br/>(rotated session)
 
     C->>A: POST /responses<br/>{input, background:true, stream:true}
-    A->>DB: INSERT response_id, owner=A,<br/>original_request (full input), attempt=1
+    A->>DB: INSERT response_id, attempt=1,<br/>heartbeat_at=now(), original_request (full input)
     A-->>C: 200 {id: resp_xxx, status: in_progress}
     activate A
-    Note over A: heartbeat loop (every 3s)
-    A->>DB: UPDATE heartbeat_at WHERE owner=A
+    Note over A: heartbeat loop (every 3s)<br/>CAS-checks attempt_number = 1
+    A->>DB: UPDATE heartbeat_at WHERE attempt_number=1
 
     par Streaming
         A->>SDK: write to session T (original conv_id)
@@ -98,9 +98,9 @@ sequenceDiagram
     C->>B: GET /responses/{id}?stream=true&starting_after=K
     B->>DB: SELECT heartbeat_at, attempt
     Note over B: heartbeat stale → claim
-    B->>DB: CAS UPDATE owner=B, attempt=2<br/>WHERE attempt=1 (atomic)
+    B->>DB: CAS UPDATE attempt=2, heartbeat_at=now()<br/>WHERE attempt=1 AND heartbeat stale (atomic)
     B->>DB: SELECT prior events WHERE attempt=1
-    Note over B: build resume input:<br/>· original_request.input (full prior turns)<br/>· + prose recovery message narrating attempt 1<br/>· rotate conv_id → ::attempt-2
+    Note over B: build resume input:<br/>· original_request.input (full prior turns)<br/>· + prose recovery message: json.dumps(events) + directive<br/>· rotate conv_id → ::attempt-2
     B->>DB: append response.resumed sentinel<br/>{conversation_id: rotated value}
     B->>B: re-invoke @stream() handler<br/>(fresh rotated SDK session)
     activate B
@@ -112,7 +112,7 @@ sequenceDiagram
 
 **What the client observes:** a single SSE stream that may pause briefly during the heartbeat-stale window (~10s by default), then resumes. The `response.resumed` sentinel marks the attempt boundary and carries the rotated `conversation_id` so the chatbot can use the rotated session for subsequent turns.
 
-**What the agent author observes:** their handler is invoked once for the original POST; a second time on resume. The second invocation's `request.input` contains the original input plus a single prose user message describing what happened in attempt 1. The handler doesn't have to know any of this is durable resume — to the model, it just looks like a user said "the prior attempt crashed, here's what had happened, please continue."
+**What the agent author observes:** their handler is invoked once for the original POST; a second time on resume. The second invocation's `request.input` contains the original input plus a single user message whose body is `[RECOVERY] ... Events: <json.dumps of attempt 1's stream events>`. The model reads it as "the prior attempt crashed, here's the raw event log, figure out what's done and continue."
 
 ### CUJ 3: Subsequent turn after a crashed turn
 
@@ -158,9 +158,9 @@ sequenceDiagram
 
     Note over B,C: both pods see response in_progress, heartbeat stale
     par
-        B->>DB: UPDATE responses SET owner=B, attempt=N+1<br/>WHERE response_id=R AND attempt=N
+        B->>DB: UPDATE responses SET attempt=N+1, heartbeat_at=now()<br/>WHERE response_id=R AND attempt=N AND heartbeat stale
     and
-        C->>DB: UPDATE responses SET owner=C, attempt=N+1<br/>WHERE response_id=R AND attempt=N
+        C->>DB: UPDATE responses SET attempt=N+1, heartbeat_at=now()<br/>WHERE response_id=R AND attempt=N AND heartbeat stale
     end
     Note over DB: only one row matches; the other UPDATE returns 0 rows
     DB-->>B: RETURNING attempt_number=N+1
@@ -229,26 +229,21 @@ flowchart TD
 
 ### 3.3 Resume input construction
 
-When a stale-claim CAS succeeds, the new owner builds the resume input from the prior attempt's emitted events as a flat prose narrative:
+When a stale-claim CAS succeeds, the new owner builds the resume input by serializing the prior attempt's stream events as JSON in a single user message:
 
 ```mermaid
 flowchart LR
-    PRIOR[prior attempt's events<br/>from messages table] --> WALK[_build_prose_recovery_message]
-    WALK --> CALLS[walk completed function_call /<br/>function_call_output items by call_id]
-    WALK --> NARR[walk completed message items<br/>extract text]
-    WALK --> PARTIAL[walk in-progress message deltas<br/>concat as 'was generating: ...']
-
-    CALLS --> COMPOSE
-    NARR --> COMPOSE
-    PARTIAL --> COMPOSE[compose single user message:<br/>'[RECOVERY] previous attempt crashed.<br/>Here is what had completed:<br/>- Called f(...) and got result: ...<br/>- Called g(...) — interrupted before result<br/>- Was generating: ...']
+    PRIOR[prior attempt's events<br/>from messages table] --> FILTER[filter events by<br/>attempt_number = prior_attempt]
+    FILTER --> JSON[json.dumps the events list]
+    JSON --> COMPOSE[compose single user message:<br/>'[RECOVERY] previous attempt crashed.<br/>Below is the raw stream-event log...<br/>Inspect the events, figure out what is<br/>already done versus in-progress, and continue.<br/><br/>Events: &lt;json.dumps&gt;']
 
     ROT[_rotate_conversation_id<br/>::attempt-N suffix] --> SUBMIT
-    COMPOSE --> SUBMIT[append to original_request.input<br/>spawn handler with rotated request<br/>emit response.resumed sentinel]
+    COMPOSE --> SUBMIT[append to original_request.input<br/>spawn handler with rotated request<br/>emit response.resumed sentinel<br/>with rotated conversation_id]
 ```
 
-Why prose: the LLM reads it as a recovery instruction and decides what to do (re-run the interrupted tool, skip completed ones, summarize from there). No structural carry-forward, no synthetic tool events, no per-SDK pairing rules. Trades cache hit rate (the prose is a fresh user message, not a stable structural prefix) for SDK-agnostic simplicity.
+Why JSON-dumped events: the LLM reads them as the authoritative record of what attempt 1 did and decides what to do — re-run an interrupted tool, skip completed ones, summarize from there. No structural carry-forward, no synthetic tool events, no per-SDK pairing rules. The handler doesn't have to know any of this is durable resume — it just sees a recovery user message in `request.input`.
 
-Why rotation: the original SDK session may carry mid-turn state from the crashed attempt (orphan `tool_use`, partial checkpoint) that's hard to repair from outside the SDK. Rotating to `{base}::attempt-N` opens a fresh, empty session for the resumed attempt; the prose narrative is the single source of truth for what already happened.
+Why rotation: the original SDK session may carry mid-turn state from the crashed attempt (orphan `tool_use`, partial checkpoint) that's hard to repair from outside the SDK. Rotating to `{base}::attempt-N` opens a fresh, empty session for the resumed attempt; the recovery message is the single source of truth for what already happened.
 
 Why the sentinel carries the rotated conv_id: cooperating chat clients capture it (via SSE) and use the rotated session for subsequent turns, so the original orphan-poisoned session is never read again.
 
@@ -311,7 +306,7 @@ Defaults are tuned for a single Lakebase deployment with low-latency writes.
 
 The stale threshold also applies as a grace period for newly-created responses that haven't written their first heartbeat yet — protects against an over-eager retrieve hijacking a still-starting handler.
 
-### 3.6 Claim atomicity
+### 3.7 Claim atomicity
 
 ```mermaid
 sequenceDiagram
@@ -322,17 +317,17 @@ sequenceDiagram
     Pod->>DB: SELECT attempt_number, heartbeat_at, status<br/>FROM responses WHERE response_id=R
     DB-->>Pod: attempt=1, heartbeat_at=12s ago, status=in_progress
     Note over Pod: stale → attempt CAS
-    Pod->>DB: UPDATE responses<br/>SET owner_pod_id=B, attempt_number=2, heartbeat_at=now()<br/>WHERE response_id=R AND attempt_number=1<br/>AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '10s')<br/>RETURNING attempt_number
+    Pod->>DB: UPDATE responses<br/>SET attempt_number=2, heartbeat_at=now()<br/>WHERE response_id=R AND attempt_number=1<br/>AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '10s')<br/>RETURNING attempt_number
     alt match
         DB-->>Pod: attempt_number=2
-        Note over Pod: claim succeeded
+        Note over Pod: claim succeeded — Pod B is the new de facto owner<br/>(prior owner's heartbeat at attempt=1 will fail next tick)
     else no match (another pod beat us)
         DB-->>Pod: (empty)
         Note over Pod: claim lost — back off
     end
 ```
 
-Postgres row locking ensures only one of N concurrent UPDATEs matches, so at most one pod ends up owning a given resume.
+Postgres row locking ensures only one of N concurrent UPDATEs matches the `attempt_number = N` predicate, so at most one pod ends up owning a given resume. The bumped `attempt_number` simultaneously revokes the prior owner's heartbeat: their next heartbeat write `WHERE attempt_number = N` returns rowcount=0, telling them they've lost the claim.
 
 ## 4. Author-side requirements
 
@@ -421,9 +416,9 @@ flowchart LR
 
 - `POST /responses` / `GET /responses/{id}` HTTP routes (and their schemas).
 - The MLflow `@invoke()` / `@stream()` handler convention.
-- `_build_prose_recovery_message` — prose construction is handler-policy, not engine-internals; lives in the adapter that bridges MLflow handlers to TaskFlow's `recover()`.
-- `_rotate_conversation_id` and `_inject_conversation_id` — same reason.
-- Author-visible settings (db config, heartbeat tuning, task timeout).
+- `_build_prose_recovery_message` — recovery-message construction is handler-policy, not engine-internals; lives in the adapter that bridges MLflow handlers to TaskFlow's `recover()`.
+- `_rotate_conversation_id` — same reason.
+- Author-visible settings (db config, heartbeat tuning, task timeout, stale-scan tuning).
 
 ### What gets deleted
 
@@ -453,8 +448,9 @@ The point of the `LongRunningAgentServer` abstraction is exactly this kind of sw
 - **Code:** `src/databricks_ai_bridge/long_running/`
 - **Tests:** `tests/databricks_ai_bridge/test_long_running_server.py`, `test_long_running_db.py`
 - **Settings:** `LongRunningSettings` in `settings.py`
-- **Model:** `Response` and `Message` in `models.py`
+- **Models:** `Response` and `Message` in `models.py`
 - **HTTP routes:** registered in `LongRunningAgentServer._setup_routes`
 - **Prose recovery:** `_build_prose_recovery_message` in `server.py`
-- **UI-echo dedup:** `_trim_echoed_history` in `server.py`
-- **Conversation rotation:** `_rotate_conversation_id` / `_inject_conversation_id` in `server.py`
+- **Conversation rotation:** `_rotate_conversation_id` in `server.py`
+- **Stale scanner:** `LongRunningAgentServer._stale_response_scanner_loop` in `server.py`
+- **UI-echo dedup:** in agent code, see `app-templates/agent-{openai,langgraph}-advanced/`
