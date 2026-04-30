@@ -270,9 +270,7 @@ class TestDeferredMarkFailed:
             stream_event = args[1]["stream_event"]
             assert stream_event["type"] == "error"
             assert stream_event["error"]["code"] == "task_timeout"
-            mock_update.assert_awaited_once_with(
-                "resp_123", "failed", expected_attempt_number=None
-            )
+            mock_update.assert_awaited_once_with("resp_123", "failed", expected_attempt_number=None)
 
     @pytest.mark.asyncio
     async def test_handles_db_error_gracefully(self):
@@ -309,9 +307,7 @@ class TestDeferredMarkFailed:
                 new_callable=AsyncMock,
             ) as mock_update,
         ):
-            await _deferred_mark_failed(
-                "resp_123", delay=0.01, owning_attempt_number=1
-            )
+            await _deferred_mark_failed("resp_123", delay=0.01, owning_attempt_number=1)
             # Neither append nor status-write fires when we've lost ownership.
             mock_append.assert_not_awaited()
             mock_update.assert_not_awaited()
@@ -769,9 +765,7 @@ class TestTaskScope:
             assert evt["error"]["message"] == "something broke"
             assert evt["error"]["code"] == "task_failed"
             assert mock_append.call_args.args[1] == 2  # next_seq
-            mock_update.assert_awaited_once_with(
-                "resp_err", "failed", expected_attempt_number=1
-            )
+            mock_update.assert_awaited_once_with("resp_err", "failed", expected_attempt_number=1)
 
     @pytest.mark.asyncio
     async def test_exception_falls_back_to_deferred_on_db_failure(self):
