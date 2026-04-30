@@ -39,17 +39,30 @@ async def create_response(
 
 
 async def update_response_status(
-    response_id: str, status: str, *, expected_current_status: str | None = None
+    response_id: str,
+    status: str,
+    *,
+    expected_current_status: str | None = None,
+    expected_attempt_number: int | None = None,
 ) -> bool:
     """Update response status. Returns True if a row was updated.
 
     If *expected_current_status* is given the update only takes effect when the
     row's current status matches, avoiding concurrent-update races.
+
+    If *expected_attempt_number* is given the update only takes effect when the
+    row's current ``attempt_number`` matches, ensuring only the pod that owns
+    the current attempt can transition the row to a terminal state. This
+    prevents a stale background task (e.g. a deferred-fail timer that fired
+    after another pod claimed the row for resume) from clobbering the new
+    owner's in-progress state.
     """
     async with session_scope() as session:
         stmt = update(Response).where(Response.response_id == response_id)
         if expected_current_status is not None:
             stmt = stmt.where(Response.status == expected_current_status)
+        if expected_attempt_number is not None:
+            stmt = stmt.where(Response.attempt_number == expected_attempt_number)
         stmt = stmt.values(status=status)
         result = await session.execute(stmt)
         await session.commit()

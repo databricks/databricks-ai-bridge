@@ -60,13 +60,23 @@ _POD_LOG_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
 async def _deferred_mark_failed(
-    response_id: str, delay: float = 2.0, reason: str = "Task timed out"
+    response_id: str,
+    delay: float = 2.0,
+    reason: str = "Task timed out",
+    *,
+    owning_attempt_number: int | None = None,
 ) -> None:
     """Mark a response as failed after a short delay.
 
     Runs as an independent asyncio task so the caller (``_task_scope``) can
-    return immediately.  The delay lets the connection pool stabilise after
-    a cancellation before we attempt new DB writes.
+    return immediately. The delay lets the connection pool stabilise after a
+    cancellation before we attempt new DB writes.
+
+    ``owning_attempt_number`` should be the attempt this pod was running when
+    the failure was scheduled. The terminal status update is CAS-checked
+    against it: if another pod has already claimed the row for a higher
+    attempt by the time this fires, we skip the failed-status write so we
+    don't clobber the new owner's state.
     """
     try:
         await asyncio.sleep(delay)
@@ -77,7 +87,16 @@ async def _deferred_mark_failed(
         async with asyncio.timeout(delay):
             existing = await get_messages(response_id, after_sequence=None)
             next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
-            attempt = await _current_attempt(response_id)
+            current_attempt = await _current_attempt(response_id)
+            if owning_attempt_number is not None and current_attempt != owning_attempt_number:
+                logger.info(
+                    "Skipping deferred fail for %s: ownership changed "
+                    "(was attempt=%d, now attempt=%d)",
+                    response_id,
+                    owning_attempt_number,
+                    current_attempt,
+                )
+                return
 
             error_event = {
                 "type": "error",
@@ -92,9 +111,13 @@ async def _deferred_mark_failed(
                 next_seq,
                 item=None,
                 stream_event=error_event,
-                attempt_number=attempt,
+                attempt_number=current_attempt,
             )
-            await update_response_status(response_id, "failed")
+            await update_response_status(
+                response_id,
+                "failed",
+                expected_attempt_number=owning_attempt_number,
+            )
 
         logger.info("Marked %s as failed (reason: %s)", response_id, reason)
     except TimeoutError:
@@ -694,9 +717,18 @@ class LongRunningAgentServer(AgentServer):
 
     @asynccontextmanager
     async def _task_scope(
-        self, response_id: str, state: dict[str, Any]
+        self,
+        response_id: str,
+        state: dict[str, Any],
+        *,
+        attempt_number: int = 1,
     ) -> AsyncGenerator[None, None]:
-        """Timeout + error handling wrapper for background tasks."""
+        """Timeout + error handling wrapper for background tasks.
+
+        ``attempt_number`` is CAS-checked on terminal-status writes so a
+        deferred fail / cleanup that fires after another pod has claimed the
+        row for resume doesn't clobber the new owner's in-progress state.
+        """
         try:
             async with asyncio.timeout(self._settings.task_timeout_seconds):
                 yield
@@ -707,7 +739,11 @@ class LongRunningAgentServer(AgentServer):
                 self._settings.task_timeout_seconds,
             )
             asyncio.create_task(
-                _deferred_mark_failed(response_id, delay=self._settings.cleanup_timeout_seconds),
+                _deferred_mark_failed(
+                    response_id,
+                    delay=self._settings.cleanup_timeout_seconds,
+                    owning_attempt_number=attempt_number,
+                ),
                 name=f"deferred-fail-{response_id}",
             )
         except Exception as exc:
@@ -717,7 +753,6 @@ class LongRunningAgentServer(AgentServer):
                 async with asyncio.timeout(self._settings.cleanup_timeout_seconds):
                     existing = await get_messages(response_id, after_sequence=None)
                     next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
-                    attempt = await _current_attempt(response_id)
                     await append_message(
                         response_id,
                         next_seq,
@@ -730,9 +765,13 @@ class LongRunningAgentServer(AgentServer):
                                 "code": "task_failed",
                             },
                         },
-                        attempt_number=attempt,
+                        attempt_number=attempt_number,
                     )
-                    await update_response_status(response_id, "failed")
+                    await update_response_status(
+                        response_id,
+                        "failed",
+                        expected_attempt_number=attempt_number,
+                    )
             except Exception:
                 logger.exception(
                     "[error-cleanup] Immediate update failed for %s, deferring",
@@ -743,6 +782,7 @@ class LongRunningAgentServer(AgentServer):
                         response_id,
                         delay=self._settings.cleanup_timeout_seconds,
                         reason=str(exc),
+                        owning_attempt_number=attempt_number,
                     ),
                     name=f"deferred-fail-{response_id}",
                 )
@@ -758,7 +798,7 @@ class LongRunningAgentServer(AgentServer):
         """Timeout-guarded wrapper around the streaming agent loop."""
         state: dict[str, Any] = {"seq": 0}
         async with (
-            self._task_scope(response_id, state),
+            self._task_scope(response_id, state, attempt_number=attempt_number),
             self._heartbeat(response_id, attempt_number),
         ):
             await self._do_background_stream(
@@ -872,7 +912,7 @@ class LongRunningAgentServer(AgentServer):
         """Timeout-guarded wrapper around the invoke agent loop."""
         state: dict[str, Any] = {"seq": 0}
         async with (
-            self._task_scope(response_id, state),
+            self._task_scope(response_id, state, attempt_number=attempt_number),
             self._heartbeat(response_id, attempt_number),
         ):
             await self._do_background_invoke(
