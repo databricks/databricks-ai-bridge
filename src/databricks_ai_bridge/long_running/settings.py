@@ -15,6 +15,15 @@ class LongRunningSettings:
     poll_interval_seconds: float = 1.0
     db_statement_timeout_ms: int = 5000
     cleanup_timeout_seconds: float = 7.0
+    heartbeat_interval_seconds: float = 3.0
+    heartbeat_stale_threshold_seconds: float = 10.0
+    # Proactive stale-scan loop: how often (on average) each pod queries the
+    # responses table for stale-heartbeat rows and tries to claim+resume them.
+    # Each pod jitters this interval so multiple pods don't all hit the DB at
+    # once. The loop is the proactive counterpart to the lazy-on-GET claim
+    # path; it ensures crashed responses get recovered even if no client polls.
+    stale_scan_interval_seconds: float = 30.0
+    stale_scan_jitter_fraction: float = 0.5
 
     def __post_init__(self) -> None:
         if self.task_timeout_seconds <= 0:
@@ -25,6 +34,16 @@ class LongRunningSettings:
             raise ValueError("db_statement_timeout_ms must be positive")
         if self.cleanup_timeout_seconds <= 0:
             raise ValueError("cleanup_timeout_seconds must be positive")
+        if self.heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be positive")
+        if self.heartbeat_stale_threshold_seconds <= 0:
+            raise ValueError("heartbeat_stale_threshold_seconds must be positive")
+        if self.heartbeat_stale_threshold_seconds <= self.heartbeat_interval_seconds:
+            raise ValueError(
+                f"heartbeat_stale_threshold_seconds ({self.heartbeat_stale_threshold_seconds}) "
+                f"must be strictly greater than heartbeat_interval_seconds "
+                f"({self.heartbeat_interval_seconds}) to avoid false stale-run detection."
+            )
         db_timeout_s = self.db_statement_timeout_ms / 1000.0
         if self.cleanup_timeout_seconds <= db_timeout_s:
             raise ValueError(
@@ -32,3 +51,7 @@ class LongRunningSettings:
                 f"strictly greater than db_statement_timeout_ms converted to seconds "
                 f"({db_timeout_s})"
             )
+        if self.stale_scan_interval_seconds <= 0:
+            raise ValueError("stale_scan_interval_seconds must be positive")
+        if not 0 <= self.stale_scan_jitter_fraction < 1:
+            raise ValueError("stale_scan_jitter_fraction must be in [0, 1)")
