@@ -507,7 +507,9 @@ class TestDoBackgroundStream:
             patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
             patch(f"{MODULE}.mlflow") as mock_mlflow,
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
             patch(f"{MODULE}.ResponsesAgent") as mock_ra,
         ):
             mock_mlflow.start_span.return_value = span
@@ -522,7 +524,7 @@ class TestDoBackgroundStream:
             assert seqs == [0, 1, 2]
             # Verify state tracks final seq
             assert state["seq"] == 3
-            mock_update.assert_awaited_once_with("resp_1", "completed")
+            mock_update.assert_awaited_once_with("resp_1", "completed", expected_attempt_number=1)
 
     @pytest.mark.asyncio
     async def test_calls_transform_stream_event(self):
@@ -574,12 +576,14 @@ class TestDoBackgroundStream:
 
         with (
             patch(f"{MODULE}.get_stream_function", return_value=None),
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
         ):
             state = {"seq": 0}
             with pytest.raises(RuntimeError, match="No stream function registered"):
                 await server._do_background_stream("resp_x", {}, False, state)
-            mock_update.assert_awaited_once_with("resp_x", "failed")
+            mock_update.assert_awaited_once_with("resp_x", "failed", expected_attempt_number=1)
 
     @pytest.mark.asyncio
     async def test_persists_trace_id_when_requested(self):
@@ -628,7 +632,9 @@ class TestDoBackgroundInvoke:
             patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke),
             patch(f"{MODULE}.mlflow") as mock_mlflow,
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
             patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock),
         ):
             mock_mlflow.start_span.return_value = span
@@ -646,7 +652,7 @@ class TestDoBackgroundInvoke:
                 assert evt["type"] == "response.output_item.done"
                 assert "item" in evt
             assert state["seq"] == 2
-            mock_update.assert_awaited_once_with("resp_inv", "completed")
+            mock_update.assert_awaited_once_with("resp_inv", "completed", expected_attempt_number=1)
 
     @pytest.mark.asyncio
     async def test_trace_id_persisted_when_requested(self):
@@ -677,12 +683,14 @@ class TestDoBackgroundInvoke:
 
         with (
             patch(f"{MODULE}.get_invoke_function", return_value=None),
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
         ):
             state = {"seq": 0}
             with pytest.raises(RuntimeError, match="No invoke function registered"):
                 await server._do_background_invoke("resp_x", {}, False, state)
-            mock_update.assert_awaited_once_with("resp_x", "failed")
+            mock_update.assert_awaited_once_with("resp_x", "failed", expected_attempt_number=1)
 
     @pytest.mark.asyncio
     async def test_sync_invoke_fn_supported(self):
@@ -697,7 +705,9 @@ class TestDoBackgroundInvoke:
             patch(f"{MODULE}.get_invoke_function", return_value=sync_invoke),
             patch(f"{MODULE}.mlflow") as mock_mlflow,
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
             patch(f"{MODULE}.update_response_trace_id", new_callable=AsyncMock),
         ):
             mock_mlflow.start_span.return_value = span
@@ -706,7 +716,9 @@ class TestDoBackgroundInvoke:
             await server._do_background_invoke("resp_sync", {"input": "hi"}, False, state)
 
             assert mock_append.await_count == 1
-            mock_update.assert_awaited_once_with("resp_sync", "completed")
+            mock_update.assert_awaited_once_with(
+                "resp_sync", "completed", expected_attempt_number=1
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +764,9 @@ class TestTaskScope:
                 return_value=_resp_info(),
             ),
             patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
-            patch(f"{MODULE}.update_response_status", new_callable=AsyncMock) as mock_update,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
         ):
             state = {"seq": 2}
             async with server._task_scope("resp_err", state):

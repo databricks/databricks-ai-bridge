@@ -825,7 +825,9 @@ class LongRunningAgentServer(AgentServer):
         """Run agent via stream_fn, persist each stream event as a message row."""
         stream_fn = get_stream_function()
         if stream_fn is None:
-            await update_response_status(response_id, "failed")
+            await update_response_status(
+                response_id, "failed", expected_attempt_number=attempt_number
+            )
             raise RuntimeError("No stream function registered; cannot run background stream")
 
         func_name = stream_fn.__name__
@@ -891,7 +893,18 @@ class LongRunningAgentServer(AgentServer):
                     attempt_number=attempt_number,
                 )
 
-        await update_response_status(response_id, "completed")
+        updated = await update_response_status(
+            response_id, "completed", expected_attempt_number=attempt_number
+        )
+        if not updated:
+            logger.info(
+                "[durable] skipped completed-status write response_id=%s attempt=%d "
+                "(another pod claimed the row mid-handler); pod=%s",
+                response_id,
+                attempt_number,
+                _POD_LOG_ID,
+            )
+            return
         logger.info(
             "[durable] background stream completed response_id=%s attempt=%d "
             "total_events=%d pod=%s",
@@ -935,7 +948,9 @@ class LongRunningAgentServer(AgentServer):
         """Run agent via invoke_fn, persist each output item as a message row."""
         invoke_fn = get_invoke_function()
         if invoke_fn is None:
-            await update_response_status(response_id, "failed")
+            await update_response_status(
+                response_id, "failed", expected_attempt_number=attempt_number
+            )
             raise RuntimeError("No invoke function registered; cannot run background invoke")
 
         func_name = invoke_fn.__name__
@@ -975,7 +990,18 @@ class LongRunningAgentServer(AgentServer):
             state["seq"] = seq + 1
         if return_trace_id:
             await update_response_trace_id(response_id, span.trace_id)
-        await update_response_status(response_id, "completed")
+        updated = await update_response_status(
+            response_id, "completed", expected_attempt_number=attempt_number
+        )
+        if not updated:
+            logger.info(
+                "[durable] skipped completed-status write response_id=%s attempt=%d "
+                "(another pod claimed the row mid-handler); pod=%s",
+                response_id,
+                attempt_number,
+                _POD_LOG_ID,
+            )
+            return
         logger.debug(
             "Background invoke completed",
             extra={"response_id": response_id, "output_items": len(output)},
