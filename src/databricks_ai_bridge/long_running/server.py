@@ -254,6 +254,24 @@ def _rotate_conversation_id(
     return request_dict
 
 
+def _attach_bridge_logger() -> None:
+    """Surface ``databricks_ai_bridge`` INFO logs in app stdout, since
+    uvicorn's logging config drops INFO from non-uvicorn loggers. Idempotent;
+    set ``DATABRICKS_AI_BRIDGE_LOG_QUIET=1`` to opt out.
+    """
+    if os.environ.get("DATABRICKS_AI_BRIDGE_LOG_QUIET", "").lower() in ("1", "true", "yes"):
+        return
+    bridge_logger = logging.getLogger("databricks_ai_bridge")
+    if bridge_logger.level == logging.NOTSET or bridge_logger.level > logging.INFO:
+        bridge_logger.setLevel(logging.INFO)
+    if any(isinstance(h, logging.StreamHandler) for h in bridge_logger.handlers):
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    bridge_logger.addHandler(handler)
+    bridge_logger.propagate = False
+
+
 @experimental
 class LongRunningAgentServer(AgentServer):
     """AgentServer subclass adding background mode, retrieve endpoints, and
@@ -336,6 +354,7 @@ class LongRunningAgentServer(AgentServer):
                 f"LongRunningAgentServer only supports '{self._SUPPORTED_AGENT_TYPE}', "
                 f"got '{agent_type}'"
             )
+        _attach_bridge_logger()
         self._settings = LongRunningSettings(
             task_timeout_seconds=task_timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
