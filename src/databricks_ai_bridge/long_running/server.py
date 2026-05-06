@@ -44,8 +44,10 @@ from databricks_ai_bridge.long_running.repository import (
     get_messages,
     get_response,
     heartbeat_response,
+    resolve_conversation_alias,
     update_response_status,
     update_response_trace_id,
+    upsert_conversation_alias,
 )
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 from databricks_ai_bridge.utils.annotations import experimental
@@ -197,7 +199,7 @@ def _rotate_conversation_id(
     new_attempt_number: int,
     response_id: str,
 ) -> dict[str, Any]:
-    """Rotate the conversation anchor to a per-attempt value.
+    """Rotate the conversation anchor to a per-rotation-unique value.
 
     After a crash, attempt N+1 should see a FRESH checkpointer / session so it
     doesn't inherit mid-turn state that the SDK can't repair cleanly (most
@@ -208,9 +210,12 @@ def _rotate_conversation_id(
         2. context.conversation_id                (fallback)
         3. auto-generated                         (last resort)
 
-    We drop (1), pick the current base anchor, and write ``{base}::attempt-N``
-    into (2). The handler then resolves to a fresh key for this attempt while
-    still being deterministic across retries of the same attempt.
+    We drop (1), pick the current base anchor, and write
+    ``{base}::r-{response_id_short}-{attempt}`` into (2). Including
+    ``response_id`` (truncated for readability) is what keeps multi-turn
+    rotations collision-free: turn 2's attempt-2 must not share a session
+    with turn 1's attempt-2 — both would otherwise mint
+    ``{base}::attempt-2`` and re-poison the just-rotated session.
 
     The LLM sees full turn history via ``original_request.input``, which was
     captured at the initial POST — before any attempt ran, so it's clean by
@@ -231,9 +236,12 @@ def _rotate_conversation_id(
     custom_inputs.pop("session_id", None)
     request_dict["custom_inputs"] = custom_inputs
 
+    # response_id format is ``resp_<24hex>``; first 8 chars of the hex are
+    # plenty for collision-avoidance within one bridge deployment.
+    rid_short = response_id.removeprefix("resp_")[:8] or response_id
     ctx = request_dict.get("context") or {}
     ctx = dict(ctx)
-    rotated = f"{base_anchor}::attempt-{new_attempt_number}"
+    rotated = f"{base_anchor}::r-{rid_short}-{new_attempt_number}"
     ctx["conversation_id"] = rotated
     request_dict["context"] = ctx
     logger.info(
@@ -517,6 +525,20 @@ class LongRunningAgentServer(AgentServer):
         # when tests pass a plain dict directly.
         dump = getattr(request_data, "model_dump", None)
         request_dict = dump() if callable(dump) else dict(request_data)
+
+        # Forward-resolve the client-visible base conversation_id to its
+        # current rotated form so the SDK lands on the post-rotation
+        # session. The client never has to track rotation itself; it always
+        # sends the original base id. ``original_request`` keeps the BASE so
+        # later rotations anchor off it (and ids don't grow unboundedly
+        # across multiple crashes). The dispatched copy uses the resolved
+        # form so this turn's SDK session is the rotated one.
+        base_conv_id = (request_dict.get("context") or {}).get("conversation_id")
+        if base_conv_id:
+            current_conv_id = await resolve_conversation_alias(base_conv_id)
+        else:
+            current_conv_id = None
+
         # Store the FULL request (untrimmed) as `original_request` so resume can
         # recover the entire prior-turn history. Per-template handlers are
         # responsible for deduping their own UI-echoed input against the SDK's
@@ -527,7 +549,22 @@ class LongRunningAgentServer(AgentServer):
             durable=True,
             original_request=request_dict,
         )
-        durable_request = self.validator.validate_and_convert_request(request_dict)
+
+        if current_conv_id and current_conv_id != base_conv_id:
+            dispatch_dict = copy.deepcopy(request_dict)
+            ctx = dispatch_dict.get("context") or {}
+            ctx = dict(ctx)
+            ctx["conversation_id"] = current_conv_id
+            dispatch_dict["context"] = ctx
+            logger.info(
+                "[durable] resolved alias on POST response_id=%s base=%s current=%s",
+                response_id,
+                base_conv_id,
+                current_conv_id,
+            )
+        else:
+            dispatch_dict = request_dict
+        durable_request = self.validator.validate_and_convert_request(dispatch_dict)
 
         logger.info(
             "Background response created response_id=%s stream=%s pod=%s",
@@ -1113,13 +1150,28 @@ class LongRunningAgentServer(AgentServer):
             new_attempt - 1,
             response_id,
         )
+        # Rotate ANCHORED off the base id stored in original_request — never
+        # off the prior rotated form — so multi-crash chains stay flat
+        # (chat-123 → chat-123::attempt-3, never chat-123::attempt-2::attempt-3).
+        base_conv_id = (resp.original_request.get("context") or {}).get("conversation_id")
         resume_dict = _rotate_conversation_id(resume_dict, new_attempt, response_id)
-        resume_request = self.validator.validate_and_convert_request(resume_dict)
-        # Surface the rotated conversation_id in the sentinel so clients that
-        # cache `chat_id → conversation_id` can pick up the rotation and use
-        # the rotated session on subsequent turns. Without this the next turn
-        # lands on the original (orphan-poisoned) session.
         rotated_conv_id = (resume_dict.get("context") or {}).get("conversation_id")
+        # Persist the alias so future requests for ``base_conv_id`` resolve
+        # forward to the rotated form on every pod, surviving chatbot restarts
+        # and multi-pod chatbot deployments. Without this, the client would
+        # need to remember the rotation itself.
+        if base_conv_id and rotated_conv_id and rotated_conv_id != base_conv_id:
+            await upsert_conversation_alias(base_conv_id, rotated_conv_id)
+            logger.info(
+                "[durable] persisted alias response_id=%s base=%s current=%s",
+                response_id,
+                base_conv_id,
+                rotated_conv_id,
+            )
+        resume_request = self.validator.validate_and_convert_request(resume_dict)
+        # Keep emitting the response.resumed sentinel for visibility / debug
+        # / test assertions; clients no longer need to act on it for
+        # cross-turn alias tracking — the bridge handles that server-side.
         await append_message(
             response_id,
             next_seq,

@@ -41,6 +41,33 @@ class Response(Base):
     messages = relationship("Message", back_populates="response", cascade="all, delete-orphan")
 
 
+class ConversationAlias(Base):
+    """Maps a stable, client-visible ``conversation_id`` to its current
+    rotated form so the client never has to track rotation itself.
+
+    On first use, ``base_conversation_id == current_conversation_id`` (no
+    rotation has happened). Each crash-resume rotates ``current`` to
+    ``{base}::attempt-N`` (anchored off ``base``, never off the prior
+    rotated form, so ids don't grow unboundedly across multiple crashes).
+
+    The bridge resolves every incoming request's ``context.conversation_id``
+    forward through this table before dispatching to the handler, so the
+    SDK's session/checkpointer always lands on the post-rotation thread.
+    """
+
+    __tablename__ = "conversation_aliases"
+    __table_args__ = {"schema": AGENT_DB_SCHEMA}
+
+    base_conversation_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    current_conversation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class Message(Base):
     """Stream events and output items for a response.
 
