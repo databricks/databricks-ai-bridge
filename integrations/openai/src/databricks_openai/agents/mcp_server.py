@@ -274,8 +274,15 @@ class McpServer(MCPServerStreamableHttp):
         )
 
     @mlflow.trace(span_type=SpanType.TOOL)
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
-        return await super().call_tool(tool_name, arguments)
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> CallToolResult:
+        # Forward extra kwargs (e.g. `meta` from newer openai-agents) so this
+        # override stays signature-compatible across SDK versions.
+        return await super().call_tool(tool_name, arguments, **kwargs)
 
     def create_streams(
         self,

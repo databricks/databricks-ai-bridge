@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agents.mcp import MCPServerStreamableHttpParams
@@ -232,3 +232,36 @@ class TestMcpServerFromUCResource:
                 == "https://test.databricks.com/api/2.0/mcp/vector-search/system/ai/test_index"
             )
             assert server.workspace_client == mock_workspace_client
+
+
+class TestMcpServerCallTool:
+    """The override must forward extra kwargs (e.g. ``meta``) the agents SDK passes."""
+
+    @pytest.mark.asyncio
+    async def test_call_tool_forwards_extra_kwargs(self, mock_workspace_client):
+        with patch(
+            "databricks_openai.agents.mcp_server.WorkspaceClient",
+            return_value=mock_workspace_client,
+        ):
+            from databricks_openai.agents.mcp_server import McpServer
+
+            server = McpServer(url="https://test.com/mcp")
+
+            sentinel = object()
+            with patch(
+                "agents.mcp.MCPServerStreamableHttp.call_tool",
+                new=AsyncMock(return_value=sentinel),
+            ) as mock_super_call:
+                # No extra kwargs — should call through with positional args only.
+                result = await server.call_tool("my_tool", {"x": 1})
+                assert result is sentinel
+                mock_super_call.assert_awaited_once_with("my_tool", {"x": 1})
+
+                mock_super_call.reset_mock()
+
+                # With ``meta`` — must be forwarded so newer openai-agents
+                # versions that pass meta don't break with TypeError.
+                meta = {"trace_id": "abc"}
+                result = await server.call_tool("my_tool", {"x": 1}, meta=meta)
+                assert result is sentinel
+                mock_super_call.assert_awaited_once_with("my_tool", {"x": 1}, meta=meta)
