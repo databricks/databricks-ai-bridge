@@ -280,11 +280,8 @@ class McpServer(MCPServerStreamableHttp):
         arguments: dict[str, Any] | None,
         **kwargs: Any,
     ) -> CallToolResult:
-        # Forward any extra kwargs (e.g. ``meta``) added by newer openai-agents
-        # versions so the override stays compatible across SDK releases. Older
-        # parents that don't accept these kwargs aren't sent any — the SDK only
-        # passes them when the corresponding feature is in use — so empty kwargs
-        # forward cleanly.
+        # Forward extra kwargs (e.g. `meta` from newer openai-agents) so this
+        # override stays signature-compatible across SDK versions.
         return await super().call_tool(tool_name, arguments, **kwargs)
 
     def create_streams(
