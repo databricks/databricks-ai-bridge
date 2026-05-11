@@ -343,6 +343,10 @@ class DatabricksOpenAI(OpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        **kwargs: Additional keyword arguments forwarded to the underlying ``openai.OpenAI``
+            client (e.g. ``timeout``, ``max_retries``, ``default_headers``). ``api_key`` and
+            ``http_client`` are managed internally for Databricks authentication and cannot
+            be overridden.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = DatabricksOpenAI()
@@ -506,6 +510,10 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        **kwargs: Additional keyword arguments forwarded to the underlying ``openai.AsyncOpenAI``
+            client (e.g. ``timeout``, ``max_retries``, ``default_headers``). ``api_key`` and
+            ``http_client`` are managed internally for Databricks authentication and cannot
+            be overridden.
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = AsyncDatabricksOpenAI()
