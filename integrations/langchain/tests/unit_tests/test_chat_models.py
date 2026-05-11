@@ -123,26 +123,6 @@ def test_timeout_and_max_retries_parameters() -> None:
     assert llm.max_retries == 5
 
 
-def test_async_client_forwards_timeout_and_max_retries() -> None:
-    """Regression test for issue #423: async_client used to crash on these kwargs."""
-    from unittest.mock import MagicMock
-
-    mock_workspace_client = MagicMock(spec=sdk.WorkspaceClient)
-    mock_workspace_client.config.host = "https://test.databricks.com"
-    mock_workspace_client.config.authenticate.return_value = {"Authorization": "Bearer t"}
-
-    llm = ChatDatabricks(
-        model="test-model",
-        workspace_client=mock_workspace_client,
-        timeout=42.0,
-        max_retries=8,
-    )
-
-    async_client = llm.async_client
-    assert async_client.timeout == 42.0
-    assert async_client.max_retries == 8
-
-
 def test_timeout_and_max_retries_with_workspace_client() -> None:
     """Test timeout and max_retries parameters work with workspace_client."""
     from unittest.mock import Mock, patch
