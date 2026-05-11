@@ -168,6 +168,18 @@ class TestAsyncDatabricksOpenAI:
         mock_workspace_client.config.authenticate.assert_called()
 
 
+class TestDatabricksOpenAIKwargForwarding:
+    """Forwarding of OpenAI kwargs through the wrappers (issue #423)."""
+
+    @pytest.mark.parametrize(
+        "client_cls", [DatabricksOpenAI, AsyncDatabricksOpenAI], ids=["sync", "async"]
+    )
+    def test_forwards_timeout_and_max_retries(self, client_cls, mock_workspace_client):
+        client = client_cls(workspace_client=mock_workspace_client, timeout=42.0, max_retries=7)
+        assert client.timeout == 42.0
+        assert client.max_retries == 7
+
+
 class TestStrictFieldStripping:
     """Tests for strict field stripping helper functions."""
 

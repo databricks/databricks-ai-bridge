@@ -385,6 +385,7 @@ class DatabricksOpenAI(OpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        **kwargs: Any,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
@@ -400,6 +401,7 @@ class DatabricksOpenAI(OpenAI):
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_http_client(workspace_client),
+            **kwargs,
         )
 
     @override
@@ -546,6 +548,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        **kwargs: Any,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
@@ -561,6 +564,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_async_http_client(workspace_client),
+            **kwargs,
         )
 
     @property
