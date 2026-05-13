@@ -343,6 +343,8 @@ class DatabricksOpenAI(OpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        **kwargs: Additional keyword arguments forwarded to the underlying ``openai.OpenAI``
+            client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = DatabricksOpenAI()
@@ -385,6 +387,7 @@ class DatabricksOpenAI(OpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        **kwargs: Any,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
@@ -400,6 +403,7 @@ class DatabricksOpenAI(OpenAI):
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_http_client(workspace_client),
+            **kwargs,
         )
 
     @override
@@ -504,6 +508,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        **kwargs: Additional keyword arguments forwarded to the underlying ``openai.AsyncOpenAI``
+            client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
     Example - Query a serving or AI gateway endpoint:
         >>> client = AsyncDatabricksOpenAI()
@@ -546,6 +552,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        **kwargs: Any,
     ):
         if workspace_client is None:
             workspace_client = WorkspaceClient()
@@ -561,6 +568,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
             http_client=_get_authorized_async_http_client(workspace_client),
+            **kwargs,
         )
 
     @property

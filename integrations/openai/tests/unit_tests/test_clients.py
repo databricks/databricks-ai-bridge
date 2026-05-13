@@ -168,6 +168,30 @@ class TestAsyncDatabricksOpenAI:
         mock_workspace_client.config.authenticate.assert_called()
 
 
+class TestDatabricksOpenAIKwargForwarding:
+    """Forwarding of OpenAI kwargs through the wrappers (issue #423)."""
+
+    @pytest.mark.parametrize(
+        "client_cls", [DatabricksOpenAI, AsyncDatabricksOpenAI], ids=["sync", "async"]
+    )
+    def test_forwards_timeout_and_max_retries(self, client_cls, mock_workspace_client):
+        client = client_cls(workspace_client=mock_workspace_client, timeout=42.0, max_retries=7)
+        assert client.timeout == 42.0
+        assert client.max_retries == 7
+
+    @pytest.mark.parametrize(
+        "client_cls", [DatabricksOpenAI, AsyncDatabricksOpenAI], ids=["sync", "async"]
+    )
+    @pytest.mark.parametrize("managed_kwarg", ["api_key", "http_client"])
+    def test_rejects_databricks_managed_auth_kwargs(
+        self, client_cls, managed_kwarg, mock_workspace_client
+    ):
+        # api_key and http_client are hardcoded with Databricks auth; passing them through
+        # **kwargs would collide with the super().__init__() call and raise TypeError.
+        with pytest.raises(TypeError, match="got multiple values for keyword argument"):
+            client_cls(workspace_client=mock_workspace_client, **{managed_kwarg: "anything"})
+
+
 class TestStrictFieldStripping:
     """Tests for strict field stripping helper functions."""
 
