@@ -1,12 +1,12 @@
-// Test setup file for Vitest
-// This file runs before each test file
+import fs from 'node:fs'
+import path from 'node:path'
+import { config as loadEnv } from 'dotenv'
 
-// You can add global test setup here, such as:
-// - Mock implementations
-// - Global test utilities
-// - Environment variable setup
-
-// Example: Set up test environment variables
 process.env.NODE_ENV = 'test'
 
-// You can extend expect with custom matchers here if needed
+const envLocalPath = path.resolve(process.cwd(), '.env.local')
+
+// Load local developer secrets for opt-in live tests without affecting CI defaults.
+if (fs.existsSync(envLocalPath)) {
+  loadEnv({ path: envLocalPath, quiet: true })
+}
