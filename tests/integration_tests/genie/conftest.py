@@ -93,3 +93,11 @@ def genie_text_response(genie_instance):
 def genie_pandas_response(genie_pandas_instance):
     """Cached pandas-mode response: 'What is the average amount by status?'"""
     return genie_pandas_instance.ask_question("What is the average amount by status?")
+
+
+@pytest.fixture(scope="session")
+def genie_summary_response(genie_instance):
+    """Cached response that tends to yield a summary plus a follow-up."""
+    return genie_instance.ask_question(
+        "Summarize the key insights from the data and explain what stands out."
+    )

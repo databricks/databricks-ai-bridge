@@ -11,7 +11,7 @@ from databricks_ai_bridge.genie import (
     Genie,
     _count_tokens,
     _extract_suggested_questions_from_attachment,
-    _extract_text_attachment_content_from_attachment,
+    _extract_text_attachment_content_from_attachments,
     _parse_attachments,
     _parse_query_result,
 )
@@ -831,7 +831,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
 
 # Parametrized tests for _parse_attachments
 @pytest.mark.parametrize(
-    "resp,exp_query,exp_text,exp_questions",
+    "resp,exp_query,exp_texts,exp_questions",
     [
         # All three attachment types
         (
@@ -846,7 +846,7 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 ]
             },
             {"attachment_id": "1", "query": {"query": "SELECT *", "description": "Test"}},
-            {"attachment_id": "2", "text": {"content": "Summary text"}},
+            [{"attachment_id": "2", "text": {"content": "Summary text"}}],
             {"attachment_id": "3", "suggested_questions": {"questions": ["Q1?", "Q2?", "Q3?"]}},
         ),
         # Only query
@@ -857,14 +857,14 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 ]
             },
             {"attachment_id": "1", "query": {"query": "SELECT 1", "description": "Desc"}},
-            None,
+            [],
             None,
         ),
         # Only text
         (
             {"attachments": [{"attachment_id": "2", "text": {"content": "Text only"}}]},
             None,
-            {"attachment_id": "2", "text": {"content": "Text only"}},
+            [{"attachment_id": "2", "text": {"content": "Text only"}}],
             None,
         ),
         # Only suggested questions
@@ -875,19 +875,19 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 ]
             },
             None,
-            None,
+            [],
             {"attachment_id": "3", "suggested_questions": {"questions": ["Question?"]}},
         ),
-        # Edge cases - all return None for all fields
-        ({"attachments": []}, None, None, None),
-        ({}, None, None, None),
-        ({"attachments": None}, None, None, None),
-        ({"attachments": "not a list"}, None, None, None),
+        # Edge cases - empty text list and None for the single-valued fields
+        ({"attachments": []}, None, [], None),
+        ({}, None, [], None),
+        ({"attachments": None}, None, [], None),
+        ({"attachments": "not a list"}, None, [], None),
         # Invalid items - only valid dict is parsed
         (
             {"attachments": ["string", 123, None, {"query": {"query": "SELECT 1"}}]},
             {"query": {"query": "SELECT 1"}},
-            None,
+            [],
             None,
         ),
         # Multiple query attachments (self-correction) - should return the LAST one
@@ -908,12 +908,11 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 "attachment_id": "2",
                 "query": {"query": "SELECT correct", "description": "corrected"},
             },
-            None,
+            [],
             None,
         ),
-        # Self-correction with paired text attachments - text should be paired
-        # with the final query (i.e., the first text AFTER the last query), not
-        # the first text overall or the final text (which may be a follow-up).
+        # Self-correction: text between the first and last query is superseded and
+        # dropped; text after the final query is kept in order.
         (
             {
                 "attachments": [
@@ -933,16 +932,36 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
                 ]
             },
             {"attachment_id": "4", "query": {"query": "SELECT correct"}},
-            {"attachment_id": "5", "text": {"content": "explains correct"}},
+            [
+                {"attachment_id": "5", "text": {"content": "explains correct"}},
+                {"attachment_id": "6", "text": {"content": "follow-up prompt"}},
+            ],
             {"attachment_id": "7", "suggested_questions": {"questions": ["Q2?"]}},
+        ),
+        # A summary text before the query and a trailing text after it must both be
+        # kept (the leading summary was previously overwritten).
+        (
+            {
+                "attachments": [
+                    {"attachment_id": "1", "text": {"content": "Summary with bullets"}},
+                    {"attachment_id": "2", "query": {"query": "SELECT 1"}},
+                    {"attachment_id": "3", "text": {"content": "Anything else?"}},
+                ]
+            },
+            {"attachment_id": "2", "query": {"query": "SELECT 1"}},
+            [
+                {"attachment_id": "1", "text": {"content": "Summary with bullets"}},
+                {"attachment_id": "3", "text": {"content": "Anything else?"}},
+            ],
+            None,
         ),
     ],
 )
-def test_parse_attachments(resp, exp_query, exp_text, exp_questions):
+def test_parse_attachments(resp, exp_query, exp_texts, exp_questions):
     """Test parsing attachments with various input scenarios."""
     result = _parse_attachments(resp)
     assert result["query_attachment"] == exp_query
-    assert result["text_attachment"] == exp_text
+    assert result["text_attachments"] == exp_texts
     assert result["suggested_questions_attachment"] == exp_questions
 
 
@@ -971,23 +990,36 @@ def test_extract_suggested_questions(attachment, expected):
     assert _extract_suggested_questions_from_attachment(attachment) == expected
 
 
-# Parametrized tests for _extract_text_attachment_content_from_attachment
+# Parametrized tests for _extract_text_attachment_content_from_attachments
 @pytest.mark.parametrize(
-    "attachment,expected",
+    "attachments,expected",
     [
-        ({"text": {"content": "Summary text"}}, "Summary text"),
-        ({"text": {"content": ""}}, ""),
-        ("not a dict", ""),
+        # Single text attachment
+        ([{"text": {"content": "Summary text"}}], "Summary text"),
+        ([{"text": {"content": ""}}], ""),
+        # Multiple text attachments are joined with a blank line
+        (
+            [{"text": {"content": "Summary"}}, {"text": {"content": "Follow-up?"}}],
+            "Summary\n\nFollow-up?",
+        ),
+        # Empty content entries are skipped when joining
+        (
+            [{"text": {"content": "Only this"}}, {"text": {"content": ""}}],
+            "Only this",
+        ),
+        # Edge cases / invalid inputs
+        ([], ""),
+        ("not a list", ""),
         (None, ""),
-        ({"other_key": "value"}, ""),
-        ({"text": "not a dict"}, ""),
-        ({"text": {"other_key": "value"}}, ""),
-        ({"text": {"content": "Line 1\nLine 2\nLine 3"}}, "Line 1\nLine 2\nLine 3"),
+        ([{"other_key": "value"}], ""),
+        ([{"text": "not a dict"}], ""),
+        ([{"text": {"other_key": "value"}}], ""),
+        ([{"text": {"content": "Line 1\nLine 2\nLine 3"}}], "Line 1\nLine 2\nLine 3"),
     ],
 )
-def test_extract_text_content(attachment, expected):
-    """Test extracting text content with various inputs."""
-    assert _extract_text_attachment_content_from_attachment(attachment) == expected
+def test_extract_text_content(attachments, expected):
+    """Test extracting and joining text content with various inputs."""
+    assert _extract_text_attachment_content_from_attachments(attachments) == expected
 
 
 def test_poll_with_all_attachments(genie, mock_workspace_client):
