@@ -6,6 +6,7 @@ from httpx import AsyncClient, Auth, Client, Request, Response
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
+from openai.resources.conversations import AsyncConversations, Conversations
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
 
@@ -135,6 +136,15 @@ def _resolve_base_url(
 
     # Fallback to using serving endpoints
     return f"{host}/serving-endpoints"
+
+
+def _resolve_conversations_base_url(
+    workspace_client: WorkspaceClient,
+    conversations_base_url: str | None,
+) -> str:
+    if conversations_base_url is not None:
+        return conversations_base_url
+    return f"{workspace_client.config.host}/api/2.1/unity-catalog"
 
 
 def _get_authorized_http_client(workspace_client: WorkspaceClient) -> Client:
@@ -337,6 +347,8 @@ class DatabricksOpenAI(OpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        conversations_base_url: Optional base URL to use for OpenAI Conversations API calls.
+            Defaults to ``{workspace_url}/api/2.1/unity-catalog``.
         use_ai_gateway_native_api: If True, auto-detect AI Gateway V2 and route requests through
             its native OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of
             provider-native features not available through the MLflow API. Cannot be combined
@@ -385,6 +397,7 @@ class DatabricksOpenAI(OpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        conversations_base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
         **kwargs: Any,
@@ -393,6 +406,9 @@ class DatabricksOpenAI(OpenAI):
             workspace_client = WorkspaceClient()
 
         self._workspace_client = workspace_client
+        self._conversations_base_url = _resolve_conversations_base_url(
+            workspace_client, conversations_base_url
+        )
 
         target_base_url = _resolve_base_url(
             workspace_client, base_url, use_ai_gateway, use_ai_gateway_native_api
@@ -424,6 +440,20 @@ class DatabricksOpenAI(OpenAI):
         if not hasattr(self, "_databricks_responses"):
             self._databricks_responses = DatabricksResponses(self, self._workspace_client)
         return self._databricks_responses
+
+    @property
+    def conversations(self) -> Conversations:
+        if not hasattr(self, "_databricks_conversations_client"):
+            self._databricks_conversations_client = OpenAI(
+                base_url=self._conversations_base_url,
+                api_key=self.api_key,
+                http_client=self._client,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+                default_headers=self._custom_headers,
+                default_query=self._custom_query,
+            )
+        return self._databricks_conversations_client.conversations
 
 
 class AsyncDatabricksCompletions(AsyncCompletions):
@@ -502,6 +532,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: Optional base URL to override the default serving endpoints URL. When the URL
             points to a Databricks App (contains "databricksapps"), OAuth authentication is
             required.
+        conversations_base_url: Optional base URL to use for OpenAI Conversations API calls.
+            Defaults to ``{workspace_url}/api/2.1/unity-catalog``.
         use_ai_gateway_native_api: If True, auto-detect AI Gateway V2 and route requests through
             its native OpenAI-compatible API (``<ai_gateway_url>/openai/v1``). This allows use of
             provider-native features not available through the MLflow API. Cannot be combined
@@ -550,6 +582,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         self,
         workspace_client: WorkspaceClient | None = None,
         base_url: str | None = None,
+        conversations_base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
         **kwargs: Any,
@@ -558,6 +591,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             workspace_client = WorkspaceClient()
 
         self._workspace_client = workspace_client
+        self._conversations_base_url = _resolve_conversations_base_url(
+            workspace_client, conversations_base_url
+        )
 
         target_base_url = _resolve_base_url(
             workspace_client, base_url, use_ai_gateway, use_ai_gateway_native_api
@@ -588,3 +624,17 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         if not hasattr(self, "_databricks_responses"):
             self._databricks_responses = AsyncDatabricksResponses(self, self._workspace_client)
         return self._databricks_responses
+
+    @property
+    def conversations(self) -> AsyncConversations:
+        if not hasattr(self, "_databricks_conversations_client"):
+            self._databricks_conversations_client = AsyncOpenAI(
+                base_url=self._conversations_base_url,
+                api_key=self.api_key,
+                http_client=self._client,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+                default_headers=self._custom_headers,
+                default_query=self._custom_query,
+            )
+        return self._databricks_conversations_client.conversations

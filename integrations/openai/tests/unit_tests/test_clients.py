@@ -9,6 +9,7 @@ from httpx import Request
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai._types import NOT_GIVEN, Omit
 from openai.resources.chat.completions import AsyncCompletions, Completions
+from openai.resources.conversations import AsyncConversations, Conversations
 from openai.resources.responses import AsyncResponses, Responses
 
 from databricks_openai import AsyncDatabricksOpenAI, DatabricksOpenAI
@@ -544,6 +545,48 @@ class TestDatabricksClientWithBaseUrl:
         assert "custom-endpoint.example.com" in str(client.base_url)
         # OAuth should not be validated for non-databricksapps URLs
         mock_workspace_client_no_oauth.config.oauth_token.assert_not_called()
+
+
+class TestConversationsBaseUrl:
+    """Tests for routing OpenAI Conversations API calls to a separate base URL."""
+
+    def test_sync_conversations_use_default_unity_catalog_base_url(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        assert isinstance(client.conversations, Conversations)
+        assert "/ai-gateway/mlflow/v1/" in str(client.base_url)
+        assert "/api/2.1/unity-catalog/" in str(client.conversations._client.base_url)
+
+    def test_sync_conversations_use_override_base_url(self, mock_workspace_client):
+        client = DatabricksOpenAI(
+            workspace_client=mock_workspace_client,
+            use_ai_gateway=True,
+            conversations_base_url="https://test.databricks.com/serving-endpoints",
+        )
+
+        assert "/ai-gateway/mlflow/v1/" in str(client.base_url)
+        assert "/serving-endpoints/" in str(client.conversations._client.base_url)
+        assert client.conversations is client.conversations
+
+    def test_async_conversations_use_default_unity_catalog_base_url(self, mock_workspace_client):
+        client = AsyncDatabricksOpenAI(
+            workspace_client=mock_workspace_client, use_ai_gateway=True
+        )
+
+        assert isinstance(client.conversations, AsyncConversations)
+        assert "/ai-gateway/mlflow/v1/" in str(client.base_url)
+        assert "/api/2.1/unity-catalog/" in str(client.conversations._client.base_url)
+
+    def test_async_conversations_use_override_base_url(self, mock_workspace_client):
+        client = AsyncDatabricksOpenAI(
+            workspace_client=mock_workspace_client,
+            use_ai_gateway=True,
+            conversations_base_url="https://test.databricks.com/serving-endpoints",
+        )
+
+        assert "/ai-gateway/mlflow/v1/" in str(client.base_url)
+        assert "/serving-endpoints/" in str(client.conversations._client.base_url)
+        assert client.conversations is client.conversations
 
 
 class TestAppsRouting:
