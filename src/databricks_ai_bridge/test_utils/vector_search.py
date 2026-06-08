@@ -4,7 +4,10 @@ from unittest import mock
 from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
-from databricks.vector_search.client import VectorSearchIndex
+try:
+    from databricks.ai_search.index import VectorSearchIndex
+except ImportError:
+    from databricks.vector_search.index import VectorSearchIndex
 
 INPUT_TEXTS = ["foo", "bar", "baz"]
 DEFAULT_VECTOR_DIMENSION = 4

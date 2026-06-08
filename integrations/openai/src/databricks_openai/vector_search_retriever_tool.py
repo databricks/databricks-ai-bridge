@@ -2,7 +2,10 @@ import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from databricks.vector_search.client import VectorSearchIndex
+try:
+    from databricks.ai_search.index import VectorSearchIndex
+except ImportError:
+    from databricks.vector_search.index import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
     RetrieverSchema,
