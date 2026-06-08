@@ -8,6 +8,7 @@ import mlflow
 import pytest
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
+
 try:
     from databricks.ai_search.index import VectorSearchIndex
 except ImportError:

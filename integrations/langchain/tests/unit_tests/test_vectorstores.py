@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 try:
     from databricks.ai_search.index import VectorSearchIndex
 except ImportError:
