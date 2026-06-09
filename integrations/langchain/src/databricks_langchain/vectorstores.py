@@ -423,7 +423,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.ai_search.client.VectorSearchIndex.similarity_search`. `See
-                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.ai_search.html#databricks.ai_search.index.VectorSearchIndex.similarity_search>`_
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
         Returns:
@@ -465,7 +465,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.ai_search.client.VectorSearchIndex.similarity_search`. `See
-                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.ai_search.html#databricks.ai_search.index.VectorSearchIndex.similarity_search>`_
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
         Returns:
@@ -539,7 +539,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.ai_search.client.VectorSearchIndex.similarity_search`. `See
-                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.ai_search.html#databricks.ai_search.index.VectorSearchIndex.similarity_search>`_
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
         Returns:
@@ -592,7 +592,7 @@ class DatabricksVectorSearch(VectorStore):
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
             kwargs: Additional keyword arguments to pass to `databricks.ai_search.client.VectorSearchIndex.similarity_search`. `See
-                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.ai_search.html#databricks.ai_search.index.VectorSearchIndex.similarity_search>`_
+                    documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
         Returns:
