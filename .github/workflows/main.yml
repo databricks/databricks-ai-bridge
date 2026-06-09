@@ -235,12 +235,6 @@ jobs:
           pip install .
           pip install integrations/openai --group dev
           pip install "${{ matrix.version.mlflow }}"
-          # Pin databricks-vectorsearch to the version range these historical
-          # openai-integration tags were validated against. >=0.74 removed the
-          # `VectorSearchIndex` re-export from `databricks.vector_search.client`
-          # that those historical sources import; fixing the source isn't an
-          # option (frozen tags), so we constrain the env instead.
-          pip install "databricks-vectorsearch<0.74"
       - name: Run tests
         run: |
           # Only testing initialization since functionality can change
