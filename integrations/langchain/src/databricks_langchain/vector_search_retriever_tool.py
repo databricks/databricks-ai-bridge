@@ -24,7 +24,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     for building a retriever tool for agents.
 
     **Note**: Any additional keyword arguments passed to the constructor will be passed along to
-    `databricks.ai_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
+    `databricks.ai_search.index.VectorSearchIndex.similarity_search` when executing the tool. `See
     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
     to see the full set of supported keyword arguments,
     e.g. `score_threshold`. Also, see documentation for
