@@ -47,8 +47,8 @@ class VectorSearchRetrieverTool(FunctionTool, VectorSearchRetrieverToolMixin):
         VectorSearchRetrieverToolMixin.__init__(self, **data)
 
         # Initialize private attributes
-        from databricks.vector_search.client import VectorSearchClient
-        from databricks.vector_search.utils import CredentialStrategy
+        from databricks.ai_search.client import VectorSearchClient
+        from databricks.ai_search.utils import CredentialStrategy
 
         credential_strategy = None
         if (

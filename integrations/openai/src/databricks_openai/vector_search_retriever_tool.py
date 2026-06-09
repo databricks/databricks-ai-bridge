@@ -2,7 +2,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from databricks.vector_search.index import VectorSearchIndex
+from databricks.ai_search.index import VectorSearchIndex
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
     RetrieverSchema,
@@ -68,7 +68,7 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
             )
 
     **Note**: Any additional keyword arguments passed to the constructor will be passed along to
-    `databricks.vector_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
+    `databricks.ai_search.index.VectorSearchIndex.similarity_search` when executing the tool. `See
     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
     to see the full set of supported keyword arguments,
     e.g. `score_threshold`. Also, see documentation for
@@ -99,10 +99,10 @@ class VectorSearchRetrieverTool(VectorSearchRetrieverToolMixin):
 
     @model_validator(mode="after")
     def _validate_tool_inputs(self):
-        from databricks.vector_search.client import (
+        from databricks.ai_search.client import (
             VectorSearchClient,  # import here so we can mock in tests
         )
-        from databricks.vector_search.utils import CredentialStrategy
+        from databricks.ai_search.utils import CredentialStrategy
 
         splits = self.index_name.split(".")
         if len(splits) != 3:

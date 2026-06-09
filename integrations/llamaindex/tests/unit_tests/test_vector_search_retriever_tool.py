@@ -4,11 +4,11 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
+from databricks.ai_search.index import VectorSearchIndex
+from databricks.ai_search.reranker import DatabricksReranker, Reranker
+from databricks.ai_search.utils import CredentialStrategy
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
-from databricks.vector_search.index import VectorSearchIndex
-from databricks.vector_search.reranker import DatabricksReranker, Reranker
-from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DEFAULT_VECTOR_DIMENSION,
@@ -156,7 +156,7 @@ def test_vector_search_client_model_serving_environment():
             host="testDogfod.com", credentials_strategy=ModelServingUserCredentials()
         )
 
-        with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
             with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
                 vsTool = VectorSearchRetrieverTool(
                     index_name="catalog.schema.my_index_name",
@@ -172,7 +172,7 @@ def test_vector_search_client_model_serving_environment():
 
 
 def test_vector_search_client_non_model_serving_environment():
-    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
         vsTool = VectorSearchRetrieverTool(
             index_name="catalog.schema.my_index_name",
             text_column="abc",
@@ -182,7 +182,7 @@ def test_vector_search_client_non_model_serving_environment():
         mockVSClient.assert_called_once_with(disable_notice=True, credential_strategy=None)
 
     w = WorkspaceClient(host="testDogfod.com", token="fakeToken")
-    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             vsTool = VectorSearchRetrieverTool(
                 index_name="catalog.schema.my_index_name",
