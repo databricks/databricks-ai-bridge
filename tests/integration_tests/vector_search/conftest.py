@@ -55,7 +55,7 @@ def vector_search_client(workspace_client):
     VectorSearchClient uses different env vars than the SDK,
     so we pass credentials explicitly.
     """
-    from databricks.vector_search.client import VectorSearchClient
+    from databricks.ai_search.client import VectorSearchClient
 
     workspace_url = workspace_client.config.host.rstrip("/")
 

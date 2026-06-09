@@ -39,7 +39,7 @@ class DatabricksRM(dspy.Retrieve):
 
         .. code-block:: python
 
-            from databricks.vector_search.client import VectorSearchClient
+            from databricks.ai_search.client import VectorSearchClient
             from databricks.sdk import WorkspaceClient
 
             # Create a Databricks workspace client
