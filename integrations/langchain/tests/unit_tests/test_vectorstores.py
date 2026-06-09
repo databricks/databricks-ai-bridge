@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
-from databricks.vector_search.client import VectorSearchIndex
+from databricks.vector_search.index import VectorSearchIndex
 from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks_ai_bridge.test_utils.vector_search import (
     ALL_INDEX_NAMES,

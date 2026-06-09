@@ -52,6 +52,7 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 databricks-ai-bridge = { path = "../../", editable = true }
+databricks-openai = { path = "../openai", editable = true }
 
 [tool.hatch.build]
 include = [
