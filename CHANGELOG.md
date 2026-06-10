@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.20.0 databricks-langchain 0.20.0 databricks-openai 0.16.0 (2026-06-10)
+
+### New Features
+- databricks-ai-bridge: Durable, crash-resumable agent execution for MLflow ResponsesAgent handlers (#425)
+
+### Improvements
+- databricks-ai-bridge / databricks-langchain / databricks-openai: migrate databricks-vectorsearch to databricks-ai-search (#437)
+
+### Bug Fixes
+- databricks-openai: forward extra `kwargs` to maintain compatibility with newer versions of openai-agents (#426, #429)
+
 ## databricks-ai-bridge 0.19.0 databricks-langchain 0.19.0 databricks-openai 0.15.0 (2026-04-22)
 
 ### New Features
