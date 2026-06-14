@@ -209,17 +209,14 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     # the answer. Prefer the id-less summary; otherwise fall back to the first
     # kept text attachment.
     query_indices = [i for i, a in enumerate(attachments) if "query" in a]
-    first_query, last_query = (
-        (query_indices[0], query_indices[-1]) if query_indices else (None, None)
-    )
+    # Indices of text strictly between the first and last query: superseded attempts.
+    superseded = set(range(query_indices[0] + 1, query_indices[-1])) if query_indices else set()
 
     text_candidates = []
     for i, a in enumerate(attachments):
         if "query" in a:
             result["query_attachment"] = a  # last query wins
-        elif "text" in a:
-            if first_query is not None and first_query < i < last_query:
-                continue
+        elif "text" in a and i not in superseded:
             text_candidates.append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
