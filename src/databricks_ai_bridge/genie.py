@@ -199,31 +199,29 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     if not attachments:
         return result
 
-    # Genie may self-correct, producing multiple query+text pairs. Text emitted
-    # strictly between the first and last query is a superseded attempt and is
-    # dropped; leading text (before the first query) and trailing text (after the
-    # last query) are part of the answer. Among the kept text attachments, the
-    # final summary is the one *without* an "attachment_id" -- internally-created
-    # messages also emit a follow-up/clarifying-question text attachment (which
-    # *does* have an attachment_id), and we don't want to surface that instead of
-    # the answer. Prefer the id-less summary; otherwise fall back to the first
-    # kept text attachment.
+    # Genie may self-correct, producing multiple query+text pairs. Text strictly
+    # between the first and last query is a superseded attempt; leading and trailing
+    # text is part of the answer. (With 0-1 queries the bounds collapse and nothing
+    # is dropped.) Among the kept text, the final summary is the one *without* an
+    # "attachment_id" -- internally-created messages also emit a follow-up/clarifying
+    # question text attachment (which *does* have an attachment_id) that we must not
+    # surface instead of the answer. Prefer the id-less summary, else the first text.
     query_indices = [i for i, a in enumerate(attachments) if "query" in a]
-    # Indices of text strictly between the first and last query: superseded attempts.
-    superseded = set(range(query_indices[0] + 1, query_indices[-1])) if query_indices else set()
+    first_query = query_indices[0] if query_indices else 0
+    last_query = query_indices[-1] if query_indices else 0
 
     text_candidates = []
     for i, a in enumerate(attachments):
         if "query" in a:
             result["query_attachment"] = a  # last query wins
-        elif "text" in a and i not in superseded:
+        elif "text" in a and not (first_query < i < last_query):
             text_candidates.append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
 
-    id_less_text = [a for a in text_candidates if a.get("attachment_id") is None]
-    if id_less_text:
-        result["text_attachment"] = id_less_text[-1]
+    summaries = [a for a in text_candidates if a.get("attachment_id") is None]
+    if summaries:
+        result["text_attachment"] = summaries[-1]  # final summary has no attachment_id
     elif text_candidates:
         result["text_attachment"] = text_candidates[0]
 
