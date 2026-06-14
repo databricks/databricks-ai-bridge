@@ -195,28 +195,40 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
         "suggested_questions_attachment": None,
     }
 
-    attachments = resp.get("attachments") or []
-    if not isinstance(attachments, list):
+    attachments = [a for a in (resp.get("attachments") or []) if isinstance(a, dict)]
+    if not attachments:
         return result
 
-    # Genie may self-correct, producing multiple query+text pairs. We want
-    # the final query and its paired text (the first text attachment following
-    # the final query).
-    want_new_text = True
-    for a in attachments:
-        if not isinstance(a, dict):
-            continue
+    # Genie may self-correct, producing multiple query+text pairs. Text emitted
+    # strictly between the first and last query is a superseded attempt and is
+    # dropped; leading text (before the first query) and trailing text (after the
+    # last query) are part of the answer. Among the kept text attachments, the
+    # final summary is the one *without* an "attachment_id" -- internally-created
+    # messages also emit a follow-up/clarifying-question text attachment (which
+    # *does* have an attachment_id), and we don't want to surface that instead of
+    # the answer. Prefer the id-less summary; otherwise fall back to the first
+    # kept text attachment.
+    query_indices = [i for i, a in enumerate(attachments) if "query" in a]
+    first_query, last_query = (
+        (query_indices[0], query_indices[-1]) if query_indices else (None, None)
+    )
 
+    text_candidates = []
+    for i, a in enumerate(attachments):
         if "query" in a:
-            result["query_attachment"] = a
-            want_new_text = True
-
-        elif "text" in a and want_new_text:
-            result["text_attachment"] = a
-            want_new_text = False
-
+            result["query_attachment"] = a  # last query wins
+        elif "text" in a:
+            if first_query is not None and first_query < i < last_query:
+                continue
+            text_candidates.append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
+
+    id_less_text = [a for a in text_candidates if a.get("attachment_id") is None]
+    if id_less_text:
+        result["text_attachment"] = id_less_text[-1]
+    elif text_candidates:
+        result["text_attachment"] = text_candidates[0]
 
     return result
 
