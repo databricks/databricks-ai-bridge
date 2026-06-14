@@ -196,34 +196,23 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     attachments = [a for a in (resp.get("attachments") or []) if isinstance(a, dict)]
-    if not attachments:
-        return result
 
-    # Genie may self-correct, producing multiple query+text pairs. Text strictly
-    # between the first and last query is a superseded attempt; leading and trailing
-    # text is part of the answer. (With 0-1 queries the bounds collapse and nothing
-    # is dropped.) Among the kept text, the final summary is the one *without* an
-    # "attachment_id" -- internally-created messages also emit a follow-up/clarifying
-    # question text attachment (which *does* have an attachment_id) that we must not
-    # surface instead of the answer. Prefer the id-less summary, else the first text.
-    query_indices = [i for i, a in enumerate(attachments) if "query" in a]
-    first_query = query_indices[0] if query_indices else 0
-    last_query = query_indices[-1] if query_indices else 0
-
-    text_candidates = []
-    for i, a in enumerate(attachments):
+    for a in attachments:
         if "query" in a:
             result["query_attachment"] = a  # last query wins
-        elif "text" in a and not (first_query < i < last_query):
-            text_candidates.append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
 
-    summaries = [a for a in text_candidates if a.get("attachment_id") is None]
+    # The answer is the final summary, which is the text attachment without an
+    # "attachment_id" -- internally-created messages also emit a follow-up/clarifying
+    # question text attachment (which *does* have one) that we must not surface
+    # instead. Take the last id-less text; fall back to the last text otherwise.
+    texts = [a for a in attachments if "text" in a]
+    summaries = [a for a in texts if a.get("attachment_id") is None]
     if summaries:
-        result["text_attachment"] = summaries[-1]  # final summary has no attachment_id
-    elif text_candidates:
-        result["text_attachment"] = text_candidates[0]
+        result["text_attachment"] = summaries[-1]
+    elif texts:
+        result["text_attachment"] = texts[-1]
 
     return result
 
