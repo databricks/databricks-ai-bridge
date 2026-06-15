@@ -911,9 +911,8 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             None,
             None,
         ),
-        # Self-correction: earlier-attempt text and a follow-up question both carry
-        # an attachment_id; only the final summary has none. The id-less summary wins
-        # over both.
+        # Self-correction: earlier attempts and the follow-up question carry an
+        # attachment_id; only the final summary has none, and it wins.
         (
             {
                 "attachments": [
@@ -935,21 +934,6 @@ def test_poll_for_result_continues_on_mlflow_tracing_exceptions(genie, mock_work
             {"attachment_id": "4", "query": {"query": "SELECT correct"}},
             {"text": {"content": "final summary"}},
             {"attachment_id": "7", "suggested_questions": {"questions": ["Q2?"]}},
-        ),
-        # Follow-up question (has attachment_id) emitted BEFORE the final summary
-        # (no attachment_id) - the id-less summary is the answer and must win over
-        # the preceding follow-up text.
-        (
-            {
-                "attachments": [
-                    {"attachment_id": "1", "query": {"query": "SELECT *"}},
-                    {"attachment_id": "2", "text": {"content": "Which proteins?"}},
-                    {"text": {"content": "Summary:\n- point a\n- point b"}},
-                ]
-            },
-            {"attachment_id": "1", "query": {"query": "SELECT *"}},
-            {"text": {"content": "Summary:\n- point a\n- point b"}},
-            None,
         ),
     ],
 )

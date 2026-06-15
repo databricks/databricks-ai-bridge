@@ -195,24 +195,26 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
         "suggested_questions_attachment": None,
     }
 
-    attachments = [a for a in (resp.get("attachments") or []) if isinstance(a, dict)]
+    attachments = resp.get("attachments") or []
+    if not isinstance(attachments, list):
+        return result
 
     for a in attachments:
+        if not isinstance(a, dict):
+            continue
+
         if "query" in a:
-            result["query_attachment"] = a  # last query wins
+            result["query_attachment"] = a
+
+        elif "text" in a:
+            # Genie's final summary is the text attachment with no "attachment_id";
+            # one that has an id is a follow-up/clarifying question. Prefer the summary
+            # (last wins), but keep any text as a fallback so we never drop answer text.
+            if a.get("attachment_id") is None or result["text_attachment"] is None:
+                result["text_attachment"] = a
+
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
-
-    # The answer is the final summary, which is the text attachment without an
-    # "attachment_id" -- internally-created messages also emit a follow-up/clarifying
-    # question text attachment (which *does* have one) that we must not surface
-    # instead. Take the last id-less text; fall back to the last text otherwise.
-    texts = [a for a in attachments if "text" in a]
-    summaries = [a for a in texts if a.get("attachment_id") is None]
-    if summaries:
-        result["text_attachment"] = summaries[-1]
-    elif texts:
-        result["text_attachment"] = texts[-1]
 
     return result
 
