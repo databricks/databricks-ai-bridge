@@ -17,6 +17,8 @@ pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdi
 ## Key Features
 
 - **Vector Search:** Store and query vector representations using `VectorSearchRetrieverTool`.
+- **OpenAI-compatible clients:** Use Databricks authentication with OpenAI SDK resources,
+  including optional separate routing for Conversations API calls.
 
 ## Getting Started
 
@@ -56,6 +58,31 @@ second_response = client.chat.completions.create(
 )
 ```
 
+### Use Conversations API state
+
+Conversations API calls default to `{workspace_url}/api/2.1/unity-catalog`, even when
+Responses API calls use another Databricks OpenAI-compatible base URL such as AI Gateway.
+Use `conversations_base_url` only when the Conversations API is served from a custom path.
+
+```python
+from databricks.sdk import WorkspaceClient
+from databricks_openai import DatabricksOpenAI
+
+workspace_client = WorkspaceClient()
+
+client = DatabricksOpenAI(
+    workspace_client=workspace_client,
+    use_ai_gateway=True,
+)
+
+conversation = client.conversations.create()
+response = client.responses.create(
+    model="databricks-claude-sonnet-4-5",
+    conversation=conversation.id,
+    input="Tell me about Databricks",
+)
+```
+
 ---
 
 ## Contribution Guide
@@ -65,4 +92,3 @@ We welcome contributions! Please see our [contribution guidelines](https://githu
 This project is licensed under the [MIT License](LICENSE).
 
 Thank you for using Databricks OpenAI!
-
