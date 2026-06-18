@@ -20,6 +20,7 @@ from mlflow.models.resources import (
     DatabricksVectorSearchIndex,
 )
 
+from databricks_mcp.external_client import PostOnlyMCPClient
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,12 @@ class DatabricksMCPClient:
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
+        # External/managed connections are fronted by a POST-only JSON-REST bridge that the
+        # Streamable HTTP client hangs against (its background GET SSE stream is rejected).
+        # Use the plain request/response POST client for those. See external_client.py.
+        if self._get_databricks_managed_mcp_url_type() == EXTERNAL_MCP:
+            async with PostOnlyMCPClient(self.server_url, self.client) as client:
+                return await client.list_tools()
         async with streamablehttp_client(
             url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
@@ -194,6 +201,9 @@ class DatabricksMCPClient:
         arguments: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
+        if self._get_databricks_managed_mcp_url_type() == EXTERNAL_MCP:
+            async with PostOnlyMCPClient(self.server_url, self.client) as client:
+                return await client.call_tool(tool_name, arguments)
         async with streamablehttp_client(
             url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
