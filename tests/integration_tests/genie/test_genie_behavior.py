@@ -73,6 +73,15 @@ class TestGenieConversationContinuity:
 
 
 @pytest.mark.behavior
+class TestGenieFullTextAttachment:
+    """poll_for_result must surface the complete answer text."""
+
+    def test_summary_text_is_nonempty(self, genie_summary_response):
+        text = genie_summary_response.text_attachment_content
+        assert isinstance(text, str) and text.strip(), "Expected non-empty summary text"
+
+
+@pytest.mark.behavior
 class TestGeniePandasMode:
     """Validates our _parse_query_result with return_pandas=True."""
 

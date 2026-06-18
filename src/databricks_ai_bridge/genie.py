@@ -186,12 +186,15 @@ def _end_current_span(client, parent_trace_id, current_span, final_state, error=
 
 
 def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse attachments from a Genie API response.
+
+    Returns the final query attachment, all text attachments belonging to the final
+    answer (an answer may carry several, e.g. a summary plus a follow-up), and the
+    suggested-questions attachment.
     """
-    Parse and normalize attachments from a Genie API response into a predictable structure.
-    """
-    result = {
+    result: Dict[str, Any] = {
         "query_attachment": None,
-        "text_attachment": None,
+        "text_attachments": [],
         "suggested_questions_attachment": None,
     }
 
@@ -199,22 +202,19 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(attachments, list):
         return result
 
-    # Genie may self-correct, producing multiple query+text pairs. We want
-    # the final query and its paired text (the first text attachment following
-    # the final query).
-    want_new_text = True
-    for a in attachments:
-        if not isinstance(a, dict):
-            continue
+    # Genie may self-correct, emitting multiple query+text pairs. Text strictly
+    # between the first and last query is a superseded attempt and is dropped; all
+    # other text is part of the answer and kept in order.
+    valid = [(i, a) for i, a in enumerate(attachments) if isinstance(a, dict)]
+    query_indices = [i for i, a in valid if "query" in a]
 
+    for i, a in valid:
         if "query" in a:
-            result["query_attachment"] = a
-            want_new_text = True
-
-        elif "text" in a and want_new_text:
-            result["text_attachment"] = a
-            want_new_text = False
-
+            result["query_attachment"] = a  # last query wins
+        elif "text" in a:
+            if query_indices and query_indices[0] < i < query_indices[-1]:
+                continue
+            result["text_attachments"].append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
 
@@ -237,16 +237,23 @@ def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[st
     return [q for q in questions if isinstance(q, str)] or None
 
 
-def _extract_text_attachment_content_from_attachment(attachment) -> Optional[str]:
-    """Extract text summary from a Genie API response attachment."""
-    if not isinstance(attachment, dict):
+def _extract_text_attachment_content_from_attachments(attachments) -> Optional[str]:
+    """Join the text summaries from a list of Genie API response text attachments."""
+    if not isinstance(attachments, list):
         return ""
 
-    text_obj = attachment.get("text")
-    if not isinstance(text_obj, dict):
-        return ""
+    contents: List[str] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        text_obj = attachment.get("text")
+        if not isinstance(text_obj, dict):
+            continue
+        content = text_obj.get("content", "")
+        if content:
+            contents.append(content)
 
-    return text_obj.get("content", "")
+    return "\n\n".join(contents)
 
 
 class Genie:
@@ -403,8 +410,8 @@ class Genie:
                         suggested_questions = _extract_suggested_questions_from_attachment(
                             parsed["suggested_questions_attachment"]
                         )
-                        text_attachment_content = _extract_text_attachment_content_from_attachment(
-                            parsed["text_attachment"]
+                        text_attachment_content = _extract_text_attachment_content_from_attachments(
+                            parsed["text_attachments"]
                         )
 
                         if parsed["query_attachment"]:
