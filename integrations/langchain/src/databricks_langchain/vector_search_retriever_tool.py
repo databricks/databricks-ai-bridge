@@ -1,7 +1,7 @@
 import json
 from typing import Type
 
-from databricks.vector_search.reranker import DatabricksReranker
+from databricks.ai_search.reranker import DatabricksReranker
 from databricks_ai_bridge.utils.vector_search import IndexDetails
 from databricks_ai_bridge.vector_search_retriever_tool import (
     FilterItem,
@@ -24,7 +24,7 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
     for building a retriever tool for agents.
 
     **Note**: Any additional keyword arguments passed to the constructor will be passed along to
-    `databricks.vector_search.client.VectorSearchIndex.similarity_search` when executing the tool. `See
+    `databricks.ai_search.index.VectorSearchIndex.similarity_search` when executing the tool. `See
     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
     to see the full set of supported keyword arguments,
     e.g. `score_threshold`. Also, see documentation for

@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, create_autospec, patch
 
 import mlflow
 import pytest
+from databricks.ai_search.utils import CredentialStrategy
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.credentials_provider import ModelServingUserCredentials
-from databricks.vector_search.utils import CredentialStrategy
 from databricks_ai_bridge.test_utils.vector_search import (  # noqa: F401
     ALL_INDEX_NAMES,
     DELTA_SYNC_INDEX,
@@ -301,7 +301,7 @@ def test_vector_search_client_model_serving_environment():
             host="testDogfod.com", credentials_strategy=ModelServingUserCredentials()
         )
 
-        with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+        with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
             mock_instance = mockVSClient.return_value
             mock_instance.get_index.side_effect = _get_index
             with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
@@ -317,7 +317,7 @@ def test_vector_search_client_model_serving_environment():
 
 
 def test_vector_search_client_non_model_serving_environment():
-    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
         mock_instance = mockVSClient.return_value
         mock_instance.get_index.side_effect = _get_index
         vsTool = VectorSearchRetrieverTool(
@@ -332,7 +332,7 @@ def test_vector_search_client_with_pat_workspace_client():
     w.config.auth_type = "pat"
     w.config.host = "https://testDogfod.com"
     w.config.token = "fakeToken"
-    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             mock_instance = mockVSClient.return_value
             mock_instance.get_index.side_effect = _get_index
@@ -356,7 +356,7 @@ def test_vector_search_client_with_sp_workspace_client():
     w.config.client_id = "fakeClientId"
     w.config.client_secret = "fakeClientSecret"
 
-    with patch("databricks.vector_search.client.VectorSearchClient") as mockVSClient:
+    with patch("databricks.ai_search.client.VectorSearchClient") as mockVSClient:
         with patch("databricks.sdk.service.serving.ServingEndpointsAPI.get", return_value=None):
             mock_instance = mockVSClient.return_value
             mock_instance.get_index.side_effect = _get_index

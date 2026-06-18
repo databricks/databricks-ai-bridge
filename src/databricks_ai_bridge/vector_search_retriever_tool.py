@@ -4,8 +4,8 @@ from functools import wraps
 from typing import Any, Dict, List, Optional
 
 import mlflow
+from databricks.ai_search.reranker import Reranker
 from databricks.sdk import WorkspaceClient
-from databricks.vector_search.reranker import Reranker
 from mlflow.entities import SpanType
 from mlflow.models.resources import (
     DatabricksServingEndpoint,

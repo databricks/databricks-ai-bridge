@@ -17,8 +17,8 @@ from typing import (
 )
 
 import numpy as np
+from databricks.ai_search.reranker import DatabricksReranker, Reranker
 from databricks.sdk import WorkspaceClient
-from databricks.vector_search.reranker import DatabricksReranker, Reranker
 from databricks_ai_bridge.utils.vector_search import (
     IndexDetails,
     RetrieverSchema,
@@ -67,7 +67,7 @@ class DatabricksVectorSearch(VectorStore):
                     and ``service_principal_client_secret`` to allow for
                     service principal authentication instead of personal access token authentication.
         reranker: Optional reranker to apply on the top results. Pass an instance of
-                    ``databricks.vector_search.reranker.DatabricksReranker`` with
+                    ``databricks.ai_search.reranker.DatabricksReranker`` with
                     ``columns_to_rerank=[...]``. The reranker reorders the initial results using
                     the specified text columns.
 
@@ -107,7 +107,7 @@ class DatabricksVectorSearch(VectorStore):
 
         .. code-block:: python
 
-            from databricks.vector_search.reranker import DatabricksReranker
+            from databricks.ai_search.reranker import DatabricksReranker
 
             vector_store = DatabricksVectorSearch(
                 index_name="<your-index-name>",
@@ -249,12 +249,12 @@ class DatabricksVectorSearch(VectorStore):
             )
 
         try:
-            from databricks.vector_search.client import VectorSearchClient
-            from databricks.vector_search.utils import CredentialStrategy
+            from databricks.ai_search.client import VectorSearchClient
+            from databricks.ai_search.utils import CredentialStrategy
         except ImportError as e:
             raise ImportError(
-                "Could not import databricks-vectorsearch python package. "
-                "Please install it with `pip install databricks-vectorsearch`."
+                "Could not import databricks-ai-search python package. "
+                "Please install it with `pip install databricks-ai-search`."
             ) from e
 
         if endpoint is not None:
@@ -422,7 +422,7 @@ class DatabricksVectorSearch(VectorStore):
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
-            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+            kwargs: Additional keyword arguments to pass to `databricks.ai_search.index.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
@@ -464,7 +464,7 @@ class DatabricksVectorSearch(VectorStore):
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
-            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+            kwargs: Additional keyword arguments to pass to `databricks.ai_search.index.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
@@ -538,7 +538,7 @@ class DatabricksVectorSearch(VectorStore):
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
-            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+            kwargs: Additional keyword arguments to pass to `databricks.ai_search.index.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
@@ -591,7 +591,7 @@ class DatabricksVectorSearch(VectorStore):
             filter: Filters to apply to the query. Defaults to None.
             query_type: The type of this query. Supported values are "ANN" and "HYBRID".
             reranker: Allows reranking the results. Defaults to None.
-            kwargs: Additional keyword arguments to pass to `databricks.vector_search.client.VectorSearchIndex.similarity_search`. `See
+            kwargs: Additional keyword arguments to pass to `databricks.ai_search.index.VectorSearchIndex.similarity_search`. `See
                     documentation <https://api-docs.databricks.com/python/vector-search/databricks.vector_search.html#databricks.vector_search.index.VectorSearchIndex.similarity_search>`_
                     to see the full set of supported keyword arguments
 
