@@ -20,3 +20,5 @@ Pipfile
 docs/build
 
 **/uv.lock
+
+node_modules/
