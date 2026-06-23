@@ -123,6 +123,16 @@ class TestDatabricksOpenAI:
         # Verify authenticate was called
         mock_workspace_client.config.authenticate.assert_called()
 
+    def test_follow_redirects_default_and_override(self, mock_workspace_client):
+        """follow_redirects defaults to True and can be disabled."""
+        assert _get_authorized_http_client(mock_workspace_client).follow_redirects is True
+        assert (
+            _get_authorized_http_client(
+                mock_workspace_client, follow_redirects=False
+            ).follow_redirects
+            is False
+        )
+
 
 class TestAsyncDatabricksOpenAI:
     """Tests for AsyncDatabricksOpenAI client."""
@@ -166,6 +176,16 @@ class TestAsyncDatabricksOpenAI:
 
         # Verify authenticate was called
         mock_workspace_client.config.authenticate.assert_called()
+
+    def test_follow_redirects_default_and_override(self, mock_workspace_client):
+        """follow_redirects defaults to True and can be disabled for the async client."""
+        assert _get_authorized_async_http_client(mock_workspace_client).follow_redirects is True
+        assert (
+            _get_authorized_async_http_client(
+                mock_workspace_client, follow_redirects=False
+            ).follow_redirects
+            is False
+        )
 
 
 class TestDatabricksOpenAIKwargForwarding:

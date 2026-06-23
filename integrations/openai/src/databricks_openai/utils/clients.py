@@ -137,14 +137,18 @@ def _resolve_base_url(
     return f"{host}/serving-endpoints"
 
 
-def _get_authorized_http_client(workspace_client: WorkspaceClient) -> Client:
+def _get_authorized_http_client(
+    workspace_client: WorkspaceClient, follow_redirects: bool = True
+) -> Client:
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
-    return Client(auth=databricks_token_auth)
+    return Client(auth=databricks_token_auth, follow_redirects=follow_redirects)
 
 
-def _get_authorized_async_http_client(workspace_client: WorkspaceClient) -> AsyncClient:
+def _get_authorized_async_http_client(
+    workspace_client: WorkspaceClient, follow_redirects: bool = True
+) -> AsyncClient:
     databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
-    return AsyncClient(auth=databricks_token_auth)
+    return AsyncClient(auth=databricks_token_auth, follow_redirects=follow_redirects)
 
 
 def _validate_oauth_for_apps(workspace_client: WorkspaceClient) -> None:
@@ -343,6 +347,8 @@ class DatabricksOpenAI(OpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        follow_redirects: If True, the underlying HTTP client follows redirect responses.
+            Defaults to True, matching the OpenAI SDK's default behavior.
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.OpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
@@ -387,6 +393,7 @@ class DatabricksOpenAI(OpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        follow_redirects: bool = True,
         **kwargs: Any,
     ):
         if workspace_client is None:
@@ -402,7 +409,7 @@ class DatabricksOpenAI(OpenAI):
         super().__init__(
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
-            http_client=_get_authorized_http_client(workspace_client),
+            http_client=_get_authorized_http_client(workspace_client, follow_redirects),
             **kwargs,
         )
 
@@ -508,6 +515,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
             with ``base_url`` or ``use_ai_gateway``. Defaults to False.
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
+        follow_redirects: If True, the underlying HTTP client follows redirect responses.
+            Defaults to True, matching the OpenAI SDK's default behavior.
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.AsyncOpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
@@ -552,6 +561,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         base_url: str | None = None,
         use_ai_gateway_native_api: bool = False,
         use_ai_gateway: bool = False,
+        follow_redirects: bool = True,
         **kwargs: Any,
     ):
         if workspace_client is None:
@@ -567,7 +577,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         super().__init__(
             base_url=target_base_url,
             api_key=_get_openai_api_key(),
-            http_client=_get_authorized_async_http_client(workspace_client),
+            http_client=_get_authorized_async_http_client(workspace_client, follow_redirects),
             **kwargs,
         )
 
