@@ -348,7 +348,7 @@ class DatabricksOpenAI(OpenAI):
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
         follow_redirects: If True, the underlying HTTP client follows redirect responses.
-            Defaults to True, matching the OpenAI SDK's default behavior.
+            Defaults to True.
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.OpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
@@ -516,7 +516,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         use_ai_gateway: If True, auto-detect AI Gateway V2 availability and route
             requests through it using the MLflow API. Defaults to False.
         follow_redirects: If True, the underlying HTTP client follows redirect responses.
-            Defaults to True, matching the OpenAI SDK's default behavior.
+            Defaults to True.
         **kwargs: Additional keyword arguments forwarded to the underlying ``openai.AsyncOpenAI``
             client (e.g. ``timeout``, ``max_retries``, ``default_headers``).
 
