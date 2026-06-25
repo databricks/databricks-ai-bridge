@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## databricks-ai-bridge 0.21.0 databricks-openai 0.17.0 (2026-06-25)
+
+### Improvements
+- databricks-openai: `DatabricksOpenAI` and `AsyncDatabricksOpenAI` clients now follow HTTP redirects by default, configurable via the new `follow_redirects` parameter (#445)
+
+### Bug Fixes
+- databricks-ai-bridge: Genie now returns the full answer text aggregated from all text attachments (#432)
+
 ## databricks-ai-bridge 0.20.0 databricks-langchain 0.20.0 databricks-openai 0.16.0 (2026-06-10)
 
 ### New Features
