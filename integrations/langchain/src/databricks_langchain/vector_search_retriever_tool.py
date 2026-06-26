@@ -108,8 +108,10 @@ class VectorSearchRetrieverTool(BaseTool, VectorSearchRetrieverToolMixin):
             }
         )
         results = self._vector_store.similarity_search(**kwargs)
-        # Serialize results using same pattern as LangChain's _stringify()
         try:
-            return json.dumps(results, ensure_ascii=False)
+            return json.dumps(
+                [{"page_content": doc.page_content, "metadata": doc.metadata} for doc in results],
+                ensure_ascii=False,
+            )
         except Exception:
             return str(results)
