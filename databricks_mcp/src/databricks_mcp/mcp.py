@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import webbrowser
 from functools import wraps
 from typing import Any, Callable, List, Optional
 from urllib.parse import urlparse
@@ -11,7 +12,15 @@ from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.annotations import experimental
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import CallToolResult, Tool
+from mcp.shared.context import RequestContext
+from mcp.types import (
+    INVALID_REQUEST,
+    CallToolResult,
+    ElicitRequestParams,
+    ElicitResult,
+    ErrorData,
+    Tool,
+)
 from mlflow.models.resources import (
     DatabricksFunction,
     DatabricksGenieSpace,
@@ -142,6 +151,82 @@ def _handle_mcp_errors(func: Callable) -> Callable:
         return sync_wrapper
 
 
+# Schemes we are willing to hand to the user's browser. URL elicitation lets the
+# server choose the URL, so anything outside http(s) (e.g. file://, javascript:) is
+# refused rather than opened.
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+async def _handle_url_elicitation(params: ElicitRequestParams) -> ElicitResult:
+    """Handle a URL-mode elicitation request by confirming with the user and opening the URL.
+
+    The server supplies the URL, so we surface a security warning, validate the scheme, and
+    require explicit confirmation before launching a browser. Returns ``accept`` once the URL
+    has been opened, ``decline`` if the user refuses (or the scheme is disallowed), and
+    ``cancel`` when no decision can be obtained (e.g. no interactive stdin).
+    """
+    url = getattr(params, "url", None)
+    if not url:
+        logger.error("URL elicitation request did not include a URL; cancelling.")
+        return ElicitResult(action="cancel")
+
+    parsed = urlparse(str(url))
+    if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES:
+        logger.warning("Refusing URL elicitation with disallowed scheme %r: %s", parsed.scheme, url)
+        return ElicitResult(action="decline")
+
+    # The server controls the URL, so the confirmation prompt doubles as a security warning.
+    # It is written to stdout via input()'s prompt (rather than print) so the human sees it
+    # exactly when they are being asked to act.
+    prompt = (
+        "\n" + "=" * 60 + "\n"
+        "SECURITY WARNING: the MCP server is requesting you open an external URL\n"
+        + "="
+        * 60
+        + "\n"
+        f"\n  Domain:   {parsed.netloc}\n"
+        f"  Full URL: {url}\n"
+        f"\n  Server's reason:\n    {params.message}\n"
+        f"\n  Elicitation ID: {getattr(params, 'elicitationId', None)}\n" + "-" * 60 + "\n"
+        "\nOpen this URL in your browser? (y/n): "
+    )
+    try:
+        response = input(prompt).strip().lower()
+    except EOFError:
+        # No interactive stdin (e.g. running inside a service); cancel rather than guess.
+        return ElicitResult(action="cancel")
+
+    if response in ("y", "yes"):
+        try:
+            webbrowser.open(str(url))
+        except Exception as e:
+            logger.warning("Failed to open browser (%s); open the URL manually: %s", e, url)
+        logger.info("Opened browser for URL elicitation; awaiting completion: %s", url)
+        return ElicitResult(action="accept")
+    if response in ("n", "no"):
+        return ElicitResult(action="decline")
+
+    logger.info("Unrecognized response %r to URL elicitation; cancelling.", response)
+    return ElicitResult(action="cancel")
+
+
+async def _url_only_elicitation_callback(
+    context: RequestContext["ClientSession", Any],
+    params: ElicitRequestParams,
+) -> ElicitResult | ErrorData:
+    """Default elicitation callback that supports URL-mode elicitation only.
+
+    Form-mode elicitation is intentionally unsupported: form input is rejected so the
+    server can fall back rather than hang waiting for a response it will never get.
+    """
+    if params.mode == "url":
+        return await _handle_url_elicitation(params)
+    return ErrorData(
+        code=INVALID_REQUEST,
+        message=f"Only URL elicitation is supported; got mode={params.mode!r}",
+    )
+
+
 @experimental
 class DatabricksMCPClient:
     """
@@ -184,7 +269,9 @@ class DatabricksMCPClient:
             url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
+            async with ClientSession(
+                read_stream, write_stream, elicitation_callback=_url_only_elicitation_callback
+            ) as session:
                 await session.initialize()
                 return (await session.list_tools()).tools
 
@@ -198,7 +285,9 @@ class DatabricksMCPClient:
             url=self.server_url,
             auth=DatabricksOAuthClientProvider(self.client),
         ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
+            async with ClientSession(
+                read_stream, write_stream, elicitation_callback=_url_only_elicitation_callback
+            ) as session:
                 await session.initialize()
                 return await session.call_tool(tool_name, arguments)
 
