@@ -816,8 +816,8 @@ class TestDatabricksConversationsMemory:
         with patch.object(Conversations, "create") as mock_create:
             mock_create.return_value = MagicMock()
             client.conversations.create(
-                memory_store_name="main.default.support_agent_memory",
-                memory_scope="user-123",
+                store="main.default.support_agent_memory",
+                scope="user-123",
             )
 
             call_kwargs = mock_create.call_args.kwargs
@@ -825,18 +825,33 @@ class TestDatabricksConversationsMemory:
                 "memory_store": {"name": "main.default.support_agent_memory"},
                 "scope": {"kind": "user", "value": "user-123"},
             }
-            assert "memory_store_name" not in call_kwargs
-            assert "memory_scope" not in call_kwargs
+            assert "store" not in call_kwargs
+            assert "scope" not in call_kwargs
 
-    def test_memory_scope_kind_override(self, mock_workspace_client):
+    def test_workspace_client_scope_extracts_user_id(self, mock_workspace_client):
+        user_client = MagicMock(spec=WorkspaceClient)
+        user_client.current_user.me.return_value.user_name = "jenny@databricks.com"
         client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
 
         with patch.object(Conversations, "create") as mock_create:
             mock_create.return_value = MagicMock()
             client.conversations.create(
-                memory_store_name="main.default.support_agent_memory",
-                memory_scope="acct-42",
-                memory_scope_kind="account",
+                store="main.default.support_agent_memory",
+                scope=user_client,
+            )
+
+            extra_body = mock_create.call_args.kwargs["extra_body"]
+            assert extra_body["scope"] == {"kind": "user", "value": "jenny@databricks.com"}
+
+    def test_scope_kind_override(self, mock_workspace_client):
+        client = DatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
+
+        with patch.object(Conversations, "create") as mock_create:
+            mock_create.return_value = MagicMock()
+            client.conversations.create(
+                store="main.default.support_agent_memory",
+                scope="acct-42",
+                scope_kind="account",
             )
 
             extra_body = mock_create.call_args.kwargs["extra_body"]
@@ -848,8 +863,8 @@ class TestDatabricksConversationsMemory:
         with patch.object(Conversations, "create") as mock_create:
             mock_create.return_value = MagicMock()
             client.conversations.create(
-                memory_store_name="main.default.support_agent_memory",
-                memory_scope="user-123",
+                store="main.default.support_agent_memory",
+                scope="user-123",
                 extra_body={"custom_field": "value", "scope": {"kind": "user", "value": "old"}},
             )
 
@@ -895,8 +910,8 @@ class TestDatabricksConversationsMemory:
 
         with patch.object(AsyncConversations, "create", new_callable=AsyncMock) as mock_create:
             await client.conversations.create(
-                memory_store_name="main.default.support_agent_memory",
-                memory_scope="user-123",
+                store="main.default.support_agent_memory",
+                scope="user-123",
             )
 
             call_kwargs = mock_create.call_args.kwargs

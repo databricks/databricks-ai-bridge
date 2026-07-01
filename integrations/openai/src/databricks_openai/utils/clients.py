@@ -323,11 +323,18 @@ class DatabricksResponses(Responses):
         return response
 
 
+def _resolve_scope_value(scope: "str | WorkspaceClient") -> str:
+    """Resolve a scope value, extracting the authenticated user's id from a WorkspaceClient."""
+    if isinstance(scope, WorkspaceClient):
+        return scope.current_user.me().user_name
+    return scope
+
+
 def _merge_memory_params_into_extra_body(
     kwargs: dict,
-    memory_store_name: str | None,
-    memory_scope: str | None,
-    memory_scope_kind: str,
+    store: str | None,
+    scope: "str | WorkspaceClient | None",
+    scope_kind: str,
 ) -> dict:
     """Translate memory kwargs into the Databricks-specific conversation body fields.
 
@@ -335,13 +342,13 @@ def _merge_memory_params_into_extra_body(
     that aren't part of the OpenAI API, so they're sent via ``extra_body``. Explicit
     kwargs take precedence over the same keys in a caller-provided ``extra_body``.
     """
-    if memory_store_name is None and memory_scope is None:
+    if store is None and scope is None:
         return kwargs
     extra_body = dict(kwargs.pop("extra_body", None) or {})
-    if memory_store_name is not None:
-        extra_body["memory_store"] = {"name": memory_store_name}
-    if memory_scope is not None:
-        extra_body["scope"] = {"kind": memory_scope_kind, "value": memory_scope}
+    if store is not None:
+        extra_body["memory_store"] = {"name": store}
+    if scope is not None:
+        extra_body["scope"] = {"kind": scope_kind, "value": _resolve_scope_value(scope)}
     kwargs["extra_body"] = extra_body
     return kwargs
 
@@ -349,32 +356,32 @@ def _merge_memory_params_into_extra_body(
 class DatabricksConversations(Conversations):
     """Conversations resource with Databricks agent memory support.
 
-    Adds ``memory_store_name`` and ``memory_scope`` convenience kwargs to ``create``,
-    which attach the conversation to a Unity Catalog memory store. See
+    Adds ``store`` and ``scope`` convenience kwargs to ``create``, which attach the
+    conversation to a Unity Catalog memory store. See
     https://docs.databricks.com/aws/en/generative-ai/agent-memory/ for details.
     """
 
     def create(
         self,
         *,
-        memory_store_name: str | None = None,
-        memory_scope: str | None = None,
-        memory_scope_kind: str = "user",
+        store: str | None = None,
+        scope: "str | WorkspaceClient | None" = None,
+        scope_kind: str = "user",
         **kwargs,
     ):
         """Create a conversation, optionally backed by a Databricks memory store.
 
         Args:
-            memory_store_name: Full three-part Unity Catalog name of the memory store
+            store: Full three-part Unity Catalog name of the memory store
                 (e.g. ``"main.default.support_agent_memory"``).
-            memory_scope: Scope value that partitions memory entries, typically a user id.
-            memory_scope_kind: Kind of the scope. Defaults to ``"user"``.
+            scope: Scope value that partitions memory entries. Pass a ``WorkspaceClient``
+                to use its authenticated user's identity, or a string user id for
+                external (non-Databricks) users.
+            scope_kind: Kind of the scope. Defaults to ``"user"``.
             **kwargs: Standard OpenAI ``conversations.create`` arguments
                 (``items``, ``metadata``, ``extra_body``, etc.).
         """
-        kwargs = _merge_memory_params_into_extra_body(
-            kwargs, memory_store_name, memory_scope, memory_scope_kind
-        )
+        kwargs = _merge_memory_params_into_extra_body(kwargs, store, scope, scope_kind)
         return super().create(**kwargs)
 
 
@@ -445,8 +452,8 @@ class DatabricksOpenAI(OpenAI):
     Example - Create a conversation backed by a Databricks memory store:
         >>> client = DatabricksOpenAI(use_ai_gateway=True)
         >>> conversation = client.conversations.create(
-        ...     memory_store_name="main.default.support_agent_memory",
-        ...     memory_scope="user-123",
+        ...     store="main.default.support_agent_memory",
+        ...     scope=user_client,  # extracts the user id; pass a string for external users
         ... )
     """
 
@@ -562,32 +569,32 @@ class AsyncDatabricksResponses(AsyncResponses):
 class AsyncDatabricksConversations(AsyncConversations):
     """Async conversations resource with Databricks agent memory support.
 
-    Adds ``memory_store_name`` and ``memory_scope`` convenience kwargs to ``create``,
-    which attach the conversation to a Unity Catalog memory store. See
+    Adds ``store`` and ``scope`` convenience kwargs to ``create``, which attach the
+    conversation to a Unity Catalog memory store. See
     https://docs.databricks.com/aws/en/generative-ai/agent-memory/ for details.
     """
 
     async def create(
         self,
         *,
-        memory_store_name: str | None = None,
-        memory_scope: str | None = None,
-        memory_scope_kind: str = "user",
+        store: str | None = None,
+        scope: "str | WorkspaceClient | None" = None,
+        scope_kind: str = "user",
         **kwargs,
     ):
         """Create a conversation, optionally backed by a Databricks memory store.
 
         Args:
-            memory_store_name: Full three-part Unity Catalog name of the memory store
+            store: Full three-part Unity Catalog name of the memory store
                 (e.g. ``"main.default.support_agent_memory"``).
-            memory_scope: Scope value that partitions memory entries, typically a user id.
-            memory_scope_kind: Kind of the scope. Defaults to ``"user"``.
+            scope: Scope value that partitions memory entries. Pass a ``WorkspaceClient``
+                to use its authenticated user's identity, or a string user id for
+                external (non-Databricks) users.
+            scope_kind: Kind of the scope. Defaults to ``"user"``.
             **kwargs: Standard OpenAI ``conversations.create`` arguments
                 (``items``, ``metadata``, ``extra_body``, etc.).
         """
-        kwargs = _merge_memory_params_into_extra_body(
-            kwargs, memory_store_name, memory_scope, memory_scope_kind
-        )
+        kwargs = _merge_memory_params_into_extra_body(kwargs, store, scope, scope_kind)
         return await super().create(**kwargs)
 
 
@@ -658,8 +665,8 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
     Example - Create a conversation backed by a Databricks memory store:
         >>> client = AsyncDatabricksOpenAI(use_ai_gateway=True)
         >>> conversation = await client.conversations.create(
-        ...     memory_store_name="main.default.support_agent_memory",
-        ...     memory_scope="user-123",
+        ...     store="main.default.support_agent_memory",
+        ...     scope=user_client,  # extracts the user id; pass a string for external users
         ... )
     """
 
