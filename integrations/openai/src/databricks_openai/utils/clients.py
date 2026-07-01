@@ -6,6 +6,7 @@ from httpx import AsyncClient, Auth, Client, Request, Response
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 from openai.resources.chat import AsyncChat, Chat
 from openai.resources.chat.completions import AsyncCompletions, Completions
+from openai.resources.conversations import AsyncConversations, Conversations
 from openai.resources.responses import AsyncResponses, Responses
 from typing_extensions import override
 
@@ -322,6 +323,61 @@ class DatabricksResponses(Responses):
         return response
 
 
+def _merge_memory_params_into_extra_body(
+    kwargs: dict,
+    memory_store_name: str | None,
+    memory_scope: str | None,
+    memory_scope_kind: str,
+) -> dict:
+    """Translate memory kwargs into the Databricks-specific conversation body fields.
+
+    The Databricks conversations endpoint accepts ``memory_store`` and ``scope`` fields
+    that aren't part of the OpenAI API, so they're sent via ``extra_body``. Explicit
+    kwargs take precedence over the same keys in a caller-provided ``extra_body``.
+    """
+    if memory_store_name is None and memory_scope is None:
+        return kwargs
+    extra_body = dict(kwargs.pop("extra_body", None) or {})
+    if memory_store_name is not None:
+        extra_body["memory_store"] = {"name": memory_store_name}
+    if memory_scope is not None:
+        extra_body["scope"] = {"kind": memory_scope_kind, "value": memory_scope}
+    kwargs["extra_body"] = extra_body
+    return kwargs
+
+
+class DatabricksConversations(Conversations):
+    """Conversations resource with Databricks agent memory support.
+
+    Adds ``memory_store_name`` and ``memory_scope`` convenience kwargs to ``create``,
+    which attach the conversation to a Unity Catalog memory store. See
+    https://docs.databricks.com/aws/en/generative-ai/agent-memory/ for details.
+    """
+
+    def create(
+        self,
+        *,
+        memory_store_name: str | None = None,
+        memory_scope: str | None = None,
+        memory_scope_kind: str = "user",
+        **kwargs,
+    ):
+        """Create a conversation, optionally backed by a Databricks memory store.
+
+        Args:
+            memory_store_name: Full three-part Unity Catalog name of the memory store
+                (e.g. ``"main.default.support_agent_memory"``).
+            memory_scope: Scope value that partitions memory entries, typically a user id.
+            memory_scope_kind: Kind of the scope. Defaults to ``"user"``.
+            **kwargs: Standard OpenAI ``conversations.create`` arguments
+                (``items``, ``metadata``, ``extra_body``, etc.).
+        """
+        kwargs = _merge_memory_params_into_extra_body(
+            kwargs, memory_store_name, memory_scope, memory_scope_kind
+        )
+        return super().create(**kwargs)
+
+
 class DatabricksOpenAI(OpenAI):
     """OpenAI client authenticated with Databricks to query LLMs and agents hosted on Databricks.
 
@@ -385,6 +441,13 @@ class DatabricksOpenAI(OpenAI):
         ...     model="apps/my-agent",  # Looks up app URL automatically
         ...     input=[{"role": "user", "content": "Hello"}],
         ... )
+
+    Example - Create a conversation backed by a Databricks memory store:
+        >>> client = DatabricksOpenAI(use_ai_gateway=True)
+        >>> conversation = client.conversations.create(
+        ...     memory_store_name="main.default.support_agent_memory",
+        ...     memory_scope="user-123",
+        ... )
     """
 
     def __init__(
@@ -431,6 +494,12 @@ class DatabricksOpenAI(OpenAI):
         if not hasattr(self, "_databricks_responses"):
             self._databricks_responses = DatabricksResponses(self, self._workspace_client)
         return self._databricks_responses
+
+    @property
+    def conversations(self) -> Conversations:
+        if not hasattr(self, "_databricks_conversations"):
+            self._databricks_conversations = DatabricksConversations(self)
+        return self._databricks_conversations
 
 
 class AsyncDatabricksCompletions(AsyncCompletions):
@@ -488,6 +557,38 @@ class AsyncDatabricksResponses(AsyncResponses):
         response = await super().create(**kwargs)
         _truncate_response_ids(response)
         return response
+
+
+class AsyncDatabricksConversations(AsyncConversations):
+    """Async conversations resource with Databricks agent memory support.
+
+    Adds ``memory_store_name`` and ``memory_scope`` convenience kwargs to ``create``,
+    which attach the conversation to a Unity Catalog memory store. See
+    https://docs.databricks.com/aws/en/generative-ai/agent-memory/ for details.
+    """
+
+    async def create(
+        self,
+        *,
+        memory_store_name: str | None = None,
+        memory_scope: str | None = None,
+        memory_scope_kind: str = "user",
+        **kwargs,
+    ):
+        """Create a conversation, optionally backed by a Databricks memory store.
+
+        Args:
+            memory_store_name: Full three-part Unity Catalog name of the memory store
+                (e.g. ``"main.default.support_agent_memory"``).
+            memory_scope: Scope value that partitions memory entries, typically a user id.
+            memory_scope_kind: Kind of the scope. Defaults to ``"user"``.
+            **kwargs: Standard OpenAI ``conversations.create`` arguments
+                (``items``, ``metadata``, ``extra_body``, etc.).
+        """
+        kwargs = _merge_memory_params_into_extra_body(
+            kwargs, memory_store_name, memory_scope, memory_scope_kind
+        )
+        return await super().create(**kwargs)
 
 
 class AsyncDatabricksOpenAI(AsyncOpenAI):
@@ -553,6 +654,13 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         ...     model="apps/my-agent",  # Looks up app URL automatically
         ...     input=[{"role": "user", "content": "Hello"}],
         ... )
+
+    Example - Create a conversation backed by a Databricks memory store:
+        >>> client = AsyncDatabricksOpenAI(use_ai_gateway=True)
+        >>> conversation = await client.conversations.create(
+        ...     memory_store_name="main.default.support_agent_memory",
+        ...     memory_scope="user-123",
+        ... )
     """
 
     def __init__(
@@ -598,3 +706,9 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         if not hasattr(self, "_databricks_responses"):
             self._databricks_responses = AsyncDatabricksResponses(self, self._workspace_client)
         return self._databricks_responses
+
+    @property
+    def conversations(self) -> AsyncConversations:
+        if not hasattr(self, "_databricks_conversations"):
+            self._databricks_conversations = AsyncDatabricksConversations(self)
+        return self._databricks_conversations
