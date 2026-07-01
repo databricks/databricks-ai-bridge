@@ -326,7 +326,13 @@ class DatabricksResponses(Responses):
 def _resolve_scope_value(scope: "str | WorkspaceClient") -> str:
     """Resolve a scope value, extracting the authenticated user's id from a WorkspaceClient."""
     if isinstance(scope, WorkspaceClient):
-        return scope.current_user.me().user_name
+        user_name = scope.current_user.me().user_name
+        if not user_name:
+            raise ValueError(
+                "Could not determine the current user from the provided WorkspaceClient; "
+                "pass the scope value as a string instead."
+            )
+        return user_name
     return scope
 
 
@@ -503,7 +509,7 @@ class DatabricksOpenAI(OpenAI):
         return self._databricks_responses
 
     @property
-    def conversations(self) -> Conversations:
+    def conversations(self) -> "DatabricksConversations":
         if not hasattr(self, "_databricks_conversations"):
             self._databricks_conversations = DatabricksConversations(self)
         return self._databricks_conversations
@@ -715,7 +721,7 @@ class AsyncDatabricksOpenAI(AsyncOpenAI):
         return self._databricks_responses
 
     @property
-    def conversations(self) -> AsyncConversations:
+    def conversations(self) -> "AsyncDatabricksConversations":
         if not hasattr(self, "_databricks_conversations"):
             self._databricks_conversations = AsyncDatabricksConversations(self)
         return self._databricks_conversations
