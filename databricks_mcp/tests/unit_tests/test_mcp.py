@@ -25,7 +25,7 @@ from databricks_mcp.mcp import (
     _handle_url_elicitation,
     _is_databricks_apps_url,
     _is_oauth_auth,
-    _url_only_elicitation_callback,
+    interactive_url_elicitation_callback,
 )
 
 
@@ -665,7 +665,7 @@ class TestUrlElicitation:
             patch("databricks_mcp.mcp.input", return_value="y"),
             patch("databricks_mcp.mcp.webbrowser.open"),
         ):
-            result = await _url_only_elicitation_callback(MagicMock(), params)
+            result = await interactive_url_elicitation_callback(MagicMock(), params)
 
         assert isinstance(result, ElicitResult)
         assert result.action == "accept"
@@ -675,40 +675,41 @@ class TestUrlElicitation:
         params = ElicitRequestFormParams(
             mode="form", message="fill this", requestedSchema=ElicitRequestedSchema(properties={})
         )
-        result = await _url_only_elicitation_callback(MagicMock(), params)
+        result = await interactive_url_elicitation_callback(MagicMock(), params)
 
         assert isinstance(result, ErrorData)
         assert result.code == INVALID_REQUEST
         assert "URL elicitation" in result.message
 
-    @pytest.mark.asyncio
-    async def test_call_tools_async_passes_elicitation_callback(self):
-        mock_result = CallToolResult(content=[TextContent(type="text", text="ok")])
-        mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
-        mock_session.call_tool = AsyncMock(return_value=mock_result)
+    def test_elicitation_off_by_default(self):
+        """No callback passed -> elicitation is off (safe for headless/async embedding)."""
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient(
+            "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
+        )
+        assert client._elicitation_callback is None
 
-        with (
-            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
-            patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
-            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
-        ):
-            mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
-            mock_session_class.return_value.__aenter__.return_value = mock_session
+    def test_injected_elicitation_callback_is_stored(self):
+        async def custom_cb(context, params):
+            return ElicitResult(action="cancel")
 
-            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
-            client = DatabricksMCPClient(
-                "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
-            )
-            await client._call_tools_async("test_tool", {"arg": "value"})
-
-        _, kwargs = mock_session_class.call_args
-        assert kwargs["elicitation_callback"] is _url_only_elicitation_callback
+        workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+        client = DatabricksMCPClient(
+            "https://test.com/api/2.0/mcp/functions/catalog/schema",
+            workspace_client,
+            elicitation_callback=custom_cb,
+        )
+        assert client._elicitation_callback is custom_cb
 
     @pytest.mark.asyncio
-    async def test_get_tools_async_passes_elicitation_callback(self):
+    @pytest.mark.parametrize("method", ["_call_tools_async", "_get_tools_async"])
+    async def test_default_passes_no_elicitation_callback(self, method):
+        """With no callback, both session paths pass elicitation_callback=None (off)."""
         mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
+        mock_session.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[TextContent(type="text", text="ok")])
+        )
         mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[]))
 
         with (
@@ -723,7 +724,47 @@ class TestUrlElicitation:
             client = DatabricksMCPClient(
                 "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
             )
-            await client._get_tools_async()
+            if method == "_call_tools_async":
+                await client._call_tools_async("test_tool", {"arg": "value"})
+            else:
+                await client._get_tools_async()
 
         _, kwargs = mock_session_class.call_args
-        assert kwargs["elicitation_callback"] is _url_only_elicitation_callback
+        assert kwargs["elicitation_callback"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["_call_tools_async", "_get_tools_async"])
+    async def test_injected_callback_passed_through(self, method):
+        """An injected callback is forwarded to the ClientSession on both paths."""
+
+        async def custom_cb(context, params):
+            return ElicitResult(action="cancel")
+
+        mock_session = AsyncMock()
+        mock_session.initialize = AsyncMock()
+        mock_session.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[TextContent(type="text", text="ok")])
+        )
+        mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[]))
+
+        with (
+            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
+            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
+        ):
+            mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/functions/catalog/schema",
+                workspace_client,
+                elicitation_callback=custom_cb,
+            )
+            if method == "_call_tools_async":
+                await client._call_tools_async("test_tool", {"arg": "value"})
+            else:
+                await client._get_tools_async()
+
+        _, kwargs = mock_session_class.call_args
+        assert kwargs["elicitation_callback"] is custom_cb
