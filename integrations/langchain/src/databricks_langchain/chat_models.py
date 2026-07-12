@@ -25,7 +25,7 @@ from typing import (
 from databricks import sdk
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
-from langchain_core.language_models.base import LanguageModelInput
+from langchain_core.language_models.base import LangSmithParams, LanguageModelInput
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -66,7 +66,7 @@ from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseStreamEvent, ResponseUsage
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, model_validator
 from typing_extensions import override
 
 from databricks_langchain.utils import get_async_openai_client, get_openai_client
@@ -272,10 +272,36 @@ class ChatDatabricks(BaseChatModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @classmethod
+    def is_lc_serializable(cls) -> bool:
+        """Return whether this model can be serialized by LangChain."""
+        return True
+
+    @classmethod
+    def get_lc_namespace(cls) -> List[str]:
+        """Get the namespace of the LangChain object."""
+        return ["databricks_langchain", "chat_models"]
+
+    @property
+    def lc_secrets(self) -> Dict[str, str]:
+        """Map the Databricks token field to its environment variable."""
+        return {"databricks_token": "DATABRICKS_TOKEN"}
+
     model: str = Field(alias="endpoint")
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
     """The target MLflow deployment URI to use. Deprecated: use workspace_client instead."""
+    databricks_host: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("databricks_host", "DATABRICKS_HOST"),
+    )
+    """Databricks workspace URL. If omitted, the SDK uses its default authentication."""
+    databricks_token: Optional[SecretStr] = Field(
+        default=None,
+        repr=False,
+        validation_alias=AliasChoices("databricks_token", "DATABRICKS_TOKEN"),
+    )
+    """Databricks personal access token. Serialized as the ``DATABRICKS_TOKEN`` secret."""
     workspace_client: Optional[sdk.WorkspaceClient] = Field(default=None, exclude=True)
     """Optional WorkspaceClient instance to use for authentication. If not provided, uses default authentication."""
     temperature: Optional[float] = None
@@ -365,6 +391,18 @@ class ChatDatabricks(BaseChatModel):
 
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
+
+        if self.workspace_client is None and (
+            self.databricks_host is not None or self.databricks_token is not None
+        ):
+            self.workspace_client = sdk.WorkspaceClient(
+                host=self.databricks_host,
+                token=(
+                    self.databricks_token.get_secret_value()
+                    if self.databricks_token is not None
+                    else None
+                ),
+            )
 
         # Handle deprecated target_uri parameter
         if self.target_uri:
@@ -1392,14 +1430,40 @@ class ChatDatabricks(BaseChatModel):
     def _identifying_params(self) -> Dict[str, Any]:
         return self._default_params
 
+    def _get_databricks_host(self) -> Optional[str]:
+        """Get the workspace host without exposing authentication state."""
+        if self.databricks_host:
+            return self.databricks_host
+        if self.workspace_client is not None:
+            host = getattr(self.workspace_client.config, "host", None)
+            if isinstance(host, str):
+                return host
+        return None
+
     def _get_invocation_params(
         self, stop: Optional[List[str]] = None, **kwargs: Any
     ) -> Dict[str, Any]:
-        """Get the parameters used to invoke the model FOR THE CALLBACKS."""
-        return {
-            **self._default_params,
-            **super()._get_invocation_params(stop=stop, **kwargs),
+        """Get safe model and workspace configuration for callbacks and tracing."""
+        params = super()._get_invocation_params(stop=stop, **kwargs)
+        optional_params = {
+            "databricks_host": self._get_databricks_host(),
+            "timeout": self.timeout,
+            "max_retries": self.max_retries,
         }
+        params.update({key: value for key, value in optional_params.items() if value is not None})
+        if self.use_ai_gateway:
+            params["use_ai_gateway"] = True
+        if self.use_ai_gateway_native_api:
+            params["use_ai_gateway_native_api"] = True
+        if self.use_responses_api:
+            params["use_responses_api"] = True
+        return params
+
+    def _get_ls_params(self, stop: Optional[List[str]] = None, **kwargs: Any) -> LangSmithParams:
+        """Get standard LangSmith trace metadata for ChatDatabricks."""
+        params = super()._get_ls_params(stop=stop, **kwargs)
+        params["ls_provider"] = "databricks"
+        return params
 
     @property
     def _llm_type(self) -> str:
