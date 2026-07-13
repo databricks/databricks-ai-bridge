@@ -66,7 +66,7 @@ from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response, ResponseStreamEvent, ResponseUsage
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from typing_extensions import override
 
 from databricks_langchain.utils import get_async_openai_client, get_openai_client
@@ -291,16 +291,9 @@ class ChatDatabricks(BaseChatModel):
     """Name of Databricks Model Serving endpoint to query."""
     target_uri: Optional[str] = None
     """The target MLflow deployment URI to use. Deprecated: use workspace_client instead."""
-    databricks_host: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("databricks_host", "DATABRICKS_HOST"),
-    )
+    databricks_host: Optional[str] = None
     """Databricks workspace URL. If omitted, the SDK uses its default authentication."""
-    databricks_token: Optional[SecretStr] = Field(
-        default=None,
-        repr=False,
-        validation_alias=AliasChoices("databricks_token", "DATABRICKS_TOKEN"),
-    )
+    databricks_token: Optional[SecretStr] = Field(default=None, repr=False)
     """Databricks personal access token. Serialized as the ``DATABRICKS_TOKEN`` secret."""
     workspace_client: Optional[sdk.WorkspaceClient] = Field(default=None, exclude=True)
     """Optional WorkspaceClient instance to use for authentication. If not provided, uses default authentication."""

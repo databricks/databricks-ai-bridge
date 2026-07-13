@@ -121,22 +121,6 @@ def test_langchain_serialization_round_trip() -> None:
     assert restored.databricks_token.get_secret_value() == "restored-token"
 
 
-def test_langchain_serialization_normalizes_legacy_uppercase_credentials() -> None:
-    with patch("databricks_langchain.chat_models.sdk.WorkspaceClient"):
-        llm = ChatDatabricks(
-            model="test-model",
-            DATABRICKS_HOST="https://example.cloud.databricks.com",
-            DATABRICKS_TOKEN="test-token",
-        )
-
-    serialized = llm.to_json()
-    assert serialized["type"] == "constructor"
-    assert "DATABRICKS_HOST" not in serialized["kwargs"]
-    assert "DATABRICKS_TOKEN" not in serialized["kwargs"]
-    assert serialized["kwargs"]["databricks_host"] == ("https://example.cloud.databricks.com")
-    assert serialized["kwargs"]["databricks_token"]["id"] == ["DATABRICKS_TOKEN"]
-
-
 def test_invocation_params_include_safe_playground_configuration() -> None:
     workspace_client = Mock(spec=sdk.WorkspaceClient)
     workspace_client.config.host = "https://example.cloud.databricks.com"
