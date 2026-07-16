@@ -51,7 +51,9 @@ class TestMCPServer:
         # Check that extra params are in connection dict
         for key, value in extra_params.items():
             if key == "timeout" and isinstance(value, float):
-                assert connection_dict["timeout"].seconds == value
+                timeout = connection_dict["timeout"]
+                assert isinstance(timeout, timedelta)
+                assert timeout.seconds == value
             else:
                 assert connection_dict[key] == value  # ty:ignore[invalid-key]
             assert "name" not in connection_dict
