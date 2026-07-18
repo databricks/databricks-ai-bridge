@@ -141,11 +141,34 @@ def mock_vs_client() -> Generator:
 
     mock_client = MagicMock()
     mock_client.get_index.side_effect = _get_index
-    with mock.patch(
-        "databricks.ai_search.client.VectorSearchClient",
-        return_value=mock_client,
-    ):
+    patches = [
+        mock.patch(
+            "databricks.ai_search.client.VectorSearchClient",
+            return_value=mock_client,
+        ),
+    ]
+    # Also patch the deprecated `databricks.vector_search` import path so that
+    # older integrations (e.g. databricks-openai < v0.6) that still import via
+    # `databricks.vector_search.client.VectorSearchClient` are mocked correctly.
+    # The shim module is only present when `databricks-vectorsearch` is installed.
+    try:
+        import databricks.vector_search.client  # noqa: F401  # ty: ignore[unresolved-import]
+    except ImportError:
+        pass
+    else:
+        patches.append(
+            mock.patch(
+                "databricks.vector_search.client.VectorSearchClient",
+                return_value=mock_client,
+            )
+        )
+    for p in patches:
+        p.start()
+    try:
         yield
+    finally:
+        for p in patches:
+            p.stop()
 
 
 @pytest.fixture(autouse=True)
