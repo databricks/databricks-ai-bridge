@@ -233,6 +233,52 @@ class TestDatabricksMCPClient:
             mock_session.initialize.assert_called_once()
             mock_session.call_tool.assert_called_once_with("test_tool", {"arg": "value"})
 
+    @pytest.mark.asyncio
+    async def test_get_tools_async_external_uses_post_only_client(self):
+        """External connections use the POST-only client, not the Streamable HTTP client."""
+        mock_tools = [Tool(name="ext_tool", description="External tool", inputSchema={})]
+        mock_post_client = AsyncMock()
+        mock_post_client.list_tools = AsyncMock(return_value=mock_tools)
+
+        with (
+            patch("databricks_mcp.mcp.PostOnlyMCPClient") as mock_post_class,
+            patch("databricks_mcp.mcp.streamablehttp_client") as mock_streamable,
+        ):
+            mock_post_class.return_value.__aenter__.return_value = mock_post_client
+
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/external/my-connection", workspace_client
+            )
+            tools = await client._get_tools_async()
+
+            assert tools == mock_tools
+            mock_post_client.list_tools.assert_called_once()
+            mock_streamable.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_call_tools_async_external_uses_post_only_client(self):
+        """External connections call tools via the POST-only client."""
+        mock_result = CallToolResult(content=[TextContent(type="text", text="ext result")])
+        mock_post_client = AsyncMock()
+        mock_post_client.call_tool = AsyncMock(return_value=mock_result)
+
+        with (
+            patch("databricks_mcp.mcp.PostOnlyMCPClient") as mock_post_class,
+            patch("databricks_mcp.mcp.streamablehttp_client") as mock_streamable,
+        ):
+            mock_post_class.return_value.__aenter__.return_value = mock_post_client
+
+            workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
+            client = DatabricksMCPClient(
+                "https://test.com/api/2.0/mcp/external/my-connection", workspace_client
+            )
+            result = await client._call_tools_async("ext_tool", {"arg": "value"})
+
+            assert result == mock_result
+            mock_post_client.call_tool.assert_called_once_with("ext_tool", {"arg": "value"})
+            mock_streamable.assert_not_called()
+
     def test_list_tools(self):
         """Test synchronous tool listing."""
         mock_tools = [Tool(name="test_tool", description="Test tool", inputSchema={})]
