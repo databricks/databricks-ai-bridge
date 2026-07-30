@@ -31,6 +31,11 @@
 ### Bug Fixes
 - databricks-ai-bridge: Use the last query attachment in `_parse_attachments` to support Genie self-correction (#419)
 
+## databricks-mcp 0.9.1 (2026-07-28)
+
+### Bug Fixes
+- Pin `mcp` dependency to `>=1.13.0,<2.0.0` to avoid breaking `ImportError` caused by the `streamablehttp_client` rename in `mcp` 2.0.0.
+
 ## databricks-ai-bridge 0.17.0 databricks-langchain 0.17.0 databricks-openai 0.13.0 (2026-03-09)
 
 ### Release

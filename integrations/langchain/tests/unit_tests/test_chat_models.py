@@ -1778,7 +1778,9 @@ def test_convert_responses_usage_to_usage_metadata(cached_tokens, reasoning_toke
         input_tokens=100,
         output_tokens=50,
         total_tokens=150,
-        input_tokens_details=InputTokensDetails(cache_write_tokens=0, cached_tokens=cached_tokens),
+        input_tokens_details=InputTokensDetails.model_construct(
+            cache_write_tokens=0, cached_tokens=cached_tokens
+        ),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens),
     )
 
@@ -1856,7 +1858,9 @@ def test_extract_response_usage_from_chunk(stream_usage):
         input_tokens=100,
         output_tokens=50,
         total_tokens=150,
-        input_tokens_details=InputTokensDetails(cache_write_tokens=0, cached_tokens=25),
+        input_tokens_details=InputTokensDetails.model_construct(
+            cache_write_tokens=0, cached_tokens=25
+        ),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
     )
     response = Mock()
@@ -1906,7 +1910,9 @@ def test_build_usage_chunk_from_responses(use_response_usage):
             input_tokens=100,
             output_tokens=50,
             total_tokens=150,
-            input_tokens_details=InputTokensDetails(cache_write_tokens=0, cached_tokens=25),
+            input_tokens_details=InputTokensDetails.model_construct(
+                cache_write_tokens=0, cached_tokens=25
+            ),
             output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
         )
     else:
@@ -2083,7 +2089,9 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
                 input_tokens=100,
                 output_tokens=50,
                 total_tokens=150,
-                input_tokens_details=InputTokensDetails(cache_write_tokens=0, cached_tokens=25),
+                input_tokens_details=InputTokensDetails.model_construct(
+                    cache_write_tokens=0, cached_tokens=25
+                ),
                 output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
             ),
         )
