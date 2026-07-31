@@ -21,7 +21,11 @@ from __future__ import annotations
 import os
 
 import pytest
-from mcp.shared.exceptions import McpError
+
+try:
+    from mcp import MCPError as McpError  # mcp >= 2.0.0 (renamed from McpError)
+except ImportError:  # mcp < 2.0.0
+    from mcp.shared.exceptions import McpError  # ty:ignore[unresolved-import]
 
 from databricks_mcp import DatabricksMCPClient
 

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from functools import wraps
 from typing import Any, Callable, List, Optional
 from urllib.parse import urlparse
@@ -9,9 +10,26 @@ from urllib.parse import urlparse
 import requests
 from databricks.sdk import WorkspaceClient
 from databricks_ai_bridge.utils.annotations import experimental
-from mcp.client.session import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult, Tool
+
+# mcp 2.0.0 replaced the transport + ``ClientSession`` layering with a single
+# ``Client``, and moved auth onto an ``httpx2.AsyncClient`` handed to
+# ``streamable_http_client`` (the old ``streamablehttp_client`` alias and its
+# ``auth=`` keyword were removed). Detect which major is installed and adapt so
+# this package stays compatible with both mcp 1.x and mcp 2.x.
+try:
+    from mcp import Client  # noqa: F401  (present only in mcp >= 2.0.0)
+
+    _MCP_V2 = True
+except ImportError:  # mcp < 2.0.0
+    _MCP_V2 = False
+
+if _MCP_V2:
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+else:
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client  # ty:ignore[unresolved-import]
 from mlflow.models.resources import (
     DatabricksFunction,
     DatabricksGenieSpace,
@@ -23,6 +41,34 @@ from mlflow.models.resources import (
 from databricks_mcp.oauth_provider import DatabricksOAuthClientProvider
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _open_mcp_session(server_url: str, auth: DatabricksOAuthClientProvider):
+    """Open an authenticated MCP session against ``server_url``.
+
+    Yields an object exposing ``list_tools()`` and ``call_tool()`` and works
+    with both mcp 1.x (transport + ``ClientSession``) and mcp 2.x (``Client``).
+    """
+    if _MCP_V2:
+        # mcp 2.x: auth is attached to an httpx2 client passed to the
+        # transport, and ``Client`` performs the initialize handshake itself.
+        async with httpx2.AsyncClient(auth=auth, follow_redirects=True) as http_client:
+            async with Client(
+                streamable_http_client(server_url, http_client=http_client)
+            ) as session:
+                yield session
+    else:
+        # mcp 1.x: auth is a keyword on the transport and the session must be
+        # explicitly initialized.
+        async with streamablehttp_client(url=server_url, auth=auth) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                yield session
 
 
 def _is_databricks_apps_url(url: str) -> bool:
@@ -180,13 +226,10 @@ class DatabricksMCPClient:
 
     async def _get_tools_async(self) -> List[Tool]:
         """Fetch tools from the MCP endpoint asynchronously."""
-        async with streamablehttp_client(
-            url=self.server_url,
-            auth=DatabricksOAuthClientProvider(self.client),
-        ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                return (await session.list_tools()).tools
+        async with _open_mcp_session(
+            self.server_url, DatabricksOAuthClientProvider(self.client)
+        ) as session:
+            return (await session.list_tools()).tools
 
     async def _call_tools_async(
         self,
@@ -194,13 +237,10 @@ class DatabricksMCPClient:
         arguments: dict[str, Any] | None = None,
     ) -> CallToolResult:
         """Call the tool with the given name and input."""
-        async with streamablehttp_client(
-            url=self.server_url,
-            auth=DatabricksOAuthClientProvider(self.client),
-        ) as (read_stream, write_stream, _):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                return await session.call_tool(tool_name, arguments)
+        async with _open_mcp_session(
+            self.server_url, DatabricksOAuthClientProvider(self.client)
+        ) as session:
+            return await session.call_tool(tool_name, arguments)
 
     def _extract_genie_id(self) -> str:
         """Extract the Genie space ID from the URL."""

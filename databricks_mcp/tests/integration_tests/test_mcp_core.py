@@ -12,25 +12,48 @@ from contextlib import asynccontextmanager
 
 import pytest
 from conftest import _skip_if_not_found
-from mcp.shared.exceptions import McpError
 from mcp.types import CallToolResult
+
+try:
+    from mcp import MCPError as McpError  # mcp >= 2.0.0 (renamed from McpError)
+except ImportError:  # mcp < 2.0.0
+    from mcp.shared.exceptions import McpError  # ty:ignore[unresolved-import]
 
 
 @asynccontextmanager
 async def raw_mcp_session(url, workspace_client):
-    """Create a raw MCP ClientSession using streamable_http_client with Databricks OAuth."""
-    import httpx
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamable_http_client
+    """Create a raw MCP session with Databricks OAuth, using the raw MCP SDK.
 
+    Works with both mcp 1.x (transport + ``ClientSession``) and mcp 2.x
+    (``Client`` + ``httpx2``).
+    """
     from databricks_mcp import DatabricksOAuthClientProvider
 
-    async with httpx.AsyncClient(
-        auth=DatabricksOAuthClientProvider(workspace_client),
-        follow_redirects=True,
-        timeout=httpx.Timeout(120.0, read=120.0),
-    ) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (
+    auth = DatabricksOAuthClientProvider(workspace_client)
+
+    try:
+        from mcp import Client  # present only in mcp >= 2.0.0
+
+        mcp_v2 = True
+    except ImportError:
+        mcp_v2 = False
+
+    if mcp_v2:
+        import httpx2
+        from mcp.client.streamable_http import streamable_http_client
+
+        async with httpx2.AsyncClient(
+            auth=auth,
+            follow_redirects=True,
+            timeout=httpx2.Timeout(120.0, read=120.0),
+        ) as http_client:
+            async with Client(streamable_http_client(url, http_client=http_client)) as session:
+                yield session
+    else:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client  # ty:ignore[unresolved-import]
+
+        async with streamablehttp_client(url=url, auth=auth) as (
             read_stream,
             write_stream,
             _,
