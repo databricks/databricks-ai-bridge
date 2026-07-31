@@ -1,4 +1,5 @@
 import re
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,30 @@ from databricks_mcp.mcp import (
     _is_databricks_apps_url,
     _is_oauth_auth,
 )
+
+
+def _patch_mcp_session(mock_session):
+    """Patch the version-agnostic ``_open_mcp_session`` helper to yield ``mock_session``.
+
+    Works regardless of whether mcp 1.x or 2.x is installed, since both code
+    paths funnel through ``_open_mcp_session``.
+    """
+
+    @asynccontextmanager
+    async def _fake_session(*args, **kwargs):
+        yield mock_session
+
+    return patch("databricks_mcp.mcp._open_mcp_session", _fake_session)
+
+
+def _make_tool(name, description=""):
+    """Construct an mcp ``Tool`` compatibly across mcp 1.x and 2.x.
+
+    mcp 2.x renamed the ``inputSchema`` field to ``input_schema`` (keeping
+    ``inputSchema`` as a validation alias), so build via ``model_validate`` with
+    the wire name, which is accepted on both versions and avoids a type error.
+    """
+    return Tool.model_validate({"name": name, "description": description, "inputSchema": {}})
 
 
 class TestDatabricksMCPClient:
@@ -184,19 +209,11 @@ class TestDatabricksMCPClient:
     @pytest.mark.asyncio
     async def test_get_tools_async(self):
         """Test asynchronous tool fetching."""
-        mock_tools = [Tool(name="test_tool", description="Test tool", inputSchema={})]
+        mock_tools = [_make_tool("test_tool", "Test tool")]
         mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
         mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=mock_tools))
 
-        with (
-            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
-            patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
-            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
-        ):
-            mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
+        with _patch_mcp_session(mock_session):
             workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
             client = DatabricksMCPClient(
                 "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
@@ -204,7 +221,6 @@ class TestDatabricksMCPClient:
             tools = await client._get_tools_async()
 
             assert tools == mock_tools
-            mock_session.initialize.assert_called_once()
             mock_session.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
@@ -212,17 +228,9 @@ class TestDatabricksMCPClient:
         """Test asynchronous tool calling."""
         mock_result = CallToolResult(content=[TextContent(type="text", text="test result")])
         mock_session = AsyncMock()
-        mock_session.initialize = AsyncMock()
         mock_session.call_tool = AsyncMock(return_value=mock_result)
 
-        with (
-            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
-            patch("databricks_mcp.mcp.ClientSession") as mock_session_class,
-            patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
-        ):
-            mock_client.return_value.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
+        with _patch_mcp_session(mock_session):
             workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
             client = DatabricksMCPClient(
                 "https://test.com/api/2.0/mcp/functions/catalog/schema", workspace_client
@@ -230,12 +238,11 @@ class TestDatabricksMCPClient:
             result = await client._call_tools_async("test_tool", {"arg": "value"})
 
             assert result == mock_result
-            mock_session.initialize.assert_called_once()
             mock_session.call_tool.assert_called_once_with("test_tool", {"arg": "value"})
 
     def test_list_tools(self):
         """Test synchronous tool listing."""
-        mock_tools = [Tool(name="test_tool", description="Test tool", inputSchema={})]
+        mock_tools = [_make_tool("test_tool", "Test tool")]
 
         with patch.object(DatabricksMCPClient, "_get_tools_async", return_value=mock_tools):
             workspace_client = WorkspaceClient(host="https://test.com", token="test-token")
@@ -278,9 +285,7 @@ class TestDatabricksMCPClient:
         self, mcp_type, tool_names, expected_resource_names
     ):
         """Test getting Databricks resources for MCP types that require tool listing."""
-        mock_tools = [
-            Tool(name=name, description=f"Tool {name}", inputSchema={}) for name in tool_names
-        ]
+        mock_tools = [_make_tool(name, f"Tool {name}") for name in tool_names]
 
         with (
             patch.object(DatabricksMCPClient, "list_tools", return_value=mock_tools),
@@ -330,7 +335,7 @@ class TestDatabricksMCPClient:
 
     def test_get_databricks_resources_unknown_mcp_type(self):
         """Test getting Databricks resources for unknown MCP type."""
-        mock_tools = [Tool(name="test_tool", description="Test tool", inputSchema={})]
+        mock_tools = [_make_tool("test_tool", "Test tool")]
 
         with (
             patch.object(DatabricksMCPClient, "list_tools", return_value=mock_tools),
@@ -454,7 +459,7 @@ class TestMCPURLPatterns:
             patch.object(client, "_get_databricks_managed_mcp_url_type", return_value=None),
             patch("databricks_mcp.mcp.DatabricksOAuthClientProvider") as mock_auth_provider,
             patch("requests.request") as mock_request,
-            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("databricks_mcp.mcp._open_mcp_session") as mock_session,
             patch.object(
                 client.client.config,
                 "authenticate",
@@ -466,7 +471,7 @@ class TestMCPURLPatterns:
             mock_request.return_value = mock_response
 
             # Trigger decorator by failing the MCP call
-            mock_client.side_effect = original_error
+            mock_session.side_effect = original_error
 
             method = getattr(client, method_name)
             if expected_exc is Exception:
@@ -508,11 +513,11 @@ class TestMCPURLPatterns:
             patch.object(
                 client, "_get_databricks_managed_mcp_url_type", return_value=UC_FUNCTIONS_MCP
             ),
-            patch("databricks_mcp.mcp.streamablehttp_client") as mock_client,
+            patch("databricks_mcp.mcp._open_mcp_session") as mock_session,
             patch("databricks_mcp.mcp.DatabricksOAuthClientProvider"),
             patch("requests.request") as mock_request,
         ):
-            mock_client.side_effect = original_error
+            mock_session.side_effect = original_error
 
             with pytest.raises(Exception, match="Databricks server error"):
                 client.list_tools()
