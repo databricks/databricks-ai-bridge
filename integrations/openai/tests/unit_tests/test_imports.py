@@ -8,7 +8,7 @@ from databricks_openai import (
     VectorSearchRetrieverTool,
     set_uc_function_client,
 )
-from databricks_openai.agents import McpServer
+from databricks_openai.agents import DatabricksSession, McpServer
 
 assert DatabricksFunctionClient
 assert UCFunctionToolkit
@@ -19,3 +19,4 @@ assert AsyncDatabricksOpenAI
 assert McpServerToolkit
 assert ToolInfo
 assert McpServer
+assert DatabricksSession

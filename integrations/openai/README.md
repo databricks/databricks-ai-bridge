@@ -19,6 +19,8 @@ pip install git+https://git@github.com/databricks/databricks-ai-bridge.git#subdi
 - **Vector Search:** Store and query vector representations using `VectorSearchRetrieverTool`.
 - **OpenAI-compatible clients:** Use Databricks authentication with OpenAI SDK resources,
   including optional separate routing for Conversations API calls.
+- **Agents SDK sessions (experimental):** Persist native OpenAI Agents SDK items in the
+  Databricks Session Store.
 
 ## Getting Started
 
@@ -82,6 +84,39 @@ response = client.responses.create(
     input="Tell me about Databricks",
 )
 ```
+
+### Use Databricks Session Store with the OpenAI Agents SDK
+
+`DatabricksSession` implements the Agents SDK `Session` protocol. The agent and runner code stay
+the same; only the `session` construction changes.
+
+```python
+from agents import Agent, Runner
+from databricks_openai.agents import DatabricksSession
+
+session = DatabricksSession("order-support-123")
+agent = Agent(name="Support agent", instructions="Help the customer.", model="...")
+
+result = await Runner.run(
+    agent,
+    "Where is my order?",
+    session=session,
+)
+```
+
+For a LiteSwap prototype, inject the shared client and traffic ID:
+
+```python
+from databricks_ai_bridge.session_store import DatabricksSessionStoreClient
+from databricks_openai.agents import DatabricksSession
+
+client = DatabricksSessionStoreClient(
+    traffic_id="testenv://liteswap/my-session-store",
+)
+session = DatabricksSession("order-support-123", client=client)
+```
+
+The adapter is experimental while the Session Store REST contract is being finalized.
 
 ---
 

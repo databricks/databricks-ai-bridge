@@ -2,6 +2,10 @@
 
 The Databricks AI Bridge library provides a shared layer of APIs to interact with Databricks AI features, such as [Databricks AI/BI Genie ](https://www.databricks.com/product/ai-bi/genie) and [Vector Search](https://docs.databricks.com/en/generative-ai/vector-search.html). Use these packages to help [author agents with Agent Framework](https://docs.databricks.com/aws/en/generative-ai/agent-framework/author-agent#requirements) on Databricks.
 
+The experimental Session Store client and adapters let OpenAI Agents SDK and Claude Agent SDK
+applications keep their native transcripts in a shared Databricks-managed store. See the
+[Session Store prototype guide](./docs/session-store.md).
+
 ## Integration Packages
 
 If you are using LangChain/LangGraph or the OpenAI SDK, we provide these integration packages for seamless integration of Databricks AI features.

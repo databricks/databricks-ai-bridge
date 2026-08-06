@@ -569,9 +569,7 @@ class TestConversationsBaseUrl:
         assert client.conversations is client.conversations
 
     def test_async_conversations_use_default_unity_catalog_base_url(self, mock_workspace_client):
-        client = AsyncDatabricksOpenAI(
-            workspace_client=mock_workspace_client, use_ai_gateway=True
-        )
+        client = AsyncDatabricksOpenAI(workspace_client=mock_workspace_client, use_ai_gateway=True)
 
         assert isinstance(client.conversations, AsyncConversations)
         assert "/ai-gateway/mlflow/v1/" in str(client.base_url)
