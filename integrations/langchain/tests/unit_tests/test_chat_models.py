@@ -1807,8 +1807,11 @@ def test_convert_responses_usage_to_usage_metadata_with_none_details():
     assert result["input_tokens"] == 100
     assert result["output_tokens"] == 50
     assert result["total_tokens"] == 150
-    assert result.get("input_token_details") is None
-    assert result.get("output_token_details") is None
+    assert "input_token_details" not in result
+    assert "output_token_details" not in result
+
+    assert AIMessage(content="", usage_metadata=result).usage_metadata == result
+    assert AIMessageChunk(content="", usage_metadata=result).usage_metadata == result
 
 
 ### Test usage extraction methods ###
@@ -1927,6 +1930,29 @@ def test_build_usage_chunk_from_responses(use_response_usage):
     assert usage_metadata["input_tokens"] == 100
     assert usage_metadata["output_tokens"] == 50
     assert usage_metadata["total_tokens"] == 150
+
+
+def test_build_usage_chunk_from_responses_with_none_details():
+    """Test ResponseUsage without token details produces a valid usage chunk."""
+    llm = ChatDatabricks(model="test-model")
+    usage = ResponseUsage.model_construct(
+        input_tokens=100,
+        output_tokens=50,
+        total_tokens=150,
+        input_tokens_details=None,
+        output_tokens_details=None,
+    )
+
+    result = llm._build_usage_chunk_from_responses(usage)
+
+    assert isinstance(result.message, AIMessageChunk)
+    usage_metadata = result.message.usage_metadata
+    assert usage_metadata is not None
+    assert usage_metadata == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+    }
 
 
 ### Test _convert_dict_to_message with usage ###
@@ -2066,13 +2092,27 @@ def test_chat_databricks_stream_with_detailed_usage_metadata():
         assert usage_metadata["output_token_details"]["reasoning"] == 10
 
 
-def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
+@pytest.mark.parametrize("with_token_details", [True, False])
+def test_chat_databricks_responses_api_invoke_returns_usage_metadata(with_token_details):
     """Test that responses API invoke returns AIMessage with usage_metadata."""
     with patch("databricks_langchain.chat_models.get_openai_client") as mock_get_client:
         mock_client = Mock()
         mock_get_client.return_value = mock_client
 
         # Mock responses API response with usage
+        usage = ResponseUsage.model_construct(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=(
+                InputTokensDetails.model_construct(cache_write_tokens=0, cached_tokens=25)
+                if with_token_details
+                else None
+            ),
+            output_tokens_details=(
+                OutputTokensDetails(reasoning_tokens=10) if with_token_details else None
+            ),
+        )
         mock_response = Response.model_construct(
             id="response_123",
             output=[
@@ -2085,15 +2125,7 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
                     ],
                 )
             ],
-            usage=ResponseUsage(
-                input_tokens=100,
-                output_tokens=50,
-                total_tokens=150,
-                input_tokens_details=InputTokensDetails.model_construct(
-                    cache_write_tokens=0, cached_tokens=25
-                ),
-                output_tokens_details=OutputTokensDetails(reasoning_tokens=10),
-            ),
+            usage=usage,
         )
         mock_client.responses.create.return_value = mock_response
 
@@ -2106,8 +2138,12 @@ def test_chat_databricks_responses_api_invoke_returns_usage_metadata():
         assert usage_metadata["input_tokens"] == 100
         assert usage_metadata["output_tokens"] == 50
         assert usage_metadata["total_tokens"] == 150
-        assert usage_metadata["input_token_details"]["cache_read"] == 25
-        assert usage_metadata["output_token_details"]["reasoning"] == 10
+        if with_token_details:
+            assert usage_metadata["input_token_details"]["cache_read"] == 25
+            assert usage_metadata["output_token_details"]["reasoning"] == 10
+        else:
+            assert "input_token_details" not in usage_metadata
+            assert "output_token_details" not in usage_metadata
 
 
 def test_chat_databricks_with_timeout_and_retries():
