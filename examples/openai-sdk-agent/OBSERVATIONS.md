@@ -1,7 +1,12 @@
 # Live Test Observations
 
-Tests ran on 2026-08-19 against the example in this PR, using an isolated App
-name and schemas so they did not affect the earlier experiment.
+These live results were recorded for the transport-neutral runtime version of
+the example before the standalone server transport was added. The standalone
+server keeps the same runtime, executor recovery behavior, HTTP contract, and
+Lakebase schemas, but this PR was not separately deployed for these observations.
+
+The baseline tests ran on 2026-08-19 using an isolated App name and schemas so
+they did not affect the earlier experiment.
 
 - App: `open-ai-sdk-runtime`
 - URL: `https://open-ai-sdk-runtime-1653573648247579.staging.aws.databricksapps.com`

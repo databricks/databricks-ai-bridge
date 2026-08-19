@@ -44,6 +44,12 @@ This preserves protocol flexibility, but request preparation and status-shape
 mapping remain developer-owned because the standalone server does not know the
 MLflow ResponsesAgent schema.
 
+| Abstraction | Application entry point | Application transport glue | Library tradeoff |
+| --- | --- | --- | --- |
+| `DatabricksDurableRuntime` | Async executor | Lifecycle, routes, errors, status responses | Transport-neutral |
+| `DatabricksDurableServer` | Async executor + request/status adapters | None | Standalone FastAPI contract |
+| `DatabricksDurableAgentServer` | MLflow `@invoke()` + request adapter | None | Protected MLflow hooks |
+
 This example intentionally allows one durable request per SDK session, so
 `custom_inputs.session_id` is also the runtime `execution_id`. A multi-turn
 application should use a separate execution ID for each invocation and keep its
