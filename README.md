@@ -31,6 +31,10 @@ adds Lakebase-backed request/response persistence, heartbeat detection, and
 stale-attempt recovery around a caller-owned async handler. The handler remains
 responsible for agent sessions and checkpoints.
 
+[`DatabricksDurableAgentServer`](./src/databricks_ai_bridge/durable_agent_server/README.md)
+extends MLflow AgentServer with blocking, background, retrieval, and stale
+recovery while preserving its `@invoke()` handler contract.
+
 See the [OpenAI Agents SDK App](./examples/openai-sdk-agent/README.md) for a
 complete FastAPI, background polling, SDK session, and Databricks Apps example.
 

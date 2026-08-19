@@ -29,6 +29,7 @@ memory = [
 agent-server = [
   "databricks-ai-bridge[memory]",
   "fastapi>=0.129.0",
+  "mlflow>=3.10.1",
   "pydantic-settings>=2.0",
   "uvicorn>=0.20.0",
 ]

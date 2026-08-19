@@ -95,6 +95,10 @@ connection, the client must supply a stable ID (for example an
 `Idempotency-Key`, session ID, or response ID) so it can retry or retrieve the
 same operation. The runtime does not hide this client/server recovery contract.
 
+For MLflow ResponsesAgent handlers, use
+[`DatabricksDurableAgentServer`](../durable_agent_server/README.md). It extends
+AgentServer with these routes and lifecycle while preserving `@invoke()`.
+
 Recommended HTTP error mappings are:
 
 - different request for an existing ID: `409 Conflict`;
