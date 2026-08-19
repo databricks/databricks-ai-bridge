@@ -64,7 +64,8 @@ Submitting the same ID and same JSON request is idempotent. If the response is
 already complete, `invoke` returns the cached response. Reusing the ID with a
 different request raises `DurableRequestConflictError`.
 
-An HTTP adapter remains small and transport-specific:
+Applications that want a transport-neutral primitive can keep a small,
+transport-specific HTTP adapter:
 
 ```python
 @app.post("/responses")
@@ -94,6 +95,10 @@ initial `202` response. For a blocking request that must survive a lost HTTP
 connection, the client must supply a stable ID (for example an
 `Idempotency-Key`, session ID, or response ID) so it can retry or retrieve the
 same operation. The runtime does not hide this client/server recovery contract.
+
+For a library-owned FastAPI adapter, use
+[`DatabricksDurableServer`](../durable_server/README.md). It owns these routes
+and lifecycle while preserving the same runtime and executor contracts.
 
 Recommended HTTP error mappings are:
 

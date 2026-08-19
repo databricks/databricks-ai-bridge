@@ -1,25 +1,21 @@
-"""OpenAI Agents SDK app backed by DatabricksDurableRuntime."""
+"""OpenAI Agents SDK app backed by DatabricksDurableServer."""
 
 import os
 import re
-from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
 from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
 from review_agent import execute_review, resume_review
 from sessions import create_session, initialize_sessions
 
 from databricks_ai_bridge.durable_runtime import (
-    DatabricksDurableRuntime,
     DurableExecution,
     DurableExecutionContext,
-    DurableExecutionFailedError,
     DurableExecutionStatus,
-    DurableRequestConflictError,
     JsonObject,
 )
+from databricks_ai_bridge.durable_server import DatabricksDurableServer, PreparedDurableRequest
 
 PR_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+/?$")
 RECOVERY_NOTE = (
@@ -48,13 +44,13 @@ def _review_inputs(request: ResponsesAgentRequest) -> tuple[str, float]:
     custom_inputs = dict(request.custom_inputs or {})
     pr_url = str(custom_inputs.get("pr_url") or "")
     if not PR_URL.fullmatch(pr_url):
-        raise HTTPException(400, "custom_inputs.pr_url must be a public GitHub pull-request URL")
+        raise ValueError("custom_inputs.pr_url must be a public GitHub pull-request URL")
     try:
         minimum_minutes = float(custom_inputs.get("minimum_minutes", 30))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "custom_inputs.minimum_minutes must be a number") from exc
+        raise ValueError("custom_inputs.minimum_minutes must be a number") from exc
     if not 0 <= minimum_minutes <= 60:
-        raise HTTPException(400, "custom_inputs.minimum_minutes must be between 0 and 60")
+        raise ValueError("custom_inputs.minimum_minutes must be between 0 and 60")
     return pr_url, minimum_minutes
 
 
@@ -104,31 +100,23 @@ async def execute_durable_review(
     return response.model_dump(mode="json", exclude_none=True)
 
 
-@asynccontextmanager
-async def lifespan(application: FastAPI):
-    await initialize_sessions()
-    durable_runtime = DatabricksDurableRuntime(
-        execute_durable_review,
-        schema=os.getenv("LAKEBASE_DURABILITY_SCHEMA", "openai_sdk_agent_durability"),
+def prepare_review_request(request: JsonObject) -> PreparedDurableRequest:
+    agent_request = ResponsesAgentRequest.model_validate(request)
+    _review_inputs(agent_request)
+    session_id = _session_id(agent_request)
+    return PreparedDurableRequest(
+        execution_id=session_id,
+        payload=_durable_request(agent_request, session_id),
     )
-    await durable_runtime.start()
-    application.state.durable_runtime = durable_runtime
-    try:
-        yield
-    finally:
-        await durable_runtime.stop()
 
 
-app = FastAPI(title="Durable OpenAI SDK PR review agent", lifespan=lifespan)
-
-
-def _status_response(state: DurableExecution) -> ResponsesAgentResponse:
+def status_response(state: DurableExecution) -> JsonObject:
     if state.status == DurableExecutionStatus.COMPLETED:
         if state.response is None:
             raise RuntimeError(f"execution {state.execution_id!r} completed without a response")
-        return ResponsesAgentResponse.model_validate(state.response)
+        return state.response
     custom_inputs = dict(state.request.get("custom_inputs") or {})
-    return ResponsesAgentResponse(
+    response = ResponsesAgentResponse(
         id=state.execution_id,
         status=RESPONSE_STATUS[state.status],
         output=[],
@@ -138,48 +126,18 @@ def _status_response(state: DurableExecution) -> ResponsesAgentResponse:
             "attempt": state.attempt,
         },
     )
+    return response.model_dump(mode="json", exclude_none=True)
 
 
-@app.get("/health")
-@app.get("/api/healthz")
-async def health() -> dict:
-    return {"ok": True, "model": "gpt-5.6-luna"}
-
-
-@app.post("/responses")
-@app.post("/invocations")
-async def invoke(
-    request: ResponsesAgentRequest,
-    response: Response,
-    http_request: Request,
-) -> ResponsesAgentResponse:
-    if request.stream:
-        raise HTTPException(400, "streaming is not implemented by this example")
-    _review_inputs(request)
-    execution_id = _session_id(request)
-    payload = _durable_request(request, execution_id)
-    durable_runtime: DatabricksDurableRuntime = http_request.app.state.durable_runtime
-    try:
-        if bool(getattr(request, "background", False)):
-            state = await durable_runtime.submit(execution_id, payload)
-            if not state.is_terminal:
-                response.status_code = 202
-            return _status_response(state)
-        result = await durable_runtime.invoke(execution_id, payload)
-        return ResponsesAgentResponse.model_validate(result)
-    except DurableRequestConflictError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    except DurableExecutionFailedError as exc:
-        raise HTTPException(500, str(exc)) from exc
-
-
-@app.get("/responses/{execution_id}")
-async def retrieve(execution_id: str, request: Request) -> ResponsesAgentResponse:
-    durable_runtime: DatabricksDurableRuntime = request.app.state.durable_runtime
-    state = await durable_runtime.get(execution_id)
-    if state is None:
-        raise HTTPException(404, f"execution {execution_id!r} was not found")
-    return _status_response(state)
+server = DatabricksDurableServer(
+    execute_durable_review,
+    prepare_request=prepare_review_request,
+    status_response=status_response,
+    on_startup=initialize_sessions,
+    schema=os.getenv("LAKEBASE_DURABILITY_SCHEMA", "openai_sdk_agent_durability"),
+    title="Durable OpenAI SDK PR review agent",
+)
+app = server.app
 
 
 if __name__ == "__main__":

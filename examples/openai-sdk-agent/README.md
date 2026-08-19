@@ -1,7 +1,7 @@
 # Durable OpenAI Agents SDK App
 
-This example is the PR-review agent from the custom-runtime experiment, with
-its application-owned durability package replaced by `DatabricksDurableRuntime`.
+This example serves the PR-review agent with `DatabricksDurableServer`. The
+server composes `DatabricksDurableRuntime` and owns FastAPI routes and lifecycle.
 The agent loop in `review_agent.py` and the OpenAI Agents SDK session in
 `sessions.py` remain application concerns.
 
@@ -12,7 +12,7 @@ client-disconnect, and real App stop/start recovery results.
 
 ```text
 client
-  -> FastAPI adapter (app.py)
+  -> DatabricksDurableServer
        -> DatabricksDurableRuntime
             -> Lakebase: openai_sdk_agent_durability.executions
             -> executor (execute_durable_review)
@@ -20,12 +20,29 @@ client
                  -> Lakebase: openai_sdk_agent_sessions.agent_messages
 ```
 
+`DatabricksDurableServer` owns `/responses`, `/invocations`, retrieval, health,
+transport-field handling, HTTP error mapping, and runtime lifecycle.
 `DatabricksDurableRuntime` owns request/response persistence, exact-request
 idempotency, heartbeats, stale-attempt claims, and process-start recovery. The
 executor owns the SDK session and recovery behavior. On attempt 1 it starts the
 review from the request. On attempt 2 or later it reopens the same SDK session
 and supplies only the fixed recovery note; it does not reconstruct an agent
 prompt from the durability request.
+
+## Developer experience
+
+`app.py` contains no FastAPI routes or lifespan. The application provides:
+
+- `prepare_review_request`, which validates the request, chooses the execution
+  ID, and returns the normalized payload;
+- `execute_durable_review`, which runs or resumes the agent;
+- `status_response`, which renders queued, active, and failed Responses API
+  objects; and
+- `initialize_sessions`, passed as the server startup hook.
+
+This preserves protocol flexibility, but request preparation and status-shape
+mapping remain developer-owned because the standalone server does not know the
+MLflow ResponsesAgent schema.
 
 This example intentionally allows one durable request per SDK session, so
 `custom_inputs.session_id` is also the runtime `execution_id`. A multi-turn
@@ -86,7 +103,7 @@ Install from the repository checkout while developing this unreleased runtime:
 
 ```bash
 uv venv
-uv pip install -e '../..[memory]' -e '../../integrations/openai[memory]'
+uv pip install -e '../..[agent-server]' -e '../../integrations/openai[memory]'
 uv pip install 'openai-agents>=0.19.4,<0.20' 'mcp>=1.29.0,<2' \
   'mlflow>=3.10.1' 'fastapi>=0.129.0' 'uvicorn>=0.41.0'
 ```
@@ -111,4 +128,4 @@ databricks bundle run open_ai_sdk_agent -t dev --profile <PROFILE> \
 After the runtime is released, the App build installs `requirements.txt`
 directly. When deploying this PR before release, replace the
 `databricks-ai-bridge` requirement with an installable wheel or Git ref that
-contains `DatabricksDurableRuntime`.
+contains `DatabricksDurableServer`.
