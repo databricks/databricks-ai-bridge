@@ -24,6 +24,17 @@ For frameworks without dedicated integration packages:
 pip install databricks-ai-bridge
 ```
 
+## Durable Runtime
+
+[`DatabricksDurableRuntime`](./src/databricks_ai_bridge/durable_runtime/README.md)
+adds Lakebase-backed request/response persistence, heartbeat detection, and
+stale-attempt recovery around a caller-owned async handler. The handler remains
+responsible for agent sessions and checkpoints.
+
+```sh
+pip install 'databricks-ai-bridge[memory]'
+```
+
 ### Install from source
 
 With https:
