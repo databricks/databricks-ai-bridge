@@ -1,0 +1,12 @@
+command: ["python", "app.py"]
+env:
+  - name: OPENAI_API_KEY
+    valueFrom: openai-api-key
+  - name: OPENAI_MODEL
+    value: gpt-5.6-luna
+  - name: LAKEBASE_AUTOSCALING_ENDPOINT
+    valueFrom: postgres
+  - name: LAKEBASE_SESSION_SCHEMA
+    value: openai_sdk_agent_sessions
+  - name: LAKEBASE_DURABILITY_SCHEMA
+    value: openai_sdk_agent_durability

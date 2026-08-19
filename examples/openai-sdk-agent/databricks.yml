@@ -1,0 +1,48 @@
+bundle:
+  name: open_ai_sdk_agent
+
+variables:
+  lakebase_branch:
+    description: Full Lakebase branch resource name
+  lakebase_database:
+    description: Full Lakebase database resource name
+  openai_secret_scope:
+    description: Databricks secret scope containing the OpenAI API key
+  openai_secret_key:
+    description: Databricks secret key containing the OpenAI API key
+
+resources:
+  apps:
+    open_ai_sdk_agent:
+      name: open-ai-sdk-agent
+      description: OpenAI Agents SDK example using DatabricksDurableRuntime
+      source_code_path: ./
+      config:
+        command: ["python", "app.py"]
+        env:
+          - name: OPENAI_API_KEY
+            value_from: openai-api-key
+          - name: OPENAI_MODEL
+            value: gpt-5.6-luna
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: postgres
+          - name: LAKEBASE_SESSION_SCHEMA
+            value: openai_sdk_agent_sessions
+          - name: LAKEBASE_DURABILITY_SCHEMA
+            value: openai_sdk_agent_durability
+      resources:
+        - name: openai-api-key
+          secret:
+            scope: ${var.openai_secret_scope}
+            key: ${var.openai_secret_key}
+            permission: READ
+        - name: postgres
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+targets:
+  dev:
+    mode: development
+    default: true

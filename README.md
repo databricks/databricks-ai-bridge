@@ -31,6 +31,9 @@ adds Lakebase-backed request/response persistence, heartbeat detection, and
 stale-attempt recovery around a caller-owned async handler. The handler remains
 responsible for agent sessions and checkpoints.
 
+See the [OpenAI Agents SDK App](./examples/openai-sdk-agent/README.md) for a
+complete FastAPI, background polling, SDK session, and Databricks Apps example.
+
 ```sh
 pip install 'databricks-ai-bridge[memory]'
 ```
