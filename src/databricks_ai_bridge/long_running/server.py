@@ -34,6 +34,7 @@ from mlflow.genai.agent_server.server import (
 from mlflow.genai.agent_server.utils import get_request_headers, set_request_headers
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.tracing.constant import SpanAttributeKey
+from mlflow.types.responses import ResponsesAgentRequest
 
 from databricks_ai_bridge.long_running.db import dispose_db, init_db, is_db_configured
 from databricks_ai_bridge.long_running.repository import (
@@ -47,6 +48,7 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_status,
     update_response_trace_id,
 )
+from databricks_ai_bridge.long_running.resume import ResumeContext, get_on_resume_function
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 from databricks_ai_bridge.utils.annotations import experimental
 
@@ -199,6 +201,15 @@ def _agent_managed_recovery_message() -> dict[str, Any]:
     }
 
 
+def _request_to_dict(request: Any) -> dict[str, Any]:
+    if isinstance(request, dict):
+        return copy.deepcopy(request)
+    model_dump = getattr(request, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(exclude_none=True)
+    raise TypeError("Resume handlers must return a request model or dictionary")
+
+
 def _build_prose_recovery_message(
     messages: list[tuple], prior_attempt_number: int
 ) -> dict[str, Any]:
@@ -310,10 +321,10 @@ class LongRunningAgentServer(AgentServer):
     ``LAKEBASE_AUTOSCALING_PROJECT`` and ``LAKEBASE_AUTOSCALING_BRANCH``.
 
     When a heartbeat becomes stale, another pod atomically claims the run and
-    passes the resumed request through ``on_resume``. Framework-managed mode
-    reconstructs prose from persisted events on a rotated session. Agent-managed
-    mode retains the session anchor and delegates transcript recovery to the
-    agent SDK's session store.
+    calls the function registered by ``@on_resume()``. If none is registered,
+    framework-managed mode reconstructs prose from persisted events on a
+    rotated session, while agent-managed mode retains the session anchor and
+    delegates transcript recovery to the agent SDK's session store.
 
     Args:
         enable_chat_proxy: Whether to enable the chat proxy endpoint.
@@ -341,9 +352,9 @@ class LongRunningAgentServer(AgentServer):
             written its first heartbeat yet. Defaults to 10.0.
         auto_recovery: Whether the server reconstructs recovery context from
             persisted stream events and rotates the agent session. When false,
-            ``on_resume`` keeps the session anchor and sends only a fixed
-            recovery prompt, delegating transcript recovery to the agent's
-            session store. Defaults to true.
+            the default resume policy keeps the session anchor and sends only
+            a fixed recovery prompt, delegating transcript recovery to the
+            agent's session store. Defaults to true.
         sse_replay: Whether background SSE events are persisted and exposed
             through streaming retrieval. Defaults to true.
     """
@@ -1095,48 +1106,61 @@ class LongRunningAgentServer(AgentServer):
             extra={"response_id": response_id, "output_items": len(output)},
         )
 
-    async def on_resume(
+    async def _build_resume_request(
         self,
         original_request: dict[str, Any],
         *,
         response_id: str,
         new_attempt_number: int,
         prior_messages: list[tuple[int, str | None, dict[str, Any] | None, int]],
-    ) -> dict[str, Any]:
-        """Build the request passed to the handler for a claimed stale attempt.
+    ) -> ResponsesAgentRequest:
+        """Apply the registered resume handler or the configured default."""
+        validated_original = self.validator.validate_and_convert_request(original_request)
 
-        The default framework-managed mode creates prose from the prior
-        attempt's event log and rotates the conversation anchor. With
-        ``auto_recovery=False``, the same session anchor is retained and the
-        handler receives only a fixed recovery prompt; the agent SDK's session
-        store is then responsible for restoring the transcript.
-
-        Subclasses may override this hook to implement another recovery
-        contract.
-        """
-        resume_request = copy.deepcopy(original_request)
-        if self.auto_recovery:
-            resume_input = list(resume_request.get("input") or [])
-            resume_input.append(
-                _build_prose_recovery_message(
-                    prior_messages,
-                    prior_attempt_number=new_attempt_number - 1,
+        async def default_request(request: ResponsesAgentRequest) -> ResponsesAgentRequest:
+            resume_request = _request_to_dict(request)
+            if self.auto_recovery:
+                resume_input = list(resume_request.get("input") or [])
+                resume_input.append(
+                    _build_prose_recovery_message(
+                        prior_messages,
+                        prior_attempt_number=new_attempt_number - 1,
+                    )
                 )
-            )
-            resume_request["input"] = resume_input
-            return _rotate_conversation_id(
-                resume_request,
-                new_attempt_number,
-                response_id,
-            )
+                resume_request["input"] = resume_input
+                resume_request = _rotate_conversation_id(
+                    resume_request,
+                    new_attempt_number,
+                    response_id,
+                )
+            else:
+                resume_request["input"] = [_agent_managed_recovery_message()]
+            return self.validator.validate_and_convert_request(resume_request)
 
-        resume_request["input"] = [_agent_managed_recovery_message()]
-        return resume_request
+        previous_events = tuple(
+            copy.deepcopy(event)
+            for _sequence, _item, event, attempt_number in prior_messages
+            if attempt_number == new_attempt_number - 1 and isinstance(event, dict)
+        )
+        context = ResumeContext(
+            response_id=response_id,
+            attempt_number=new_attempt_number,
+            previous_events=previous_events,
+            _default_request=default_request,
+        )
+        resume_function = get_on_resume_function()
+        if resume_function is None:
+            return await context.default_request(validated_original)
+
+        resumed = resume_function(validated_original, context)
+        if inspect.isawaitable(resumed):
+            resumed = await resumed
+        return self.validator.validate_and_convert_request(_request_to_dict(resumed))
 
     async def _try_claim_and_resume(self, response_id: str, resp) -> int | None:
         """If ``resp`` is a stale in-progress run, attempt an atomic claim.
 
-        On success, pass the original request through ``on_resume``, spawn the
+        On success, pass the original request through ``@on_resume``, spawn the
         handler for the new attempt, and return its attempt number. On failure
         (another pod won, or the run is no longer stale), return ``None``.
         """
@@ -1208,19 +1232,19 @@ class LongRunningAgentServer(AgentServer):
             await get_messages(response_id, after_sequence=None) if self._event_log_enabled else []
         )
         next_seq = max((s for s, _, _, _ in existing), default=-1) + 1
-        resume_dict = await self.on_resume(
+        resume_request = await self._build_resume_request(
             resp.original_request,
             response_id=response_id,
             new_attempt_number=new_attempt,
             prior_messages=existing,
         )
+        resume_dict = _request_to_dict(resume_request)
         logger.info(
             "[durable] resume request built response_id=%s attempt=%d mode=%s",
             response_id,
             new_attempt,
             "event_log" if self.auto_recovery else "agent_session",
         )
-        resume_request = self.validator.validate_and_convert_request(resume_dict)
         # Framework recovery exposes its rotated conversation ID. Agent-managed
         # recovery exposes the unchanged conversation ID when one was supplied.
         conversation_id = (resume_dict.get("context") or {}).get("conversation_id")

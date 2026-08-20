@@ -1,4 +1,4 @@
-"""Shared MLflow handlers for all three durable-server examples."""
+"""OpenAI Agents SDK handlers for agent-session-managed recovery."""
 
 import json
 import re
@@ -12,9 +12,13 @@ from mlflow.types.responses import (
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
 )
-
-from shared.review_agent import execute_review, resume_review, stream_resume, stream_review
-from shared.sessions import create_session
+from openai_sdk_agent_shared.review_agent import (
+    execute_review,
+    resume_review,
+    stream_resume,
+    stream_review,
+)
+from openai_sdk_agent_shared.sessions import create_session
 
 PR_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+/?$")
 
@@ -42,13 +46,13 @@ def _review_inputs(request: ResponsesAgentRequest) -> tuple[str, float]:
     return pr_url, minimum_minutes
 
 
-def _recovery_prompt(request: ResponsesAgentRequest) -> tuple[str, bool]:
+def _agent_recovery_prompt(request: ResponsesAgentRequest) -> str:
     if not request.input:
-        return "", False
+        return ""
     content = request.input[-1].model_dump().get("content")
-    if not isinstance(content, str) or not content.startswith("[RECOVERY]"):
-        return "", False
-    return content, len(request.input) == 1 and "session store" in content
+    if len(request.input) == 1 and isinstance(content, str) and content.startswith("[RECOVERY]"):
+        return content
+    return ""
 
 
 def _message(text: str) -> dict:
@@ -85,15 +89,46 @@ async def _responses_events(
             yield ResponsesAgentStreamEvent(type="response.output_item.done", item=output)
 
 
+# Optional override. Without it, LongRunningAgentServer keeps the current SDK
+# session and replaces input with its fixed recovery prompt. The server calls
+# this once after claiming a stale attempt, then reuses that attempt's stored
+# invoke/stream mode. No event log is required for this default.
+#
+# from databricks_ai_bridge.long_running import ResumeContext, on_resume
+#
+# @on_resume()
+# async def resume_request(
+#     request: ResponsesAgentRequest,
+#     context: ResumeContext,
+# ) -> ResponsesAgentRequest:
+#     request_dict = request.model_dump(exclude_none=True)
+#     request_dict["input"] = [
+#         {
+#             "type": "message",
+#             "role": "user",
+#             "content": (
+#                 "[RECOVERY] The previous attempt was interrupted. Continue "
+#                 "the task using the transcript already persisted by the "
+#                 "agent's session store. Inspect external side effects and "
+#                 "safely repeat any interrupted operation."
+#             ),
+#         }
+#     ]
+#     return ResponsesAgentRequest(**request_dict)
+#
+# The complete implementation above can be replaced with:
+#     return await context.default_request(request)
+
+
 @invoke()
 async def invoke_review(request: ResponsesAgentRequest) -> ResponsesAgentResponse:
     session = create_session(_session_id(request))
-    recovery_prompt, agent_managed = _recovery_prompt(request)
-    if agent_managed:
+    recovery_prompt = _agent_recovery_prompt(request)
+    if recovery_prompt:
         report = await resume_review(session, recovery_prompt)
     else:
         pr_url, minimum_minutes = _review_inputs(request)
-        report = await execute_review(pr_url, minimum_minutes, session, recovery_prompt)
+        report = await execute_review(pr_url, minimum_minutes, session)
     return ResponsesAgentResponse(output=[_message(report)])
 
 
@@ -102,11 +137,11 @@ async def stream_review_events(
     request: ResponsesAgentRequest,
 ) -> AsyncGenerator[ResponsesAgentStreamEvent | dict, None]:
     session = create_session(_session_id(request))
-    recovery_prompt, agent_managed = _recovery_prompt(request)
-    if agent_managed:
+    recovery_prompt = _agent_recovery_prompt(request)
+    if recovery_prompt:
         events = stream_resume(session, recovery_prompt)
     else:
         pr_url, minimum_minutes = _review_inputs(request)
-        events = stream_review(pr_url, minimum_minutes, session, recovery_prompt)
+        events = stream_review(pr_url, minimum_minutes, session)
     async for event in _responses_events(events):
         yield event

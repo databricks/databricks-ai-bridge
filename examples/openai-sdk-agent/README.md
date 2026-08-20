@@ -1,8 +1,9 @@
 # OpenAI SDK Recovery Modes
 
 These three Databricks Apps run the same OpenAI Agents SDK PR-review agent and
-the same MLflow `@invoke()` / `@stream()` handlers. Only two
-`LongRunningAgentServer` options change:
+expose the same MLflow `@invoke()` / `@stream()` surface. The mode-specific
+handler code is intentionally visible, while only two `LongRunningAgentServer`
+options change:
 
 | App | `auto_recovery` | `sse_replay` | Resume input | Durable event rows |
 | --- | --- | --- | --- | --- |
@@ -14,18 +15,56 @@ Heartbeat, stale-attempt claiming, and process-start recovery run in all three
 modes. `auto_recovery` controls who restores agent context, not whether a stale
 attempt is restarted.
 
+## Staging deployments
+
+All three examples are deployed in `ml-inference-staging` against separate
+branches of the `shivam-openai-agent-on-apps` Lakebase project:
+
+| App | Runtime | Workspace | Lakebase tables |
+| --- | --- | --- | --- |
+| Framework recovery + SSE | [App](https://openai-agent-framework-sse-1653573648247579.staging.aws.databricksapps.com) | [Overview](https://eng-ml-inference.staging.cloud.databricks.com/apps-v2/app/openai-agent-framework-sse/overview?o=1653573648247579) | [`durable-framework-sse`](https://eng-ml-inference.staging.cloud.databricks.com/lakebase/projects/18e258e0-0c3c-4cf4-aa99-c5a8452b25ef/branches/br-falling-rice-y2moig3m/tables) |
+| Agent recovery + SSE | [App](https://openai-agent-session-sse-1653573648247579.staging.aws.databricksapps.com) | [Overview](https://eng-ml-inference.staging.cloud.databricks.com/apps-v2/app/openai-agent-session-sse/overview?o=1653573648247579) | [`durable-session-sse`](https://eng-ml-inference.staging.cloud.databricks.com/lakebase/projects/18e258e0-0c3c-4cf4-aa99-c5a8452b25ef/branches/br-withered-snow-y24p21r1/tables) |
+| Agent recovery + polling | [App](https://openai-agent-session-poll-1653573648247579.staging.aws.databricksapps.com) | [Overview](https://eng-ml-inference.staging.cloud.databricks.com/apps-v2/app/openai-agent-session-poll/overview?o=1653573648247579) | [`durable-session-poll`](https://eng-ml-inference.staging.cloud.databricks.com/lakebase/projects/18e258e0-0c3c-4cf4-aa99-c5a8452b25ef/branches/br-damp-mountain-y2yvlah2/tables) |
+
 ```text
 openai-sdk-agent/
-├── framework_recovery_sse/   # app.py, app.yaml, README.md
-├── agent_recovery_sse/       # app.py, app.yaml, README.md
-├── agent_recovery_polling/   # app.py, app.yaml, README.md
-└── shared/                   # identical agent, handlers, sessions, lifecycle
+├── framework_recovery_sse/   # app.py + app.yaml + handlers.py
+├── agent_recovery_sse/       # app.py + app.yaml + handlers.py
+├── agent_recovery_polling/   # app.py + app.yaml + handlers.py
+└── shared/                   # only the identical agent loop and SDK sessions
 ```
+
+The mode folders intentionally duplicate `app.py` and `handlers.py`. This is a
+developer-experience comparison, so each folder shows the complete server
+configuration and handler code an author owns instead of hiding the differences
+behind a shared factory.
 
 ## Recovery hook
 
-Every claimed stale attempt passes through `LongRunningAgentServer.on_resume`.
-The default implementation has two policies:
+After atomically claiming a stale attempt, `LongRunningAgentServer` calls the
+single function registered with `@on_resume()`. The callback transforms the
+stored request; the server then invokes the same `@invoke()` or `@stream()` mode
+recorded for the original attempt. Authors do not register separate invoke and
+stream resume callbacks.
+
+Each `handlers.py` includes a commented, copyable implementation of its full
+default transformation. The shorter equivalent is:
+
+```python
+from databricks_ai_bridge.long_running import ResumeContext, on_resume
+
+
+@on_resume()
+async def resume_request(request, context: ResumeContext):
+    return await context.default_request(request)
+```
+
+`ResumeContext` exposes the response ID, current and previous attempt numbers,
+the previous attempt's persisted events, and `default_request()`. When no
+`@on_resume()` function is registered, the server calls that same default
+automatically.
+
+The built-in implementation has two policies:
 
 ```python
 LongRunningAgentServer(auto_recovery=True)
@@ -37,10 +76,66 @@ LongRunningAgentServer(auto_recovery=False)
 # [RECOVERY] prompt. The agent SDK session store supplies the transcript.
 ```
 
-Applications can subclass the server and override `on_resume` for another
-contract.
+Applications register `@on_resume()` only when they need another request
+contract. Session restoration still happens later, when the resumed
+`@invoke()` or `@stream()` handler opens its SDK session.
 
-## Event and result persistence
+## Logical and physical persistence
+
+There are three independent logical stores. They share a Lakebase branch in
+each example, but they do not have the same owner or purpose:
+
+```mermaid
+flowchart LR
+    Client --> Server[LongRunningAgentServer]
+    Server --> Responses[agent_server.responses\nruntime durability]
+    Server --> Events[agent_server.messages\noptional event log]
+    Server --> Handler[MLflow handler]
+    Handler --> SDK[OpenAI Agents SDK]
+    SDK --> Sessions[LAKEBASE_SESSION_SCHEMA.agent_sessions\nSDK session identity]
+    SDK --> Messages[LAKEBASE_SESSION_SCHEMA.agent_messages\nSDK transcript]
+```
+
+1. **Runtime durability:** `agent_server.responses` is owned by
+   `LongRunningAgentServer`. It stores the original request, terminal response,
+   status, heartbeat, attempt, and whether the original handler was streaming.
+2. **Durable event log:** `agent_server.messages` is also runtime-owned, but is
+   a separate append-only stream-event/output-item log. It is written only when
+   framework recovery or client SSE replay needs events.
+3. **Agent session store:** this is the actual conversation store selected by
+   the agent handler/harness. In these examples, the OpenAI Agents SDK owns
+   `agent_sessions` and `agent_messages` in `LAKEBASE_SESSION_SCHEMA`. The
+   handler opens this store; `LongRunningAgentServer` neither creates its schema
+   nor parses its transcript.
+
+The physical schema captured from all three deployed Lakebase branches is:
+
+| Table | Primary key | Captured columns and PostgreSQL types |
+| --- | --- | --- |
+| `agent_server.responses` | `response_id` | `response_id text`, `status text`, `created_at timestamptz`, `trace_id text?`, `heartbeat_at timestamptz?`, `attempt_number int`, `original_request text?`, `response text?`, `is_streaming boolean` |
+| `agent_server.messages` | `(response_id, sequence_number)` | `response_id text`, `sequence_number int`, `attempt_number int`, `item text?`, `stream_event text?` |
+| `<SDK schema>.agent_sessions` | `session_id` | `session_id varchar`, `created_at timestamp`, `updated_at timestamp` |
+| `<SDK schema>.agent_messages` | `id` | `id int`, `session_id varchar`, `message_data text`, `created_at timestamp` |
+
+`?` marks a nullable column. `original_request`, `response`, `item`,
+`stream_event`, and `message_data` contain serialized JSON text.
+
+`agent_messages.session_id` references the SDK-owned session identity. There is
+no foreign key between the SDK schema and `agent_server`: the request's session
+or conversation ID is the logical correlation key.
+
+### Per-mode writes
+
+| App | Runtime response | Event log | SDK session behavior |
+| --- | --- | --- | --- |
+| Framework recovery + SSE | Request and terminal response always stored | Stored; read for recovery and SSE replay | Crashed session is left as-is; resume writes a rotated `::attempt-N` session |
+| Agent recovery + SSE | Request and terminal response always stored | Stored only for SSE replay | Resume reopens the same SDK session and uses its transcript |
+| Agent recovery + polling | Request and terminal response always stored | Table exists but receives no rows | Resume reopens the same SDK session and uses its transcript |
+
+Each mode README includes a captured response row plus its event and SDK-session
+counts from the deployed app.
+
+### Event-log condition
 
 The server writes `agent_server.messages` only when at least one consumer needs
 the event log:
@@ -64,18 +159,22 @@ The SDK transcript is independent:
 | --- | --- | --- |
 | `LongRunningAgentServer` | `agent_server.responses` | Request, final response, handler mode, heartbeat, attempt, status |
 | `LongRunningAgentServer` | `agent_server.messages` | Optional stream-event log |
-| OpenAI Agents SDK | `LAKEBASE_SESSION_SCHEMA.agent_messages` | Agent, model, tool-call, and tool-output transcript |
+| OpenAI Agents SDK | `LAKEBASE_SESSION_SCHEMA.agent_sessions` | SDK session identity and timestamps |
+| OpenAI Agents SDK | `LAKEBASE_SESSION_SCHEMA.agent_messages` | User, model, tool-call, and tool-output transcript |
 
 ## Shared agent code
 
-- `shared/review_agent.py` contains the deterministic PR CUJs and shell tool.
-- `shared/handlers.py` adapts OpenAI Agents SDK output to MLflow Responses
-  events.
-- `shared/sessions.py` creates `AsyncDatabricksSession` instances.
-- `shared/server_factory.py` contains common Lakebase, lifespan, and dynamic
-  App port wiring.
-- Each mode folder contains only its `app.py`, `app.yaml`, and a short README.
-  The `app.py` files intentionally differ only in the two policy flags.
+- `shared/src/openai_sdk_agent_shared/review_agent.py` contains the identical
+  deterministic PR CUJs and shell tool used by all three Apps.
+- `shared/src/openai_sdk_agent_shared/sessions.py` creates the identical
+  `AsyncDatabricksSession` instances used by all three Apps.
+- Each mode folder owns `handlers.py`. Framework recovery consumes the prose
+  recovery input generated from durable events; agent-managed recovery detects
+  the fixed recovery prompt and reopens the existing SDK session.
+- Each mode folder owns `app.py`, which directly constructs
+  `LongRunningAgentServer` with fixed `auto_recovery`/`sse_replay` values.
+- Each `handlers.py` shows the optional `@on_resume()` override beside the
+  ordinary MLflow handlers.
 
 ## HTTP tests
 
@@ -135,23 +234,35 @@ database resource. Every App service principal creates the fixed
 schema owner and prevent the other two from initializing it. The SDK session
 schemas are also separate.
 
-Each mode folder has its own runtime `app.yaml`. The root bundle includes the
-shared implementation and embeds all three runtime configurations, so it is
-the easiest way to deploy the comparison together. To deploy one mode through
-a direct App upload, copy that mode's `app.yaml` to this directory first so
-the uploaded source still includes `shared/`.
+Each mode folder is a standalone App source with its own `app.py`, `app.yaml`,
+`requirements.txt`, and README. The shared implementation is packaged once and
+installed into each App from a local wheel.
+
+Build the unreleased server wheel and shared-agent wheel into all three App
+sources before validation or deployment:
 
 ```bash
-databricks apps deploy -t dev --profile <PROFILE> \
-  --var="framework_recovery_sse_lakebase_branch=projects/<project>/branches/<framework-branch>" \
-  --var="framework_recovery_sse_lakebase_database=projects/<project>/branches/<framework-branch>/databases/<database>" \
-  --var="agent_recovery_sse_lakebase_branch=projects/<project>/branches/<agent-sse-branch>" \
-  --var="agent_recovery_sse_lakebase_database=projects/<project>/branches/<agent-sse-branch>/databases/<database>" \
-  --var="agent_recovery_polling_lakebase_branch=projects/<project>/branches/<agent-polling-branch>" \
-  --var="agent_recovery_polling_lakebase_database=projects/<project>/branches/<agent-polling-branch>/databases/<database>" \
-  --var="openai_secret_scope=<scope>" \
-  --var="openai_secret_key=<key>"
+bash examples/openai-sdk-agent/prepare_deployment.sh
 ```
 
-When testing this unreleased branch, package it as a wheel and include that
-wheel in the App source instead of resolving `databricks-ai-bridge` from PyPI.
+```bash
+cd examples/openai-sdk-agent
+
+bundle_vars=(
+  --var="framework_recovery_sse_lakebase_branch=projects/<project>/branches/<framework-branch>"
+  --var="framework_recovery_sse_lakebase_database=projects/<project>/branches/<framework-branch>/databases/<database>"
+  --var="agent_recovery_sse_lakebase_branch=projects/<project>/branches/<agent-sse-branch>"
+  --var="agent_recovery_sse_lakebase_database=projects/<project>/branches/<agent-sse-branch>/databases/<database>"
+  --var="agent_recovery_polling_lakebase_branch=projects/<project>/branches/<agent-polling-branch>"
+  --var="agent_recovery_polling_lakebase_database=projects/<project>/branches/<agent-polling-branch>/databases/<database>"
+  --var="openai_secret_scope=<scope>"
+  --var="openai_secret_key=<key>"
+)
+
+databricks bundle validate --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle deploy --profile <PROFILE> "${bundle_vars[@]}"
+
+databricks bundle run framework_recovery_sse --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle run agent_recovery_sse --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle run agent_recovery_polling --profile <PROFILE> "${bundle_vars[@]}"
+```

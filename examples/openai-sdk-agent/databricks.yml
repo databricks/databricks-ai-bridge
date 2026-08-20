@@ -24,9 +24,9 @@ resources:
     framework_recovery_sse:
       name: openai-agent-framework-sse
       description: Framework-managed recovery with durable SSE replay
-      source_code_path: ./
+      source_code_path: ./framework_recovery_sse
       config:
-        command: ["python", "-m", "framework_recovery_sse.app"]
+        command: ["python", "app.py"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key
@@ -51,9 +51,9 @@ resources:
     agent_recovery_sse:
       name: openai-agent-session-sse
       description: Agent-session-managed recovery with durable SSE replay
-      source_code_path: ./
+      source_code_path: ./agent_recovery_sse
       config:
-        command: ["python", "-m", "agent_recovery_sse.app"]
+        command: ["python", "app.py"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key
@@ -78,9 +78,9 @@ resources:
     agent_recovery_polling:
       name: openai-agent-session-poll
       description: Agent-session-managed recovery without SSE event persistence
-      source_code_path: ./
+      source_code_path: ./agent_recovery_polling
       config:
-        command: ["python", "-m", "agent_recovery_polling.app"]
+        command: ["python", "app.py"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key

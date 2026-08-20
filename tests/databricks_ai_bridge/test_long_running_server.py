@@ -14,7 +14,9 @@ if __import__("sys").version_info < (3, 11):
 pytest.importorskip("fastapi")
 pytest.importorskip("psycopg")
 
+from databricks_ai_bridge.long_running import ResumeContext, on_resume
 from databricks_ai_bridge.long_running.repository import ResponseInfo
+from databricks_ai_bridge.long_running.resume import get_on_resume_function
 from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
     _build_prose_recovery_message,
@@ -29,6 +31,13 @@ from databricks_ai_bridge.long_running.settings import LongRunningSettings
 # ---------------------------------------------------------------------------
 
 MODULE = "databricks_ai_bridge.long_running.server"
+RESUME_MODULE = "databricks_ai_bridge.long_running.resume"
+
+
+@pytest.fixture(autouse=True)
+def reset_on_resume_handler():
+    with patch(f"{RESUME_MODULE}._on_resume_function", None):
+        yield
 
 
 def _make_server(**kwargs):
@@ -1201,12 +1210,13 @@ class TestOnResume:
             "context": {"conversation_id": "conversation-1"},
         }
 
-        resumed = await server.on_resume(
+        resumed = await server._build_resume_request(
             original_request,
             response_id="resp_1",
             new_attempt_number=2,
             prior_messages=[],
         )
+        resumed = resumed.model_dump(exclude_none=True)
 
         assert resumed["custom_inputs"] == {
             "session_id": "session-1",
@@ -1229,7 +1239,7 @@ class TestOnResume:
     @pytest.mark.asyncio
     async def test_framework_recovery_uses_event_log_and_rotates_session(self):
         server = _make_server(auto_recovery=True, sse_replay=False)
-        resumed = await server.on_resume(
+        resumed = await server._build_resume_request(
             {
                 "input": [{"role": "user", "content": "original"}],
                 "custom_inputs": {"session_id": "session-1"},
@@ -1243,11 +1253,96 @@ class TestOnResume:
                 )
             ],
         )
+        resumed = resumed.model_dump()
 
         assert len(resumed["input"]) == 2
         assert '"text": "prior"' in resumed["input"][1]["content"]
         assert resumed["context"]["conversation_id"] == "session-1::attempt-2"
         assert "session_id" not in resumed["custom_inputs"]
+
+    @pytest.mark.asyncio
+    async def test_decorated_handler_can_delegate_to_default_and_customize_request(self):
+        captured = {}
+
+        @on_resume()
+        async def resume_request(request, context: ResumeContext):
+            captured["request"] = request
+            captured["response_id"] = context.response_id
+            captured["attempt_number"] = context.attempt_number
+            captured["previous_attempt_number"] = context.previous_attempt_number
+            captured["previous_events"] = context.previous_events
+            resumed = await context.default_request(request)
+            resumed_dict = resumed.model_dump()
+            resumed_dict["custom_inputs"]["resume_policy"] = "custom"
+            return resumed_dict
+
+        server = _make_server(auto_recovery=True, sse_replay=True)
+        resumed = await server._build_resume_request(
+            {
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[
+                _msg(0, evt={"type": "prior"}, attempt=1),
+                _msg(1, evt={"type": "current"}, attempt=2),
+            ],
+        )
+        resumed = resumed.model_dump()
+
+        assert captured["request"].input[0].content == "original"
+        assert captured["response_id"] == "resp_1"
+        assert captured["attempt_number"] == 2
+        assert captured["previous_attempt_number"] == 1
+        assert captured["previous_events"] == ({"type": "prior"},)
+        assert resumed["custom_inputs"]["resume_policy"] == "custom"
+        assert resumed["context"]["conversation_id"] == "session-1::attempt-2"
+
+    @pytest.mark.asyncio
+    async def test_decorated_handler_replaces_default_request(self):
+        @on_resume()
+        def resume_request(request, context):
+            request_dict = request.model_dump()
+            request_dict["input"] = [{"role": "user", "content": "custom recovery"}]
+            return request_dict
+
+        server = _make_server(auto_recovery=True, sse_replay=True)
+        resumed = await server._build_resume_request(
+            {"input": [{"role": "user", "content": "original"}]},
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[],
+        )
+        resumed = resumed.model_dump()
+
+        assert len(resumed["input"]) == 1
+        assert resumed["input"][0]["content"] == "custom recovery"
+
+
+class TestOnResumeDecorator:
+    def test_registers_handler_and_preserves_metadata(self):
+        @on_resume()
+        def custom_resume(request, context):
+            """Custom resume handler."""
+            return request
+
+        registered = get_on_resume_function()
+
+        assert registered is not None
+        assert custom_resume.__name__ == "custom_resume"
+        assert custom_resume.__doc__ == "Custom resume handler."
+
+    def test_rejects_multiple_handlers(self):
+        @on_resume()
+        def first(request, context):
+            return request
+
+        with pytest.raises(ValueError, match="can only be used once"):
+
+            @on_resume()
+            def second(request, context):
+                return request
 
 
 class TestRotateConversationId:

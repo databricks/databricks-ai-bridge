@@ -29,7 +29,10 @@ pip install databricks-ai-bridge
 `LongRunningAgentServer` adds Lakebase-backed background execution, heartbeat
 recovery, result persistence, and optional SSE replay to MLflow ResponsesAgent
 handlers. Recovery context can come from the server's event log or from an
-agent-managed SDK session.
+agent-managed SDK session. Applications keep the normal `@invoke()` and
+`@stream()` handlers and may register one optional `@on_resume()` request
+transformer. The server calls it after claiming a stale attempt, then dispatches
+the transformed request through the original invoke or stream mode.
 
 See the [OpenAI Agents SDK examples](./examples/openai-sdk-agent/README.md) for
 the same agent configured with framework-managed recovery, agent-session

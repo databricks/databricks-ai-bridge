@@ -15,7 +15,7 @@ This document describes:
 
 1. **Background execution.** A `POST /responses` request with `background: true` returns a `response_id` immediately; the agent loop runs detached from the HTTP connection. State persists to Lakebase Postgres.
 2. **Optional streaming retrieval.** With `sse_replay=True`, `GET /responses/{response_id}?stream=true&starting_after=N` replays events past sequence `N` and tails new ones until the run finishes.
-3. **Crash-resumable execution.** If the pod running an agent loop dies, another pod atomically claims the run. With `auto_recovery=True`, the server reconstructs prose from stream events and rotates the SDK session. With `auto_recovery=False`, `on_resume` retains the session anchor and sends only a fixed recovery prompt so the agent's session store restores the transcript.
+3. **Crash-resumable execution.** If the pod running an agent loop dies, another pod atomically claims the run. With `auto_recovery=True`, the server reconstructs prose from stream events and rotates the SDK session. With `auto_recovery=False`, the default resume policy retains the session anchor and sends only a fixed recovery prompt so the agent's session store restores the transcript.
 
 Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, others) is opaque to the server.
 
@@ -24,10 +24,10 @@ Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, othe
 - **At-most-once durable claim.** Only one pod runs a given response at a time. The handoff uses an atomic CAS on `attempt_number`.
 - **Conditional append-only event log.** Events are persisted when framework recovery or SSE replay needs them: `auto_recovery or sse_replay`.
 - **Durable terminal response.** Polling reads the final response from `agent_server.responses.response`; it does not require event rows.
-- **Pluggable resume input.** `on_resume` provides framework-managed and agent-session-managed defaults and can be overridden.
+- **Pluggable resume input.** An optional `@on_resume()` handler can transform the stored request; `ResumeContext.default_request()` exposes the framework-managed or agent-session-managed default.
 - **Per-template UI-echo dedup.** The bridge does NOT trim echoed history. When the chat client echoes the full prior conversation in `request.input`, the agent handler is responsible for deduping its input against the SDK's session/checkpointer state — typically by forwarding only the latest user message when the session already has prior turns. See the templates in `app-templates/agent-{openai,langgraph}-advanced/` for the canonical 1-2 line shape.
 - **Best-effort tool execution.** A tool call interrupted mid-flight may re-run on the resumed attempt. Idempotency is the tool author's responsibility.
-- **No agent code changes required.** Templates that subclass `LongRunningAgentServer` keep using `@invoke()` / `@stream()` decorators. All durability lives below the handler boundary.
+- **No agent code changes required.** Templates construct `LongRunningAgentServer` and keep using `@invoke()` / `@stream()` decorators. `@on_resume()` is optional. All durability lives below the handler boundary.
 
 ### Non-goals
 
@@ -50,10 +50,10 @@ Heartbeat, stale scanning, CAS claim, and handler restart apply to every mode.
 
 ### CUJ 1: Author writes a long-running agent
 
-The author subclasses `LongRunningAgentServer` and registers `@invoke()` / `@stream()` handlers like a regular MLflow agent server. **No durability code in `agent.py`.**
+The author constructs `LongRunningAgentServer` and registers `@invoke()` / `@stream()` handlers like a regular MLflow agent server. **No durability code in `agent.py`.**
 
 ```python
-from databricks_ai_bridge.long_running import LongRunningAgentServer
+from databricks_ai_bridge.long_running import LongRunningAgentServer, ResumeContext, on_resume
 from mlflow.genai.agent_server import invoke, stream
 
 agent_server = LongRunningAgentServer(
@@ -71,6 +71,12 @@ async def stream_handler(request):
 @invoke()
 async def invoke_handler(request):
     ...
+
+# Optional. LongRunningAgentServer calls this after claiming a stale attempt,
+# then dispatches the transformed request to the original invoke/stream mode.
+# @on_resume()
+# async def resume_handler(request, context: ResumeContext):
+#     return await context.default_request(request)
 
 app = agent_server.app
 ```
@@ -214,6 +220,31 @@ erDiagram
     responses ||--o{ messages : "has"
 ```
 
+These are runtime-owned tables, not the agent harness's session store. The
+handler independently opens whatever persistence its SDK uses. In the OpenAI
+example that is a separate `LAKEBASE_SESSION_SCHEMA` with:
+
+```mermaid
+erDiagram
+    agent_sessions {
+        varchar session_id PK
+        timestamp created_at
+        timestamp updated_at
+    }
+    agent_messages {
+        int id PK
+        varchar session_id FK
+        text message_data "serialized SDK item"
+        timestamp created_at
+    }
+    agent_sessions ||--o{ agent_messages : "contains"
+```
+
+There is no foreign key from `agent_server` to the SDK schema. A session or
+conversation ID in the stored request is only a logical correlation key. The
+runtime does not inspect `message_data`; the resumed handler reopens the SDK
+session and the SDK restores its own transcript.
+
 - `responses.attempt_number` is the CAS guard for claim atomicity. **There is no `owner_pod_id` column** — ownership is implicit. The pod that last successfully heartbeats at the current `attempt_number` is the de facto owner. A heartbeat write at attempt N stops working the moment another pod has CAS-bumped the row to N+1, so the prior owner detects it has lost the claim on its next heartbeat (rowcount=0) and shuts down its heartbeat task.
 - `responses.original_request` stores the **full untrimmed input** so the resume path can recover the entire prior-turn history when the rotated SDK session starts empty.
 - `responses.response` stores the final success or error payload, allowing polling when no event log is written.
@@ -268,7 +299,7 @@ Why rotation: the original SDK session may carry mid-turn state from the crashed
 
 Why the sentinel carries the rotated conv_id: cooperating chat clients capture it (via SSE) and use the rotated session for subsequent turns, so the original orphan-poisoned session is never read again.
 
-With `auto_recovery=False`, `on_resume` instead keeps the original session anchor and replaces `request.input` with one fixed `[RECOVERY]` prompt. The handler reopens the same SDK session, and the SDK supplies its own transcript. No event parsing or conversation rotation occurs. Applications may override `on_resume` for a different request contract.
+With `auto_recovery=False`, the default resume policy instead keeps the original session anchor and replaces `request.input` with one fixed `[RECOVERY]` prompt. The handler reopens the same SDK session, and the SDK supplies its own transcript. No event parsing or conversation rotation occurs. Applications may register `@on_resume()` for a different request contract.
 
 ### 3.4 Per-template UI-echo dedup (NOT in the bridge)
 
@@ -359,8 +390,8 @@ Postgres row locking ensures only one of N concurrent UPDATEs matches the `attem
 | Concern | Where it lives | Author-visible? |
 |---|---|---|
 | Heartbeat + claim | `LongRunningAgentServer` | No |
-| Resume request policy | `LongRunningAgentServer.on_resume` | Optional override |
-| Conversation_id rotation | Framework-managed `on_resume` | No |
+| Resume request policy | `@on_resume()` or `ResumeContext.default_request()` | Optional override |
+| Conversation_id rotation | Framework-managed default | No |
 | Agent session transcript | Agent SDK session store | Yes when `auto_recovery=False` |
 | UI-echo dedup | per-template handler (see §3.4) | Yes — 1-2 lines in `agent.py` / `utils.py` |
 | Stream resume cursor | `LongRunningAgentServer._stream_retrieve` | Only with `sse_replay=True` |

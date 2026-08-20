@@ -1,4 +1,4 @@
-command: ["python", "-m", "agent_recovery_sse.app"]
+command: ["python", "app.py"]
 env:
   - name: OPENAI_API_KEY
     valueFrom: openai-api-key
