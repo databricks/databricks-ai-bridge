@@ -3,10 +3,12 @@
 import asyncio
 import os
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from agents import Agent, Runner, function_tool
+from agents.result import StreamEvent
 
 MODEL = "gpt-5.6-luna"
 SHELL_TIMEOUT_SECONDS = 15 * 60
@@ -144,3 +146,41 @@ async def resume_review(session, recovery_note: str) -> str:
             max_turns=100,
         )
         return str(result.final_output)
+
+
+async def stream_review(
+    pr_url: str,
+    minimum_minutes: float,
+    session,
+    recovery_note: str = "",
+) -> AsyncGenerator[StreamEvent, None]:
+    """Stream complete CUJ iterations while preserving one SDK session."""
+    started = time.monotonic()
+    iteration = 0
+    with TemporaryDirectory(prefix="openai-sdk-agent-") as temporary_directory:
+        workspace = Path(temporary_directory)
+        while iteration == 0 or time.monotonic() - started < minimum_minutes * 60:
+            iteration += 1
+            result = Runner.run_streamed(
+                create_agent(workspace),
+                build_prompt(pr_url, iteration, workspace, recovery_note if iteration == 1 else ""),
+                session=session,
+                max_turns=100,
+            )
+            async for event in result.stream_events():
+                yield event
+            if minimum_minutes <= 0:
+                break
+
+
+async def stream_resume(session, recovery_note: str) -> AsyncGenerator[StreamEvent, None]:
+    """Resume a streamed run using the SDK session transcript."""
+    with TemporaryDirectory(prefix="openai-sdk-agent-") as temporary_directory:
+        result = Runner.run_streamed(
+            create_agent(Path(temporary_directory)),
+            recovery_note,
+            session=session,
+            max_turns=100,
+        )
+        async for event in result.stream_events():
+            yield event

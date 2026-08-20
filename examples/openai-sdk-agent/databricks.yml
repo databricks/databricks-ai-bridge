@@ -1,11 +1,19 @@
 bundle:
-  name: open_ai_sdk_agent
+  name: open_ai_sdk_agent_recovery_examples
 
 variables:
-  lakebase_branch:
-    description: Full Lakebase branch resource name
-  lakebase_database:
-    description: Full Lakebase database resource name
+  framework_recovery_sse_lakebase_branch:
+    description: Full Lakebase branch resource name for framework recovery with SSE replay
+  framework_recovery_sse_lakebase_database:
+    description: Full Lakebase database resource name for framework recovery with SSE replay
+  agent_recovery_sse_lakebase_branch:
+    description: Full Lakebase branch resource name for agent-managed recovery with SSE replay
+  agent_recovery_sse_lakebase_database:
+    description: Full Lakebase database resource name for agent-managed recovery with SSE replay
+  agent_recovery_polling_lakebase_branch:
+    description: Full Lakebase branch resource name for agent-managed recovery without SSE replay
+  agent_recovery_polling_lakebase_database:
+    description: Full Lakebase database resource name for agent-managed recovery without SSE replay
   openai_secret_scope:
     description: Databricks secret scope containing the OpenAI API key
   openai_secret_key:
@@ -13,12 +21,12 @@ variables:
 
 resources:
   apps:
-    open_ai_sdk_agent:
-      name: open-ai-sdk-agent
-      description: OpenAI Agents SDK example using DatabricksDurableRuntime
+    framework_recovery_sse:
+      name: openai-agent-framework-sse
+      description: Framework-managed recovery with durable SSE replay
       source_code_path: ./
       config:
-        command: ["python", "app.py"]
+        command: ["python", "app_framework_recovery_sse.py"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key
@@ -27,9 +35,7 @@ resources:
           - name: LAKEBASE_AUTOSCALING_ENDPOINT
             value_from: postgres
           - name: LAKEBASE_SESSION_SCHEMA
-            value: openai_sdk_agent_sessions
-          - name: LAKEBASE_DURABILITY_SCHEMA
-            value: openai_sdk_agent_durability
+            value: openai_framework_sse_sessions
       resources:
         - name: openai-api-key
           secret:
@@ -38,8 +44,62 @@ resources:
             permission: READ
         - name: postgres
           postgres:
-            branch: ${var.lakebase_branch}
-            database: ${var.lakebase_database}
+            branch: ${var.framework_recovery_sse_lakebase_branch}
+            database: ${var.framework_recovery_sse_lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+    agent_recovery_sse:
+      name: openai-agent-session-sse
+      description: Agent-session-managed recovery with durable SSE replay
+      source_code_path: ./
+      config:
+        command: ["python", "app_agent_recovery_sse.py"]
+        env:
+          - name: OPENAI_API_KEY
+            value_from: openai-api-key
+          - name: OPENAI_MODEL
+            value: gpt-5.6-luna
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: postgres
+          - name: LAKEBASE_SESSION_SCHEMA
+            value: openai_agent_sse_sessions
+      resources:
+        - name: openai-api-key
+          secret:
+            scope: ${var.openai_secret_scope}
+            key: ${var.openai_secret_key}
+            permission: READ
+        - name: postgres
+          postgres:
+            branch: ${var.agent_recovery_sse_lakebase_branch}
+            database: ${var.agent_recovery_sse_lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+    agent_recovery_polling:
+      name: openai-agent-session-poll
+      description: Agent-session-managed recovery without SSE event persistence
+      source_code_path: ./
+      config:
+        command: ["python", "app_agent_recovery_polling.py"]
+        env:
+          - name: OPENAI_API_KEY
+            value_from: openai-api-key
+          - name: OPENAI_MODEL
+            value: gpt-5.6-luna
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: postgres
+          - name: LAKEBASE_SESSION_SCHEMA
+            value: openai_agent_polling_sessions
+      resources:
+        - name: openai-api-key
+          secret:
+            scope: ${var.openai_secret_scope}
+            key: ${var.openai_secret_key}
+            permission: READ
+        - name: postgres
+          postgres:
+            branch: ${var.agent_recovery_polling_lakebase_branch}
+            database: ${var.agent_recovery_polling_lakebase_database}
             permission: CAN_CONNECT_AND_CREATE
 
 targets:

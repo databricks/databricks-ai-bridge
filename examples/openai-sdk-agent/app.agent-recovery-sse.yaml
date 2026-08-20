@@ -1,4 +1,4 @@
-command: ["python", "app_framework_recovery_sse.py"]
+command: ["python", "app_agent_recovery_sse.py"]
 env:
   - name: OPENAI_API_KEY
     valueFrom: openai-api-key
@@ -7,4 +7,4 @@ env:
   - name: LAKEBASE_AUTOSCALING_ENDPOINT
     valueFrom: postgres
   - name: LAKEBASE_SESSION_SCHEMA
-    value: openai_framework_sse_sessions
+    value: openai_agent_sse_sessions

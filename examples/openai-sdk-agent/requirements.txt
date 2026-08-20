@@ -3,5 +3,3 @@ mcp>=1.29.0,<2
 databricks-openai[memory]>=0.17.0
 databricks-ai-bridge[agent-server]>=0.21.0
 mlflow>=3.10.1
-fastapi>=0.129.0
-uvicorn>=0.41.0

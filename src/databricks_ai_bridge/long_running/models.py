@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Dedicated schema for agent tables (responses, messages)
@@ -37,6 +37,10 @@ class Response(Base):
         Integer, nullable=False, server_default="1", default=1
     )
     original_request: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_streaming: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
 
     messages = relationship("Message", back_populates="response", cascade="all, delete-orphan")
 

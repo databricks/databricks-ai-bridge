@@ -24,22 +24,20 @@ For frameworks without dedicated integration packages:
 pip install databricks-ai-bridge
 ```
 
-## Durable Runtime
+## Long-running agents
 
-[`DatabricksDurableRuntime`](./src/databricks_ai_bridge/durable_runtime/README.md)
-adds Lakebase-backed request/response persistence, heartbeat detection, and
-stale-attempt recovery around a caller-owned async handler. The handler remains
-responsible for agent sessions and checkpoints.
+`LongRunningAgentServer` adds Lakebase-backed background execution, heartbeat
+recovery, result persistence, and optional SSE replay to MLflow ResponsesAgent
+handlers. Recovery context can come from the server's event log or from an
+agent-managed SDK session.
 
-[`DatabricksDurableServer`](./src/databricks_ai_bridge/durable_server/README.md)
-adds a standalone FastAPI transport with blocking, background, and retrieval
-routes around the durable runtime.
-
-See the [OpenAI Agents SDK App](./examples/openai-sdk-agent/README.md) for a
-complete FastAPI, background polling, SDK session, and Databricks Apps example.
+See the [OpenAI Agents SDK examples](./examples/openai-sdk-agent/README.md) for
+the same agent configured with framework-managed recovery, agent-session
+recovery with SSE replay, and agent-session recovery without event-log
+persistence.
 
 ```sh
-pip install 'databricks-ai-bridge[memory]'
+pip install 'databricks-ai-bridge[agent-server]'
 ```
 
 ### Install from source

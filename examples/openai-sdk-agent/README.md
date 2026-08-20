@@ -1,137 +1,147 @@
-# Durable OpenAI Agents SDK App
+# OpenAI SDK Recovery Modes
 
-This example serves the PR-review agent with `DatabricksDurableServer`. The
-server composes `DatabricksDurableRuntime` and owns FastAPI routes and lifecycle.
-The agent loop in `review_agent.py` and the OpenAI Agents SDK session in
-`sessions.py` remain application concerns.
+These three Databricks Apps run the same OpenAI Agents SDK PR-review agent and
+the same MLflow `@invoke()` / `@stream()` handlers. Only two
+`LongRunningAgentServer` options change:
 
-See [Live Test Observations](./OBSERVATIONS.md) for blocking, cache/conflict,
-client-disconnect, and real App stop/start recovery results.
+| App | `auto_recovery` | `sse_replay` | Resume input | Durable event rows |
+| --- | --- | --- | --- | --- |
+| `app_framework_recovery_sse.py` | `True` | `True` | Original request plus prose built from prior stream events; rotated SDK session | Yes |
+| `app_agent_recovery_sse.py` | `False` | `True` | Fixed recovery prompt; same SDK session restores its transcript | Yes, for client replay only |
+| `app_agent_recovery_polling.py` | `False` | `False` | Fixed recovery prompt; same SDK session restores its transcript | No |
 
-## Responsibilities
+Heartbeat, stale-attempt claiming, and process-start recovery run in all three
+modes. `auto_recovery` controls who restores agent context, not whether a stale
+attempt is restarted.
 
-```text
-client
-  -> DatabricksDurableServer
-       -> DatabricksDurableRuntime
-            -> Lakebase: openai_sdk_agent_durability.executions
-            -> executor (execute_durable_review)
-                 -> OpenAI Agents SDK + tools
-                 -> Lakebase: openai_sdk_agent_sessions.agent_messages
+## Recovery hook
+
+Every claimed stale attempt passes through `LongRunningAgentServer.on_resume`.
+The default implementation has two policies:
+
+```python
+LongRunningAgentServer(auto_recovery=True)
+# Build [RECOVERY] prose from the prior attempt's event log and rotate the
+# conversation ID so the handler opens a clean SDK session.
+
+LongRunningAgentServer(auto_recovery=False)
+# Keep the original session ID and replace request.input with one fixed
+# [RECOVERY] prompt. The agent SDK session store supplies the transcript.
 ```
 
-`DatabricksDurableServer` owns `/responses`, `/invocations`, retrieval, health,
-transport-field handling, HTTP error mapping, and runtime lifecycle.
-`DatabricksDurableRuntime` owns request/response persistence, exact-request
-idempotency, heartbeats, stale-attempt claims, and process-start recovery. The
-executor owns the SDK session and recovery behavior. On attempt 1 it starts the
-review from the request. On attempt 2 or later it reopens the same SDK session
-and supplies only the fixed recovery note; it does not reconstruct an agent
-prompt from the durability request.
+Applications can subclass the server and override `on_resume` for another
+contract.
 
-## Developer experience
+## Event and result persistence
 
-`app.py` contains no FastAPI routes or lifespan. The application provides:
+The server writes `agent_server.messages` only when at least one consumer needs
+the event log:
 
-- `prepare_review_request`, which validates the request, chooses the execution
-  ID, and returns the normalized payload;
-- `execute_durable_review`, which runs or resumes the agent;
-- `status_response`, which renders queued, active, and failed Responses API
-  objects; and
-- `initialize_sessions`, passed as the server startup hook.
+```text
+event_log_enabled = auto_recovery or sse_replay
+```
 
-This preserves protocol flexibility, but request preparation and status-shape
-mapping remain developer-owned because the standalone server does not know the
-MLflow ResponsesAgent schema.
+- Framework-managed recovery reads prior events to construct recovery prose.
+- SSE replay reads events for `starting_after` cursor recovery.
+- When both options are false, the messages table remains available for schema
+  compatibility but receives no rows for that response.
 
-| Abstraction | Application entry point | Application transport glue | Library tradeoff |
-| --- | --- | --- | --- |
-| `DatabricksDurableRuntime` | Async executor | Lifecycle, routes, errors, status responses | Transport-neutral |
-| `DatabricksDurableServer` | Async executor + request/status adapters | None | Standalone FastAPI contract |
-| `DatabricksDurableAgentServer` | MLflow `@invoke()` + request adapter | None | Protected MLflow hooks |
+Polling does not depend on event rows. Every terminal Responses payload is
+stored in `agent_server.responses.response`, alongside status, attempt,
+heartbeat, and original request.
 
-This example intentionally allows one durable request per SDK session, so
-`custom_inputs.session_id` is also the runtime `execution_id`. A multi-turn
-application should use a separate execution ID for each invocation and keep its
-conversation or session ID in the persisted request.
+The SDK transcript is independent:
 
-## HTTP contract
+| Owner | Schema | Purpose |
+| --- | --- | --- |
+| `LongRunningAgentServer` | `agent_server.responses` | Request, final response, handler mode, heartbeat, attempt, status |
+| `LongRunningAgentServer` | `agent_server.messages` | Optional stream-event log |
+| OpenAI Agents SDK | `LAKEBASE_SESSION_SCHEMA.agent_messages` | Agent, model, tool-call, and tool-output transcript |
 
-- `POST /responses` and `POST /invocations` run in blocking mode by default.
-- Set `background: true` to receive `202` with an ID and poll
-  `GET /responses/{execution_id}`.
-- Repeating the same normalized request and ID returns the cached response.
-- Reusing an ID with a different request returns `409 Conflict`.
-- `background` and `stream` are transport fields and are not persisted.
-  Streaming is rejected because this example does not implement it.
+## Shared agent code
 
-Clients should supply a stable `custom_inputs.session_id`. A generated ID can
-be returned to a connected client, but a blocking client that loses its
-connection before receiving that ID cannot later identify the execution.
+- `review_agent.py` contains the deterministic PR CUJs and shell tool.
+- `handlers.py` adapts OpenAI Agents SDK output to MLflow Responses events.
+- `sessions.py` creates `AsyncDatabricksSession` instances.
+- `server_factory.py` contains common Lakebase, lifespan, and dynamic App port
+  wiring.
+- The three `app_*.py` files are intentionally only the two policy flags.
 
-Example background request:
+## HTTP tests
+
+Use background streaming for either replay-enabled app:
 
 ```bash
-SESSION_ID="review-$(date -u +%Y%m%dT%H%M%SZ)"
-
-curl -X POST "$APP_URL/responses" \
+curl -N -X POST "$APP_URL/responses" \
   -H "Authorization: Bearer $APP_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{
-    \"background\": true,
-    \"input\": [{\"role\": \"user\", \"content\": \"Execute the complete PR CUJ.\"}],
-    \"custom_inputs\": {
-      \"session_id\": \"$SESSION_ID\",
-      \"pr_url\": \"https://github.com/databricks/databricks-ai-bridge/pull/459\",
-      \"minimum_minutes\": 0
+  -d '{
+    "background": true,
+    "stream": true,
+    "input": [{"role": "user", "content": "Execute the complete PR CUJ."}],
+    "custom_inputs": {
+      "session_id": "framework-sse-test",
+      "pr_url": "https://github.com/databricks/databricks-ai-bridge/pull/459",
+      "minimum_minutes": 0
     }
-  }"
+  }'
+```
 
-curl "$APP_URL/responses/$SESSION_ID" \
+Reconnect with the response ID and last observed sequence:
+
+```bash
+curl -N "$APP_URL/responses/$RESPONSE_ID?stream=true&starting_after=$LAST_SEQUENCE" \
   -H "Authorization: Bearer $APP_TOKEN"
 ```
 
-## Lakebase state
+Use background polling for the no-replay app:
 
-Both stores use the App's `postgres` resource but separate schemas:
+```bash
+curl -X POST "$APP_URL/responses" \
+  -H "Authorization: Bearer $APP_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "background": true,
+    "input": [{"role": "user", "content": "Execute the complete PR CUJ."}],
+    "custom_inputs": {
+      "session_id": "agent-polling-test",
+      "pr_url": "https://github.com/databricks/databricks-ai-bridge/pull/459",
+      "minimum_minutes": 0
+    }
+  }'
 
-| Owner | Schema and table | Persisted state |
-| --- | --- | --- |
-| Runtime | `openai_sdk_agent_durability.executions` | execution ID, status, attempt, heartbeat, normalized request, final response |
-| OpenAI Agents SDK | `openai_sdk_agent_sessions.agent_messages` | replayable user, assistant, tool-call, and tool-output items |
+curl "$APP_URL/responses/$RESPONSE_ID" \
+  -H "Authorization: Bearer $APP_TOKEN"
+```
 
-The runtime provides at-least-once recovery. Pod-local files and in-flight tool
-processes do not survive a crash, and tools must tolerate retries.
+`stream=true` is rejected for a background request or retrieval when
+`sse_replay=False`.
 
 ## Deploy
 
-Install from the repository checkout while developing this unreleased runtime:
+The bundle defines all three Apps. Give each App its own Lakebase branch and
+database resource. Every App service principal creates the fixed
+`agent_server` schema, so sharing one branch would make the first principal the
+schema owner and prevent the other two from initializing it. The SDK session
+schemas are also separate.
+
+`app.yaml` is the direct-deployment runtime manifest for framework recovery.
+The two `app.*.yaml` files show the equivalent runtime configuration for the
+other modes; copy the selected file to `app.yaml` before a direct deployment.
+The bundle embeds all three runtime configurations and is the easiest way to
+deploy the comparison together.
 
 ```bash
-uv venv
-uv pip install -e '../..[agent-server]' -e '../../integrations/openai[memory]'
-uv pip install 'openai-agents>=0.19.4,<0.20' 'mcp>=1.29.0,<2' \
-  'mlflow>=3.10.1' 'fastapi>=0.129.0' 'uvicorn>=0.41.0'
-```
-
-For Databricks Apps, configure one Lakebase branch/database and one secret, then
-deploy with an explicitly selected profile:
-
-```bash
-databricks bundle deploy -t dev --profile <PROFILE> \
-  --var="lakebase_branch=projects/<project>/branches/<branch>" \
-  --var="lakebase_database=projects/<project>/branches/<branch>/databases/<database>" \
-  --var="openai_secret_scope=<scope>" \
-  --var="openai_secret_key=<key>"
-
-databricks bundle run open_ai_sdk_agent -t dev --profile <PROFILE> \
-  --var="lakebase_branch=projects/<project>/branches/<branch>" \
-  --var="lakebase_database=projects/<project>/branches/<branch>/databases/<database>" \
+databricks apps deploy -t dev --profile <PROFILE> \
+  --var="framework_recovery_sse_lakebase_branch=projects/<project>/branches/<framework-branch>" \
+  --var="framework_recovery_sse_lakebase_database=projects/<project>/branches/<framework-branch>/databases/<database>" \
+  --var="agent_recovery_sse_lakebase_branch=projects/<project>/branches/<agent-sse-branch>" \
+  --var="agent_recovery_sse_lakebase_database=projects/<project>/branches/<agent-sse-branch>/databases/<database>" \
+  --var="agent_recovery_polling_lakebase_branch=projects/<project>/branches/<agent-polling-branch>" \
+  --var="agent_recovery_polling_lakebase_database=projects/<project>/branches/<agent-polling-branch>/databases/<database>" \
   --var="openai_secret_scope=<scope>" \
   --var="openai_secret_key=<key>"
 ```
 
-After the runtime is released, the App build installs `requirements.txt`
-directly. When deploying this PR before release, replace the
-`databricks-ai-bridge` requirement with an installable wheel or Git ref that
-contains `DatabricksDurableServer`.
+When testing this unreleased branch, package it as a wheel and include that
+wheel in the App source instead of resolving `databricks-ai-bridge` from PyPI.

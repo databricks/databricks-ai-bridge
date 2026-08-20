@@ -45,6 +45,8 @@ def _resp_info(
     heartbeat_at=None,
     attempt_number: int = 1,
     original_request: dict | None = None,
+    response: dict | None = None,
+    is_streaming: bool = True,
 ) -> ResponseInfo:
     """Build a ResponseInfo with sensible defaults for tests.
 
@@ -61,6 +63,8 @@ def _resp_info(
         heartbeat_at=heartbeat_at,
         attempt_number=attempt_number,
         original_request=original_request,
+        response=response,
+        is_streaming=is_streaming,
     )
 
 
@@ -237,6 +241,31 @@ class TestStartingAfterValidation:
             assert resp.status_code == 200
 
 
+class TestReplayDisabledValidation:
+    def test_background_streaming_is_rejected(self):
+        from starlette.testclient import TestClient
+
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                auto_recovery=False,
+                sse_replay=False,
+            )
+            response = TestClient(server.app).post(
+                "/responses",
+                json={
+                    "background": True,
+                    "stream": True,
+                    "input": [{"role": "user", "content": "hello"}],
+                },
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == (
+            "Background streaming requires SSE replay to be enabled."
+        )
+
+
 class TestDeferredMarkFailed:
     @pytest.mark.asyncio
     async def test_marks_response_failed(self):
@@ -270,7 +299,9 @@ class TestDeferredMarkFailed:
             stream_event = args[1]["stream_event"]
             assert stream_event["type"] == "error"
             assert stream_event["error"]["code"] == "task_timeout"
-            mock_update.assert_awaited_once_with("resp_123", "failed", expected_attempt_number=None)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] is None
+            assert mock_update.await_args.kwargs["response"]["error"]["code"] == "task_timeout"
 
     @pytest.mark.asyncio
     async def test_handles_db_error_gracefully(self):
@@ -362,6 +393,43 @@ class TestRetrieveRequest:
             assert result["status"] == "completed"
             assert result["output"] == [{"text": "hi"}]
             assert result["metadata"] == {"trace_id": "trace_abc"}
+
+    @pytest.mark.asyncio
+    async def test_completed_returns_persisted_response_without_event_log(self):
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        persisted = {
+            "id": "resp_123",
+            "status": "completed",
+            "attempt_number": 2,
+            "output": [{"text": "done"}],
+        }
+        with (
+            patch(
+                f"{MODULE}.get_response",
+                new_callable=AsyncMock,
+                return_value=_resp_info("resp_123", "completed", response=persisted),
+            ),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock) as mock_get_messages,
+        ):
+            result = await server._handle_retrieve_request(
+                "resp_123", stream=False, starting_after=0
+            )
+
+        assert result == persisted
+        mock_get_messages.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stream_retrieval_rejected_when_replay_disabled(self):
+        from fastapi import HTTPException
+
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        with patch(
+            f"{MODULE}.get_response",
+            new_callable=AsyncMock,
+            return_value=_resp_info("resp_123", "in_progress"),
+        ):
+            with pytest.raises(HTTPException, match="SSE replay is disabled"):
+                await server._handle_retrieve_request("resp_123", stream=True, starting_after=0)
 
     @pytest.mark.asyncio
     async def test_stale_run_detection(self):
@@ -524,7 +592,14 @@ class TestDoBackgroundStream:
             assert seqs == [0, 1, 2]
             # Verify state tracks final seq
             assert state["seq"] == 3
-            mock_update.assert_awaited_once_with("resp_1", "completed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["response"] == {
+                "id": "resp_1",
+                "status": "completed",
+                "attempt_number": 1,
+                "output": [],
+            }
 
     @pytest.mark.asyncio
     async def test_calls_transform_stream_event(self):
@@ -612,6 +687,39 @@ class TestDoBackgroundStream:
             trace_evt = last_call.kwargs.get("stream_event")
             assert trace_evt == {"trace_id": "trace_abc123"}
 
+    @pytest.mark.asyncio
+    async def test_skips_event_rows_when_recovery_and_replay_are_disabled(self):
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        _mock_validator(server)
+        span = _mock_span()
+
+        async def fake_stream(request_data):
+            yield {"type": "response.output_item.done", "item": {"text": "done"}}
+
+        with (
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
+            patch(f"{MODULE}.ResponsesAgent") as mock_responses_agent,
+        ):
+            mock_mlflow.start_span.return_value = span
+            mock_responses_agent.responses_agent_output_reducer.return_value = {
+                "output": [{"text": "done"}]
+            }
+            await server._do_background_stream("resp_1", {"input": "hi"}, False, {"seq": 0})
+
+        mock_append.assert_not_awaited()
+        assert mock_update.await_args is not None
+        assert mock_update.await_args.kwargs["response"] == {
+            "id": "resp_1",
+            "status": "completed",
+            "attempt_number": 1,
+            "output": [{"text": "done"}],
+        }
+
 
 class TestDoBackgroundInvoke:
     @pytest.mark.asyncio
@@ -652,7 +760,13 @@ class TestDoBackgroundInvoke:
                 assert evt["type"] == "response.output_item.done"
                 assert "item" in evt
             assert state["seq"] == 2
-            mock_update.assert_awaited_once_with("resp_inv", "completed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["response"]["id"] == "resp_inv"
+            assert mock_update.await_args.kwargs["response"]["output"] == [
+                {"type": "message", "content": "hello"},
+                {"type": "message", "content": "world"},
+            ]
 
     @pytest.mark.asyncio
     async def test_trace_id_persisted_when_requested(self):
@@ -716,9 +830,36 @@ class TestDoBackgroundInvoke:
             await server._do_background_invoke("resp_sync", {"input": "hi"}, False, state)
 
             assert mock_append.await_count == 1
-            mock_update.assert_awaited_once_with(
-                "resp_sync", "completed", expected_attempt_number=1
-            )
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.args == ("resp_sync", "completed")
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["response"]["id"] == "resp_sync"
+
+    @pytest.mark.asyncio
+    async def test_skips_event_rows_when_recovery_and_replay_are_disabled(self):
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        _mock_validator(server)
+        span = _mock_span()
+
+        async def fake_invoke(request_data):
+            return {"output": [{"type": "message", "content": "done"}]}
+
+        with (
+            patch(f"{MODULE}.get_invoke_function", return_value=fake_invoke),
+            patch(f"{MODULE}.mlflow") as mock_mlflow,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch(
+                f"{MODULE}.update_response_status", new_callable=AsyncMock, return_value=True
+            ) as mock_update,
+        ):
+            mock_mlflow.start_span.return_value = span
+            await server._do_background_invoke("resp_1", {"input": "hi"}, False, {"seq": 0})
+
+        mock_append.assert_not_awaited()
+        assert mock_update.await_args is not None
+        assert mock_update.await_args.kwargs["response"]["output"] == [
+            {"type": "message", "content": "done"}
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +920,13 @@ class TestTaskScope:
             assert evt["error"]["message"] == "something broke"
             assert evt["error"]["code"] == "task_failed"
             assert mock_append.call_args.args[1] == 2  # next_seq
-            mock_update.assert_awaited_once_with("resp_err", "failed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["response"]["error"] == {
+                "message": "something broke",
+                "type": "server_error",
+                "code": "task_failed",
+            }
 
     @pytest.mark.asyncio
     async def test_exception_falls_back_to_deferred_on_db_failure(self):
@@ -904,6 +1051,24 @@ class TestConstructorParams:
         assert server._db_project is None
         assert server._db_branch is None
 
+    @pytest.mark.parametrize(
+        ("auto_recovery", "sse_replay", "event_log_enabled"),
+        [
+            (True, True, True),
+            (True, False, True),
+            (False, True, True),
+            (False, False, False),
+        ],
+    )
+    def test_event_log_required_only_by_recovery_or_replay(
+        self,
+        auto_recovery,
+        sse_replay,
+        event_log_enabled,
+    ):
+        server = _make_server(auto_recovery=auto_recovery, sse_replay=sse_replay)
+        assert server._event_log_enabled is event_log_enabled
+
 
 class TestLifespanPlumbing:
     @pytest.mark.asyncio
@@ -1026,6 +1191,65 @@ class TestBuildProseRecoveryMessage:
         assert "Events:\n[]" in out["content"]
 
 
+class TestOnResume:
+    @pytest.mark.asyncio
+    async def test_agent_managed_recovery_keeps_session_and_uses_only_recovery_prompt(self):
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        original_request = {
+            "input": [{"role": "user", "content": "original"}],
+            "custom_inputs": {"session_id": "session-1", "other": "value"},
+            "context": {"conversation_id": "conversation-1"},
+        }
+
+        resumed = await server.on_resume(
+            original_request,
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[],
+        )
+
+        assert resumed["custom_inputs"] == {
+            "session_id": "session-1",
+            "other": "value",
+        }
+        assert resumed["context"]["conversation_id"] == "conversation-1"
+        assert resumed["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": (
+                    "[RECOVERY] The previous attempt was interrupted. Continue the task using "
+                    "the transcript already persisted by the agent's session store. Inspect "
+                    "external side effects and safely repeat any interrupted operation."
+                ),
+            }
+        ]
+        assert original_request["input"][0]["content"] == "original"
+
+    @pytest.mark.asyncio
+    async def test_framework_recovery_uses_event_log_and_rotates_session(self):
+        server = _make_server(auto_recovery=True, sse_replay=False)
+        resumed = await server.on_resume(
+            {
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[
+                _msg(
+                    0,
+                    evt={"type": "response.output_item.done", "item": {"text": "prior"}},
+                )
+            ],
+        )
+
+        assert len(resumed["input"]) == 2
+        assert '"text": "prior"' in resumed["input"][1]["content"]
+        assert resumed["context"]["conversation_id"] == "session-1::attempt-2"
+        assert "session_id" not in resumed["custom_inputs"]
+
+
 class TestRotateConversationId:
     def test_rotate_drops_thread_id_and_sets_rotated_context(self):
         r = {"custom_inputs": {"thread_id": "t1", "user_id": "u"}, "context": {}}
@@ -1070,12 +1294,18 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         captured: dict = {}
 
         async def fake_create_response(
-            response_id, status, *, durable=False, original_request=None
+            response_id,
+            status,
+            *,
+            durable=False,
+            original_request=None,
+            is_streaming=False,
         ):
             captured["response_id"] = response_id
             captured["status"] = status
             captured["durable"] = durable
             captured["original_request"] = original_request
+            captured["is_streaming"] = is_streaming
 
         with (
             patch(f"{MODULE}.create_response", side_effect=fake_create_response),
@@ -1089,6 +1319,7 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
 
         assert captured["status"] == "in_progress"
         assert captured["durable"] is True
+        assert captured["is_streaming"] is False
         # original_request preserves the input the client sent (no
         # conversation_id injection — the client owns that decision).
         orig = captured["original_request"]
@@ -1216,6 +1447,57 @@ class TestTryClaimAndResume:
         assert captured["attempt_tag"] == 2
         # A resume task is spawned; it was not awaited synchronously.
         mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_managed_recovery_without_replay_skips_event_log(self):
+        from datetime import timedelta
+
+        server = _make_server(auto_recovery=False, sse_replay=False)
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            is_streaming=False,
+        )
+
+        captured_tasks = []
+
+        def capture_task(coro, *, name=None):
+            captured_tasks.append(coro)
+
+            class FakeTask:
+                def add_done_callback(self, callback):
+                    pass
+
+            return FakeTask()
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock) as mock_get_messages,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch.object(server, "_run_background_invoke", new_callable=AsyncMock) as mock_run,
+        ):
+            attempt = await server._try_claim_and_resume("resp_1", resp)
+
+        assert attempt == 2
+        mock_get_messages.assert_not_awaited()
+        mock_append.assert_not_awaited()
+        await captured_tasks[0]
+        assert mock_run.await_args is not None
+        resumed_request = mock_run.await_args.args[1]
+        dumped = (
+            resumed_request.model_dump()
+            if hasattr(resumed_request, "model_dump")
+            else resumed_request
+        )
+        assert dumped["custom_inputs"]["session_id"] == "session-1"
+        assert len(dumped["input"]) == 1
+        assert "session store" in dumped["input"][0]["content"]
 
     @pytest.mark.asyncio
     async def test_resume_replays_input_and_rotates_conversation_id(self):
