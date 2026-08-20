@@ -25,6 +25,8 @@ Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, othe
 - **Conditional append-only event log.** Events are persisted when framework recovery or SSE replay needs them: `auto_recovery or sse_replay`.
 - **Durable terminal response.** Polling reads the final response from `agent_server.responses.response`; it does not require event rows.
 - **Pluggable resume input.** An optional `@on_resume()` handler can transform the stored request; `ResumeContext.default_request()` exposes the framework-managed or agent-session-managed default.
+- **Resume translation boundary.** `@on_resume()` runs before handler dispatch. The transformed request then follows the same ordinary `@invoke()` or `@stream()` path as an initial request; normal handlers do not detect recovery or select a second implementation.
+- **Stable agent-managed session.** Background requests with `auto_recovery=False` may provide `context.conversation_id`, `custom_inputs.session_id`, or `custom_inputs.thread_id`. Without one, the server warns and injects `response_id` as `context.conversation_id`. The resulting anchor is persisted inside `original_request` and reused after a crash.
 - **Per-template UI-echo dedup.** The bridge does NOT trim echoed history. When the chat client echoes the full prior conversation in `request.input`, the agent handler is responsible for deduping its input against the SDK's session/checkpointer state — typically by forwarding only the latest user message when the session already has prior turns. See the templates in `app-templates/agent-{openai,langgraph}-advanced/` for the canonical 1-2 line shape.
 - **Best-effort tool execution.** A tool call interrupted mid-flight may re-run on the resumed attempt. Idempotency is the tool author's responsibility.
 - **No agent code changes required.** Templates construct `LongRunningAgentServer` and keep using `@invoke()` / `@stream()` decorators. `@on_resume()` is optional. All durability lives below the handler boundary.
@@ -81,7 +83,7 @@ async def invoke_handler(request):
 app = agent_server.app
 ```
 
-The agent author writes their handler exactly the same way they would for the non-durable `AgentServer`. `LongRunningAgentServer` adds the durable wiring transparently.
+The agent author writes their handler exactly the same way they would for the non-durable `AgentServer`. `LongRunningAgentServer` adds the durable wiring transparently. For agent-managed recovery, the server retains a client-provided session anchor or generates one from `response_id` so the handler reopens the same harness session after translation.
 
 ### CUJ 2: Pod crashes mid-tool, client polls
 
@@ -299,7 +301,7 @@ Why rotation: the original SDK session may carry mid-turn state from the crashed
 
 Why the sentinel carries the rotated conv_id: cooperating chat clients capture it (via SSE) and use the rotated session for subsequent turns, so the original orphan-poisoned session is never read again.
 
-With `auto_recovery=False`, the default resume policy instead keeps the original session anchor and replaces `request.input` with one fixed `[RECOVERY]` prompt. The handler reopens the same SDK session, and the SDK supplies its own transcript. No event parsing or conversation rotation occurs. Applications may register `@on_resume()` for a different request contract.
+With `auto_recovery=False`, the default resume policy instead keeps the original session anchor and replaces `request.input` with one fixed `[RECOVERY]` prompt. The server persists a client-provided anchor inside `original_request`; when none is provided, it logs a warning and first injects `response_id` as `context.conversation_id`. After translation, the same ordinary handler reopens the SDK session and the SDK supplies its own transcript. No event parsing, conversation rotation, recovery-marker detection, or separate resume handler path occurs. Applications may register `@on_resume()` for a different request contract.
 
 ### 3.4 Per-template UI-echo dedup (NOT in the bridge)
 

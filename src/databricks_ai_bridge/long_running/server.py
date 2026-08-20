@@ -210,6 +210,40 @@ def _request_to_dict(request: Any) -> dict[str, Any]:
     raise TypeError("Resume handlers must return a request model or dictionary")
 
 
+def _session_anchor(request_dict: dict[str, Any]) -> str | None:
+    custom_inputs = request_dict.get("custom_inputs")
+    if not isinstance(custom_inputs, dict):
+        custom_inputs = {}
+    context = request_dict.get("context")
+    if not isinstance(context, dict):
+        context = {}
+    anchor = (
+        custom_inputs.get("thread_id")
+        or custom_inputs.get("session_id")
+        or context.get("conversation_id")
+    )
+    if anchor is None or not str(anchor).strip():
+        return None
+    return str(anchor)
+
+
+def _ensure_session_anchor(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
+    if _session_anchor(request_dict) is not None:
+        return request_dict
+
+    request_context = request_dict.get("context")
+    if not isinstance(request_context, dict):
+        request_context = {}
+    request_context["conversation_id"] = response_id
+    request_dict["context"] = request_context
+    logger.warning(
+        "[durable] agent-managed request has no session anchor; using response_id=%s "
+        "as context.conversation_id",
+        response_id,
+    )
+    return request_dict
+
+
 def _build_prose_recovery_message(
     messages: list[tuple], prior_attempt_number: int
 ) -> dict[str, Any]:
@@ -273,12 +307,7 @@ def _rotate_conversation_id(
     if not isinstance(custom_inputs, dict):
         custom_inputs = {}
 
-    base_anchor = (
-        custom_inputs.get("thread_id")
-        or custom_inputs.get("session_id")
-        or (request_dict.get("context") or {}).get("conversation_id")
-        or response_id
-    )
+    base_anchor = _session_anchor(request_dict) or response_id
 
     custom_inputs.pop("thread_id", None)
     custom_inputs.pop("session_id", None)
@@ -596,6 +625,8 @@ class LongRunningAgentServer(AgentServer):
         # when tests pass a plain dict directly.
         dump = getattr(request_data, "model_dump", None)
         request_dict = dump() if callable(dump) else dict(request_data)
+        if not self.auto_recovery:
+            request_dict = _ensure_session_anchor(request_dict, response_id)
         # Store the FULL request (untrimmed) as `original_request` so resume can
         # recover the entire prior-turn history. Per-template handlers are
         # responsible for deduping their own UI-echoed input against the SDK's
@@ -1134,6 +1165,7 @@ class LongRunningAgentServer(AgentServer):
                     response_id,
                 )
             else:
+                resume_request = _ensure_session_anchor(resume_request, response_id)
                 resume_request["input"] = [_agent_managed_recovery_message()]
             return self.validator.validate_and_convert_request(resume_request)
 

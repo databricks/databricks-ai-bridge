@@ -10,9 +10,9 @@ The agent SDK session store restores the transcript. The server writes no
 stream-event rows and persists only durability metadata, the request, and the
 terminal response used by polling.
 
-- [`handlers.py`](./handlers.py) detects the fixed recovery prompt and invokes
-  the resume path against the same SDK session. It also shows the optional
-  `@on_resume()` callback in a commented block.
+- [`handlers.py`](./handlers.py) uses one normal invoke/stream path for initial
+  and resumed requests. The commented `@on_resume()` block shows the complete
+  request translation that happens before the same handler is called.
 - [`app.py`](./app.py) directly constructs the server with both policy flags
   set to `False`.
 
@@ -27,6 +27,12 @@ terminal response used by polling.
 
 The SDK schema is created by `AsyncDatabricksSession`; the runtime creates only
 the `agent_server` schema.
+
+The initial background request may provide `context.conversation_id`,
+`custom_inputs.session_id`, or `custom_inputs.thread_id`. If omitted, the
+server warns and injects `response_id` as `context.conversation_id` before the
+first handler call, so the same generated SDK session can be reopened after a
+crash.
 
 ### Captured polling response
 

@@ -1,6 +1,7 @@
 """OpenAI Agents SDK handlers for agent-session-managed recovery."""
 
 import json
+import logging
 import re
 from collections.abc import AsyncGenerator, AsyncIterator
 from uuid import uuid4
@@ -12,24 +13,29 @@ from mlflow.types.responses import (
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
 )
-from openai_sdk_agent_shared.review_agent import (
-    execute_review,
-    resume_review,
-    stream_resume,
-    stream_review,
-)
+from openai_sdk_agent_shared.review_agent import execute_review, stream_review
 from openai_sdk_agent_shared.sessions import create_session
 
 PR_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+/?$")
+logger = logging.getLogger(__name__)
 
 
 def _session_id(request: ResponsesAgentRequest) -> str:
     custom_inputs = dict(request.custom_inputs or {})
+    if custom_inputs.get("thread_id"):
+        return str(custom_inputs["thread_id"])
     if custom_inputs.get("session_id"):
         return str(custom_inputs["session_id"])
     if request.context and getattr(request.context, "conversation_id", None):
         return str(request.context.conversation_id)
-    return str(uuid4())
+    generated_session_id = str(uuid4())
+    logger.warning(
+        "No session anchor was provided; using generated session_id=%s. "
+        "Background LongRunningAgentServer requests normally inject response_id as "
+        "context.conversation_id before invoking this handler.",
+        generated_session_id,
+    )
+    return generated_session_id
 
 
 def _review_inputs(request: ResponsesAgentRequest) -> tuple[str, float]:
@@ -46,13 +52,11 @@ def _review_inputs(request: ResponsesAgentRequest) -> tuple[str, float]:
     return pr_url, minimum_minutes
 
 
-def _agent_recovery_prompt(request: ResponsesAgentRequest) -> str:
+def _parse_prompt(request: ResponsesAgentRequest) -> str:
     if not request.input:
         return ""
     content = request.input[-1].model_dump().get("content")
-    if len(request.input) == 1 and isinstance(content, str) and content.startswith("[RECOVERY]"):
-        return content
-    return ""
+    return content if isinstance(content, str) else ""
 
 
 def _message(text: str) -> dict:
@@ -118,17 +122,22 @@ async def _responses_events(
 #
 # The complete implementation above can be replaced with:
 #     return await context.default_request(request)
+#
+# Resume translation ends here. The invoke and stream handlers below do not
+# detect recovery or choose a recovery-specific path; they process the
+# transformed request exactly like every other request.
 
 
 @invoke()
 async def invoke_review(request: ResponsesAgentRequest) -> ResponsesAgentResponse:
     session = create_session(_session_id(request))
-    recovery_prompt = _agent_recovery_prompt(request)
-    if recovery_prompt:
-        report = await resume_review(session, recovery_prompt)
-    else:
-        pr_url, minimum_minutes = _review_inputs(request)
-        report = await execute_review(pr_url, minimum_minutes, session)
+    pr_url, minimum_minutes = _review_inputs(request)
+    report = await execute_review(
+        pr_url,
+        minimum_minutes,
+        session,
+        _parse_prompt(request),
+    )
     return ResponsesAgentResponse(output=[_message(report)])
 
 
@@ -137,11 +146,12 @@ async def stream_review_events(
     request: ResponsesAgentRequest,
 ) -> AsyncGenerator[ResponsesAgentStreamEvent | dict, None]:
     session = create_session(_session_id(request))
-    recovery_prompt = _agent_recovery_prompt(request)
-    if recovery_prompt:
-        events = stream_resume(session, recovery_prompt)
-    else:
-        pr_url, minimum_minutes = _review_inputs(request)
-        events = stream_review(pr_url, minimum_minutes, session)
+    pr_url, minimum_minutes = _review_inputs(request)
+    events = stream_review(
+        pr_url,
+        minimum_minutes,
+        session,
+        _parse_prompt(request),
+    )
     async for event in _responses_events(events):
         yield event

@@ -45,7 +45,10 @@ After atomically claiming a stale attempt, `LongRunningAgentServer` calls the
 single function registered with `@on_resume()`. The callback transforms the
 stored request; the server then invokes the same `@invoke()` or `@stream()` mode
 recorded for the original attempt. Authors do not register separate invoke and
-stream resume callbacks.
+stream resume callbacks. This is the recovery translation boundary: after the
+callback returns, the transformed request is an ordinary handler request. The
+normal invoke and stream handlers do not inspect a recovery marker or branch to
+a separate resume implementation.
 
 Each `handlers.py` includes a commented, copyable implementation of its full
 default transformation. The shorter equivalent is:
@@ -79,6 +82,26 @@ LongRunningAgentServer(auto_recovery=False)
 Applications register `@on_resume()` only when they need another request
 contract. Session restoration still happens later, when the resumed
 `@invoke()` or `@stream()` handler opens its SDK session.
+
+### Stable session anchor
+
+Agent-managed recovery needs a stable session anchor internally. A client may
+provide `context.conversation_id`, `custom_inputs.session_id`, or
+`custom_inputs.thread_id`. If none is present, the server logs a warning and
+injects its generated `response_id` as `context.conversation_id` before the
+request is persisted or dispatched. The request therefore continues instead
+of failing validation.
+
+The runtime `response_id` and agent SDK `session_id` remain different logical
+identities. They use the same string only for this generated fallback. An
+explicit client-provided anchor is useful when the client must know or reuse the
+SDK session identity before it receives the background response.
+
+The anchor is persisted inside `agent_server.responses.original_request`, not
+as a dedicated runtime-table column. On recovery, `@on_resume()` translates
+the stored request into a normal request while retaining that anchor. The same
+ordinary `@invoke()` or `@stream()` handler then opens the SDK session; it does
+not know whether the request is an initial attempt or a resumed attempt.
 
 ## Logical and physical persistence
 
@@ -168,9 +191,9 @@ The SDK transcript is independent:
   deterministic PR CUJs and shell tool used by all three Apps.
 - `shared/src/openai_sdk_agent_shared/sessions.py` creates the identical
   `AsyncDatabricksSession` instances used by all three Apps.
-- Each mode folder owns `handlers.py`. Framework recovery consumes the prose
-  recovery input generated from durable events; agent-managed recovery detects
-  the fixed recovery prompt and reopens the existing SDK session.
+- Each mode folder owns `handlers.py`. Every invoke/stream handler follows one
+  normal path for initial and resumed requests. Recovery-specific translation
+  happens before dispatch in `@on_resume()` or its built-in default.
 - Each mode folder owns `app.py`, which directly constructs
   `LongRunningAgentServer` with fixed `auto_recovery`/`sse_replay` values.
 - Each `handlers.py` shows the optional `@on_resume()` override beside the

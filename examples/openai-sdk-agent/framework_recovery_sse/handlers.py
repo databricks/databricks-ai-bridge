@@ -41,13 +41,11 @@ def _review_inputs(request: ResponsesAgentRequest) -> tuple[str, float]:
     return pr_url, minimum_minutes
 
 
-def _framework_recovery_note(request: ResponsesAgentRequest) -> str:
+def _parse_prompt(request: ResponsesAgentRequest) -> str:
     if not request.input:
         return ""
     content = request.input[-1].model_dump().get("content")
-    if isinstance(content, str) and content.startswith("[RECOVERY]"):
-        return content
-    return ""
+    return content if isinstance(content, str) else ""
 
 
 def _message(text: str) -> dict:
@@ -136,6 +134,10 @@ async def _responses_events(
 #
 # The complete implementation above can be replaced with:
 #     return await context.default_request(request)
+#
+# Resume translation ends here. The invoke and stream handlers below do not
+# detect recovery or choose a recovery-specific path; they process the
+# transformed request exactly like every other request.
 
 
 @invoke()
@@ -146,7 +148,7 @@ async def invoke_review(request: ResponsesAgentRequest) -> ResponsesAgentRespons
         pr_url,
         minimum_minutes,
         session,
-        _framework_recovery_note(request),
+        _parse_prompt(request),
     )
     return ResponsesAgentResponse(output=[_message(report)])
 
@@ -161,7 +163,7 @@ async def stream_review_events(
         pr_url,
         minimum_minutes,
         session,
-        _framework_recovery_note(request),
+        _parse_prompt(request),
     )
     async for event in _responses_events(events):
         yield event

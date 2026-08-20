@@ -96,7 +96,12 @@ def create_agent(workspace: Path) -> Agent:
     )
 
 
-def build_prompt(pr_url: str, iteration: int, workspace: Path, recovery_note: str = "") -> str:
+def build_prompt(
+    pr_url: str,
+    iteration: int,
+    workspace: Path,
+    request_prompt: str = "",
+) -> str:
     steps = "\n".join(f"{index}. {name}: {goal}" for index, (name, goal) in enumerate(CUJS, 1))
     return f"""PR: {pr_url}
 Iteration: {iteration}
@@ -108,12 +113,15 @@ execute these CUJs sequentially in the same environment:
 {steps}
 
 If a CUJ fails, investigate the cause and continue with the remaining CUJs. Include exact commands,
-exit status, and important output in the final report. {recovery_note}
+exit status, and important output in the final report. {request_prompt}
 """
 
 
 async def execute_review(
-    pr_url: str, minimum_minutes: float, session, recovery_note: str = ""
+    pr_url: str,
+    minimum_minutes: float,
+    session,
+    request_prompt: str = "",
 ) -> str:
     """Run complete CUJ iterations sequentially until the minimum wall time is met."""
     started = time.monotonic()
@@ -125,7 +133,12 @@ async def execute_review(
             iteration += 1
             result = await Runner.run(
                 create_agent(workspace),
-                build_prompt(pr_url, iteration, workspace, recovery_note if iteration == 1 else ""),
+                build_prompt(
+                    pr_url,
+                    iteration,
+                    workspace,
+                    request_prompt if iteration == 1 else "",
+                ),
                 session=session,
                 max_turns=100,
             )
@@ -135,24 +148,11 @@ async def execute_review(
     return "\n\n".join(reports)
 
 
-async def resume_review(session, recovery_note: str) -> str:
-    """Resume using only the SDK session history and a fixed recovery note."""
-    with TemporaryDirectory(prefix="openai-sdk-agent-") as temporary_directory:
-        workspace = Path(temporary_directory)
-        result = await Runner.run(
-            create_agent(workspace),
-            recovery_note,
-            session=session,
-            max_turns=100,
-        )
-        return str(result.final_output)
-
-
 async def stream_review(
     pr_url: str,
     minimum_minutes: float,
     session,
-    recovery_note: str = "",
+    request_prompt: str = "",
 ) -> AsyncGenerator[StreamEvent, None]:
     """Stream complete CUJ iterations while preserving one SDK session."""
     started = time.monotonic()
@@ -163,7 +163,12 @@ async def stream_review(
             iteration += 1
             result = Runner.run_streamed(
                 create_agent(workspace),
-                build_prompt(pr_url, iteration, workspace, recovery_note if iteration == 1 else ""),
+                build_prompt(
+                    pr_url,
+                    iteration,
+                    workspace,
+                    request_prompt if iteration == 1 else "",
+                ),
                 session=session,
                 max_turns=100,
             )
@@ -171,16 +176,3 @@ async def stream_review(
                 yield event
             if minimum_minutes <= 0:
                 break
-
-
-async def stream_resume(session, recovery_note: str) -> AsyncGenerator[StreamEvent, None]:
-    """Resume a streamed run using the SDK session transcript."""
-    with TemporaryDirectory(prefix="openai-sdk-agent-") as temporary_directory:
-        result = Runner.run_streamed(
-            create_agent(Path(temporary_directory)),
-            recovery_note,
-            session=session,
-            max_turns=100,
-        )
-        async for event in result.stream_events():
-            yield event

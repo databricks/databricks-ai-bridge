@@ -32,7 +32,8 @@ handlers. Recovery context can come from the server's event log or from an
 agent-managed SDK session. Applications keep the normal `@invoke()` and
 `@stream()` handlers and may register one optional `@on_resume()` request
 transformer. The server calls it after claiming a stale attempt, then dispatches
-the transformed request through the original invoke or stream mode.
+the transformed request through the original invoke or stream mode. The normal
+handlers do not detect recovery or select a recovery-specific code path.
 
 See the [OpenAI Agents SDK examples](./examples/openai-sdk-agent/README.md) for
 the same agent configured with framework-managed recovery, agent-session

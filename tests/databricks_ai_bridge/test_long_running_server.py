@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -97,6 +98,7 @@ def _mock_span():
 def _mock_validator(server):
     """Patch the server's validator to pass through dicts unchanged."""
     server.validator = MagicMock()
+    server.validator.validate_and_convert_request = MagicMock(side_effect=lambda x: x)
     server.validator.validate_and_convert_result = MagicMock(side_effect=lambda x, **kw: x)
 
 
@@ -273,6 +275,71 @@ class TestReplayDisabledValidation:
         assert response.json()["detail"] == (
             "Background streaming requires SSE replay to be enabled."
         )
+
+
+class TestAgentManagedSessionRouting:
+    @pytest.mark.asyncio
+    async def test_background_request_allows_generated_session_anchor(self):
+        server = _make_server(auto_recovery=False, sse_replay=True)
+        _mock_validator(server)
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "input": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "session_anchor",
+        [
+            {"context": {"conversation_id": "conversation-1"}},
+            {"custom_inputs": {"session_id": "session-1"}},
+            {"custom_inputs": {"thread_id": "thread-1"}},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_background_request_accepts_supported_session_anchor(self, session_anchor):
+        server = _make_server(auto_recovery=False, sse_replay=True)
+        _mock_validator(server)
+
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "input": [{"role": "user", "content": "hello"}],
+                **session_anchor,
+            }
+        )
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
 
 
 class TestDeferredMarkFailed:
@@ -1202,6 +1269,27 @@ class TestBuildProseRecoveryMessage:
 
 class TestOnResume:
     @pytest.mark.asyncio
+    async def test_agent_managed_recovery_generates_missing_session_anchor(self, caplog):
+        server = _make_server(auto_recovery=False, sse_replay=False)
+
+        with caplog.at_level(logging.WARNING):
+            resumed = await server._build_resume_request(
+                {"input": [{"role": "user", "content": "original"}]},
+                response_id="resp_1",
+                new_attempt_number=2,
+                prior_messages=[],
+            )
+        resumed = resumed.model_dump(exclude_none=True)
+
+        assert resumed["context"]["conversation_id"] == "resp_1"
+        assert resumed["input"][0]["content"] == (
+            "[RECOVERY] The previous attempt was interrupted. Continue the task using "
+            "the transcript already persisted by the agent's session store. Inspect "
+            "external side effects and safely repeat any interrupted operation."
+        )
+        assert "using response_id=resp_1 as context.conversation_id" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_agent_managed_recovery_keeps_session_and_uses_only_recovery_prompt(self):
         server = _make_server(auto_recovery=False, sse_replay=False)
         original_request = {
@@ -1423,6 +1511,43 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         assert result["id"] == captured["response_id"]
         assert result["status"] == "in_progress"
         mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_managed_request_persists_generated_session_anchor(self, caplog):
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                auto_recovery=False,
+                sse_replay=False,
+            )
+        _mock_validator(server)
+
+        captured: dict = {}
+
+        async def fake_create_response(
+            response_id,
+            status,
+            *,
+            durable=False,
+            original_request=None,
+            is_streaming=False,
+        ):
+            captured["response_id"] = response_id
+            captured["original_request"] = original_request
+
+        with (
+            patch(f"{MODULE}.create_response", side_effect=fake_create_response),
+            patch("asyncio.create_task"),
+            caplog.at_level(logging.WARNING),
+        ):
+            await server._handle_background_request(
+                {"input": [{"role": "user", "content": "hi"}]},
+                is_streaming=False,
+                return_trace_id=False,
+            )
+
+        assert captured["original_request"]["context"]["conversation_id"] == captured["response_id"]
+        assert "as context.conversation_id" in caplog.text
 
 
 class TestTryClaimAndResume:
