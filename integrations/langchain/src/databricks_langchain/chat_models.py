@@ -1594,11 +1594,20 @@ def _get_tool_calls_from_ai_message(message: AIMessage) -> List[Dict]:
     ]
 
     if tool_calls or invalid_tool_calls:
-        return tool_calls + invalid_tool_calls
+        result = tool_calls + invalid_tool_calls
+        thought_signatures = {
+            tool_call.get("id"): tool_call.get("thoughtSignature")
+            for tool_call in message.additional_kwargs.get("tool_calls", [])
+            if tool_call.get("thoughtSignature")
+        }
+        for tool_call in result:
+            if thought_signature := thought_signatures.get(tool_call["id"]):
+                tool_call["thoughtSignature"] = thought_signature
+        return result
 
     # Get tool calls from additional kwargs if present.
     return [
-        {k: v for k, v in tool_call.items() if k in {"id", "type", "function"}}
+        {k: v for k, v in tool_call.items() if k in {"id", "type", "function", "thoughtSignature"}}
         for tool_call in message.additional_kwargs.get("tool_calls", [])
     ]
 

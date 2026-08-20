@@ -753,6 +753,27 @@ def test_convert_message_with_tool_calls() -> None:
     assert dict_result == message_with_tools
 
 
+def test_convert_message_with_tool_calls_preserves_thought_signature() -> None:
+    tool_call_id = "system__ai__python_exec"
+    thought_signature = "encoded-gemini-reasoning"
+    tool_calls = [
+        {
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "system__ai__python_exec",
+                "arguments": '{"code":"print(6 * 7)"}',
+            },
+            "thoughtSignature": thought_signature,
+        }
+    ]
+    message = AIMessage(content="", additional_kwargs={"tool_calls": tool_calls})
+
+    result = _convert_message_to_dict(message)
+
+    assert result["tool_calls"][0]["thoughtSignature"] == thought_signature
+
+
 def test_convert_tool_message() -> None:
     tool_message = ToolMessage(content="result", tool_call_id="call_123")
     result = _convert_message_to_dict(tool_message)
