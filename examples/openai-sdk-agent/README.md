@@ -6,13 +6,21 @@ the same MLflow `@invoke()` / `@stream()` handlers. Only two
 
 | App | `auto_recovery` | `sse_replay` | Resume input | Durable event rows |
 | --- | --- | --- | --- | --- |
-| `app_framework_recovery_sse.py` | `True` | `True` | Original request plus prose built from prior stream events; rotated SDK session | Yes |
-| `app_agent_recovery_sse.py` | `False` | `True` | Fixed recovery prompt; same SDK session restores its transcript | Yes, for client replay only |
-| `app_agent_recovery_polling.py` | `False` | `False` | Fixed recovery prompt; same SDK session restores its transcript | No |
+| [`framework_recovery_sse/`](./framework_recovery_sse/) | `True` | `True` | Original request plus prose built from prior stream events; rotated SDK session | Yes |
+| [`agent_recovery_sse/`](./agent_recovery_sse/) | `False` | `True` | Fixed recovery prompt; same SDK session restores its transcript | Yes, for client replay only |
+| [`agent_recovery_polling/`](./agent_recovery_polling/) | `False` | `False` | Fixed recovery prompt; same SDK session restores its transcript | No |
 
 Heartbeat, stale-attempt claiming, and process-start recovery run in all three
 modes. `auto_recovery` controls who restores agent context, not whether a stale
 attempt is restarted.
+
+```text
+openai-sdk-agent/
+├── framework_recovery_sse/   # app.py, app.yaml, README.md
+├── agent_recovery_sse/       # app.py, app.yaml, README.md
+├── agent_recovery_polling/   # app.py, app.yaml, README.md
+└── shared/                   # identical agent, handlers, sessions, lifecycle
+```
 
 ## Recovery hook
 
@@ -60,12 +68,14 @@ The SDK transcript is independent:
 
 ## Shared agent code
 
-- `review_agent.py` contains the deterministic PR CUJs and shell tool.
-- `handlers.py` adapts OpenAI Agents SDK output to MLflow Responses events.
-- `sessions.py` creates `AsyncDatabricksSession` instances.
-- `server_factory.py` contains common Lakebase, lifespan, and dynamic App port
-  wiring.
-- The three `app_*.py` files are intentionally only the two policy flags.
+- `shared/review_agent.py` contains the deterministic PR CUJs and shell tool.
+- `shared/handlers.py` adapts OpenAI Agents SDK output to MLflow Responses
+  events.
+- `shared/sessions.py` creates `AsyncDatabricksSession` instances.
+- `shared/server_factory.py` contains common Lakebase, lifespan, and dynamic
+  App port wiring.
+- Each mode folder contains only its `app.py`, `app.yaml`, and a short README.
+  The `app.py` files intentionally differ only in the two policy flags.
 
 ## HTTP tests
 
@@ -125,11 +135,11 @@ database resource. Every App service principal creates the fixed
 schema owner and prevent the other two from initializing it. The SDK session
 schemas are also separate.
 
-`app.yaml` is the direct-deployment runtime manifest for framework recovery.
-The two `app.*.yaml` files show the equivalent runtime configuration for the
-other modes; copy the selected file to `app.yaml` before a direct deployment.
-The bundle embeds all three runtime configurations and is the easiest way to
-deploy the comparison together.
+Each mode folder has its own runtime `app.yaml`. The root bundle includes the
+shared implementation and embeds all three runtime configurations, so it is
+the easiest way to deploy the comparison together. To deploy one mode through
+a direct App upload, copy that mode's `app.yaml` to this directory first so
+the uploaded source still includes `shared/`.
 
 ```bash
 databricks apps deploy -t dev --profile <PROFILE> \

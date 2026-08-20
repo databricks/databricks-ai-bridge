@@ -13,8 +13,8 @@ from mlflow.types.responses import (
     ResponsesAgentStreamEvent,
 )
 
-from review_agent import execute_review, resume_review, stream_resume, stream_review
-from sessions import create_session
+from shared.review_agent import execute_review, resume_review, stream_resume, stream_review
+from shared.sessions import create_session
 
 PR_URL = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+/?$")
 

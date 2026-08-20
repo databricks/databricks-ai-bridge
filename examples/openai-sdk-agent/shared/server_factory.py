@@ -7,8 +7,8 @@ import uvicorn
 
 from databricks_ai_bridge.long_running import LongRunningAgentServer
 
-import handlers  # noqa: F401
-from sessions import initialize_sessions
+import shared.handlers  # noqa: F401
+from shared.sessions import initialize_sessions
 
 
 def create_server(*, auto_recovery: bool, sse_replay: bool) -> LongRunningAgentServer:
