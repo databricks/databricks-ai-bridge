@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## databricks-openai 0.17.1 (2026-08-20)
+
+### Bug Fixes
+- databricks-openai: declare `mcp>=1.19,<2` as a direct dependency so `databricks_openai.agents.McpServer` imports correctly on fresh installs (mcp 2.0.0 removed `GetSessionIdCallback`) (#463)
+
 ## databricks-ai-bridge 0.21.0 databricks-openai 0.17.0 (2026-06-25)
 
 ### Improvements
