@@ -81,17 +81,17 @@ async def test_update_response_status_persists_terminal_response(mock_session):
     result_mock.rowcount = 1
     mock_session.execute.return_value = result_mock
 
-    response = {"id": "resp_abc123", "status": "completed", "output": []}
+    terminal_response = {"id": "resp_abc123", "status": "completed", "output": []}
     updated = await update_response_status(
         "resp_abc123",
         "completed",
         expected_attempt_number=2,
-        response=response,
+        terminal_response=terminal_response,
     )
 
     assert updated is True
     statement = mock_session.execute.await_args.args[0]
-    assert json.loads(statement.compile().params["response"]) == response
+    assert json.loads(statement.compile().params["terminal_response"]) == terminal_response
 
 
 @pytest.mark.asyncio
@@ -199,7 +199,7 @@ async def test_get_response(mock_session):
     row.heartbeat_at = None
     row.attempt_number = 1
     row.original_request = None
-    row.response = json.dumps({"id": "resp_abc123", "status": "completed", "output": []})
+    row.terminal_response = json.dumps({"id": "resp_abc123", "status": "completed", "output": []})
     row.is_streaming = False
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = row
@@ -322,7 +322,7 @@ class TestInitDb:
         assert "ADD COLUMN IF NOT EXISTS heartbeat_at" in all_sql
         assert "ADD COLUMN IF NOT EXISTS attempt_number" in all_sql
         assert "ADD COLUMN IF NOT EXISTS original_request" in all_sql
-        assert "ADD COLUMN IF NOT EXISTS response" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS terminal_response" in all_sql
         assert "ADD COLUMN IF NOT EXISTS is_streaming" in all_sql
         assert "idx_responses_stale" in all_sql
         mock_conn.run_sync.assert_awaited_once()

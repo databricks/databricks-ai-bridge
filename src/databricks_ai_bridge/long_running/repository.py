@@ -46,7 +46,7 @@ async def update_response_status(
     *,
     expected_current_status: str | None = None,
     expected_attempt_number: int | None = None,
-    response: dict[str, Any] | None = None,
+    terminal_response: dict[str, Any] | None = None,
 ) -> bool:
     """Update response status. Returns True if a row was updated.
 
@@ -60,8 +60,8 @@ async def update_response_status(
     after another pod claimed the row for resume) from clobbering the new
     owner's in-progress state.
 
-    A terminal *response* is stored on the response row so polling does not
-    depend on stream-event persistence.
+    A *terminal_response* is stored on the response row so polling returns the
+    exact Responses payload without reconstructing it from stream events.
     """
     async with session_scope() as session:
         stmt = update(Response).where(Response.response_id == response_id)
@@ -70,8 +70,8 @@ async def update_response_status(
         if expected_attempt_number is not None:
             stmt = stmt.where(Response.attempt_number == expected_attempt_number)
         values: dict[str, Any] = {"status": status}
-        if response is not None:
-            values["response"] = json.dumps(response)
+        if terminal_response is not None:
+            values["terminal_response"] = json.dumps(terminal_response)
         stmt = stmt.values(**values)
         result = await session.execute(stmt)
         await session.commit()
@@ -241,7 +241,7 @@ class ResponseInfo(NamedTuple):
     heartbeat_at: datetime | None
     attempt_number: int
     original_request: dict[str, Any] | None
-    response: dict[str, Any] | None
+    terminal_response: dict[str, Any] | None
     is_streaming: bool
 
 
@@ -259,7 +259,7 @@ async def get_response(response_id: str) -> ResponseInfo | None:
                 row.heartbeat_at,
                 row.attempt_number,
                 json.loads(row.original_request) if row.original_request else None,
-                json.loads(row.response) if row.response else None,
+                json.loads(row.terminal_response) if row.terminal_response else None,
                 row.is_streaming,
             )
         return None

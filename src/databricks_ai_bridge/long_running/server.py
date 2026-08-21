@@ -18,6 +18,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 import mlflow
@@ -48,18 +49,29 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_status,
     update_response_trace_id,
 )
-from databricks_ai_bridge.long_running.resume import ResumeContext, get_on_resume_function
+from databricks_ai_bridge.long_running.resume import (
+    ResumeContext,
+    ResumeStrategy,
+    get_on_resume_function,
+)
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 from databricks_ai_bridge.utils.annotations import experimental
 
 logger = logging.getLogger(__name__)
 
 BACKGROUND_KEY = "background"
-AGENT_MANAGED_RECOVERY_PROMPT = (
+AGENT_SESSION_RECOVERY_PROMPT = (
     "[RECOVERY] The previous attempt was interrupted. Continue the task using "
     "the transcript already persisted by the agent's session store. Inspect "
     "external side effects and safely repeat any interrupted operation."
 )
+
+
+class ResponseStatus(str, Enum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 
 # Process-local identifier for log lines. Not stored in the DB — heartbeat
 # ownership is implicit via attempt_number CAS.
@@ -73,7 +85,6 @@ async def _deferred_mark_failed(
     *,
     failure_code: str = "task_timeout",
     owning_attempt_number: int | None = None,
-    persist_events: bool = True,
 ) -> None:
     """Mark a response as failed after a short delay.
 
@@ -110,23 +121,22 @@ async def _deferred_mark_failed(
                     "code": failure_code,
                 },
             }
-            if persist_events:
-                # TODO: sequence number computation is racy under concurrent writers.
-                # Acceptable at current scale; for high-QPS use a DB-assigned sequence.
-                existing = await get_messages(response_id, after_sequence=None)
-                next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
-                await append_message(
-                    response_id,
-                    next_seq,
-                    item=None,
-                    stream_event=error_event,
-                    attempt_number=current_attempt,
-                )
+            # TODO: sequence number computation is racy under concurrent writers.
+            # Acceptable at current scale; for high-QPS use a DB-assigned sequence.
+            existing = await get_messages(response_id, after_sequence=None)
+            next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
+            await append_message(
+                response_id,
+                next_seq,
+                item=None,
+                stream_event=error_event,
+                attempt_number=current_attempt,
+            )
             await update_response_status(
                 response_id,
-                "failed",
+                ResponseStatus.FAILED,
                 expected_attempt_number=owning_attempt_number,
-                response=_failed_response(response_id, reason, failure_code),
+                terminal_response=_failed_response(response_id, reason, failure_code),
             )
 
         logger.info("Marked %s as failed (reason: %s)", response_id, reason)
@@ -167,15 +177,15 @@ def _age_seconds(created_at: datetime) -> float:
     return (now - created_at).total_seconds()
 
 
-def _failed_response(response_id: str, message: str, code: str) -> dict[str, Any]:
+def _failed_response(response_id: str, error_msg: str, error_code: str) -> dict[str, Any]:
     return {
         "id": response_id,
         "object": "response",
-        "status": "failed",
+        "status": ResponseStatus.FAILED,
         "error": {
-            "message": message,
+            "message": error_msg,
             "type": "server_error",
-            "code": code,
+            "code": error_code,
         },
         "output": [],
     }
@@ -188,16 +198,16 @@ def _completed_response(
 ) -> dict[str, Any]:
     response = copy.deepcopy(result)
     response["id"] = response_id
-    response["status"] = "completed"
+    response["status"] = ResponseStatus.COMPLETED
     response["attempt_number"] = attempt_number
     return response
 
 
-def _agent_managed_recovery_message() -> dict[str, Any]:
+def _agent_session_recovery_message() -> dict[str, Any]:
     return {
         "type": "message",
         "role": "user",
-        "content": AGENT_MANAGED_RECOVERY_PROMPT,
+        "content": AGENT_SESSION_RECOVERY_PROMPT,
     }
 
 
@@ -210,25 +220,27 @@ def _request_to_dict(request: Any) -> dict[str, Any]:
     raise TypeError("Resume handlers must return a request model or dictionary")
 
 
-def _session_anchor(request_dict: dict[str, Any]) -> str | None:
+def _agent_session_key(request_dict: dict[str, Any]) -> str | None:
+    """Return the stable request key used by a handler to reopen SDK state."""
     custom_inputs = request_dict.get("custom_inputs")
     if not isinstance(custom_inputs, dict):
         custom_inputs = {}
     context = request_dict.get("context")
     if not isinstance(context, dict):
         context = {}
-    anchor = (
+    session_key = (
         custom_inputs.get("thread_id")
         or custom_inputs.get("session_id")
         or context.get("conversation_id")
     )
-    if anchor is None or not str(anchor).strip():
+    if session_key is None or not str(session_key).strip():
         return None
-    return str(anchor)
+    return str(session_key)
 
 
-def _ensure_session_anchor(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
-    if _session_anchor(request_dict) is not None:
+def _ensure_agent_session_key(request_dict: dict[str, Any], response_id: str) -> dict[str, Any]:
+    """Inject a stable SDK session key when the client did not provide one."""
+    if _agent_session_key(request_dict) is not None:
         return request_dict
 
     request_context = request_dict.get("context")
@@ -237,7 +249,7 @@ def _ensure_session_anchor(request_dict: dict[str, Any], response_id: str) -> di
     request_context["conversation_id"] = response_id
     request_dict["context"] = request_context
     logger.warning(
-        "[durable] agent-managed request has no session anchor; using response_id=%s "
+        "[durable] agent-session request has no session key; using response_id=%s "
         "as context.conversation_id",
         response_id,
     )
@@ -284,7 +296,7 @@ def _rotate_conversation_id(
     new_attempt_number: int,
     response_id: str,
 ) -> dict[str, Any]:
-    """Rotate the conversation anchor to a per-attempt value.
+    """Rotate the agent session key to a per-attempt value.
 
     After a crash, attempt N+1 should see a FRESH checkpointer / session so it
     doesn't inherit mid-turn state that the SDK can't repair cleanly (most
@@ -293,9 +305,9 @@ def _rotate_conversation_id(
 
         1. custom_inputs.thread_id / session_id   (explicit, wins)
         2. context.conversation_id                (fallback)
-        3. auto-generated                         (last resort)
+        3. response_id                            (last resort)
 
-    We drop (1), pick the current base anchor, and write ``{base}::attempt-N``
+    We drop (1), pick the current base key, and write ``{base}::attempt-N``
     into (2). The handler then resolves to a fresh key for this attempt while
     still being deterministic across retries of the same attempt.
 
@@ -307,7 +319,7 @@ def _rotate_conversation_id(
     if not isinstance(custom_inputs, dict):
         custom_inputs = {}
 
-    base_anchor = _session_anchor(request_dict) or response_id
+    base_session_key = _agent_session_key(request_dict) or response_id
 
     custom_inputs.pop("thread_id", None)
     custom_inputs.pop("session_id", None)
@@ -315,14 +327,14 @@ def _rotate_conversation_id(
 
     ctx = request_dict.get("context") or {}
     ctx = dict(ctx)
-    rotated = f"{base_anchor}::attempt-{new_attempt_number}"
+    rotated = f"{base_session_key}::attempt-{new_attempt_number}"
     ctx["conversation_id"] = rotated
     request_dict["context"] = ctx
     logger.info(
         "[durable] rotated conversation_id for resume response_id=%s attempt=%d base=%s rotated=%s",
         response_id,
         new_attempt_number,
-        base_anchor,
+        base_session_key,
         rotated,
     )
     return request_dict
@@ -349,13 +361,13 @@ class LongRunningAgentServer(AgentServer):
     ``LAKEBASE_INSTANCE_NAME``, ``LAKEBASE_AUTOSCALING_ENDPOINT``, or both
     ``LAKEBASE_AUTOSCALING_PROJECT`` and ``LAKEBASE_AUTOSCALING_BRANCH``.
 
-    When a heartbeat becomes stale, another pod atomically claims the run and
-    calls the function registered by ``@on_resume()``. If none is registered,
-    framework-managed mode reconstructs prose from persisted events on a
-    rotated session, while agent-managed mode retains the session anchor and
+    When a heartbeat becomes stale, another pod atomically claims the execution
+    and calls the function registered by ``@on_resume()``. If none is
+    registered, ``EVENT_LOG`` reconstructs prose from persisted events on a
+    rotated session, while ``AGENT_SESSION`` retains the agent session key and
     delegates transcript recovery to the agent SDK's session store.
 
-    Framework-managed recovery requires a registered ``@stream()`` handler.
+    Event-log recovery requires a registered ``@stream()`` handler.
     Background requests execute through it even when the client uses polling;
     the request's ``stream`` flag controls delivery rather than event capture.
 
@@ -383,15 +395,12 @@ class LongRunningAgentServer(AgentServer):
             considered stale and another pod may claim the run. Also used
             as the grace window for a freshly-created run that hasn't
             written its first heartbeat yet. Defaults to 10.0.
-        auto_recovery: Whether the server reconstructs recovery context from
-            persisted stream events and rotates the agent session. A registered
-            ``@stream()`` handler is required; background executions use it even
-            when the client polls with ``stream=false``. When false, the default
-            resume policy keeps the session anchor and sends only a fixed
-            recovery prompt, delegating transcript recovery to the agent's
-            session store. Defaults to true.
-        sse_replay: Whether background SSE events are persisted and exposed
-            through streaming retrieval. Defaults to true.
+        resume_strategy: How a restarted handler receives agent context.
+            ``EVENT_LOG`` reconstructs recovery prose from durable events and
+            rotates the SDK session; it requires a registered ``@stream()``
+            handler. ``AGENT_SESSION`` keeps the agent session key and sends a
+            fixed recovery prompt so the SDK restores its transcript. Defaults
+            to ``EVENT_LOG``.
     """
 
     _SUPPORTED_AGENT_TYPE = "ResponsesAgent"
@@ -413,8 +422,7 @@ class LongRunningAgentServer(AgentServer):
         cleanup_timeout_seconds: float = 7.0,
         heartbeat_interval_seconds: float = 3.0,
         heartbeat_stale_threshold_seconds: float = 10.0,
-        auto_recovery: bool = True,
-        sse_replay: bool = True,
+        resume_strategy: ResumeStrategy | str = ResumeStrategy.EVENT_LOG,
     ):
         if agent_type != self._SUPPORTED_AGENT_TYPE:
             raise ValueError(
@@ -433,9 +441,11 @@ class LongRunningAgentServer(AgentServer):
         self._db_autoscaling_endpoint = db_autoscaling_endpoint
         self._db_project = db_project
         self._db_branch = db_branch
-        self._auto_recovery = auto_recovery
-        self._sse_replay = sse_replay
-        self._event_log_enabled = auto_recovery or sse_replay
+        try:
+            self._resume_strategy = ResumeStrategy(resume_strategy)
+        except ValueError as exc:
+            choices = ", ".join(strategy.value for strategy in ResumeStrategy)
+            raise ValueError(f"resume_strategy must be one of: {choices}") from exc
         # Track in-flight background tasks per response_id so the debug-kill
         # endpoint can simulate a pod crash without tearing the whole pod
         # down. Not load-bearing for correctness — durability still relies on
@@ -444,12 +454,8 @@ class LongRunningAgentServer(AgentServer):
         super().__init__(agent_type, enable_chat_proxy=enable_chat_proxy)
 
     @property
-    def auto_recovery(self) -> bool:
-        return self._auto_recovery
-
-    @property
-    def sse_replay(self) -> bool:
-        return self._sse_replay
+    def resume_strategy(self) -> ResumeStrategy:
+        return self._resume_strategy
 
     def _setup_routes(self) -> None:
         """Register routes. Reuses parent's POST /invocations and POST /responses.
@@ -520,11 +526,6 @@ class LongRunningAgentServer(AgentServer):
                 raise HTTPException(
                     status_code=501,
                     detail="Response retrieval requires a database configuration.",
-                )
-            if stream and not self.sse_replay:
-                raise HTTPException(
-                    status_code=400,
-                    detail="SSE replay is disabled for this server.",
                 )
             if starting_after != 0 and not stream:
                 raise HTTPException(
@@ -601,15 +602,10 @@ class LongRunningAgentServer(AgentServer):
             ) from None
 
         if is_background and is_db_configured():
-            if is_streaming and not self.sse_replay:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Background streaming requires SSE replay to be enabled.",
-                )
-            if self.auto_recovery and get_stream_function() is None:
+            if self.resume_strategy is ResumeStrategy.EVENT_LOG and get_stream_function() is None:
                 raise HTTPException(
                     status_code=500,
-                    detail=("Framework-managed recovery requires a registered @stream() handler."),
+                    detail="Event-log recovery requires a registered @stream() handler.",
                 )
             return await self._handle_background_request(
                 request_data, is_streaming, return_trace_id
@@ -627,30 +623,26 @@ class LongRunningAgentServer(AgentServer):
     ) -> dict[str, Any] | StreamingResponse:
         """Start a background execution and return its initial response.
 
-        Framework-managed recovery always executes through ``@stream()`` so
+        Event-log recovery always executes through ``@stream()`` so
         intermediate events are available for recovery prose. The request's
         ``stream`` flag still controls whether the client receives SSE or polls.
         """
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        use_stream_handler = self.auto_recovery or is_streaming
-        # Anchor the conversation to response_id so any future replay from a
-        # different pod resolves to the same agent-SDK thread/session. We
-        # round-trip through dict + validator so the handler still receives a
-        # pydantic ResponsesAgentRequest (its declared arg type). The
-        # declared param type is ``dict`` but the runtime object is a pydantic
-        # model from ``validate_and_convert_request``; fall back to ``dict()``
-        # when tests pass a plain dict directly.
+        use_stream_handler = self.resume_strategy is ResumeStrategy.EVENT_LOG or is_streaming
+        # Round-trip through dict + validator so the handler still receives a
+        # pydantic ResponsesAgentRequest. Agent-session recovery also needs a
+        # stable key that another worker can use to reopen the SDK transcript.
         dump = getattr(request_data, "model_dump", None)
         request_dict = dump() if callable(dump) else dict(request_data)
-        if not self.auto_recovery:
-            request_dict = _ensure_session_anchor(request_dict, response_id)
+        if self.resume_strategy is ResumeStrategy.AGENT_SESSION:
+            request_dict = _ensure_agent_session_key(request_dict, response_id)
         # Store the FULL request (untrimmed) as `original_request` so resume can
         # recover the entire prior-turn history. Per-template handlers are
         # responsible for deduping their own UI-echoed input against the SDK's
         # session/checkpointer state — the bridge no longer trims input.
         await create_response(
             response_id,
-            "in_progress",
+            ResponseStatus.IN_PROGRESS,
             durable=True,
             original_request=request_dict,
             is_streaming=use_stream_handler,
@@ -669,7 +661,7 @@ class LongRunningAgentServer(AgentServer):
             "id": response_id,
             "object": "response",
             "created_at": int(time.time()),
-            "status": "in_progress",
+            "status": ResponseStatus.IN_PROGRESS,
             "error": None,
             "incomplete_details": None,
             "output": [],
@@ -874,7 +866,6 @@ class LongRunningAgentServer(AgentServer):
                     response_id,
                     delay=self._settings.cleanup_timeout_seconds,
                     owning_attempt_number=attempt_number,
-                    persist_events=self._event_log_enabled,
                 ),
                 name=f"deferred-fail-{response_id}",
             )
@@ -882,29 +873,28 @@ class LongRunningAgentServer(AgentServer):
             logger.exception("Task %s failed: %s", response_id, exc)
             try:
                 async with asyncio.timeout(self._settings.cleanup_timeout_seconds):
-                    if self._event_log_enabled:
-                        # TODO: sequence number computation is racy.
-                        existing = await get_messages(response_id, after_sequence=None)
-                        next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
-                        await append_message(
-                            response_id,
-                            next_seq,
-                            item=None,
-                            stream_event={
-                                "type": "error",
-                                "error": {
-                                    "message": str(exc),
-                                    "type": "server_error",
-                                    "code": "task_failed",
-                                },
+                    # TODO: sequence number computation is racy.
+                    existing = await get_messages(response_id, after_sequence=None)
+                    next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
+                    await append_message(
+                        response_id,
+                        next_seq,
+                        item=None,
+                        stream_event={
+                            "type": "error",
+                            "error": {
+                                "message": str(exc),
+                                "type": "server_error",
+                                "code": "task_failed",
                             },
-                            attempt_number=attempt_number,
-                        )
+                        },
+                        attempt_number=attempt_number,
+                    )
                     await update_response_status(
                         response_id,
-                        "failed",
+                        ResponseStatus.FAILED,
                         expected_attempt_number=attempt_number,
-                        response=_failed_response(response_id, str(exc), "task_failed"),
+                        terminal_response=_failed_response(response_id, str(exc), "task_failed"),
                     )
             except Exception:
                 logger.exception(
@@ -918,7 +908,6 @@ class LongRunningAgentServer(AgentServer):
                         reason=str(exc),
                         failure_code="task_failed",
                         owning_attempt_number=attempt_number,
-                        persist_events=self._event_log_enabled,
                     ),
                     name=f"deferred-fail-{response_id}",
                 )
@@ -962,7 +951,7 @@ class LongRunningAgentServer(AgentServer):
         stream_fn = get_stream_function()
         if stream_fn is None:
             await update_response_status(
-                response_id, "failed", expected_attempt_number=attempt_number
+                response_id, ResponseStatus.FAILED, expected_attempt_number=attempt_number
             )
             raise RuntimeError("No stream function registered; cannot run background stream")
 
@@ -979,7 +968,7 @@ class LongRunningAgentServer(AgentServer):
         # never rewinds on resume. First attempt starts at 0 and skips the DB
         # lookup — keeps the fast path identical to pre-resume behavior and
         # avoids an extra query per background request.
-        if self._event_log_enabled and attempt_number > 1:
+        if attempt_number > 1:
             existing = await get_messages(response_id, after_sequence=None)
             seq = max((s for s, _, _, _ in existing), default=-1) + 1
         else:
@@ -1003,16 +992,15 @@ class LongRunningAgentServer(AgentServer):
                         "attempt": attempt_number,
                     },
                 )
-                if self._event_log_enabled:
-                    await append_message(
-                        response_id,
-                        seq,
-                        item=json.dumps(item) if item is not None else None,
-                        stream_event=evt,
-                        attempt_number=attempt_number,
-                    )
-                    seq += 1
-                    state["seq"] = seq
+                await append_message(
+                    response_id,
+                    seq,
+                    item=json.dumps(item) if item is not None else None,
+                    stream_event=evt,
+                    attempt_number=attempt_number,
+                )
+                seq += 1
+                state["seq"] = seq
                 # Explicit yield so task.cancel() propagates promptly on
                 # tight event streams. The OpenAI Agents Runner's
                 # stream_events() awaits a queue that empties fast enough
@@ -1023,7 +1011,7 @@ class LongRunningAgentServer(AgentServer):
             span.set_attribute(SpanAttributeKey.MESSAGE_FORMAT, "openai")
             span.set_outputs(result)
 
-            if return_trace_id and self._event_log_enabled:
+            if return_trace_id:
                 await append_message(
                     response_id,
                     seq,
@@ -1035,9 +1023,9 @@ class LongRunningAgentServer(AgentServer):
 
         updated = await update_response_status(
             response_id,
-            "completed",
+            ResponseStatus.COMPLETED,
             expected_attempt_number=attempt_number,
-            response=_completed_response(response_id, result, attempt_number),
+            terminal_response=_completed_response(response_id, result, attempt_number),
         )
         if not updated:
             logger.info(
@@ -1092,7 +1080,7 @@ class LongRunningAgentServer(AgentServer):
         invoke_fn = get_invoke_function()
         if invoke_fn is None:
             await update_response_status(
-                response_id, "failed", expected_attempt_number=attempt_number
+                response_id, ResponseStatus.FAILED, expected_attempt_number=attempt_number
             )
             raise RuntimeError("No invoke function registered; cannot run background invoke")
 
@@ -1111,37 +1099,34 @@ class LongRunningAgentServer(AgentServer):
 
         output = result.get("output", [])
         # Continue sequence numbering across attempts (see _do_background_stream).
-        if self._event_log_enabled and attempt_number > 1:
+        if attempt_number > 1:
             existing = await get_messages(response_id, after_sequence=None)
             base_seq = max((s for s, _, _, _ in existing), default=-1) + 1
         else:
             base_seq = 0
-        if self._event_log_enabled:
-            for i, item in enumerate(output):
-                item_dict = (
-                    item
-                    if isinstance(item, dict)
-                    else (
-                        item.model_dump() if hasattr(item, "model_dump") else {"content": str(item)}
-                    )
-                )
-                seq = base_seq + i
-                await append_message(
-                    response_id,
-                    seq,
-                    item=json.dumps(item_dict),
-                    stream_event={"type": "response.output_item.done", "item": item_dict},
-                    attempt_number=attempt_number,
-                )
-                state["seq"] = seq + 1
+        for i, item in enumerate(output):
+            item_dict = (
+                item
+                if isinstance(item, dict)
+                else (item.model_dump() if hasattr(item, "model_dump") else {"content": str(item)})
+            )
+            seq = base_seq + i
+            await append_message(
+                response_id,
+                seq,
+                item=json.dumps(item_dict),
+                stream_event={"type": "response.output_item.done", "item": item_dict},
+                attempt_number=attempt_number,
+            )
+            state["seq"] = seq + 1
         if return_trace_id:
             await update_response_trace_id(response_id, span.trace_id)
             result["metadata"] = (result.get("metadata") or {}) | {"trace_id": span.trace_id}
         updated = await update_response_status(
             response_id,
-            "completed",
+            ResponseStatus.COMPLETED,
             expected_attempt_number=attempt_number,
-            response=_completed_response(response_id, result, attempt_number),
+            terminal_response=_completed_response(response_id, result, attempt_number),
         )
         if not updated:
             logger.info(
@@ -1168,9 +1153,11 @@ class LongRunningAgentServer(AgentServer):
         """Apply the registered resume handler or the configured default."""
         validated_original = self.validator.validate_and_convert_request(original_request)
 
-        async def default_request(request: ResponsesAgentRequest) -> ResponsesAgentRequest:
+        async def build_default_resume_request(
+            request: ResponsesAgentRequest,
+        ) -> ResponsesAgentRequest:
             resume_request = _request_to_dict(request)
-            if self.auto_recovery:
+            if self.resume_strategy is ResumeStrategy.EVENT_LOG:
                 resume_input = list(resume_request.get("input") or [])
                 resume_input.append(
                     _build_prose_recovery_message(
@@ -1185,11 +1172,11 @@ class LongRunningAgentServer(AgentServer):
                     response_id,
                 )
             else:
-                resume_request = _ensure_session_anchor(resume_request, response_id)
-                resume_request["input"] = [_agent_managed_recovery_message()]
+                resume_request = _ensure_agent_session_key(resume_request, response_id)
+                resume_request["input"] = [_agent_session_recovery_message()]
             return self.validator.validate_and_convert_request(resume_request)
 
-        previous_events = tuple(
+        previous_attempt_events = tuple(
             copy.deepcopy(event)
             for _sequence, _item, event, attempt_number in prior_messages
             if attempt_number == new_attempt_number - 1 and isinstance(event, dict)
@@ -1197,12 +1184,13 @@ class LongRunningAgentServer(AgentServer):
         context = ResumeContext(
             response_id=response_id,
             attempt_number=new_attempt_number,
-            previous_events=previous_events,
-            _default_request=default_request,
+            resume_strategy=self.resume_strategy,
+            previous_attempt_events=previous_attempt_events,
+            _build_default_resume_request=build_default_resume_request,
         )
         resume_function = get_on_resume_function()
         if resume_function is None:
-            return await context.default_request(validated_original)
+            return await context.default_resume_request(validated_original)
 
         resumed = resume_function(validated_original, context)
         if inspect.isawaitable(resumed):
@@ -1216,7 +1204,7 @@ class LongRunningAgentServer(AgentServer):
         handler for the new attempt, and return its attempt number. On failure
         (another pod won, or the run is no longer stale), return ``None``.
         """
-        if resp.status != "in_progress":
+        if resp.status != ResponseStatus.IN_PROGRESS:
             return None
         # The run may be freshly started but too young to have a heartbeat yet;
         # respect the creation age as a grace period equal to the stale
@@ -1280,9 +1268,7 @@ class LongRunningAgentServer(AgentServer):
             )
             return None
 
-        existing = (
-            await get_messages(response_id, after_sequence=None) if self._event_log_enabled else []
-        )
+        existing = await get_messages(response_id, after_sequence=None)
         next_seq = max((s for s, _, _, _ in existing), default=-1) + 1
         resume_request = await self._build_resume_request(
             resp.original_request,
@@ -1295,23 +1281,22 @@ class LongRunningAgentServer(AgentServer):
             "[durable] resume request built response_id=%s attempt=%d mode=%s",
             response_id,
             new_attempt,
-            "event_log" if self.auto_recovery else "agent_session",
+            self.resume_strategy.value,
         )
-        # Framework recovery exposes its rotated conversation ID. Agent-managed
+        # Event-log recovery exposes its rotated conversation ID. Agent-session
         # recovery exposes the unchanged conversation ID when one was supplied.
         conversation_id = (resume_dict.get("context") or {}).get("conversation_id")
-        if self.sse_replay:
-            await append_message(
-                response_id,
-                next_seq,
-                stream_event={
-                    "type": "response.resumed",
-                    "attempt": new_attempt,
-                    "from_seq": next_seq,
-                    "conversation_id": conversation_id,
-                },
-                attempt_number=new_attempt,
-            )
+        await append_message(
+            response_id,
+            next_seq,
+            stream_event={
+                "type": "response.resumed",
+                "attempt": new_attempt,
+                "from_seq": next_seq,
+                "conversation_id": conversation_id,
+            },
+            attempt_number=new_attempt,
+        )
 
         logger.info(
             "[durable] claim succeeded response_id=%s new_attempt=%d pod=%s resume_from_seq=%d",
@@ -1373,22 +1358,22 @@ class LongRunningAgentServer(AgentServer):
         status = resp.status
         created_at = resp.created_at
         trace_id = resp.trace_id
-        stored_response = resp.response
+        terminal_response = resp.terminal_response
 
         if (
-            status == "in_progress"
+            status == ResponseStatus.IN_PROGRESS
             and _age_seconds(created_at) > self._settings.task_timeout_seconds
         ):
             timeout_response = _failed_response(response_id, "Task timed out", "task_timeout")
             # Use conditional update so only one concurrent request performs the transition.
             updated = await update_response_status(
                 response_id,
-                "failed",
-                expected_current_status="in_progress",
-                response=timeout_response,
+                ResponseStatus.FAILED,
+                expected_current_status=ResponseStatus.IN_PROGRESS,
+                terminal_response=timeout_response,
             )
             if updated:
-                stored_response = timeout_response
+                terminal_response = timeout_response
                 logger.warning(
                     "Stale in_progress run detected, marking as failed",
                     extra={
@@ -1396,22 +1381,21 @@ class LongRunningAgentServer(AgentServer):
                         "age_s": _age_seconds(created_at),
                     },
                 )
-                if self._event_log_enabled:
-                    # TODO: sequence number computation here is racy.
-                    existing = await get_messages(response_id, after_sequence=None)
-                    next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
-                    attempt = await _current_attempt(response_id)
-                    await append_message(
-                        response_id,
-                        next_seq,
-                        item=None,
-                        stream_event={
-                            "type": "error",
-                            "error": timeout_response["error"],
-                        },
-                        attempt_number=attempt,
-                    )
-            status = "failed"
+                # TODO: sequence number computation here is racy.
+                existing = await get_messages(response_id, after_sequence=None)
+                next_seq = max((seq for seq, _, _, _ in existing), default=-1) + 1
+                attempt = await _current_attempt(response_id)
+                await append_message(
+                    response_id,
+                    next_seq,
+                    item=None,
+                    stream_event={
+                        "type": "error",
+                        "error": timeout_response["error"],
+                    },
+                    attempt_number=attempt,
+                )
+            status = ResponseStatus.FAILED
 
         logger.debug(
             "Retrieve request",
@@ -1424,28 +1408,25 @@ class LongRunningAgentServer(AgentServer):
         )
 
         if stream:
-            if not self.sse_replay:
-                raise HTTPException(
-                    status_code=400, detail="SSE replay is disabled for this server."
-                )
             return StreamingResponse(
                 self._stream_retrieve(response_id, starting_after),
                 media_type="text/event-stream",
             )
 
-        if status in {"completed", "failed"} and stored_response is not None:
-            return copy.deepcopy(stored_response)
+        if (
+            status in {ResponseStatus.COMPLETED, ResponseStatus.FAILED}
+            and terminal_response is not None
+        ):
+            return copy.deepcopy(terminal_response)
 
-        messages = (
-            await get_messages(response_id, after_sequence=None) if self._event_log_enabled else []
-        )
-        if not messages and status == "in_progress":
+        messages = await get_messages(response_id, after_sequence=None)
+        if not messages and status == ResponseStatus.IN_PROGRESS:
             return {
                 "id": response_id,
-                "status": "in_progress",
+                "status": ResponseStatus.IN_PROGRESS,
                 "attempt_number": resp.attempt_number,
             }
-        if status == "completed" and messages:
+        if status == ResponseStatus.COMPLETED and messages:
             # Only consider items from the final (successful) attempt so that
             # abandoned in-progress items from crashed attempts don't leak
             # into the authoritative response body. Completed output_item.done
@@ -1458,19 +1439,19 @@ class LongRunningAgentServer(AgentServer):
                     output.append(evt.get("item"))
             result: dict[str, Any] = {
                 "id": response_id,
-                "status": "completed",
+                "status": ResponseStatus.COMPLETED,
                 "output": [o for o in output if o is not None],
                 "attempt_number": resp.attempt_number,
             }
             if trace_id:
                 result["metadata"] = {"trace_id": trace_id}
             return result
-        if status == "failed" and messages:
+        if status == ResponseStatus.FAILED and messages:
             for _, _, evt, _attempt in messages:
                 if evt and evt.get("type") == "error":
                     return {
                         "id": response_id,
-                        "status": "failed",
+                        "status": ResponseStatus.FAILED,
                         "error": evt.get("error"),
                         "attempt_number": resp.attempt_number,
                     }
@@ -1526,7 +1507,7 @@ class LongRunningAgentServer(AgentServer):
             # pod already won. Without this, a stream opened before the crash
             # would idle forever polling a dead run — since _try_claim_and_resume
             # is only triggered by the outer retrieve handler on fresh GETs.
-            if status == "in_progress":
+            if status == ResponseStatus.IN_PROGRESS:
                 await self._try_claim_and_resume(response_id, resp)
 
             # starting_after=0 fetches all messages (sequence numbers start at 0).
@@ -1547,18 +1528,18 @@ class LongRunningAgentServer(AgentServer):
                     yield _sse_event(event_type, evt)
                 last_seq = seq
 
-            if status == "completed":
+            if status == ResponseStatus.COMPLETED:
                 logger.debug(
                     "SSE stream ended",
-                    extra={"response_id": response_id, "status": "completed"},
+                    extra={"response_id": response_id, "status": ResponseStatus.COMPLETED},
                 )
                 yield "data: [DONE]\n\n"
                 break
 
-            if status == "failed":
+            if status == ResponseStatus.FAILED:
                 logger.debug(
                     "SSE stream ended",
-                    extra={"response_id": response_id, "status": "failed"},
+                    extra={"response_id": response_id, "status": ResponseStatus.FAILED},
                 )
                 break
 

@@ -9,7 +9,7 @@ trap 'rm -rf "$build_dir"' EXIT
 uv build --wheel "$repository_root" --out-dir "$build_dir"
 uv build --wheel "$example_root/shared" --out-dir "$build_dir"
 
-for app_dir in framework_recovery_sse agent_recovery_sse agent_recovery_polling; do
+for app_dir in event_log_recovery agent_session_recovery; do
   find "$example_root/$app_dir" -maxdepth 1 -name '*.whl' -delete
   cp "$build_dir"/databricks_ai_bridge-0.21.0-py3-none-any.whl "$example_root/$app_dir/"
   cp "$build_dir"/openai_sdk_agent_shared-0.1.0-py3-none-any.whl "$example_root/$app_dir/"

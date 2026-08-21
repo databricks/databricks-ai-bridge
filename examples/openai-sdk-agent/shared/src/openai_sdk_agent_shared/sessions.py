@@ -1,4 +1,4 @@
-"""OpenAI Agents SDK session history stored in the App's Lakebase resource."""
+"""OpenAI Agents SDK sessions stored in the App's Lakebase resource."""
 
 import os
 
@@ -11,8 +11,3 @@ def create_session(session_id: str) -> AsyncDatabricksSession:
         autoscaling_endpoint=os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"],
         schema=os.getenv("LAKEBASE_SESSION_SCHEMA", "openai_sdk_agent_sessions"),
     )
-
-
-async def initialize_sessions() -> None:
-    session = create_session("__startup__")
-    await session._ensure_tables()

@@ -3,8 +3,8 @@ env:
   - name: OPENAI_API_KEY
     valueFrom: openai-api-key
   - name: OPENAI_MODEL
-    value: gpt-5.6-luna
+    value: gpt-4.1-mini
   - name: LAKEBASE_AUTOSCALING_ENDPOINT
     valueFrom: postgres
   - name: LAKEBASE_SESSION_SCHEMA
-    value: openai_framework_sse_sessions
+    value: openai_agent_session_sessions

@@ -91,7 +91,7 @@ async def init_db(
         f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
         "ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1",
         f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS original_request TEXT",
-        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS response TEXT",
+        f"ALTER TABLE {AGENT_DB_SCHEMA}.responses ADD COLUMN IF NOT EXISTS terminal_response TEXT",
         f"ALTER TABLE {AGENT_DB_SCHEMA}.responses "
         "ADD COLUMN IF NOT EXISTS is_streaming BOOLEAN NOT NULL DEFAULT FALSE",
         f"ALTER TABLE {AGENT_DB_SCHEMA}.messages "

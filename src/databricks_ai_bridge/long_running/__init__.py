@@ -30,7 +30,7 @@ from databricks_ai_bridge.long_running.repository import (
     update_response_status,
     update_response_trace_id,
 )
-from databricks_ai_bridge.long_running.resume import ResumeContext, on_resume
+from databricks_ai_bridge.long_running.resume import ResumeContext, ResumeStrategy, on_resume
 from databricks_ai_bridge.long_running.server import LongRunningAgentServer
 from databricks_ai_bridge.long_running.settings import LongRunningSettings
 
@@ -42,6 +42,7 @@ __all__ = [
     "Response",
     "ResponseInfo",
     "ResumeContext",
+    "ResumeStrategy",
     "append_message",
     "create_response",
     "dispose_db",
