@@ -84,8 +84,8 @@ async def _responses_events(
 
 # Optional override. Without it, LongRunningAgentServer reconstructs recovery
 # prose from the prior event log and rotates to a fresh SDK session. The server
-# calls this once after claiming a stale attempt, then reuses that attempt's
-# stored invoke/stream mode.
+# calls this once after claiming a stale attempt, then reuses the required
+# stream-handler execution mode.
 #
 # from databricks_ai_bridge.long_running import ResumeContext, on_resume
 #

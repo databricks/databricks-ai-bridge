@@ -4,7 +4,7 @@
 
 ### Improvements
 - databricks-openai: `DatabricksOpenAI` and `AsyncDatabricksOpenAI` clients now follow HTTP redirects by default, configurable via the new `follow_redirects` parameter (#445)
-- databricks-ai-bridge: Make `LongRunningAgentServer` recovery context and SSE replay independently configurable, with terminal response persistence when event logging is disabled
+- databricks-ai-bridge: Make `LongRunningAgentServer` recovery context and SSE replay independently configurable, require stream-backed execution for framework recovery, and persist terminal responses when event logging is disabled
 
 ### Bug Fixes
 - databricks-ai-bridge: Genie now returns the full answer text aggregated from all text attachments (#432)

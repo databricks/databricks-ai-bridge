@@ -23,13 +23,14 @@ Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, othe
 
 - **At-most-once durable claim.** Only one pod runs a given response at a time. The handoff uses an atomic CAS on `attempt_number`.
 - **Conditional append-only event log.** Events are persisted when framework recovery or SSE replay needs them: `auto_recovery or sse_replay`.
+- **Stream-backed framework recovery.** `auto_recovery=True` requires a registered `@stream()` handler. Background execution uses that handler even when the client requests polling with `stream=false`, ensuring recovery prose has intermediate events to inspect.
 - **Durable terminal response.** Polling reads the final response from `agent_server.responses.response`; it does not require event rows.
 - **Pluggable resume input.** An optional `@on_resume()` handler can transform the stored request; `ResumeContext.default_request()` exposes the framework-managed or agent-session-managed default.
-- **Resume translation boundary.** `@on_resume()` runs before handler dispatch. The transformed request then follows the same ordinary `@invoke()` or `@stream()` path as an initial request; normal handlers do not detect recovery or select a second implementation.
+- **Resume translation boundary.** `@on_resume()` runs before handler dispatch. The transformed request follows the persisted execution-handler mode; normal handlers do not detect recovery or select a second implementation.
 - **Stable agent-managed session.** Background requests with `auto_recovery=False` may provide `context.conversation_id`, `custom_inputs.session_id`, or `custom_inputs.thread_id`. Without one, the server warns and injects `response_id` as `context.conversation_id`. The resulting anchor is persisted inside `original_request` and reused after a crash.
 - **Per-template UI-echo dedup.** The bridge does NOT trim echoed history. When the chat client echoes the full prior conversation in `request.input`, the agent handler is responsible for deduping its input against the SDK's session/checkpointer state — typically by forwarding only the latest user message when the session already has prior turns. See the templates in `app-templates/agent-{openai,langgraph}-advanced/` for the canonical 1-2 line shape.
 - **Best-effort tool execution.** A tool call interrupted mid-flight may re-run on the resumed attempt. Idempotency is the tool author's responsibility.
-- **No agent code changes required.** Templates construct `LongRunningAgentServer` and keep using `@invoke()` / `@stream()` decorators. `@on_resume()` is optional. All durability lives below the handler boundary.
+- **Minimal agent requirements.** Framework-managed recovery requires `@stream()`. Agent-session recovery follows the client's invoke/stream mode. `@on_resume()` remains optional, and durability stays below the handler boundary.
 
 ### Non-goals
 
@@ -39,13 +40,15 @@ Callers see one HTTP surface; the underlying SDK (LangGraph, OpenAI Agents, othe
 
 ### Configuration modes
 
-| `auto_recovery` | `sse_replay` | Recovery context | Event rows |
-|---|---|---|---|
-| `True` | `True` | Prior event log, rotated session | Recovery + client replay |
-| `True` | `False` | Prior event log, rotated session | Recovery only |
-| `False` | `True` | Agent session transcript, same session | Client replay only |
-| `False` | `False` | Agent session transcript, same session | None |
+| `auto_recovery` | `sse_replay` | Background handler | Recovery context | Event rows |
+|---|---|---|---|---|
+| `True` | `True` | Required `@stream()` | Prior event log, rotated session | Recovery + client replay |
+| `True` | `False` | Required `@stream()` | Prior event log, rotated session | Recovery only |
+| `False` | `True` | Client-selected `@invoke()` / `@stream()` | Agent session transcript, same session | Client replay only |
+| `False` | `False` | Client-selected `@invoke()` / `@stream()` | Agent session transcript, same session | None |
 
+The request's `stream` flag controls client delivery. In framework-managed mode,
+`stream=false` still executes `@stream()` internally and returns an ID for polling.
 Heartbeat, stale scanning, CAS claim, and handler restart apply to every mode.
 
 ## 2. Customer journeys
@@ -75,7 +78,7 @@ async def invoke_handler(request):
     ...
 
 # Optional. LongRunningAgentServer calls this after claiming a stale attempt,
-# then dispatches the transformed request to the original invoke/stream mode.
+# then dispatches the transformed request to the persisted execution-handler mode.
 # @on_resume()
 # async def resume_handler(request, context: ResumeContext):
 #     return await context.default_request(request)
@@ -250,7 +253,7 @@ session and the SDK restores its own transcript.
 - `responses.attempt_number` is the CAS guard for claim atomicity. **There is no `owner_pod_id` column** — ownership is implicit. The pod that last successfully heartbeats at the current `attempt_number` is the de facto owner. A heartbeat write at attempt N stops working the moment another pod has CAS-bumped the row to N+1, so the prior owner detects it has lost the claim on its next heartbeat (rowcount=0) and shuts down its heartbeat task.
 - `responses.original_request` stores the **full untrimmed input** so the resume path can recover the entire prior-turn history when the rotated SDK session starts empty.
 - `responses.response` stores the final success or error payload, allowing polling when no event log is written.
-- `responses.is_streaming` preserves which registered handler must execute after a crash.
+- `responses.is_streaming` preserves whether the background executor uses the registered stream handler. Framework-managed recovery stores `true` even for polling clients.
 - `messages.attempt_number` tags every event so retrieval can filter to the latest attempt's output (avoiding partial output from a crashed attempt leaking into the final response body).
 - `messages` receives rows only when `auto_recovery or sse_replay` is true. The table remains present so deployments can change modes without a schema migration.
 - Schema migrations are idempotent (`ADD COLUMN IF NOT EXISTS`) so an existing deployment upgrades without downtime.
@@ -260,7 +263,7 @@ session and the SDK restores its own transcript.
 ```mermaid
 flowchart TD
     POST["POST /responses<br/>background=true"] --> CR[create_response<br/>store FULL original_request]
-    CR --> SPAWN[spawn @stream handler<br/>handler dedupes UI echo against SDK session]
+    CR --> SPAWN[spawn selected execution handler<br/>framework recovery always uses @stream]
     SPAWN --> HB[heartbeat loop<br/>every 3s]
     SPAWN --> EMIT{event log<br/>enabled?}
     EMIT -->|yes| APPEND[append SSE events<br/>to messages table]
@@ -393,13 +396,14 @@ Postgres row locking ensures only one of N concurrent UPDATEs matches the `attem
 |---|---|---|
 | Heartbeat + claim | `LongRunningAgentServer` | No |
 | Resume request policy | `@on_resume()` or `ResumeContext.default_request()` | Optional override |
+| Framework recovery stream | Author's `@stream()` handler | Required when `auto_recovery=True` |
 | Conversation_id rotation | Framework-managed default | No |
 | Agent session transcript | Agent SDK session store | Yes when `auto_recovery=False` |
 | UI-echo dedup | per-template handler (see §3.4) | Yes — 1-2 lines in `agent.py` / `utils.py` |
 | Stream resume cursor | `LongRunningAgentServer._stream_retrieve` | Only with `sse_replay=True` |
 | Tool/SDK selection | `agent.py` | Yes (this is the author's actual code) |
 
-The author's `agent.py` is unchanged from a non-durable agent. They construct an `AsyncCheckpointSaver` (LangGraph) or `AsyncDatabricksSession` (OpenAI) and use it normally. Durability fires entirely above the SDK boundary — the SDK adapters themselves contain zero durability code.
+The author's `agent.py` uses ordinary MLflow handlers. Framework-managed recovery requires `@stream()` so the runtime can persist progress events; agent-managed recovery may use `@invoke()` or `@stream()`. Authors construct an `AsyncCheckpointSaver` (LangGraph) or `AsyncDatabricksSession` (OpenAI) and use it normally. Durability fires entirely above the SDK boundary — the SDK adapters themselves contain zero durability code.
 
 ### 4.2 Author-visible client cooperation (chat-UI side)
 
@@ -417,7 +421,7 @@ Without client cooperation: the next turn lands on the original (orphan-poisoned
 - `db_instance_name` / `db_autoscaling_endpoint` / `db_project` + `db_branch` — Lakebase connection config.
 - `heartbeat_interval_seconds` / `heartbeat_stale_threshold_seconds` — for tuning under heavy load.
 - `task_timeout_seconds` — per-attempt ceiling.
-- `auto_recovery` — choose event-log prose recovery or agent-session recovery.
+- `auto_recovery` — choose event-log prose recovery or agent-session recovery. The framework-managed mode requires a registered `@stream()` handler.
 - `sse_replay` — persist and expose cursor-replayable stream events.
 - `stale_scan_interval_seconds` / `stale_scan_jitter_fraction` — controls how often (and with how much randomness) each pod scans the DB for stale responses to claim. Defaults to 30s with ±50% jitter.
 

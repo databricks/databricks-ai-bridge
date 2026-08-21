@@ -12,7 +12,9 @@ LongRunningAgentServer(auto_recovery=True, sse_replay=True)
 
 The server persists stream events for both recovery prose and client replay.
 After a crash it rotates the SDK session and resumes from the persisted event
-log.
+log. A registered `@stream()` handler is required for framework-managed
+recovery; it is also the execution path for polling clients so intermediate
+progress remains recoverable.
 
 - [`handlers.py`](./handlers.py) always runs the normal review path and passes
   the framework-generated recovery prose into the new SDK session. It also

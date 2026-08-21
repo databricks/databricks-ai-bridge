@@ -276,6 +276,66 @@ class TestReplayDisabledValidation:
             "Background streaming requires SSE replay to be enabled."
         )
 
+    def test_framework_recovery_requires_stream_handler(self):
+        from starlette.testclient import TestClient
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch(f"{MODULE}.get_stream_function", return_value=None),
+        ):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                auto_recovery=True,
+                sse_replay=False,
+            )
+            response = TestClient(server.app, raise_server_exceptions=False).post(
+                "/responses",
+                json={
+                    "background": True,
+                    "stream": False,
+                    "input": [{"role": "user", "content": "hello"}],
+                },
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Framework-managed recovery requires a registered @stream() handler."
+        )
+
+    @pytest.mark.asyncio
+    async def test_framework_recovery_polling_allows_replay_disabled(self):
+        server = _make_server(auto_recovery=True, sse_replay=False)
+        _mock_validator(server)
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "stream": False,
+                "input": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+        async def fake_stream(request_data):
+            yield {"type": "response.output_item.done", "item": {"text": "done"}}
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
+        assert mock_background.await_args is not None
+        assert mock_background.await_args.args[1] is False
+
 
 class TestAgentManagedSessionRouting:
     @pytest.mark.asyncio
@@ -1469,9 +1529,13 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
     full original_request body so resume can recover full prior-turn history."""
 
     @pytest.mark.asyncio
-    async def test_persists_durable_flag_and_original_request(self):
+    async def test_framework_recovery_polling_uses_stream_handler(self):
         with patch(f"{MODULE}.is_db_configured", return_value=True):
-            server = LongRunningAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                auto_recovery=True,
+                sse_replay=False,
+            )
         _mock_validator(server)
 
         captured: dict = {}
@@ -1502,7 +1566,7 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
 
         assert captured["status"] == "in_progress"
         assert captured["durable"] is True
-        assert captured["is_streaming"] is False
+        assert captured["is_streaming"] is True
         # original_request preserves the input the client sent (no
         # conversation_id injection — the client owns that decision).
         orig = captured["original_request"]
@@ -1511,6 +1575,9 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         assert result["id"] == captured["response_id"]
         assert result["status"] == "in_progress"
         mock_create_task.assert_called_once()
+        background_coro = mock_create_task.call_args.args[0]
+        assert background_coro.cr_code.co_name == "_run_background_stream"
+        background_coro.close()
 
     @pytest.mark.asyncio
     async def test_agent_managed_request_persists_generated_session_anchor(self, caplog):
@@ -1534,10 +1601,11 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         ):
             captured["response_id"] = response_id
             captured["original_request"] = original_request
+            captured["is_streaming"] = is_streaming
 
         with (
             patch(f"{MODULE}.create_response", side_effect=fake_create_response),
-            patch("asyncio.create_task"),
+            patch("asyncio.create_task") as mock_create_task,
             caplog.at_level(logging.WARNING),
         ):
             await server._handle_background_request(
@@ -1547,7 +1615,11 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
             )
 
         assert captured["original_request"]["context"]["conversation_id"] == captured["response_id"]
+        assert captured["is_streaming"] is False
         assert "as context.conversation_id" in caplog.text
+        background_coro = mock_create_task.call_args.args[0]
+        assert background_coro.cr_code.co_name == "_run_background_invoke"
+        background_coro.close()
 
 
 class TestTryClaimAndResume:

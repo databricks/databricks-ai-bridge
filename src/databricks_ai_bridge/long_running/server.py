@@ -355,6 +355,10 @@ class LongRunningAgentServer(AgentServer):
     rotated session, while agent-managed mode retains the session anchor and
     delegates transcript recovery to the agent SDK's session store.
 
+    Framework-managed recovery requires a registered ``@stream()`` handler.
+    Background requests execute through it even when the client uses polling;
+    the request's ``stream`` flag controls delivery rather than event capture.
+
     Args:
         enable_chat_proxy: Whether to enable the chat proxy endpoint.
         db_instance_name: Lakebase provisioned instance name. Overrides
@@ -380,10 +384,12 @@ class LongRunningAgentServer(AgentServer):
             as the grace window for a freshly-created run that hasn't
             written its first heartbeat yet. Defaults to 10.0.
         auto_recovery: Whether the server reconstructs recovery context from
-            persisted stream events and rotates the agent session. When false,
-            the default resume policy keeps the session anchor and sends only
-            a fixed recovery prompt, delegating transcript recovery to the
-            agent's session store. Defaults to true.
+            persisted stream events and rotates the agent session. A registered
+            ``@stream()`` handler is required; background executions use it even
+            when the client polls with ``stream=false``. When false, the default
+            resume policy keeps the session anchor and sends only a fixed
+            recovery prompt, delegating transcript recovery to the agent's
+            session store. Defaults to true.
         sse_replay: Whether background SSE events are persisted and exposed
             through streaming retrieval. Defaults to true.
     """
@@ -600,6 +606,11 @@ class LongRunningAgentServer(AgentServer):
                     status_code=400,
                     detail="Background streaming requires SSE replay to be enabled.",
                 )
+            if self.auto_recovery and get_stream_function() is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=("Framework-managed recovery requires a registered @stream() handler."),
+                )
             return await self._handle_background_request(
                 request_data, is_streaming, return_trace_id
             )
@@ -614,8 +625,14 @@ class LongRunningAgentServer(AgentServer):
         is_streaming: bool,
         return_trace_id: bool,
     ) -> dict[str, Any] | StreamingResponse:
-        """Start a new conversation and return response_id immediately."""
+        """Start a background execution and return its initial response.
+
+        Framework-managed recovery always executes through ``@stream()`` so
+        intermediate events are available for recovery prose. The request's
+        ``stream`` flag still controls whether the client receives SSE or polls.
+        """
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
+        use_stream_handler = self.auto_recovery or is_streaming
         # Anchor the conversation to response_id so any future replay from a
         # different pod resolves to the same agent-SDK thread/session. We
         # round-trip through dict + validator so the handler still receives a
@@ -636,14 +653,15 @@ class LongRunningAgentServer(AgentServer):
             "in_progress",
             durable=True,
             original_request=request_dict,
-            is_streaming=is_streaming,
+            is_streaming=use_stream_handler,
         )
         durable_request = self.validator.validate_and_convert_request(request_dict)
 
         logger.info(
-            "Background response created response_id=%s stream=%s pod=%s",
+            "Background response created response_id=%s client_stream=%s stream_handler=%s pod=%s",
             response_id,
             is_streaming,
+            use_stream_handler,
             _POD_LOG_ID,
         )
 
@@ -661,26 +679,28 @@ class LongRunningAgentServer(AgentServer):
         # Fire-and-forget is intentional — task status is persisted to the database.
         # We still track the task handle so the debug-kill endpoint can simulate
         # a crash (and so we know whether a claim target lives on this pod).
-        if is_streaming:
+        if use_stream_handler:
             task = asyncio.create_task(
                 self._run_background_stream(
                     response_id, durable_request, return_trace_id, attempt_number=1
                 )
             )
             self._track_task(response_id, task)
-            return await self._handle_retrieve_request(
-                response_id,
-                stream=True,
-                starting_after=0,
-            )
-        else:
-            task = asyncio.create_task(
-                self._run_background_invoke(
-                    response_id, durable_request, return_trace_id, attempt_number=1
+            if is_streaming:
+                return await self._handle_retrieve_request(
+                    response_id,
+                    stream=True,
+                    starting_after=0,
                 )
-            )
-            self._track_task(response_id, task)
             return response_obj
+
+        task = asyncio.create_task(
+            self._run_background_invoke(
+                response_id, durable_request, return_trace_id, attempt_number=1
+            )
+        )
+        self._track_task(response_id, task)
+        return response_obj
 
     def _track_task(self, response_id: str, task: asyncio.Task) -> None:
         """Record a background task so the debug-kill endpoint can find it."""

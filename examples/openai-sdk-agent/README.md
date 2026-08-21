@@ -15,6 +15,12 @@ Heartbeat, stale-attempt claiming, and process-start recovery run in all three
 modes. `auto_recovery` controls who restores agent context, not whether a stale
 attempt is restarted.
 
+Framework-managed recovery requires a registered `@stream()` handler because
+its recovery prompt is built from persisted progress events. The client may
+still send `stream=false`: the server executes `@stream()` internally and
+returns a response ID for polling. `sse_replay` controls whether those events
+are exposed to clients, independently of whether recovery persists them.
+
 ## Staging deployments
 
 All three examples are deployed in `ml-inference-staging` against separate
@@ -49,12 +55,12 @@ Detailed deployed test evidence is recorded per app:
 
 After atomically claiming a stale attempt, `LongRunningAgentServer` calls the
 single function registered with `@on_resume()`. The callback transforms the
-stored request; the server then invokes the same `@invoke()` or `@stream()` mode
-recorded for the original attempt. Authors do not register separate invoke and
-stream resume callbacks. This is the recovery translation boundary: after the
-callback returns, the transformed request is an ordinary handler request. The
-normal invoke and stream handlers do not inspect a recovery marker or branch to
-a separate resume implementation.
+stored request; the server then invokes the persisted execution-handler mode.
+Framework-managed recovery always persists and reuses `@stream()`, including
+when the client polls. Agent-managed recovery follows the client's invoke or
+stream mode. Authors do not register separate resume callbacks. This is the
+recovery translation boundary: after the callback returns, the transformed
+request is an ordinary handler request.
 
 Each `handlers.py` includes a commented, copyable implementation of its full
 default transformation. The shorter equivalent is:
@@ -87,7 +93,8 @@ LongRunningAgentServer(auto_recovery=False)
 
 Applications register `@on_resume()` only when they need another request
 contract. Session restoration still happens later, when the resumed
-`@invoke()` or `@stream()` handler opens its SDK session.
+execution handler opens its SDK session. Framework recovery always uses
+`@stream()`; agent-managed recovery uses the client-selected handler.
 
 ### Stable session anchor
 
@@ -127,7 +134,8 @@ flowchart LR
 
 1. **Runtime durability:** `agent_server.responses` is owned by
    `LongRunningAgentServer`. It stores the original request, terminal response,
-   status, heartbeat, attempt, and whether the original handler was streaming.
+   status, heartbeat, attempt, and whether the background executor uses the
+   stream handler.
 2. **Durable event log:** `agent_server.messages` is also runtime-owned, but is
    a separate append-only stream-event/output-item log. It is written only when
    framework recovery or client SSE replay needs events.
