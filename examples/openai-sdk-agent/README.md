@@ -39,6 +39,12 @@ developer-experience comparison, so each folder shows the complete server
 configuration and handler code an author owns instead of hiding the differences
 behind a shared factory.
 
+Detailed deployed test evidence is recorded per app:
+
+- [Framework recovery with SSE replay](./framework_recovery_sse/TEST_RESULTS.md)
+- [Agent recovery with SSE replay](./agent_recovery_sse/TEST_RESULTS.md)
+- [Agent recovery with polling](./agent_recovery_polling/TEST_RESULTS.md)
+
 ## Recovery hook
 
 After atomically claiming a stale attempt, `LongRunningAgentServer` calls the

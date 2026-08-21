@@ -1,5 +1,9 @@
 # Agent Recovery With SSE Replay
 
+See [`TEST_RESULTS.md`](./TEST_RESULTS.md) for the exact requests, client SSE
+disconnect/replay observations, crash/restart commands, recovery prompt, SQL,
+and captured Lakebase rows.
+
 This App uses the shared OpenAI Agents SDK implementation with:
 
 ```python

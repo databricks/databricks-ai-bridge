@@ -1,5 +1,9 @@
 # Agent Recovery With Polling
 
+See [`TEST_RESULTS.md`](./TEST_RESULTS.md) for the exact requests, client poll
+responses, streaming rejection, crash/restart commands, recovery prompt, SQL,
+and captured Lakebase rows.
+
 This App uses the shared OpenAI Agents SDK implementation with:
 
 ```python
