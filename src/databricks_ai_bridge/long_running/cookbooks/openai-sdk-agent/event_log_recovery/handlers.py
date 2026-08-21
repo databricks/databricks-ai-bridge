@@ -16,8 +16,6 @@ from openai_sdk_agent_shared.sessions import create_session
 
 def _session_id(request: ResponsesAgentRequest) -> str:
     custom_inputs = dict(request.custom_inputs or {})
-    if custom_inputs.get("thread_id"):
-        return str(custom_inputs["thread_id"])
     if custom_inputs.get("session_id"):
         return str(custom_inputs["session_id"])
     if request.context and request.context.conversation_id:
