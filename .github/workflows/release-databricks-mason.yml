@@ -1,57 +1,12 @@
-#!/usr/bin/env python3
-"""Generate release workflow YAML files for databricks packages."""
-
-from dataclasses import dataclass
-from pathlib import Path
-
-
-@dataclass
-class Package:
-    name: str
-    working_dir: str | None = None  # None means root level
-
-
-PACKAGES = [
-    Package("databricks-ai-bridge"),
-    Package("databricks-langchain", "integrations/langchain"),
-    Package("databricks-mason", "integrations/mason"),
-    Package("databricks-mcp", "databricks_mcp"),
-    Package("databricks-openai", "integrations/openai"),
-]
-
-
-def generate_workflow(pkg: Package) -> str:
-    """Generate a release workflow YAML for a package."""
-    is_root = pkg.working_dir is None
-    dist_path = "dist/" if is_root else f"{pkg.working_dir}/dist/"
-
-    # Build the defaults section for non-root packages
-    defaults_section = ""
-    if not is_root:
-        defaults_section = f"""    defaults:
-      run:
-        working-directory: {pkg.working_dir}
-"""
-
-    # Build packages-dir parameter for non-root packages
-    packages_dir_pypi = ""
-    packages_dir_testpypi = ""
-    if not is_root:
-        packages_dir_pypi = f"""
-        with:
-          packages-dir: {pkg.working_dir}/dist/"""
-        packages_dir_testpypi = f"""
-          packages-dir: {pkg.working_dir}/dist/"""
-
-    return f"""# GENERATED FILE - DO NOT EDIT DIRECTLY
+# GENERATED FILE - DO NOT EDIT DIRECTLY
 # Regenerate with: uv run python .github/workflows/generate_release_workflows.py
 
-name: Release {pkg.name}
+name: Release databricks-mason
 
 on:
   push:
     tags:
-      - "{pkg.name}-v*"
+      - "databricks-mason-v*"
   workflow_dispatch:
     inputs:
       production:
@@ -71,9 +26,12 @@ jobs:
       id-token: write
       contents: write
     environment:
-      name: ${{{{ inputs.production && 'pypi' || 'testpypi' }}}}
-      url: ${{{{ inputs.production && 'https://pypi.org/p/{pkg.name}' || 'https://test.pypi.org/p/{pkg.name}' }}}}
-{defaults_section}    steps:
+      name: ${{ inputs.production && 'pypi' || 'testpypi' }}
+      url: ${{ inputs.production && 'https://pypi.org/p/databricks-mason' || 'https://test.pypi.org/p/databricks-mason' }}
+    defaults:
+      run:
+        working-directory: integrations/mason
+    steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -91,7 +49,7 @@ jobs:
           echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
 
           # Construct the expected tag name
-          TAG_NAME="{pkg.name}-v$PKG_VERSION"
+          TAG_NAME="databricks-mason-v$PKG_VERSION"
 
           # Check if the tag exists on GitHub and points to the current commit
           CURRENT_COMMIT=$(git rev-parse HEAD)
@@ -115,25 +73,28 @@ jobs:
       - name: Store the distribution packages
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
-          name: dist-{pkg.name}
-          path: {dist_path}
+          name: dist-databricks-mason
+          path: integrations/mason/dist/
 
       - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
         if: inputs.production
         with:
-          artifacts: "{dist_path}*.whl,{dist_path}*.tar.gz"
+          artifacts: "integrations/mason/dist/*.whl,integrations/mason/dist/*.tar.gz"
           draft: true
           generateReleaseNotes: true
 
       - name: Publish to PyPI
         if: inputs.production
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e{packages_dir_pypi}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          packages-dir: integrations/mason/dist/
 
       - name: Publish to Test PyPI
         if: github.event_name == 'push' || !inputs.production
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
         with:
-          repository-url: https://test.pypi.org/legacy/{packages_dir_testpypi}
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: integrations/mason/dist/
 
       - name: Wait for package to be available
         run: sleep 10
@@ -141,17 +102,17 @@ jobs:
       - name: Install published package from PyPI
         if: inputs.production
         run: |
-          pip install {pkg.name}
+          pip install databricks-mason
 
       - name: Install published package from Test PyPI
         if: github.event_name == 'push' || !inputs.production
         run: |
-          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple {pkg.name}==${{{{ steps.verify-version.outputs.version }}}}
+          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple databricks-mason==${{ steps.verify-version.outputs.version }}
 
       - name: Smoke test - verify version
         run: |
           EXPECTED_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          INSTALLED_VERSION=$(python -c "from importlib.metadata import version; print(version('{pkg.name}'))")
+          INSTALLED_VERSION=$(python -c "from importlib.metadata import version; print(version('databricks-mason'))")
           echo "Expected version: $EXPECTED_VERSION"
           echo "Installed version: $INSTALLED_VERSION"
           if [ "$EXPECTED_VERSION" != "$INSTALLED_VERSION" ]; then
@@ -162,34 +123,19 @@ jobs:
 
       - name: Generate package link
         run: |
-          VERSION=${{{{ steps.verify-version.outputs.version }}}}
-          if [ "${{{{ inputs.production }}}}" == "true" ]; then
-            LINK="https://pypi.org/project/{pkg.name}/$VERSION/"
+          VERSION=${{ steps.verify-version.outputs.version }}
+          if [ "${{ inputs.production }}" == "true" ]; then
+            LINK="https://pypi.org/project/databricks-mason/$VERSION/"
             echo "## :rocket: Package Released" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**{pkg.name} v$VERSION** has been published to PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-mason v$VERSION** has been published to PyPI!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
           else
-            LINK="https://test.pypi.org/project/{pkg.name}/$VERSION/"
+            LINK="https://test.pypi.org/project/databricks-mason/$VERSION/"
             echo "## :test_tube: Package Released to Test PyPI" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**{pkg.name} v$VERSION** has been published to Test PyPI!" >> $GITHUB_STEP_SUMMARY
+            echo "**databricks-mason v$VERSION** has been published to Test PyPI!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo ":link: [$LINK]($LINK)" >> $GITHUB_STEP_SUMMARY
           fi
-"""
-
-
-def main():
-    script_dir = Path(__file__).parent
-
-    for pkg in PACKAGES:
-        workflow_content = generate_workflow(pkg)
-        output_file = script_dir / f"release-{pkg.name}.yml"
-        output_file.write_text(workflow_content)
-        print(f"Generated {output_file.name}")
-
-
-if __name__ == "__main__":
-    main()
