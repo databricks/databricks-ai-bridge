@@ -1,9 +1,10 @@
-"""`mason login` / `logout` — remember a default `.databrickscfg` profile.
+"""`mason login` / `logout` — remember an optional Databricks profile.
 
-Without this, every command needs an explicit `--profile/-p`. `login` validates a
-profile's credentials and persists it; the root group then falls back to the saved
-profile whenever `-p` is omitted (see cli.py). State lives in a small JSON file under
-`~/.mason` (override the directory with `MASON_CONFIG_HOME`, mainly for tests).
+`login` validates a named profile and persists the selection; the root group falls back
+to it whenever `-p` is omitted. Without a saved profile, the Databricks SDK performs its
+normal default authentication resolution. `logout` removes only Mason's saved selection,
+not the underlying credentials. State lives in a small JSON file under `~/.mason`
+(override the directory with `MASON_CONFIG_HOME`, mainly for tests).
 """
 
 from __future__ import annotations
@@ -72,7 +73,7 @@ def login(obj, profile) -> None:
 @click.command()
 @click.pass_obj
 def logout(obj) -> None:
-    """Forget the saved default profile (later commands need -p again)."""
+    """Forget the saved profile selection without deleting its credentials."""
     path = _config_file()
     existed = path.exists()
     path.unlink(missing_ok=True)

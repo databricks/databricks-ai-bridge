@@ -28,17 +28,20 @@ pip install 'databricks-mason[tracing]'
 
 ## Authentication
 
-Configure credentials using
-[Databricks CLI authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-Run `mason login` to validate and remember an existing CLI profile, or pass `--profile/-p`
-to select a profile for an individual command:
+Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
+If you do not already have credentials, authenticate a named profile first. You can
+then ask Mason to validate and remember that profile:
 
 ```sh
+databricks auth login --profile <profile>
 mason login --profile <profile>
 mason sessions stores list
 ```
 
-The default is stored in `~/.mason/config.json`; `mason logout` removes it.
+`mason login` does not create credentials; it stores the selected profile in
+`~/.mason/config.json`. `mason logout` forgets that selection without revoking the
+underlying credentials. If Databricks SDK default authentication is already configured,
+you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
 Use `--output json` for scripting.
 
 ## Commands
