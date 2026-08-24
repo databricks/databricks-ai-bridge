@@ -8,16 +8,16 @@ from pathlib import Path
 @dataclass
 class Package:
     name: str
+    release_enabled: bool
     working_dir: str | None = None  # None means root level
-    release_enabled: bool = False
 
 
 PACKAGES = [
-    Package("databricks-ai-bridge"),
-    Package("databricks-langchain", "integrations/langchain"),
-    Package("databricks-mason", "integrations/mason", release_enabled=True),
-    Package("databricks-mcp", "databricks_mcp"),
-    Package("databricks-openai", "integrations/openai"),
+    Package("databricks-ai-bridge", release_enabled=False),
+    Package("databricks-langchain", release_enabled=False, working_dir="integrations/langchain"),
+    Package("databricks-mason", release_enabled=True, working_dir="integrations/mason"),
+    Package("databricks-mcp", release_enabled=False, working_dir="databricks_mcp"),
+    Package("databricks-openai", release_enabled=False, working_dir="integrations/openai"),
 ]
 
 
