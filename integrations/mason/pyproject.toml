@@ -1,0 +1,46 @@
+[project]
+name = "databricks-mason"
+version = "0.0.1.dev0"
+description = "Databricks integration for Mason"
+authors = [
+    { name="Databricks", email="agent-feedback@databricks.com" },
+]
+readme = "README.md"
+license = { text="Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff==0.14.10",
+    "ty==0.0.23",
+    { include-group = "tests" },
+]
+tests = [
+    "pytest==9.0.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/databricks_mason/*",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/databricks_mason"]
+
+[tool.ruff]
+include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+extend = "../../pyproject.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit_tests"]
+
+[tool.ty.environment]
+root = ["./src", "./tests"]
+
+[tool.ty.src]
+include = ["./src", "./tests"]
