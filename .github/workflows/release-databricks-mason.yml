@@ -17,7 +17,6 @@ on:
 
 jobs:
   release:
-    if: false  # TEMPORARILY DISABLED - remove this line to re-enable
     runs-on:
       group: databricks-protected-runner-group
       labels: linux-ubuntu-latest
