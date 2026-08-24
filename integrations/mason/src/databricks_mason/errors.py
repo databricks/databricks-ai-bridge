@@ -25,7 +25,9 @@ _PREVIEW_HINT = (
 class AgentCliError(click.ClickException):
     """A user-facing CLI error rendered without a Python traceback."""
 
-    def __init__(self, message: str, *, error_code: Optional[str] = None, hint: Optional[str] = None):
+    def __init__(
+        self, message: str, *, error_code: Optional[str] = None, hint: Optional[str] = None
+    ):
         super().__init__(message)
         self.error_code = error_code
         self.hint = hint

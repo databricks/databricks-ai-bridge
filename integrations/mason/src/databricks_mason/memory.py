@@ -131,7 +131,13 @@ def stores_list(obj, page_size, page_token) -> None:
     ]
     render.resource_table(
         "Managed Memory Stores",
-        [("Name", "left"), ("Store ID", "left"), ("Created", "left"), ("Updated", "left"), ("Description", "left")],
+        [
+            ("Name", "left"),
+            ("Store ID", "left"),
+            ("Created", "left"),
+            ("Updated", "left"),
+            ("Description", "left"),
+        ],
         rows,
         subtitle=_page_note(data),
     )
@@ -207,12 +213,18 @@ def _render_entry_detail(entry: dict) -> None:
 @click.option(
     "--source-type",
     default=None,
-    type=click.Choice(["MANAGED_MEMORY_ENTRY_SOURCE_TYPE_AGENT", "MANAGED_MEMORY_ENTRY_SOURCE_TYPE_UNSPECIFIED"]),
+    type=click.Choice(
+        ["MANAGED_MEMORY_ENTRY_SOURCE_TYPE_AGENT", "MANAGED_MEMORY_ENTRY_SOURCE_TYPE_UNSPECIFIED"]
+    ),
 )
 @click.pass_obj
-def entries_create(obj, store, actor_id, path, content, description, session_id, source_type) -> None:
+def entries_create(
+    obj, store, actor_id, path, content, description, session_id, source_type
+) -> None:
     """Create a memory entry."""
-    data = obj.client().create_memory_entry(store, actor_id, path, content, description, session_id, source_type)
+    data = obj.client().create_memory_entry(
+        store, actor_id, path, content, description, session_id, source_type
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -242,7 +254,9 @@ def entries_get(obj, store, entry) -> None:
 @click.pass_obj
 def entries_list(obj, store, actor_id, path_prefix, session_id, page_size, page_token) -> None:
     """List entries for an actor (content omitted)."""
-    data = obj.client().list_memory_entries(store, actor_id, path_prefix, session_id, page_size, page_token)
+    data = obj.client().list_memory_entries(
+        store, actor_id, path_prefix, session_id, page_size, page_token
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -259,7 +273,13 @@ def entries_list(obj, store, actor_id, path_prefix, session_id, page_size, page_
     ]
     render.resource_table(
         f"Memory Entries · actor {actor_id}",
-        [("Path", "left"), ("Actor", "left"), ("Session", "left"), ("Description", "left"), ("Updated", "left")],
+        [
+            ("Path", "left"),
+            ("Actor", "left"),
+            ("Session", "left"),
+            ("Description", "left"),
+            ("Updated", "left"),
+        ],
         rows,
         subtitle=_page_note(data),
     )

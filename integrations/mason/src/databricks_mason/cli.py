@@ -33,9 +33,15 @@ class CliContext:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option("--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with.")
 @click.option(
-    "--output", "-o", type=click.Choice(["text", "json"]), default="text", help="Output format (default: text)."
+    "--profile", "-p", default=None, help="~/.databrickscfg profile to authenticate with."
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    help="Output format (default: text).",
 )
 @click.version_option(package_name="databricks-mason", prog_name="mason")
 @click.pass_context

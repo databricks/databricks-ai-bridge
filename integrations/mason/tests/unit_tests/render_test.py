@@ -28,7 +28,8 @@ def test_relative_phrasing_matches_mock():
 def test_parse_timestamp_millis_and_rfc3339():
     dt = timefmt.parse_timestamp(1_755_100_000_000)
     assert dt is not None and dt.tzinfo is not None
-    assert timefmt.parse_timestamp("2026-08-15T01:29:00Z").year == 2026
+    rfc3339 = timefmt.parse_timestamp("2026-08-15T01:29:00Z")
+    assert rfc3339 is not None and rfc3339.year == 2026
     assert timefmt.parse_timestamp("") is None
     assert timefmt.parse_timestamp("not-a-date") is None
 
@@ -49,7 +50,10 @@ def test_field_snake_and_camel():
 def test_resource_table_renders_title_and_count():
     con, buf = _console()
     render.resource_table(
-        "Managed Memory Stores", [("Name", "left"), ("Created", "left")], [["acme", "13 days ago"]], con=con
+        "Managed Memory Stores",
+        [("Name", "left"), ("Created", "left")],
+        [["acme", "13 days ago"]],
+        con=con,
     )
     out = buf.getvalue()
     assert "Managed Memory Stores" in out

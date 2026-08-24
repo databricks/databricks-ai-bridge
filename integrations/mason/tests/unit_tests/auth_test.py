@@ -47,7 +47,11 @@ def test_login_json_output(tmp_path, monkeypatch):
     _stub_client(monkeypatch)
     result = CliRunner().invoke(auth.login, ["-p", "prof"], obj=_Ctx(output="json"))
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"profile": "prof", "user": "me@example.com", "host": "https://ws"}
+    assert json.loads(result.output) == {
+        "profile": "prof",
+        "user": "me@example.com",
+        "host": "https://ws",
+    }
 
 
 def test_login_falls_back_to_global_profile(tmp_path, monkeypatch):

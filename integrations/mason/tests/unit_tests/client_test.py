@@ -20,7 +20,10 @@ def test_create_memory_store(workspace_client):
     c, do = _client(workspace_client)
     c.create_memory_store("acme", "desc")
     do.assert_called_once_with(
-        "POST", "/api/agents/v1/memory-stores", query=None, body={"display_name": "acme", "description": "desc"}
+        "POST",
+        "/api/agents/v1/memory-stores",
+        query=None,
+        body={"display_name": "acme", "description": "desc"},
     )
 
 
@@ -28,7 +31,9 @@ def test_create_memory_store(workspace_client):
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)
-    do.assert_called_once_with("GET", "/api/agents/v1/memory-stores", query={"page_size": 10}, body=None)
+    do.assert_called_once_with(
+        "GET", "/api/agents/v1/memory-stores", query={"page_size": 10}, body=None
+    )
 
 
 @mock.patch("databricks_mason.client.WorkspaceClient")
@@ -55,7 +60,10 @@ def test_create_session_puts_session_id_in_query(workspace_client):
     c, do = _client(workspace_client)
     c.create_session("store1", "alice", session_id="sid")
     do.assert_called_once_with(
-        "POST", "/api/agents/v1/session-stores/store1/sessions", query={"session_id": "sid"}, body={"actor_id": "alice"}
+        "POST",
+        "/api/agents/v1/session-stores/store1/sessions",
+        query={"session_id": "sid"},
+        body={"actor_id": "alice"},
     )
 
 
@@ -85,19 +93,25 @@ def test_delete_session_force_flag(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid", force=True)
     do.assert_called_once_with(
-        "DELETE", "/api/agents/v1/session-stores/store1/sessions/sid", query={"force": True}, body=None
+        "DELETE",
+        "/api/agents/v1/session-stores/store1/sessions/sid",
+        query={"force": True},
+        body=None,
     )
 
 
 @mock.patch("databricks_mason.client.WorkspaceClient")
 def test_preview_error_is_mapped_with_hint(workspace_client):
     c, do = _client(workspace_client)
-    err = RuntimeError("not implemented")
-    err.error_code = "NOT_IMPLEMENTED"
+
+    class PreviewApiError(RuntimeError):
+        error_code = "NOT_IMPLEMENTED"
+
+    err = PreviewApiError("not implemented")
     do.side_effect = err
     try:
         c.list_memory_stores()
-        assert False, "expected AgentCliError"
+        raise AssertionError("expected AgentCliError")
     except AgentCliError as mapped:
         assert mapped.error_code == "NOT_IMPLEMENTED"
         assert mapped.hint is not None

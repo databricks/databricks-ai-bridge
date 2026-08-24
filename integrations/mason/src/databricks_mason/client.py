@@ -43,7 +43,8 @@ class AgentApiClient:
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Check your profile (`databricks auth login --profile <name>`) " "or pass --profile.",
+                hint="Check your profile (`databricks auth login --profile <name>`) "
+                "or pass --profile.",
             ) from exc
 
     @property
@@ -53,9 +54,11 @@ class AgentApiClient:
     @property
     def current_user(self) -> str:
         """The authenticated user's name (used to derive the app source workspace path)."""
-        return self._w.current_user.me().user_name
+        return str(self._w.current_user.me().user_name or "unknown")
 
-    def _do(self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None) -> Any:
+    def _do(
+        self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
+    ) -> Any:
         try:
             return self._w.api_client.do(method, path, query=query, body=body)
         except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
@@ -70,15 +73,23 @@ class AgentApiClient:
     def get_memory_store(self, name: str) -> dict:
         return self._do("GET", f"{_BASE}/{memory_store_path(name)}")
 
-    def list_memory_stores(self, page_size: Optional[int] = None, page_token: Optional[str] = None) -> dict:
-        return self._do("GET", f"{_BASE}/memory-stores", query=_query(page_size=page_size, page_token=page_token))
+    def list_memory_stores(
+        self, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        return self._do(
+            "GET",
+            f"{_BASE}/memory-stores",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
 
     def update_memory_store(
         self, name: str, display_name: Optional[str] = None, description: Optional[str] = None
     ) -> dict:
         body = _query(display_name=display_name, description=description)
         mask = ",".join(body.keys())
-        return self._do("PATCH", f"{_BASE}/{memory_store_path(name)}", query=_query(update_mask=mask), body=body)
+        return self._do(
+            "PATCH", f"{_BASE}/{memory_store_path(name)}", query=_query(update_mask=mask), body=body
+        )
 
     def delete_memory_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{memory_store_path(name)}")
@@ -129,12 +140,18 @@ class AgentApiClient:
             ),
         )
 
-    def search_memory_entries(self, store: str, actor_id: str, query: str, limit: Optional[int] = None) -> dict:
+    def search_memory_entries(
+        self, store: str, actor_id: str, query: str, limit: Optional[int] = None
+    ) -> dict:
         body = _query(actor_id=actor_id, query=query, limit=limit)
         return self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries:search", body=body)
 
     def update_memory_entry(
-        self, store: str, entry: str, content: Optional[str] = None, description: Optional[str] = None
+        self,
+        store: str,
+        entry: str,
+        content: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> dict:
         body = _query(content=content, description=description)
         return self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body)
@@ -148,20 +165,30 @@ class AgentApiClient:
         self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
     ) -> dict:
         body = _query(description=description, metadata=metadata)
-        return self._do("POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body)
+        return self._do(
+            "POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body
+        )
 
     def get_session_store(self, name: str) -> dict:
         return self._do("GET", f"{_BASE}/session-stores/{name}")
 
-    def list_session_stores(self, page_size: Optional[int] = None, page_token: Optional[str] = None) -> dict:
-        return self._do("GET", f"{_BASE}/session-stores", query=_query(page_size=page_size, page_token=page_token))
+    def list_session_stores(
+        self, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> dict:
+        return self._do(
+            "GET",
+            f"{_BASE}/session-stores",
+            query=_query(page_size=page_size, page_token=page_token),
+        )
 
     def update_session_store(
         self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
     ) -> dict:
         body = _query(description=description, metadata=metadata)
         mask = ",".join(body.keys())
-        return self._do("PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body)
+        return self._do(
+            "PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body
+        )
 
     def delete_session_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/session-stores/{name}")
@@ -178,7 +205,10 @@ class AgentApiClient:
     ) -> dict:
         body = _query(actor_id=actor_id, parent_session_id=parent_session_id, metadata=metadata)
         return self._do(
-            "POST", f"{_BASE}/session-stores/{store}/sessions", query=_query(session_id=session_id), body=body
+            "POST",
+            f"{_BASE}/session-stores/{store}/sessions",
+            query=_query(session_id=session_id),
+            body=body,
         )
 
     def list_sessions(
@@ -192,7 +222,9 @@ class AgentApiClient:
         return self._do(
             "GET",
             f"{_BASE}/session-stores/{store}/sessions",
-            query=_query(filter=filter, order_by=order_by, page_size=page_size, page_token=page_token),
+            query=_query(
+                filter=filter, order_by=order_by, page_size=page_size, page_token=page_token
+            ),
         )
 
     def get_session(self, session_id: str, store: Optional[str] = None) -> dict:
@@ -210,7 +242,9 @@ class AgentApiClient:
 
     def delete_session(self, store: str, session_id: str, force: bool = False) -> dict:
         return self._do(
-            "DELETE", f"{_BASE}/session-stores/{store}/sessions/{session_id}", query=_query(force=force or None)
+            "DELETE",
+            f"{_BASE}/session-stores/{store}/sessions/{session_id}",
+            query=_query(force=force or None),
         )
 
     def fork_session(
@@ -249,10 +283,16 @@ class AgentApiClient:
 
     def append_session_items(self, store: str, session_id: str, items: list[dict]) -> dict:
         body = {"items": [{"data": item} for item in items]}
-        return self._do("POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:append", body=body)
+        return self._do(
+            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:append", body=body
+        )
 
     def pop_session_item(self, store: str, session_id: str) -> dict:
-        return self._do("POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:pop", body={})
+        return self._do(
+            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:pop", body={}
+        )
 
     def clear_session_items(self, store: str, session_id: str) -> dict:
-        return self._do("POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={})
+        return self._do(
+            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={}
+        )

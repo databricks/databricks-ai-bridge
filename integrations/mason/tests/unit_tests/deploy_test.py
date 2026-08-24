@@ -15,7 +15,9 @@ from databricks_mason.errors import AgentCliError
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
-    scaffolded = deploy_mod._upsert_manifest_env(tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"})
+    scaffolded = deploy_mod._upsert_manifest_env(
+        tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
+    )
     assert scaffolded is True
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert {"name": "AGENT_MEMORY_STORE", "value": "memory-stores/x"} in doc["env"]
@@ -24,9 +26,16 @@ def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
 
 def test_upsert_manifest_env_updates_existing(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text(
-        yaml.safe_dump({"command": ["uvicorn", "app:app"], "env": [{"name": "AGENT_MEMORY_STORE", "value": "old"}]})
+        yaml.safe_dump(
+            {
+                "command": ["uvicorn", "app:app"],
+                "env": [{"name": "AGENT_MEMORY_STORE", "value": "old"}],
+            }
+        )
     )
-    scaffolded = deploy_mod._upsert_manifest_env(tmp_path, {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"})
+    scaffolded = deploy_mod._upsert_manifest_env(
+        tmp_path, {"AGENT_MEMORY_STORE": "new", "AGENT_SESSION_STORE": "s"}
+    )
     assert scaffolded is False
     doc = yaml.safe_load((tmp_path / "app.yaml").read_text())
     assert doc["command"] == ["uvicorn", "app:app"]  # preserved
@@ -67,11 +76,14 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kw: calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
     result = CliRunner().invoke(
-        deploy_mod.deploy, ["myapp", "--source", str(src), "--with-memory-store", "mem"], obj=_FakeCtx()
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--with-memory-store", "mem"],
+        obj=_FakeCtx(),
     )
 
     assert result.exit_code == 0, result.output
@@ -95,7 +107,15 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--with-traces", "cat.schema", "--traces-experiment", "/Shared/x"],
+        [
+            "myapp",
+            "--source",
+            str(src),
+            "--with-traces",
+            "cat.schema",
+            "--traces-experiment",
+            "/Shared/x",
+        ],
         obj=_FakeCtx(),
     )
 

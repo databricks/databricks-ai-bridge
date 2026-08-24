@@ -7,7 +7,7 @@ Functions accept an optional `console` for testability; default is stdout.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Literal, Optional, Sequence
 
 import click
 from rich import box
@@ -62,7 +62,7 @@ def status_pill(status: Optional[str]) -> Text:
 
 def resource_table(
     title: str,
-    columns: Sequence[tuple[str, str]],
+    columns: Sequence[tuple[str, Literal["default", "left", "center", "right", "full"]]],
     rows: Iterable[Sequence[Any]],
     *,
     subtitle: Optional[str] = None,
@@ -135,7 +135,11 @@ def detail(
         con.print()
         con.print(
             Panel(
-                _snippet_group(snippets), title="Starter code", title_align="left", border_style=MUTED, box=box.ROUNDED
+                _snippet_group(snippets),
+                title="Starter code",
+                title_align="left",
+                border_style=MUTED,
+                box=box.ROUNDED,
             )
         )
 

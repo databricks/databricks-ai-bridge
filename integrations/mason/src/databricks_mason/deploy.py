@@ -55,13 +55,17 @@ def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
     """Inject/overwrite env entries in <source>/app.yaml. Returns True if it scaffolded a new file."""
     app_yaml = source / "app.yaml"
     if app_yaml.exists():
-        doc = yaml.safe_load(app_yaml.read_text()) or {}
+        loaded = yaml.safe_load(app_yaml.read_text())
+        doc: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
         scaffolded = False
     else:
         doc = {"command": ["# TODO: set your run command, e.g. ['uvicorn', 'app:app']"], "env": []}
         scaffolded = True
 
-    env = doc.get("env") or []
+    raw_env = doc.get("env")
+    env: list[dict[str, Any]] = (
+        [entry for entry in raw_env if isinstance(entry, dict)] if isinstance(raw_env, list) else []
+    )
     by_name = {e.get("name"): e for e in env if isinstance(e, dict)}
     for name, value in updates.items():
         if name in by_name:
@@ -117,7 +121,10 @@ def _ensure_session_store(client, name: str) -> dict:
     help="Memory store display name to wire in via AGENT_MEMORY_STORE.",
 )
 @click.option(
-    "--with-session-store", "session_store", default=None, help="Session store name to wire in via AGENT_SESSION_STORE."
+    "--with-session-store",
+    "session_store",
+    default=None,
+    help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
 @click.option(
     "--with-traces",
@@ -126,14 +133,32 @@ def _ensure_session_store(client, name: str) -> dict:
     help="UC trace destination 'catalog.schema' to wire in via MLFLOW_TRACING_DESTINATION "
     "(link it first with `mason tracing setup`).",
 )
-@click.option("--traces-experiment", default=None, help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.")
-@click.option("--create-stores", is_flag=True, help="Create the referenced stores if they don't exist (idempotent).")
 @click.option(
-    "--workspace-path", default=None, help="Workspace destination for the synced source (defaults to a per-user path)."
+    "--traces-experiment",
+    default=None,
+    help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
+)
+@click.option(
+    "--create-stores",
+    is_flag=True,
+    help="Create the referenced stores if they don't exist (idempotent).",
+)
+@click.option(
+    "--workspace-path",
+    default=None,
+    help="Workspace destination for the synced source (defaults to a per-user path).",
 )
 @click.pass_obj
 def deploy(
-    obj, name, source, memory_store, session_store, traces_destination, traces_experiment, create_stores, workspace_path
+    obj,
+    name,
+    source,
+    memory_store,
+    session_store,
+    traces_destination,
+    traces_experiment,
+    create_stores,
+    workspace_path,
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
     source_dir = pathlib.Path(source)
@@ -143,7 +168,11 @@ def deploy(
     env_updates: dict[str, str] = {}
     provisioned: dict[str, Any] = {}
     if memory_store:
-        store = _ensure_memory_store(client, memory_store) if create_stores else client.get_memory_store(memory_store)
+        store = (
+            _ensure_memory_store(client, memory_store)
+            if create_stores
+            else client.get_memory_store(memory_store)
+        )
         env_updates[_MEMORY_ENV] = field(store, "name") or memory_store
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if session_store:
@@ -175,7 +204,9 @@ def deploy(
 
     steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
     if scaffolded:
-        steps.insert(0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)")
+        steps.insert(
+            0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
+        )
     render.success(
         f"Deployed agent '{name}'",
         fields={"Workspace path": ws_path, **provisioned},

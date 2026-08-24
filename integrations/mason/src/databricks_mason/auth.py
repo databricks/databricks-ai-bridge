@@ -41,7 +41,12 @@ def _save_default_profile(profile: str) -> None:
 
 
 @click.command()
-@click.option("--profile", "-p", default=None, help="Profile to authenticate with and remember as the default.")
+@click.option(
+    "--profile",
+    "-p",
+    default=None,
+    help="Profile to authenticate with and remember as the default.",
+)
 @click.pass_obj
 def login(obj, profile) -> None:
     """Validate a profile's credentials and save it as the default, so later commands can omit -p."""

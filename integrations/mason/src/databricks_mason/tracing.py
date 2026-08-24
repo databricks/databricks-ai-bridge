@@ -113,9 +113,13 @@ def tracing() -> None:
 @tracing.command("setup")
 @click.option("--catalog", required=True, help="Unity Catalog catalog to store traces in.")
 @click.option("--schema", required=True, help="Unity Catalog schema to store traces in.")
-@click.option("--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT}).")
 @click.option(
-    "--warehouse-id", default=None, help="SQL warehouse id for trace queries (MLFLOW_TRACING_SQL_WAREHOUSE_ID)."
+    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
+)
+@click.option(
+    "--warehouse-id",
+    default=None,
+    help="SQL warehouse id for trace queries (MLFLOW_TRACING_SQL_WAREHOUSE_ID).",
 )
 @click.pass_obj
 def tracing_setup(obj, catalog, schema, experiment, warehouse_id) -> None:
@@ -132,7 +136,9 @@ def tracing_setup(obj, catalog, schema, experiment, warehouse_id) -> None:
     destination = f"{catalog}.{schema}"
 
     if obj.output == "json":
-        render.emit_json({"experiment": exp_name, "experiment_id": exp_id, "destination": destination})
+        render.emit_json(
+            {"experiment": exp_name, "experiment_id": exp_id, "destination": destination}
+        )
         return
     render.success(
         f"Linked traces for '{exp_name}' to {destination}",
@@ -149,7 +155,9 @@ def tracing_setup(obj, catalog, schema, experiment, warehouse_id) -> None:
 
 
 @tracing.command("list")
-@click.option("--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT}).")
+@click.option(
+    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
+)
 @click.option("--limit", type=int, default=20)
 @click.pass_obj
 def tracing_list(obj, experiment, limit) -> None:
@@ -157,7 +165,9 @@ def tracing_list(obj, experiment, limit) -> None:
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, None)
     exp_name = experiment or _DEFAULT_EXPERIMENT
-    traces = mlflow.search_traces(experiment_names=[exp_name], max_results=limit, return_type="list")
+    traces = mlflow.search_traces(
+        experiment_names=[exp_name], max_results=limit, return_type="list"
+    )
 
     if obj.output == "json":
         render.emit_json([_trace_json(t) for t in traces])
@@ -218,8 +228,14 @@ def _trace_json(trace: Any) -> dict:
 
 
 @tracing.command("instrument")
-@click.option("--destination", default=None, help="UC trace destination 'catalog.schema' (from `mason tracing setup`).")
-@click.option("--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT}).")
+@click.option(
+    "--destination",
+    default=None,
+    help="UC trace destination 'catalog.schema' (from `mason tracing setup`).",
+)
+@click.option(
+    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
+)
 @click.pass_obj
 def tracing_instrument(obj, destination, experiment) -> None:
     """Print the snippet that routes an OpenAI Agents SDK agent's traces to UC."""

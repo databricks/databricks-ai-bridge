@@ -100,7 +100,13 @@ def stores_list(obj, page_size, page_token) -> None:
     ]
     render.resource_table(
         "Session Stores",
-        [("Name", "left"), ("Creator", "left"), ("Created", "left"), ("Updated", "left"), ("Description", "left")],
+        [
+            ("Name", "left"),
+            ("Creator", "left"),
+            ("Created", "left"),
+            ("Updated", "left"),
+            ("Description", "left"),
+        ],
         rows,
         subtitle=_page_note(data),
     )
@@ -199,7 +205,9 @@ def _render_session_detail(obj, session: dict, store: Optional[str]) -> None:
 @click.pass_obj
 def sessions_create(obj, store, actor_id, session_id, parent_session_id, metadata) -> None:
     """Create a session in a store."""
-    data = obj.client().create_session(store, actor_id, session_id, parent_session_id, _parse_metadata(metadata))
+    data = obj.client().create_session(
+        store, actor_id, session_id, parent_session_id, _parse_metadata(metadata)
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -239,7 +247,13 @@ def sessions_list(obj, store, filter_, order_by, page_size, page_token) -> None:
     ]
     render.resource_table(
         f"Sessions · {store}",
-        [("Session ID", "left"), ("Actor", "left"), ("Root", "left"), ("Created", "left"), ("Last Activity", "left")],
+        [
+            ("Session ID", "left"),
+            ("Actor", "left"),
+            ("Root", "left"),
+            ("Created", "left"),
+            ("Last Activity", "left"),
+        ],
         rows,
         subtitle=_page_note(data),
     )
@@ -261,7 +275,9 @@ def sessions_get(obj, session_id, store) -> None:
 @sessions.command("update")
 @click.argument("session_id")
 @click.option("--store", required=True)
-@click.option("--metadata", required=True, help="JSON object of string labels (only mutable field).")
+@click.option(
+    "--metadata", required=True, help="JSON object of string labels (only mutable field)."
+)
 @click.pass_obj
 def sessions_update(obj, session_id, store, metadata) -> None:
     """Update a session's metadata."""
@@ -294,7 +310,9 @@ def sessions_delete(obj, session_id, store, force) -> None:
 @click.option("--session-id", default=None, help="Optional id for the fork.")
 @click.option("--metadata", default=None)
 @click.pass_obj
-def sessions_fork(obj, store, source_session_id, actor_id, up_to_item_id, session_id, metadata) -> None:
+def sessions_fork(
+    obj, store, source_session_id, actor_id, up_to_item_id, session_id, metadata
+) -> None:
     """Fork a session into a new independent top-level session."""
     data = obj.client().fork_session(
         store, source_session_id, actor_id, up_to_item_id, session_id, _parse_metadata(metadata)
@@ -323,7 +341,11 @@ def items_list(obj, store, session_id, order_by, page_size, page_token) -> None:
         return
     items_ = field(data, "session_items") or []
     rows = [
-        [field(it, "item_id"), timefmt.relative(field(it, "create_time")), _truncate(field(it, "data"), 70)]
+        [
+            field(it, "item_id"),
+            timefmt.relative(field(it, "create_time")),
+            _truncate(field(it, "data"), 70),
+        ]
         for it in items_
     ]
     render.resource_table(
@@ -338,7 +360,9 @@ def items_list(obj, store, session_id, order_by, page_size, page_token) -> None:
 @click.option("--store", required=True)
 @click.option("--session-id", required=True)
 @click.option("--data", "data_", multiple=True, help="One item's JSON data (repeatable).")
-@click.option("--file", "file_", type=click.File("r"), default=None, help="JSON array of item data values.")
+@click.option(
+    "--file", "file_", type=click.File("r"), default=None, help="JSON array of item data values."
+)
 @click.pass_obj
 def items_append(obj, store, session_id, data_, file_) -> None:
     """Append one or more items to a session (atomic, in order)."""

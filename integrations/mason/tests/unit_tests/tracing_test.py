@@ -74,7 +74,9 @@ def test_split_destination_invalid_raises():
 def test_setup_requires_mlflow_when_absent():
     # mlflow is not on the hermetic test deptree, so setup should surface a clean CLI error
     # (non-zero exit) rather than a traceback.
-    result = CliRunner().invoke(tracing_mod.tracing_setup, ["--catalog", "c", "--schema", "s"], obj=_Ctx())
+    result = CliRunner().invoke(
+        tracing_mod.tracing_setup, ["--catalog", "c", "--schema", "s"], obj=_Ctx()
+    )
     assert result.exit_code != 0
 
 
