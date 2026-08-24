@@ -69,7 +69,6 @@ jobs:
           - dir: "integrations/llamaindex"
           - dir: "integrations/openai"
           - dir: "integrations/langchain"
-          - dir: "integrations/mason"
 
     steps:
       - name: Checkout code

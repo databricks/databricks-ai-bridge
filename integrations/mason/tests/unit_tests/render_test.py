@@ -1,0 +1,73 @@
+"""Unit tests for the timefmt and render presentation helpers."""
+
+from __future__ import annotations
+
+import io
+from datetime import datetime, timedelta, timezone
+
+from rich.console import Console
+
+from databricks_mason import render, timefmt
+
+
+def _console() -> tuple[Console, io.StringIO]:
+    buf = io.StringIO()
+    return Console(file=buf, width=200, no_color=True), buf
+
+
+def test_relative_phrasing_matches_mock():
+    now = datetime(2026, 8, 15, tzinfo=timezone.utc)
+    assert timefmt.relative(now - timedelta(days=13), now=now) == "13 days ago"
+    assert timefmt.relative(now - timedelta(hours=14), now=now) == "14 hours ago"
+    assert timefmt.relative(now - timedelta(hours=1), now=now) == "An hour ago"
+    assert timefmt.relative(now - timedelta(days=1), now=now) == "A day ago"
+    assert timefmt.relative(now - timedelta(days=35), now=now) == "A month ago"
+    assert timefmt.relative(None, now=now) == "—"
+
+
+def test_parse_timestamp_millis_and_rfc3339():
+    dt = timefmt.parse_timestamp(1_755_100_000_000)
+    assert dt is not None and dt.tzinfo is not None
+    assert timefmt.parse_timestamp("2026-08-15T01:29:00Z").year == 2026
+    assert timefmt.parse_timestamp("") is None
+    assert timefmt.parse_timestamp("not-a-date") is None
+
+
+def test_status_pill_colors():
+    assert "Active" in render.status_pill("ACTIVE").plain
+    assert render.status_pill("ACTIVE").plain.startswith("●")
+    assert "Pending" in render.status_pill("PENDING").plain
+    assert "Disabled" in render.status_pill("DISABLED").plain
+
+
+def test_field_snake_and_camel():
+    assert render.field({"display_name": "x"}, "display_name") == "x"
+    assert render.field({"displayName": "y"}, "display_name") == "y"
+    assert render.field({}, "missing") is None
+
+
+def test_resource_table_renders_title_and_count():
+    con, buf = _console()
+    render.resource_table(
+        "Managed Memory Stores", [("Name", "left"), ("Created", "left")], [["acme", "13 days ago"]], con=con
+    )
+    out = buf.getvalue()
+    assert "Managed Memory Stores" in out
+    assert "acme" in out
+    assert "1 item" in out
+
+
+def test_detail_renders_breadcrumb_status_and_snippet():
+    con, buf = _console()
+    render.detail(
+        "Agent Memory",
+        "acme",
+        {"Store ID": "abc"},
+        status="ACTIVE",
+        snippets=[("curl", "bash", "curl https://x")],
+        con=con,
+    )
+    out = buf.getvalue()
+    assert "Agent Memory" in out and "acme" in out
+    assert "Active" in out
+    assert "Starter code" in out
