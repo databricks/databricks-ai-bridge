@@ -1,8 +1,8 @@
 # `databricks-mason`
 
-Mason is an experimental CLI for the Databricks `agents/v1` preview APIs and
-integrated agent deployment flows. It manages memory, sessions, tracing, and
-deployments from one authenticated command.
+Mason is an experimental CLI for Databricks custom agent preview APIs and
+deployments. It manages memory, sessions, tracing, and deployments from one
+authenticated command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
@@ -20,7 +20,7 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-For live tracing commands, install the optional MLflow dependency:
+For tracing commands, install Mason with tracing extras:
 
 ```sh
 pip install 'databricks-mason[tracing]'
@@ -28,8 +28,10 @@ pip install 'databricks-mason[tracing]'
 
 ## Authentication
 
-Authentication uses a `.databrickscfg` profile. Pass `--profile/-p`, or save a
-default profile once:
+Configure credentials using
+[Databricks CLI authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
+Run `mason login` to validate and remember an existing CLI profile, or pass `--profile/-p`
+to select a profile for an individual command:
 
 ```sh
 mason login --profile <profile>
