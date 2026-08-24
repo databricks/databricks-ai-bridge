@@ -1,8 +1,7 @@
 """Authenticated REST client for the agents/v1 memory and session APIs.
 
 Wraps a databricks-sdk `WorkspaceClient` so auth/host come from a `.databrickscfg`
-profile. Each method maps to one RPC; paths come straight from the HTTP bindings in
-`conversation-store/service.proto` and `conversation-store/session_store.proto`.
+profile. Each method maps to one API operation.
 Deployment is handled separately (deploy.py) since it wraps the `databricks apps` CLI.
 """
 

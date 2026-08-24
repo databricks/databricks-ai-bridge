@@ -37,9 +37,9 @@ def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
 def test_login_persists_and_load_round_trips(tmp_path, monkeypatch):
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     _stub_client(monkeypatch)
-    result = CliRunner().invoke(auth.login, ["--profile", "eng-ml-inference"], obj=_Ctx())
+    result = CliRunner().invoke(auth.login, ["--profile", "my-workspace"], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert auth.load_default_profile() == "eng-ml-inference"
+    assert auth.load_default_profile() == "my-workspace"
 
 
 def test_login_json_output(tmp_path, monkeypatch):

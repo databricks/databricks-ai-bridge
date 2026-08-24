@@ -12,16 +12,13 @@ import click
 from rich.console import Console
 from rich.text import Text
 
-# Databricks error codes that mean "this preview API isn't turned on for this
-# workspace" rather than "the caller did something wrong". The agents/v1 handlers
-# return these while the feature is gated (see conversation-store/docs/managed-memory.md):
-# memory-entry writes and several session RPCs are still unimplemented on master.
+# Error codes indicating that a preview API is unavailable in the workspace.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED", "FEATURE_DISABLED"})
 
 _PREVIEW_HINT = (
     "These agents/v1 APIs are in preview and gated per workspace. This handler is "
-    "not enabled on the target workspace yet — try a different --profile, or check "
-    "conversation-store/docs/managed-memory.md for rollout status."
+    "not enabled on the target workspace yet — try a different --profile or contact "
+    "your workspace administrator."
 )
 
 

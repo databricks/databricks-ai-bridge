@@ -49,7 +49,7 @@ def login(obj, profile) -> None:
     if not profile:
         raise AgentCliError(
             "No profile to save.",
-            hint="Pass one to remember, e.g. `mason login --profile eng-ml-inference`.",
+            hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
         )
     client = AgentApiClient(profile)
     user = client.current_user  # round-trips current_user.me(), so a bad profile fails here

@@ -58,5 +58,3 @@ mason [-p <profile>] [-o text|json]
                [--with-session-store N] [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
-
-See [the OpenAI Agents SDK walkthrough](./OPENAI_AGENTS_SDK.md) for an end-to-end example.

@@ -5,8 +5,7 @@ int64 (`created_at`/`updated_at`), while entries, sessions, and session items us
 `google.protobuf.Timestamp`, which serializes to an RFC 3339 string
 (`2026-08-15T01:29:00Z`). `parse_timestamp` accepts either.
 
-`relative` mirrors the phrasing in the console mock (experimental/ankit/neon-app):
-"13 days ago", "14 hours ago", "A month ago", "An hour ago", "A day ago".
+`relative` returns concise phrases such as "13 days ago" and "An hour ago".
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ def parse_timestamp(value: TimestampValue) -> Optional[datetime]:
 
 
 def relative(value: TimestampValue, *, now: Optional[datetime] = None) -> str:
-    """Humanize a timestamp as an "N units ago" string, matching the console mock."""
+    """Humanize a timestamp as an "N units ago" string."""
     dt = parse_timestamp(value)
     if dt is None:
         return "—"

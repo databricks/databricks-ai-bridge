@@ -1,9 +1,4 @@
-"""Unit tests for AgentApiClient: path/verb/body per RPC + preview-error mapping.
-
-Uses only unittest.mock (no `import pytest`): the Bazel db_py_test runner supplies a
-vendored pytest that is not importable as `pytest`, so tests rely on the mock decorator
-and built-in behavior rather than pytest fixtures.
-"""
+"""Unit tests for AgentApiClient paths, verbs, bodies, and error mapping."""
 
 from __future__ import annotations
 

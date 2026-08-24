@@ -1,14 +1,6 @@
 """Terminal presentation layer for the Mason CLI.
 
-Echoes the two Databricks console screens mocked in experimental/ankit/neon-app:
-
-  * `resource_table` -> the "Autoscaling Database Projects" list (db-projects.png):
-    a titled table with relative timestamps and a count footer.
-  * `detail`         -> the AI Gateway endpoint page (aig-endpoint.png): a breadcrumb,
-    a status pill, a key/value rail, and a "Starter code" snippet panel.
-  * `success`        -> the post-create / "Set up" cards: a green panel + next steps.
-
-Rendering is centralized here so every `list`/`get`/`create` command looks consistent.
+Rendering is centralized so every `list`/`get`/`create` command looks consistent.
 Functions accept an optional `console` for testability; default is stdout.
 """
 
@@ -25,7 +17,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-# Databricks brand accent (the red-orange in the console logo/nav).
+# Databricks brand accent.
 ACCENT = "#FF3621"
 MUTED = "grey62"
 
@@ -54,7 +46,7 @@ def emit_json(data: Any) -> None:
 
 
 def status_pill(status: Optional[str]) -> Text:
-    """A colored ●/○ status pill, mirroring the mock's "● Active" indicator."""
+    """Create a colored ●/○ status indicator."""
     value = (status or "").strip().upper()
     if value in {"ACTIVE", "RUNNING", "READY"}:
         return Text("● ", style="green") + Text(value.title(), style="green")
@@ -65,7 +57,7 @@ def status_pill(status: Optional[str]) -> Text:
     return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
 
 
-# --- list view (db-projects.png) ---------------------------------------------
+# --- list view ---------------------------------------------------------------
 
 
 def resource_table(
