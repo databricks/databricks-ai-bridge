@@ -7,7 +7,6 @@ The Databricks AI Bridge library provides a shared layer of APIs to interact wit
 We provide integration packages for seamless use of Databricks AI features with supported frameworks and SDKs.
 
 - [`databricks-langchain`](./integrations/langchain/README.md) - For LangChain/LangGraph users
-- [`databricks-mason`](./integrations/mason/README.md) - For Mason users
 - [`databricks-openai`](./integrations/openai/README.md) - For OpenAI SDK users
 
 ## Installation
@@ -16,7 +15,6 @@ Install the package for your framework or SDK:
 
 ```sh
 pip install databricks-langchain
-pip install databricks-mason
 pip install databricks-openai
 ```
 
