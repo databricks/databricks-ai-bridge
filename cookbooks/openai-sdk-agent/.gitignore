@@ -1,3 +1,4 @@
 .databricks/
 *.whl
 __pycache__/
+/prepare_deployment.sh

@@ -34,7 +34,7 @@ context from durable events on a fresh agent session;
 restore its transcript. Applications keep normal `@invoke()` and `@stream()`
 handlers and may register an optional `@on_resume()` request transformer.
 
-See the [OpenAI Agents SDK examples](./examples/openai-sdk-agent/README.md) for
+See the [OpenAI Agents SDK cookbook](./cookbooks/openai-sdk-agent/README.md) for
 the same small agent configured with both recovery strategies.
 
 ```sh

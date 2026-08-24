@@ -1,6 +1,0 @@
-openai-agents>=0.19.4,<0.20
-mcp>=1.29.0,<2
-databricks-openai[memory]>=0.17.0
-./databricks_ai_bridge-0.21.0-py3-none-any.whl[agent-server]
-./openai_sdk_agent_shared-0.1.0-py3-none-any.whl
-mlflow>=3.10.1

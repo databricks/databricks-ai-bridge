@@ -58,26 +58,19 @@ async def _responses_events(
             if event_data["type"] == "response.output_item.added":
                 current_item_id = str(uuid4())
                 event_data["item"]["id"] = current_item_id
-            elif isinstance(event_data.get("item"), dict) and event_data["item"].get(
-                "id"
-            ):
+            elif isinstance(event_data.get("item"), dict) and event_data["item"].get("id"):
                 event_data["item"]["id"] = current_item_id
             elif event_data.get("item_id") is not None:
                 event_data["item_id"] = current_item_id
             yield event_data
-        elif (
-            event.type == "run_item_stream_event"
-            and event.item.type == "tool_call_output_item"
-        ):
+        elif event.type == "run_item_stream_event" and event.item.type == "tool_call_output_item":
             output = event.item.to_input_item()
             if not isinstance(output.get("output"), str):
                 try:
                     output["output"] = json.dumps(output.get("output"))
                 except (TypeError, ValueError):
                     output["output"] = str(output.get("output"))
-            yield ResponsesAgentStreamEvent(
-                type="response.output_item.done", item=output
-            )
+            yield ResponsesAgentStreamEvent(type="response.output_item.done", item=output)
 
 
 async def stream_agent(

@@ -15,23 +15,21 @@ replay, heartbeat active work, and atomically claim stale attempts.
 
 ```text
 openai-sdk-agent/
+├── requirements.txt
+├── databricks.yml
+├── openai_sdk_agent_shared/
+│   ├── agent.py
+│   ├── handlers.py
+│   └── sessions.py
 ├── event_log_recovery/
-│   ├── app.py
-│   ├── app.yaml
-│   └── handlers.py
-├── agent_session_recovery/
-│   ├── app.py
-│   ├── app.yaml
-│   └── handlers.py
-└── shared/
-    └── src/openai_sdk_agent_shared/
-        ├── agent.py
-        └── sessions.py
+│   └── app.py
+└── agent_session_recovery/
+    └── app.py
 ```
 
-The App folders intentionally duplicate the server and handler wiring so the
-developer experience is easy to compare. Only the agent and its Lakebase-backed
-OpenAI SDK session implementation are shared.
+Both Apps upload this common source directory. They share the agent, handler
+registrations, dependencies, and Lakebase-backed OpenAI SDK session implementation;
+the two small `app.py` files differ only in their recovery strategy.
 
 ## Resume Hook
 
@@ -73,9 +71,9 @@ Lakebase database:
 
 `response_id` identifies a durable HTTP response. The agent session key
 identifies SDK history. For agent-session recovery, a client can provide
-`custom_inputs.session_id`, `custom_inputs.thread_id`, or
-`context.conversation_id`. If none is supplied, the server logs a warning and
-uses the generated `response_id` as `context.conversation_id`.
+`custom_inputs.session_id` or `context.conversation_id`. If neither is supplied,
+the server logs a warning and uses the generated `response_id` as
+`context.conversation_id`.
 
 ## Try It
 
@@ -112,17 +110,11 @@ curl "$APP_URL/responses/$RESPONSE_ID" \
 
 ## Deploy
 
-Build the unreleased bridge package and the shared example package into each App
-source directory:
+Both Apps use the common root `requirements.txt` and source tree. Provide two
+dedicated Lakebase branches and the OpenAI API-key secret:
 
 ```bash
-bash examples/openai-sdk-agent/prepare_deployment.sh
-```
-
-Then provide two dedicated Lakebase branches and the OpenAI API-key secret:
-
-```bash
-cd examples/openai-sdk-agent
+cd cookbooks/openai-sdk-agent
 
 bundle_vars=(
   --var="event_log_lakebase_branch=projects/<project>/branches/<branch>"

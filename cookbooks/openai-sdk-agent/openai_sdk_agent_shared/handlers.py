@@ -1,4 +1,4 @@
-"""MLflow handlers for agent-session recovery."""
+"""MLflow handler registrations shared by both recovery examples."""
 
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -10,6 +10,7 @@ from mlflow.types.responses import (
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
 )
+
 from openai_sdk_agent_shared.agent import invoke_agent, stream_agent
 from openai_sdk_agent_shared.sessions import create_session
 
@@ -21,17 +22,6 @@ def _session_id(request: ResponsesAgentRequest) -> str:
     if request.context and request.context.conversation_id:
         return request.context.conversation_id
     return str(uuid4())
-
-
-# Optional override, called only after a stale attempt is claimed. By default,
-# the server keeps this session ID and sends a recovery prompt; the OpenAI
-# Agents SDK then reloads its transcript. An override can modify that request:
-#
-# from databricks_ai_bridge.long_running import ResumeContext, on_resume
-#
-# @on_resume()
-# async def resume(request, context: ResumeContext):
-#     return await context.default_resume_request(request)
 
 
 @invoke()

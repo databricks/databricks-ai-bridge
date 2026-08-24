@@ -20,9 +20,9 @@ resources:
     event_log_recovery:
       name: openai-event-log-recovery
       description: OpenAI agent with event-log recovery
-      source_code_path: ./event_log_recovery
+      source_code_path: .
       config:
-        command: ["python", "app.py"]
+        command: ["python", "-m", "event_log_recovery.app"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key
@@ -47,9 +47,9 @@ resources:
     agent_session_recovery:
       name: openai-agent-session
       description: OpenAI agent with SDK-session recovery
-      source_code_path: ./agent_session_recovery
+      source_code_path: .
       config:
-        command: ["python", "app.py"]
+        command: ["python", "-m", "agent_session_recovery.app"]
         env:
           - name: OPENAI_API_KEY
             value_from: openai-api-key

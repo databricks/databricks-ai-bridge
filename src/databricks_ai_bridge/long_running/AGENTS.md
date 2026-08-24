@@ -114,19 +114,19 @@ through the same `@invoke()` or `@stream()` mode selected for that response.
 
 ```mermaid
 flowchart TD
-    A["POST /responses with background=true"] --> B["Persist response and original request"]
-    B --> C["Start invoke or stream handler"]
-    C --> D["Heartbeat current attempt"]
-    C --> E["Append ordered events"]
-    C --> F{"Handler finishes?"}
-    F -->|"yes"| G["Persist terminal response"]
-    F -->|"worker crashes"| H["Heartbeat becomes stale"]
-    H --> I["Another worker atomically claims attempt N+1"]
-    I --> J["Build resume request or call on_resume"]
-    J --> K["Append response.resumed event"]
-    K --> C
-    E --> L["GET with starting_after replays events"]
-    G --> L
+    REQUEST[Receive background response request] --> PERSIST[Persist response state and original request]
+    PERSIST --> RUN[Start the selected handler]
+    RUN --> HEARTBEAT[Heartbeat the current attempt]
+    RUN --> EVENTS[Append ordered stream events]
+    RUN --> OUTCOME{Handler outcome}
+    OUTCOME -->|completed| RESULT[Persist terminal response]
+    OUTCOME -->|worker stopped| STALE[Heartbeat becomes stale]
+    STALE --> CLAIM[Another worker claims the next attempt]
+    CLAIM --> RESUME[Build the resume request]
+    RESUME --> MARKER[Append the resumed event]
+    MARKER --> RUN
+    EVENTS --> RETRIEVE[Replay events from the requested cursor]
+    RESULT --> RETRIEVE
 ```
 
 Recovery restarts a handler; it does not resume a suspended Python coroutine.
@@ -190,6 +190,26 @@ A response row has no pod identifier. Ownership is implicit in
 3. Exactly one contender receives a row from `RETURNING`.
 4. A previous worker that is still alive loses its next heartbeat CAS and stops
    acting as owner.
+
+```mermaid
+sequenceDiagram
+    participant B as Worker B
+    participant DB as Lakebase
+    participant C as Worker C
+
+    Note over B,C: Both workers observe the same stale attempt
+    B->>DB: Try conditional claim with the expected attempt
+    C->>DB: Try conditional claim with the expected attempt
+    Note right of DB: Exactly one conditional update matches
+    alt Worker B wins
+        DB-->>B: Return the claimed next attempt
+        DB-->>C: Return no row
+    else Worker C wins
+        DB-->>B: Return no row
+        DB-->>C: Return the claimed next attempt
+    end
+    Note over B,C: Only the worker that receives a row continues
+```
 
 Only the current attempt can write terminal status. This prevents a delayed
 task from overwriting a later attempt's result.
