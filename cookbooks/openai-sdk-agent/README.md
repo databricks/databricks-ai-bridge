@@ -15,9 +15,11 @@ replay, heartbeat active work, and atomically claim stale attempts.
 
 ```text
 openai-sdk-agent/
+├── app.yaml
 ├── requirements.txt
 ├── databricks.yml
 ├── openai_sdk_agent_shared/
+│   ├── app.py
 │   ├── agent.py
 │   ├── handlers.py
 │   └── sessions.py
@@ -27,9 +29,13 @@ openai-sdk-agent/
     └── app.py
 ```
 
-Both Apps upload this common source directory. They share the agent, handler
-registrations, dependencies, and Lakebase-backed OpenAI SDK session implementation;
-the two small `app.py` files differ only in their recovery strategy.
+Both Apps upload this common source directory. `app.yaml` keeps the command,
+secret, and Lakebase resource bindings available after a later App restart.
+During a bundle deployment, the target sets `RESUME_STRATEGY`; after a plain App
+restart, the shared entry point maps the stable App name to the same strategy and
+session schema. Both Apps share the agent, handlers, dependencies, and
+Lakebase-backed session implementation. The two small strategy-specific
+`app.py` files show the equivalent direct wiring.
 
 ## Resume Hook
 
@@ -57,6 +63,11 @@ The default transformation depends on `resume_strategy`:
 
 `ResumeContext.previous_attempt_events` exposes the same previous-attempt
 events when an application needs a custom transformation.
+
+After EVENT_LOG recovery, the client must replace its stored conversation ID
+with `conversation_id` from the durable `response.resumed` event before sending
+the next turn. A polling client can retrieve the persisted SSE events after
+completion to discover the rotated ID.
 
 ## Persistence
 
@@ -110,23 +121,29 @@ curl "$APP_URL/responses/$RESPONSE_ID" \
 
 ## Deploy
 
-Both Apps use the common root `requirements.txt` and source tree. Provide two
-dedicated Lakebase branches and the OpenAI API-key secret:
+Select the `event_log` or `agent_session` bundle target. Both targets deploy the
+common source tree as a different App, recovery strategy, and SDK-session schema.
+Provide a Lakebase branch and the OpenAI API-key secret:
+
+Use a separate empty Lakebase database for each App unless both App service
+principals have explicitly been granted access to the shared `agent_server`
+schema and tables.
 
 ```bash
 cd cookbooks/openai-sdk-agent
 
 bundle_vars=(
-  --var="event_log_lakebase_branch=projects/<project>/branches/<branch>"
-  --var="event_log_lakebase_database=projects/<project>/branches/<branch>/databases/<database>"
-  --var="agent_session_lakebase_branch=projects/<project>/branches/<branch>"
-  --var="agent_session_lakebase_database=projects/<project>/branches/<branch>/databases/<database>"
+  --var="lakebase_branch=projects/<project>/branches/<branch>"
+  --var="lakebase_database=projects/<project>/branches/<branch>/databases/<database>"
   --var="openai_secret_scope=<scope>"
   --var="openai_secret_key=<key>"
 )
 
-databricks bundle validate --profile <PROFILE> "${bundle_vars[@]}"
-databricks bundle deploy --profile <PROFILE> "${bundle_vars[@]}"
-databricks bundle run event_log_recovery --profile <PROFILE> "${bundle_vars[@]}"
-databricks bundle run agent_session_recovery --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle validate -t event_log --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle deploy -t event_log --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle run recovery -t event_log --profile <PROFILE> "${bundle_vars[@]}"
+
+databricks bundle validate -t agent_session --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle deploy -t agent_session --profile <PROFILE> "${bundle_vars[@]}"
+databricks bundle run recovery -t agent_session --profile <PROFILE> "${bundle_vars[@]}"
 ```

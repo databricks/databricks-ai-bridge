@@ -1,0 +1,7 @@
+command: ["python", "-m", "langgraph_agent_shared.app"]
+
+env:
+  - name: LAKEBASE_AUTOSCALING_ENDPOINT
+    valueFrom: postgres
+  - name: DATABRICKS_MODEL
+    value: databricks-gpt-5-2

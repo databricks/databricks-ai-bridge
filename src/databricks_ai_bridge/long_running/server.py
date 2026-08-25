@@ -1473,7 +1473,7 @@ class LongRunningAgentServer(AgentServer):
                 messages. Values > 0 fetch only messages after that sequence.
         """
         poll_interval = self._settings.poll_interval_seconds
-        last_seq = starting_after
+        last_seq = -1 if starting_after == 0 else starting_after
         deadline = time.monotonic() + self._settings.task_timeout_seconds
 
         while time.monotonic() < deadline:
@@ -1510,10 +1510,7 @@ class LongRunningAgentServer(AgentServer):
             if status == ResponseStatus.IN_PROGRESS:
                 await self._try_claim_and_resume(response_id, resp)
 
-            # starting_after=0 fetches all messages (sequence numbers start at 0).
-            # We use after_sequence=-1 for the DB query so that seq 0 is included.
-            after_seq = last_seq - 1 if last_seq == 0 else last_seq
-            messages = await get_messages(response_id, after_sequence=after_seq)
+            messages = await get_messages(response_id, after_sequence=last_seq)
 
             for seq, _, evt, _attempt in messages:
                 if evt is not None:

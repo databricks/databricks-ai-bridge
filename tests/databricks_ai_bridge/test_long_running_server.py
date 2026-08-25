@@ -600,6 +600,42 @@ class TestRetrieveRequest:
 
 class TestStreamRetrieve:
     @pytest.mark.asyncio
+    async def test_in_progress_sequence_zero_is_not_replayed(self):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent", poll_interval_seconds=0.01)
+
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                side_effect=[
+                    _resp_info("resp_123", "in_progress"),
+                    _resp_info("resp_123", "completed"),
+                ],
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                side_effect=[
+                    [_msg(0, None, {"type": "response.output_item.done", "item": {}})],
+                    [],
+                ],
+            ) as mock_get_messages,
+            patch.object(server, "_try_claim_and_resume", new_callable=AsyncMock),
+        ):
+            events = []
+            async for chunk in server._stream_retrieve("resp_123", starting_after=0):
+                events.append(chunk)
+
+        assert len(events) == 2
+        assert "response.output_item.done" in events[0]
+        assert events[1] == "data: [DONE]\n\n"
+        assert [call.kwargs["after_sequence"] for call in mock_get_messages.await_args_list] == [
+            -1,
+            0,
+        ]
+
+    @pytest.mark.asyncio
     async def test_completed_stream(self):
         with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent", poll_interval_seconds=0.01)
