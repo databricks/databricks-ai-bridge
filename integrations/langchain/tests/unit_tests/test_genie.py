@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 from databricks.sdk.service.dashboards import GenieSpace
-from databricks_ai_bridge.genie import Genie, GenieResponse
+from databricks_ai_bridge.genie import Genie, GenieResponse, GenieVizAttachment
 from langchain_core.messages import AIMessage
 
 from databricks_langchain.genie import (
@@ -413,3 +413,27 @@ def test_string_return_no_dataframe_field(MockWorkspaceClient):
         # Message content should be the string
         assert result["messages"][0].content == "String result"
         assert result["conversation_id"] == "conv-str-123"
+
+
+@patch("databricks.sdk.WorkspaceClient")
+def test_visualizations_are_returned(MockWorkspaceClient):
+    MockWorkspaceClient.genie.get_space.return_value = GenieSpace(
+        space_id="space-id",
+        title="Sales Space",
+        description="description",
+    )
+    visualization = GenieVizAttachment(
+        attachment_id="viz-1",
+        query_attachment_id="query-1",
+        title="Sales",
+        content=b"png",
+    )
+    genie_response = GenieResponse(result="Sales results", visualizations=[visualization])
+    genie = Genie("space-id", MockWorkspaceClient)
+
+    with patch.object(genie, "ask_question", return_value=genie_response):
+        result = _query_genie_as_agent(
+            {"messages": [{"role": "user", "content": "Show sales"}]}, genie, "Genie"
+        )
+
+    assert result["visualizations"] == [visualization]
