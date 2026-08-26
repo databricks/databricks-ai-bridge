@@ -1,0 +1,1 @@
+databricks-ai-bridge[agent-server]
