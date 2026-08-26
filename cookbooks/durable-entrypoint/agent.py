@@ -1,9 +1,9 @@
-"""A complete durable agent using the SDK-provided entrypoint application."""
+"""OpenAI Agents SDK loop hosted by the SDK-provided durable entrypoint."""
 
-import asyncio
 import os
 
 import uvicorn
+from openai_agent import run_openai_agent
 
 from databricks_ai_bridge.durable_app import DatabricksDurableApp, DurableAgentContext
 
@@ -12,15 +12,14 @@ app = DatabricksDurableApp()
 
 @app.entrypoint
 async def agent(payload: dict, context: DurableAgentContext) -> dict:
-    steps = int(payload.get("steps", 3))
-    delay_seconds = float(payload.get("delay_seconds", 1))
-
-    for step in range(1, steps + 1):
-        await asyncio.sleep(delay_seconds)
-        await context.emit({"type": "progress", "step": step, "total": steps})
+    output = await run_openai_agent(
+        prompt=str(payload["prompt"]),
+        session_id=context.session_id,
+        emit=context.emit,
+    )
 
     return {
-        "message": "completed",
+        "output": output,
         "session_id": context.session_id,
         "attempt": context.attempt,
     }
