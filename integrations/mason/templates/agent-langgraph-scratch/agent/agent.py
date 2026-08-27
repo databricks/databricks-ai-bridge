@@ -86,6 +86,7 @@ async def invoke_handler(request: dict) -> dict:
     ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
     payload.
     """
+    request = {**request, "session_id": _session_id(request)}
     outputs = [
         event
         async for event in stream_handler(request)
@@ -94,7 +95,7 @@ async def invoke_handler(request: dict) -> dict:
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": _session_id(request),
+        "session_id": request["session_id"],
         "status": "interrupted" if interrupted else "completed",
     }
 
