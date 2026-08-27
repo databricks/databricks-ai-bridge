@@ -364,6 +364,32 @@ function renderSessionItems(items) {
   });
 }
 
+function renderSessionTranscript(items) {
+  state.draft = null;
+  state.draftText = "";
+  state.lastAssistantText = "";
+  elements.chatLog.replaceChildren(elements.emptyState);
+  elements.emptyState.hidden = false;
+
+  for (const item of items) {
+    const data = item?.data || {};
+    const storedRole = String(data.role || data.type || "").toLowerCase();
+    const content = extractText(data.content ?? data);
+    if (!content) continue;
+    if (storedRole === "human_decision") {
+      appendMessage("system", content, "Human decision");
+      continue;
+    }
+    const role = normalizeRole(data);
+    if (role === "assistant") state.lastAssistantText = content;
+    appendMessage(
+      role,
+      role === "tool" ? toolSummary(data) : content,
+      role === "user" ? "You" : role === "assistant" ? "Agent" : role === "tool" ? "Tool result" : "System",
+    );
+  }
+}
+
 async function ensureManagedSession() {
   if (!state.config?.session.managed) return null;
   const sessionId = ensureSessionId();
@@ -380,7 +406,7 @@ async function ensureManagedSession() {
   return sessionId;
 }
 
-async function refreshManagedSession() {
+async function refreshManagedSession({ hydrateChat = false } = {}) {
   if (!state.config?.session.managed) {
     stateMessage(elements.sessionItems, "Connect a Session Store to mirror transcript items.");
     return;
@@ -391,7 +417,9 @@ async function refreshManagedSession() {
       cache: "no-store",
     });
     const result = await jsonResponse(response);
-    renderSessionItems(sessionItems(result));
+    const items = sessionItems(result);
+    renderSessionItems(items);
+    if (hydrateChat) renderSessionTranscript(items);
     addEvent("session.items.list", result);
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
@@ -407,6 +435,11 @@ async function openSessionById() {
   }
   setSessionId(sessionId);
   state.pendingInterrupt = null;
+  state.draft = null;
+  state.draftText = "";
+  state.lastAssistantText = "";
+  elements.chatLog.replaceChildren(elements.emptyState);
+  elements.emptyState.hidden = false;
   elements.approvalSummary.textContent =
     "Session opened by ID. If its LangGraph checkpoint is paused, approve or reject it below.";
   elements.approvalPanel.hidden = !state.config?.session.durable;
@@ -422,7 +455,7 @@ async function openSessionById() {
     const result = await jsonResponse(response);
     state.managedSessionId = sessionId;
     addEvent("session.open", result);
-    await refreshManagedSession();
+    await refreshManagedSession({ hydrateChat: true });
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -868,7 +901,7 @@ elements.sessionIdInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") openSessionById();
 });
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));
-elements.refreshSession.addEventListener("click", refreshManagedSession);
+elements.refreshSession.addEventListener("click", () => refreshManagedSession({ hydrateChat: true }));
 elements.clearEvents.addEventListener("click", () => {
   state.events = [];
   elements.eventLog.innerHTML = '<div class="event-empty">Invocation events appear here.</div>';

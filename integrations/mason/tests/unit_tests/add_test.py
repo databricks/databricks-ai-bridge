@@ -37,6 +37,8 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert "/api/demo/memory/search" in ui_script
     assert "/api/demo/sessions/" in ui_script
     assert 'credentials: "same-origin"' in ui_script
+    assert "renderSessionTranscript(items)" in ui_script
+    assert "refreshManagedSession({ hydrateChat: true })" in ui_script
     assert "Approve paused HITL" in (project / "ui/index.html").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
