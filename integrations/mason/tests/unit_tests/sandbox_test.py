@@ -60,7 +60,8 @@ def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     ast.parse(generated)
     assert '"name": "catalog.schema.volume"' in generated
     assert '"permission": "read_only"' in generated
-    assert 'function_name="sandbox"' in generated
+    assert 'tool_filter={"allowed_tool_names": ["sandbox"]}' in generated
+    assert 'function_name="sandbox"' not in generated
     assert "return [\n        _build_sandbox_mcp_server(),\n    ]" in generated
     assert 'meta["downscope"] = _SANDBOX_DOWNSCOPE' in generated
     assert "super().call_tool(tool_name, arguments, meta=meta, **kwargs)" in generated
@@ -125,7 +126,10 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
         },
         "trace_id": "123",
     }
-    assert server.connection["function_name"] == "sandbox"
+    assert server.connection["catalog"] == "system"
+    assert server.connection["schema"] == "ai"
+    assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox"]}
+    assert "function_name" not in server.connection
 
 
 def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pathlib.Path):

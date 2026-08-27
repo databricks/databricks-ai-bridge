@@ -487,8 +487,8 @@ def {_SERVER_FACTORY} -> McpServer:
     return _SandboxMcpServer.from_uc_function(
         catalog="system",
         schema="ai",
-        function_name="sandbox",
         name="system.ai.sandbox",
+        tool_filter={{"allowed_tool_names": ["sandbox"]}},
     )
 
 
