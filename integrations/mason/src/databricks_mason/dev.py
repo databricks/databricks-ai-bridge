@@ -13,9 +13,16 @@ import pathlib
 from typing import Optional
 
 import click
+import yaml
 
-from databricks_mason.deploy import _databricks
 from databricks_mason.errors import AgentCliError
+from databricks_mason.store_access import _databricks
+
+# Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
+# `mason deploy`). They point at an index the deploying environment can reach, which is not
+# necessarily reachable from the local dev machine — so `mason dev`'s local `uv` build must ignore
+# them and use the machine's own configured index instead.
+_BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"})
 
 
 @click.command()
@@ -42,7 +49,8 @@ def dev(obj, source: str, prepare_environment: Optional[bool], app_port: Optiona
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
     """
     source_dir = pathlib.Path(source)
-    if not (source_dir / "app.yaml").exists():
+    app_yaml = source_dir / "app.yaml"
+    if not app_yaml.exists():
         raise AgentCliError(
             f"No app.yaml in '{source_dir}'.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
@@ -58,5 +66,35 @@ def dev(obj, source: str, prepare_environment: Optional[bool], app_port: Optiona
         args.append("--prepare-environment")
     if app_port is not None:
         args += ["--app-port", str(app_port)]
-    # Run in the project dir so run-local finds app.yaml; stream output (no capture).
+
+    # If the manifest carries a deploy-only package-index override, run against a filtered copy so
+    # the local build uses this machine's index instead of one it may not be able to reach.
+    entry_point = _dev_entry_point(app_yaml)
+    if entry_point is not None:
+        args += ["--entry-point", str(entry_point)]
+
+    # Run in the project dir so run-local finds the app; stream output (no capture).
     _databricks(args, obj.profile, cwd=str(source_dir))
+
+
+def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
+    """Return a filtered manifest path when app.yaml pins a build index, else None.
+
+    Strips the deploy-only package-index env vars and writes the result next to app.yaml as
+    ``.mason-dev.app.yaml`` (so relative paths still resolve). Returns None when there's nothing to
+    strip, so the normal ``app.yaml`` is used unchanged.
+    """
+    try:
+        doc = yaml.safe_load(app_yaml.read_text()) or {}
+    except yaml.YAMLError:
+        return None
+    env = doc.get("env")
+    if not isinstance(env, list):
+        return None
+    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
+    if len(filtered) == len(env):
+        return None  # no index override present — run-local can use app.yaml directly
+    doc["env"] = filtered
+    dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
+    dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return dev_yaml

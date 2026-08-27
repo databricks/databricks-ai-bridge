@@ -13,15 +13,15 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
 from typing import Any, Optional
 
 import click
 import yaml
 
-from databricks_mason import render, timefmt
+from databricks_mason import memory_store_access, render, session_store_access, timefmt
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
+from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
@@ -38,26 +38,19 @@ _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
 
-def _databricks(
-    args: list[str],
-    profile: Optional[str],
-    *,
-    capture: bool = False,
-    check: bool = True,
-    cwd: Optional[str] = None,
-) -> subprocess.CompletedProcess:
-    cmd = ["databricks", *args]
-    if profile:
-        cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
-    if check and result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(f"`{' '.join(cmd)}` failed (exit {result.returncode})", hint=detail)
-    return result
-
-
 def _deployment_exists(name: str, profile: Optional[str]) -> bool:
     return _databricks(["apps", "get", name], profile, capture=True, check=False).returncode == 0
+
+
+def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
+    """The app's service principal client id (its Postgres role identity), or None if unavailable."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("service_principal_client_id")
+    except json.JSONDecodeError:
+        return None
 
 
 # --- app.yaml manifest handling ---------------------------------------------
@@ -115,43 +108,43 @@ def _ensure_session_store(client, name: str) -> dict:
     return client.get_session_store(name)
 
 
-# Managed session stores are backed by a service-owned Lakebase project (shared, on its "production"
-# branch). The durable checkpointer connects to it as the app's service principal, so the SP needs a
-# Postgres grant — modeled as a `postgres` app resource. See agent/mason/session_store.py.
-_SESSION_STORE_LAKEBASE_PROJECT = "databricks-internal-lakebase-agent-session-store"
-_SESSION_STORE_LAKEBASE_BRANCH = "production"
-_SESSION_STORE_LAKEBASE_DB = "databricks-postgres"
+def _memory_store_database(client, memory_store: str) -> Optional[str]:
+    """Resolve the memory store's per-store Lakebase database name from its storage backend."""
+    store = client.get_memory_store(memory_store)
+    backend_id = field(field(store, "storage_backend") or {}, "backend_id")
+    return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
 
 
-def _grant_session_store_lakebase(name: str, profile: Optional[str]) -> Optional[str]:
-    """Attach the `postgres` resource that grants the app's SP access to the session store's Lakebase.
+def _grant_store_access(
+    app: str,
+    sp: str,
+    owner: str,
+    session_store: Optional[str],
+    memory_database: Optional[str],
+    profile: Optional[str],
+) -> Optional[str]:
+    """Give the app's SP access to the deployed stores (best-effort, two steps).
 
-    Best-effort: returns None on success, or a human-readable reason if the grant couldn't be applied
-    (most commonly the caller lacks MANAGE on the service-owned Lakebase project). Deploy proceeds
-    regardless — the app runs, but durable sessions won't work until the grant exists.
+    Binds every store's database as a `postgres` app resource in one update (the update replaces the
+    whole resource array, so they must be applied together), then GRANTs the SP read/write on each
+    store's tables. Returns None on success or a human-readable reason on the first failure.
     """
-    branch = f"projects/{_SESSION_STORE_LAKEBASE_PROJECT}/branches/{_SESSION_STORE_LAKEBASE_BRANCH}"
-    resource = {
-        "resources": [
-            {
-                "name": "postgres",
-                "postgres": {
-                    "branch": branch,
-                    "database": f"{branch}/databases/{_SESSION_STORE_LAKEBASE_DB}",
-                    "permission": "CAN_CONNECT_AND_CREATE",
-                },
-            }
-        ]
-    }
-    result = _databricks(
-        ["apps", "update", name, "--json", json.dumps(resource)],
-        profile,
-        capture=True,
-        check=False,
-    )
-    if result.returncode == 0:
+    backends = []
+    if session_store:
+        backends.append(session_store_access.backend(session_store))
+    if memory_database:
+        backends.append(memory_store_access.backend(memory_database))
+    if not backends:
         return None
-    return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+    error = apply_postgres_resources(app, backends, profile)
+    if error:
+        return error
+    for backend in backends:
+        error = grant_tables(backend, sp, owner, profile)
+        if error:
+            return error
+    return None
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -234,7 +227,10 @@ def deploy(
             if create_stores
             else client.get_memory_store(memory_store)
         )
-        env_updates[_MEMORY_ENV] = field(store, "name") or memory_store
+        # The API's store name is `memory-stores/<id>`; the agent runtime wants the bare <id>
+        # (it re-adds the `memory-stores/` prefix when building the entries URL), so strip it.
+        store_name = field(store, "name") or memory_store
+        env_updates[_MEMORY_ENV] = store_name.split("/", 1)[-1]
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if session_store:
         if create_stores:
@@ -266,9 +262,20 @@ def deploy(
     _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
     _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
-    # 4. Grant the app's SP access to the session store's Lakebase (best-effort; needs MANAGE on the
-    #    service-owned project). Without it the app runs but durable sessions fail to authenticate.
-    grant_error = _grant_session_store_lakebase(name, obj.profile) if session_store else None
+    # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
+    #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
+    #    both, the app runs but the durable store path fails (can't connect, or can't read tables).
+    grants_stores = bool(session_store or memory_store)
+    grant_error: Optional[str] = None
+    if grants_stores:
+        sp = _app_service_principal(name, obj.profile)
+        if sp is None:
+            grant_error = "could not resolve the app's service principal."
+        else:
+            memory_database = _memory_store_database(client, memory_store) if memory_store else None
+            grant_error = _grant_store_access(
+                name, sp, client.current_user, session_store, memory_database, obj.profile
+            )
 
     if obj.output == "json":
         render.emit_json(
@@ -276,10 +283,10 @@ def deploy(
                 "deployment": name,
                 "workspace_path": ws_path,
                 "env": env_updates,
-                "session_store_lakebase_grant": "skipped"
-                if not session_store
+                "store_grant": "skipped"
+                if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
-                "session_store_lakebase_grant_error": grant_error,
+                "store_grant_error": grant_error,
             }
         )
         return
@@ -289,15 +296,15 @@ def deploy(
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
         )
-    if session_store and grant_error is not None:
+    if grants_stores and grant_error is not None:
         steps.insert(
             0,
-            "Durable sessions need a Lakebase grant that couldn't be applied automatically "
-            "(need MANAGE on the managed session-store Lakebase — ask an admin or re-run as one). "
+            "The app's service principal needs read/write on its store tables; that grant couldn't "
+            "be applied automatically (it requires store ownership and psql). "
             f"Cause: {grant_error}",
         )
-    if session_store and grant_error is None:
-        provisioned["Session store Lakebase"] = "granted (postgres resource)"
+    if grants_stores and grant_error is None:
+        provisioned["Store access"] = "granted to app service principal"
     render.success(
         f"Deployed agent '{name}'",
         fields={"Workspace path": ws_path, **provisioned},

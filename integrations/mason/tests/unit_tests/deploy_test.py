@@ -91,7 +91,10 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "myapp", "--source-code-path", ws] in calls
-    assert "AGENT_MEMORY_STORE" in (src / "app.yaml").read_text()
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    # The API returns `memory-stores/mem`, but the runtime re-adds that prefix, so the env var
+    # must carry the bare id.
+    assert env["AGENT_MEMORY_STORE"] == "mem"
 
 
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):

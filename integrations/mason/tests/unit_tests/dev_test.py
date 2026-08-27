@@ -64,6 +64,45 @@ def test_dev_no_prepare_and_custom_port(tmp_path: pathlib.Path):
     assert cmd[-2:] == ["--app-port", "9000"]
 
 
+def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
+    import yaml
+
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "AGENT_SESSION_STORE", "value": "s"},
+                    {"name": "PIP_INDEX_URL", "value": "https://pypi.org/simple/"},
+                    {"name": "UV_INDEX_URL", "value": "https://pypi.org/simple/"},
+                ],
+            }
+        )
+    )
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    cmd = db.call_args.args[0]
+    assert "--entry-point" in cmd  # a filtered manifest was used
+    dev_yaml = tmp_path / ".mason-dev.app.yaml"
+    assert str(dev_yaml) in cmd
+    names = {e["name"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
+    assert names == {"AGENT_SESSION_STORE"}  # index vars stripped, app env kept
+
+
+def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
+    import yaml
+
+    (tmp_path / "app.yaml").write_text(
+        yaml.safe_dump({"command": ["x"], "env": [{"name": "AGENT_SESSION_STORE", "value": "s"}]})
+    )
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "--entry-point" not in db.call_args.args[0]  # nothing to strip -> use app.yaml as-is
+    assert not (tmp_path / ".mason-dev.app.yaml").exists()
+
+
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
