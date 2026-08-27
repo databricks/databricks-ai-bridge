@@ -62,20 +62,20 @@ def test_thread_config_from_session_id():
     assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123"}}
 
 
-@pytest.mark.asyncio
-async def test_checkpointer_is_shared():
+def test_checkpointer_is_shared():
     # In-memory by default (no AGENT_SESSION_STORE), cached so multi-turn works in-process.
-    assert await checkpointer() is await checkpointer()
+    assert checkpointer() is checkpointer()
 
 
-@pytest.mark.asyncio
-async def test_durable_checkpointer_needs_lakebase_resolver(monkeypatch):
+def test_durable_checkpointer_needs_lakebase_resolver(monkeypatch):
     # With a Session Store named but no way to resolve its Lakebase instance yet, fail loudly rather
     # than silently falling back to in-memory (which would lose durability the caller asked for).
+    checkpointer.cache_clear()  # bypass the lru_cache so the durable branch is exercised
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
     monkeypatch.delenv("LAKEBASE_INSTANCE_NAME", raising=False)
     with pytest.raises(NotImplementedError, match="backing Lakebase instance"):
-        await checkpointer()
+        checkpointer()
+    checkpointer.cache_clear()  # don't leak the failed-store state to other tests
 
 
 def test_session_id_from_request():

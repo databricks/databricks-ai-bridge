@@ -65,7 +65,7 @@ async def create_agent_graph():
         model=ChatDatabricks(endpoint=MODEL),
         tools=tools,
         middleware=middleware,
-        checkpointer=await checkpointer(),
+        checkpointer=checkpointer(),
     )
 
 

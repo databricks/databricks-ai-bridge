@@ -169,8 +169,8 @@ curl -X POST http://localhost:8000/invocations -H "Content-Type: application/jso
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
   human-in-the-loop section above); empty the dict to disable gating.
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Change the session checkpointer:** `agent/mason/session_store.py` (in-memory by default; swap for
-  a durable `PostgresSaver` over Lakebase).
+- **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
+  checkpointer lives in `agent/mason/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store name; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
