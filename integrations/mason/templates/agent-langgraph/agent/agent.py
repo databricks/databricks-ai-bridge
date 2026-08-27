@@ -81,7 +81,7 @@ async def create_agent_graph():
 def _session_id(request: dict) -> str:
     """The request's session id (for multi-turn / resume), or a fresh one for a new conversation.
 
-    The runtime copies the ``X-Routing-Key`` header into ``session_id`` before calling the handler.
+    The runtime passes the request body's ``session_id`` through before calling the handler.
     """
     return str(request.get("session_id") or uuid7())
 

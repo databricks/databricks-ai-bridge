@@ -72,7 +72,8 @@ mason [-p <profile>] [-o text|json]
                [--permission read_only|read_write] [--source PATH]
                [--framework openai|langgraph]
   deploy       <name> --source PATH [--with-memory-store N]
-               [--with-session-store N] [--with-traces C.S] [--create-stores]
+               [--with-session-store N] [--actor-id ID]
+               [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
 
@@ -118,10 +119,11 @@ mason add ui
 uv run start-server
 ```
 
-The UI exercises streaming, background polling, session routing, long-term memory tools, human
-approval, and runtime status. `mason add ui --enable-crash` also enables a demo-only endpoint that
-terminates the process so an auto-restarting dev server or deployed Databricks App can prove that a
-managed Session Store resumes the same conversation after restart.
+The UI exercises streaming, sticky background polling, same-ID session resume, managed Memory Store
+entries, managed Session Store transcript items, agent memory tools, human approval, and runtime status.
+`mason add ui --enable-crash` also enables a demo-only endpoint that terminates the process so an
+auto-restarting dev server or deployed Databricks App can prove that the durable checkpointer resumes
+the same conversation after restart.
 
 For the full deployed demo, connect both managed stores:
 
@@ -130,8 +132,11 @@ mason add ui --enable-crash
 mason --profile <profile> deploy mason-agent-demo --source . \
   --with-session-store mason-demo-sessions \
   --with-memory-store mason-demo-memory \
+  --actor-id alice \
   --create-stores
 ```
 
-The UI can remember a fact in one session and recall it in a new one. It can also pause on the
-sample approval-gated tool, crash the app, wait for a new process, and approve the same paused run.
+`mason deploy` provisions or resolves the stores and injects their names plus the shared actor id.
+The UI can create, list, and search memory entries for the actor; it also creates a managed session
+and mirrors user/assistant turns into Session Store items. It can pause on the sample approval-gated
+tool, crash the app, wait for a new process, and approve the same paused run.

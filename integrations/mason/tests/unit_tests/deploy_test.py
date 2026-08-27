@@ -65,6 +65,9 @@ class _FakeClient:
             "next_page_token": "",
         }
 
+    def get_session_store(self, name):
+        return {"session_store_name": name}
+
 
 class _FakeCtx:
     profile = "prof"
@@ -179,6 +182,43 @@ def test_wait_for_running_times_out(monkeypatch):
         raise AssertionError("expected AgentCliError on timeout")
     except AgentCliError:
         pass
+
+
+def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        [
+            "myapp",
+            "--source",
+            str(src),
+            "--with-memory-store",
+            "mem",
+            "--with-session-store",
+            "sessions",
+            "--actor-id",
+            "alice",
+        ],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert env["AGENT_MEMORY_ACTOR_ID"] == "alice"
+    assert env["AGENT_SESSION_ACTOR_ID"] == "alice"
 
 
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):

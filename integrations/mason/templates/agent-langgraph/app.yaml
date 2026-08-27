@@ -15,7 +15,11 @@ command: ["uv", "run", "start-server"]
 #   # Long-term memory tools: a managed memory store name (registers remember/recall).
 #   - name: AGENT_MEMORY_STORE
 #     value: "<memory-store-name>"
+#   - name: AGENT_MEMORY_ACTOR_ID
+#     value: "alice"
 #   # Durable state: a managed Session Store name → checkpoints persisted via its REST API
 #   # (durable multi-turn + HITL pauses, no DB connection). Access uses the app's service principal.
 #   - name: AGENT_SESSION_STORE
 #     value: "<session-store-name>"
+#   - name: AGENT_SESSION_ACTOR_ID
+#     value: "alice"

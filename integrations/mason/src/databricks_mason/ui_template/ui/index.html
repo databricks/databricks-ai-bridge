@@ -70,16 +70,31 @@
           <section class="rail-section session-card">
             <div class="section-heading compact">
               <div>
-                <p class="eyebrow">Routing key</p>
-                <h2>Session</h2>
+                <p class="eyebrow">Managed transcript</p>
+                <h2>Session Store</h2>
               </div>
-              <button id="new-session" class="text-button" type="button">New</button>
+              <div class="button-row compact-actions">
+                <button id="refresh-session" class="text-button" type="button">Refresh</button>
+                <button id="new-session" class="text-button" type="button">New</button>
+              </div>
             </div>
             <button id="copy-session" class="session-key" type="button" title="Copy session ID">
               <code id="session-id">Creating…</code>
               <span>Copy</span>
             </button>
-            <p class="supporting-text">Stored in this browser and sent as <code>X-Routing-Key</code>.</p>
+            <label for="session-id-input">Open a session ID</label>
+            <div class="session-open-row">
+              <input id="session-id-input" autocomplete="off" spellcheck="false" />
+              <button id="open-session" class="button button-secondary" type="button">Open</button>
+            </div>
+            <div class="button-row wrap">
+              <button id="resume-session" class="button button-primary" type="button">Approve paused HITL</button>
+              <button id="reject-session" class="button button-secondary" type="button">Reject paused HITL</button>
+            </div>
+            <p id="session-store-label" class="supporting-text">The same ID is stored in this browser and sent in every invocation body.</p>
+            <div id="session-items" class="state-list compact-list" aria-live="polite">
+              <div class="state-empty">Connect a Session Store to mirror transcript items.</div>
+            </div>
           </section>
 
           <section class="rail-section identity-card">
@@ -147,15 +162,21 @@
               <span class="control-number">01</span>
               <div><p class="eyebrow">Cross-session</p><h2>Long-term memory</h2></div>
             </div>
-            <label for="memory-topic">Topic</label>
-            <input id="memory-topic" value="preferences" />
-            <label for="memory-fact">Fact to remember</label>
+            <label for="memory-path">Entry path</label>
+            <input id="memory-path" value="/profile.md" />
+            <label for="memory-fact">Content</label>
             <textarea id="memory-fact" rows="2" placeholder="I prefer concise answers with examples."></textarea>
-            <div class="button-row">
-              <button id="remember-button" class="button button-primary" type="button">Remember</button>
-              <button id="recall-button" class="button button-secondary" type="button">Recall in new session</button>
+            <label for="memory-query">Search query</label>
+            <input id="memory-query" value="profile preferences" />
+            <div class="button-row wrap">
+              <button id="remember-button" class="button button-primary" type="button">Save entry</button>
+              <button id="search-memory" class="button button-secondary" type="button">Search</button>
+              <button id="ask-memory" class="button button-secondary" type="button">Ask agent</button>
             </div>
-            <p id="memory-help" class="supporting-text">Connect a Memory Store to enable these tools.</p>
+            <p id="memory-help" class="supporting-text">Connect a Memory Store to manage entries.</p>
+            <div id="memory-results" class="state-list" aria-live="polite">
+              <div class="state-empty">Memory entries appear here.</div>
+            </div>
           </section>
 
           <section class="control-card recovery-card">

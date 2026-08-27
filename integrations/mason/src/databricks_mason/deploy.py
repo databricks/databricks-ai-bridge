@@ -26,7 +26,9 @@ from databricks_mason.store_access import _databricks, apply_postgres_resources,
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
+_MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_ENV = "AGENT_SESSION_STORE"
+_SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -276,6 +278,12 @@ def _grant_store_access(
     help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
 @click.option(
+    "--actor-id",
+    default="agent",
+    show_default=True,
+    help="Actor id used for managed memory entries and sessions.",
+)
+@click.option(
     "--with-traces",
     "traces_destination",
     default=None,
@@ -312,6 +320,7 @@ def deploy(
     source,
     memory_store,
     session_store,
+    actor_id,
     traces_destination,
     traces_experiment,
     create_stores,
@@ -335,8 +344,10 @@ def deploy(
     provisioned: dict[str, Any] = {}
     if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
+        env_updates[_MEMORY_ACTOR_ENV] = actor_id
     if _SESSION_ENV in env_updates:
         provisioned["Session store"] = env_updates[_SESSION_ENV]
+        env_updates[_SESSION_ACTOR_ENV] = actor_id
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:

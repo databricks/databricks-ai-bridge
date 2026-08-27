@@ -6,8 +6,9 @@
     stream_handler(request: dict) -> AsyncGenerator[dict]
 
 Nothing here is SDK-specific — the agent lives entirely behind those handlers (``agent/agent.py``).
-The session id (used for multi-turn and to resume a paused run) travels in the ``X-Routing-Key``
-header, not the body; the runtime reads it and hands it to the handlers as ``session_id``.
+The session id (used for multi-turn and to resume a paused run) travels in the JSON body as
+``session_id``. Databricks Apps replica affinity is handled separately by the
+``__Host-databricks-app-router`` cookie.
 
 Endpoints: ``POST /invocations`` (``stream: true`` → SSE ending with ``data: [DONE]``;
 ``background: true`` → an ``invocation_id`` to poll), ``GET /invocations/{invocation_id}`` to poll a
@@ -85,9 +86,6 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
         data = await request.json()
         is_stream = bool(data.pop(_REQUEST_STREAM_PARAM_KEY, False))
         is_background = bool(data.pop(_REQUEST_BACKGROUND_PARAM_KEY, False))
-        # Session id rides the routing-key header; expose it to the handlers as `session_id`.
-        if routing_key := request.headers.get(_REQUEST_SESSION_ID_HEADER_KEY):
-            data["session_id"] = routing_key
 
         if is_background:
             invocation_id = runs.start()

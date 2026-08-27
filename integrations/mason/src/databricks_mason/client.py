@@ -7,6 +7,7 @@ Deployment is handled separately (deploy.py) since it wraps the `databricks apps
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
@@ -14,6 +15,7 @@ from databricks.sdk import WorkspaceClient
 from databricks_mason.errors import AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
+_PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -39,7 +41,16 @@ class AgentApiClient:
 
     def __init__(self, profile: Optional[str] = None):
         try:
-            self._w = WorkspaceClient(profile=profile)
+            if profile:
+                inherited = {name: os.environ.pop(name, None) for name in _PROFILE_CONFLICT_ENV}
+                try:
+                    self._w = WorkspaceClient(profile=profile)
+                finally:
+                    for name, value in inherited.items():
+                        if value is not None:
+                            os.environ[name] = value
+            else:
+                self._w = WorkspaceClient()
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
@@ -68,7 +79,10 @@ class AgentApiClient:
         self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
     ) -> Any:
         try:
-            return self._w.api_client.do(method, path, query=query, body=body)
+            headers = None
+            if self._w.config.workspace_id:
+                headers = {"X-Databricks-Workspace-Id": str(self._w.config.workspace_id)}
+            return self._w.api_client.do(method, path, query=query, body=body, headers=headers)
         except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
             raise wrap_api_error(exc) from exc
 

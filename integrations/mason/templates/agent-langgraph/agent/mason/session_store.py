@@ -76,10 +76,11 @@ def thread_config(session_id: str) -> dict:
     """Run config that anchors this request to ``session_id``'s conversation thread.
 
     Includes ``actor_id`` because the durable saver maps it onto the Session's actor; it's ignored by
-    the in-memory default. The agent uses one actor per session id here — override for real per-user
-    attribution.
+    the in-memory default. ``AGENT_SESSION_ACTOR_ID`` keeps the saver and optional UI aligned on the
+    same actor; without it, each session id is its own actor for backward compatibility.
     """
-    return {"configurable": {"thread_id": session_id, "actor_id": session_id}}
+    actor_id = os.getenv("AGENT_SESSION_ACTOR_ID") or session_id
+    return {"configurable": {"thread_id": session_id, "actor_id": actor_id}}
 
 
 class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):

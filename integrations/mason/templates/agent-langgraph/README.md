@@ -88,9 +88,23 @@ storage, tracing — is off by default and requires no setup.
 Streaming frames are likewise native: `{ "type": "message", "message": {...} }` for completed
 messages and `{ "type": "delta", "content": "...", "id": "..." }` for text chunks.
 
-**Session id / multi-turn.** The session id travels in the **`X-Routing-Key`** header, not the body
-(one routing key generic across Apps and Agents). Send it to continue a conversation or resume a
-paused run; omit it and the server mints a fresh one and returns it as `session_id`.
+**Session id / multi-turn.** Send `session_id` in the JSON body to continue a conversation or resume
+a paused run; omit it and the server mints a fresh one and returns it.
+
+When calling a deployed App from an API client, also send the Databricks Apps
+`__Host-databricks-app-router` cookie for best-effort replica affinity. Reusing the same UUID for the
+cookie and `session_id` makes debugging straightforward, but the body value is what keys LangGraph
+checkpoint state and managed Session Store records. Browsers receive and resend the router cookie
+automatically.
+
+```bash
+SESSION_ID=$(uuidgen)
+curl -X POST "https://<app>.databricksapps.com/invocations" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -b "__Host-databricks-app-router=${SESSION_ID}" \
+  -d "{\"session_id\":\"${SESSION_ID}\",\"input\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
+```
 
 The examples below use `http://localhost:8000` (local dev). When deployed, use
 `https://<app>.databricksapps.com` with an `Authorization: Bearer <token>` header.
@@ -133,15 +147,13 @@ of running the tool, the run **pauses** and emits an `interrupt` event describin
              "args": { "recipient": "alice@x.com", "body": "hi" } }], "review_configs": [...] } }
 ```
 
-The paused run is checkpointed on the session's thread. **Resume** by sending the same session id
-(the `X-Routing-Key` header) with a native LangGraph `resume` payload — one decision per pending
-call:
+The paused run is checkpointed on the session's thread. **Resume** by sending the same `session_id`
+with a native LangGraph `resume` payload — one decision per pending call:
 
 ```bash
 # Approve — the tool runs
 curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -H "X-Routing-Key: <session-id>" \
-  -d '{ "resume": { "decisions": [{ "type": "approve" }] } }'
+  -d '{ "session_id": "<session-id>", "resume": { "decisions": [{ "type": "approve" }] } }'
 
 # Reject — the tool is skipped; the message is fed back to the model
 #   { "type": "reject", "message": "Not allowed." }
@@ -162,17 +174,16 @@ entirely. Which decisions are allowed per tool is configurable — see LangChain
 > so it survives only within the running process. Back the checkpointer with a durable store (below)
 > for pauses that survive restarts / span replicas.
 
-**Multi-turn** — send the `session_id` returned by the first turn back as the `X-Routing-Key` header:
+**Multi-turn** — send the `session_id` returned by the first turn back in the next JSON body:
 
 ```bash
 # First turn returns: { "output": [...], "session_id": "abc-123" }
 curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
   -d '{ "input": [{ "role": "user", "content": "My name is Alice" }] }'
 
-# Second turn — same routing key, agent remembers the first (same process; see durability note)
+# Second turn — same session id, agent remembers the first (same process; see durability note)
 curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -H "X-Routing-Key: abc-123" \
-  -d '{ "input": [{ "role": "user", "content": "What is my name?" }] }'
+  -d '{ "session_id": "abc-123", "input": [{ "role": "user", "content": "What is my name?" }] }'
 ```
 
 ## Customize the agent
@@ -187,7 +198,8 @@ curl -X POST http://localhost:8000/invocations -H "Content-Type: application/jso
   checkpointer lives in `agent/mason/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store name; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
-  conversations). Unset → the model isn't offered them.
+  conversations). The optional UI also creates, lists, and searches managed entries directly.
+  Unset → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `agent/mason/background.py`).
 
@@ -208,6 +220,11 @@ Deploy with the [Mason](../../README.md) CLI:
 ```bash
 mason deploy agent-langgraph --source .
 ```
+
+Add `--with-memory-store <name> --with-session-store <name> --actor-id <actor>` to wire managed
+state. Mason provisions or resolves the stores, injects the store/actor env vars, and deploys the
+App. The optional UI mirrors each chat turn into Session Store items and exposes direct Memory Store
+create/list/search controls.
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
@@ -257,7 +274,9 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store name → registers `remember`/`recall` long-term-memory tools |
+| `AGENT_MEMORY_ACTOR_ID` | `agent` | Actor partition used by memory tools and the optional UI |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
+| `AGENT_SESSION_ACTOR_ID` | session id | Actor used by the durable saver and optional UI managed session |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |

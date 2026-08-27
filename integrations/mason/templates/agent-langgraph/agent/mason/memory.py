@@ -14,11 +14,13 @@ long-term memory; change ``_actor_id`` to scope per user (e.g. from request cont
 """
 
 import os
+from functools import lru_cache
 
 from databricks.sdk import WorkspaceClient
 from langchain_core.tools import BaseTool, tool
 
 _AGENTS_V1 = "/api/agents/v1"
+_PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 
 
 def _actor_id() -> str:
@@ -26,18 +28,38 @@ def _actor_id() -> str:
 
 
 def _store_path() -> str:
-    return f"{_AGENTS_V1}/memory-stores/{os.environ['AGENT_MEMORY_STORE']}"
+    store = os.environ["AGENT_MEMORY_STORE"].strip().strip("/")
+    store = store.removeprefix("memory-stores/")
+    return f"{_AGENTS_V1}/memory-stores/{store}"
 
 
-def _api():
+@lru_cache(maxsize=1)
+def _workspace_client() -> WorkspaceClient:
     # Build the client lazily (needs workspace auth) so importing this module stays cheap.
-    return WorkspaceClient().api_client
+    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
+    if not profile:
+        return WorkspaceClient()
+    inherited = {name: os.environ.pop(name, None) for name in _PROFILE_CONFLICT_ENV}
+    try:
+        return WorkspaceClient(profile=profile)
+    finally:
+        for name, value in inherited.items():
+            if value is not None:
+                os.environ[name] = value
+
+
+def _do(method: str, path: str, *, body: dict) -> dict:
+    workspace = _workspace_client()
+    headers = None
+    if workspace.config.workspace_id:
+        headers = {"X-Databricks-Workspace-Id": str(workspace.config.workspace_id)}
+    return workspace.api_client.do(method, path, body=body, headers=headers)
 
 
 @tool
 def remember(fact: str, topic: str) -> str:
     """Persist a durable fact about the user in long-term memory."""
-    _api().do(
+    _do(
         "POST",
         f"{_store_path()}/entries",
         body={"actor_id": _actor_id(), "path": f"/{topic}/{fact[:8]}.md", "content": fact},
@@ -48,7 +70,7 @@ def remember(fact: str, topic: str) -> str:
 @tool
 def recall(query: str) -> str:
     """Search the user's long-term memory for facts relevant to the query."""
-    data = _api().do(
+    data = _do(
         "POST",
         f"{_store_path()}/entries:search",
         body={"actor_id": _actor_id(), "query": query, "limit": 5},

@@ -19,8 +19,9 @@ No database needed — conversation state uses an in-process LangGraph checkpoin
 ## Sample requests
 
 `input` is a list of LangChain message dicts; the reply is `{ "output": [...], "session_id": "..." }`
-where `output` is LangChain messages (native shape). The session id travels in the `X-Routing-Key`
-header — omit it for a new conversation, send it back to continue one.
+where `output` is LangChain messages (native shape). Send `session_id` in the JSON body to continue a
+conversation. For deployed API clients, also reuse it in the `__Host-databricks-app-router` cookie
+for best-effort replica affinity; browsers handle that cookie automatically.
 
 The examples below use local `/invocations` routes. Deployed Databricks Apps also expose the same
 handlers under `/api/invocations` so OAuth Bearer-token calls pass through the Apps API gateway.
@@ -47,22 +48,22 @@ curl -s http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
 
 # Human-in-the-loop — the gated send_message tool pauses for approval
 curl -sX POST http://localhost:8000/invocations \
-  -H "Content-Type: application/json" -H "X-Routing-Key: S" \
-  -d '{"input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"S","input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
 # -> {"output": [..., {"type":"interrupt","id":"int_...","value":{"action_requests":[...]}}], "session_id":"S", "status":"interrupted"}
-# Resume with the same routing key and a native decision (approve | edit | reject | respond):
+# Resume with the same session id and a native decision (approve | edit | reject | respond):
 curl -sX POST http://localhost:8000/invocations \
-  -H "Content-Type: application/json" -H "X-Routing-Key: S" \
-  -d '{"resume": {"decisions": [{"type": "approve"}]}}'
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"S","resume": {"decisions": [{"type": "approve"}]}}'
 # -> {"output": [...], "session_id": "S", "status": "completed"}
 
-# Multi-turn — send back the returned session_id as X-Routing-Key (same process; in-memory checkpointer)
+# Multi-turn — send back the returned session_id in the body (same process; in-memory checkpointer)
 curl -sX POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{"input": [{"role": "user", "content": "My name is Alice."}]}'
 curl -sX POST http://localhost:8000/invocations \
-  -H "Content-Type: application/json" -H "X-Routing-Key: <session-id>" \
-  -d '{"input": [{"role": "user", "content": "What is my name?"}]}'
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"<session-id>","input": [{"role": "user", "content": "What is my name?"}]}'
 ```
 
 ## Where things live
@@ -97,19 +98,24 @@ a file to `agent/tools/`.
 
 - Default: `agent/mason/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
-- The session id arrives in the `X-Routing-Key` header; `runtime/runtime.py` copies it into the
-  request dict as `session_id` before calling the handler.
+- The session id is the request body's `session_id`. Databricks Apps replica affinity is the separate
+  `__Host-databricks-app-router` cookie, which browsers receive automatically and API clients send.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
   returns a `DatabricksSessionStoreSaver` — a `BaseCheckpointSaver` that serializes checkpoints into
   Session Store items via the REST API (no DB connection), so full graph state incl. paused HITL runs
   survives restarts/replicas. Adapted from the first-party `databricks_agent_client.langgraph`
   prototype over a vendored REST client (`session_store_client.py`); swap both for the published
-  package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`).
+  package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`);
+  `AGENT_SESSION_ACTOR_ID` keeps the saver and optional UI on the same actor.
+- The optional UI uses the managed Session API too: it creates the same-ID session and mirrors
+  user/assistant messages into transcript items.
+- When `AGENT_MEMORY_STORE` is set, the optional UI creates/lists/searches entries directly using
+  `AGENT_MEMORY_ACTOR_ID` (default `agent`), in addition to exposing the agent's memory tools.
 - Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
-  `resume` with the same routing key — no runtime change; it rides `/invocations` through the handlers.
+  `resume` with the same session id — no runtime change; it rides `/invocations` through the handlers.
   Durability follows the checkpointer: in-process by default, cross-restart with `AGENT_SESSION_STORE`.
 
 ## MLflow tracing

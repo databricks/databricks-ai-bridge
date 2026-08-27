@@ -359,6 +359,31 @@ h2 {
   font-weight: 750;
 }
 
+.session-card label {
+  display: block;
+  margin: 12px 0 5px;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.session-open-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.session-open-row input {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+}
+
 .supporting-text {
   margin: 10px 0 0;
   color: var(--ink-soft);
@@ -630,6 +655,14 @@ h2 {
   gap: 8px;
 }
 
+.button-row.wrap {
+  flex-wrap: wrap;
+}
+
+.compact-actions {
+  margin-top: 0;
+}
+
 .composer {
   margin: 0 18px 18px;
   padding: 11px;
@@ -779,6 +812,71 @@ h2 {
   border: 1px solid var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.state-list {
+  max-height: 230px;
+  margin-top: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
+.compact-list {
+  max-height: 190px;
+}
+
+.state-empty,
+.state-loading,
+.state-error {
+  padding: 13px;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.state-loading {
+  color: var(--warning);
+}
+
+.state-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.state-item {
+  padding: 10px 11px;
+  border-bottom: 1px solid var(--line);
+}
+
+.state-item:last-child {
+  border-bottom: 0;
+}
+
+.state-item strong,
+.state-item p,
+.state-item small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.state-item strong {
+  color: var(--ink);
+  font-size: 0.7rem;
+}
+
+.state-item p {
+  margin: 5px 0;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.state-item small {
+  color: var(--line-strong);
+  font-size: 0.61rem;
 }
 
 .event-card {

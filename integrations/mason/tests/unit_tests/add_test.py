@@ -33,6 +33,11 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert (project / "ui/index.html").is_file()
     assert (project / "runtime/ui.py").is_file()
     assert (project / "tests/test_demo_ui.py").is_file()
+    ui_script = (project / "ui/app.js").read_text()
+    assert "/api/demo/memory/search" in ui_script
+    assert "/api/demo/sessions/" in ui_script
+    assert 'credentials: "same-origin"' in ui_script
+    assert "Approve paused HITL" in (project / "ui/index.html").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
     assert "install_ui(app)" in main
