@@ -138,16 +138,16 @@ def init(
         )
         return
 
-    run_step = (
-        "uv run start-server        # run locally"
-        if wrote_env
-        else "cp .env.example .env       # then set DATABRICKS_CONFIG_PROFILE, and: uv run start-server"
-    )
     fields = {"Framework": framework, "Directory": str(dest)}
+    steps = [f"cd {dest}"]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
-    render.success(
-        f"Scaffolded '{template_dir}'",
-        fields=fields,
-        next_steps=[f"cd {dest}", run_step, f"mason deploy <name> --source {dest}"],
-    )
+    else:
+        # No profile resolved, so no .env was seeded — call out the auth step explicitly rather
+        # than burying it, since `uv run start-server` fails without a Databricks profile.
+        steps += [
+            "cp .env.example .env",
+            "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
+        ]
+    steps += ["uv run start-server        # run locally", f"mason deploy <name> --source {dest}"]
+    render.success(f"Scaffolded '{template_dir}'", fields=fields, next_steps=steps)
