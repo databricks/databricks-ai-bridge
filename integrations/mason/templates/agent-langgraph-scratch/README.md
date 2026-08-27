@@ -228,8 +228,14 @@ Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name
 Store is provisioned into a service-managed Lakebase Postgres project; the saver runs LangGraph's real
 `PostgresSaver` against it, so full graph state — including paused HITL runs (pending writes +
 interrupts) — is durable across restarts and replicas. The project/branch are derived from the store
-name alone (no extra connection config); the durable path needs `databricks-langchain[memory]`. No
-agent code changes; the checkpointer swap is the only difference.
+name alone (no extra connection config). No agent code changes; the checkpointer swap is the only
+difference.
+
+> **This is a deployed-app path.** The store's Lakebase project is granted to the app's service
+> principal (via the app resource binding), not to human users — so it works in the deployed app but
+> **not** under your local user credentials (Postgres rejects the connection; `session_store.py`
+> raises a clear error saying so). For local dev, leave `AGENT_SESSION_STORE` unset to use the
+> in-process checkpointer, or separately grant your user on the store's Lakebase project.
 
 > Checkpoints currently land in the shared project's default Lakebase database, not the per-store
 > database named after `AGENT_SESSION_STORE` (which holds the session's message items). The

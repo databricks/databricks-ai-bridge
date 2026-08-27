@@ -61,8 +61,8 @@ def _durable_checkpointer() -> BaseCheckpointSaver:
     different database. When the pool allows overriding the database, point this at the per-store one
     to co-locate checkpoints with the session's items (and match its access grants).
     """
-    # Lazy import: the durable path needs databricks-langchain[memory]; the base template runs
-    # in-memory without it.
+    # Imported here (not at module load) so the in-memory default path doesn't pull in the Lakebase
+    # connection-pool machinery it never uses.
     from databricks_langchain.checkpoint import CheckpointSaver
 
     saver = CheckpointSaver(
@@ -70,8 +70,23 @@ def _durable_checkpointer() -> BaseCheckpointSaver:
         branch=_DEFAULT_BRANCH,
         schema=_CHECKPOINT_SCHEMA,
     )
-    saver.__enter__()  # open the connection pool (process-lived; no explicit close)
-    saver.setup()  # create checkpoint tables if absent
+    try:
+        saver.__enter__()  # open the connection pool (process-lived; no explicit close)
+        saver.setup()  # create checkpoint tables if absent
+    except Exception as e:
+        # The store's Lakebase project is granted to the deployed app's service principal (via the
+        # app resource binding), not to individual human users. Running locally under your own
+        # credentials, that grant doesn't exist, so Postgres rejects the connection. Surface that
+        # rather than a raw driver error — the durable path is meant to run in the deployed app.
+        if "authentication failed" in str(e).lower():
+            raise RuntimeError(
+                f"Connected to the Lakebase project for {_SESSION_STORE_ENV!r} but Postgres auth "
+                "was rejected. The managed Session Store grants access to the deployed app's "
+                "service principal, not to human users — so the durable checkpointer works in the "
+                "deployed app but not under local user credentials. For local dev, leave "
+                f"{_SESSION_STORE_ENV} unset to use the in-process checkpointer."
+            ) from e
+        raise
     return saver
 
 

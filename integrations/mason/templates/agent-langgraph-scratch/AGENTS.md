@@ -98,9 +98,10 @@ a file to `agent/tools/`.
   request dict as `session_id` before calling the handler.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
   returns a Lakebase-backed `CheckpointSaver` (LangGraph `PostgresSaver`), so full graph state —
-  incl. paused HITL runs — survives restarts/replicas. Project/branch derive from the store name;
-  needs `databricks-langchain[memory]`. (Checkpoints land in the project's default database, not the
-  per-store one yet — see the note in `session_store.py`.)
+  incl. paused HITL runs — survives restarts/replicas. Project/branch derive from the store name.
+  Deployed-app path: the store's Lakebase grants the app's service principal, not human users, so it
+  fails under local user creds (clear error in `session_store.py`) — leave unset for local dev.
+  (Checkpoints land in the project's default database, not the per-store one yet — see `session_store.py`.)
 - Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
