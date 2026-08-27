@@ -11,8 +11,16 @@ The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, t
 background wiring), so the template shows exactly how the agent is served — request and response
 bodies are plain dicts, no wrapper types.
 
-This template is API-first (no bundled UI). Call it with `curl` or from your own frontend /
-model-serving client.
+This template is API-first. Call it with `curl`, use it from your own client, or add Mason's
+zero-build demo UI after scaffolding:
+
+```bash
+mason add ui
+```
+
+The UI exercises sync and SSE streaming calls, background polling, session routing, long-term
+memory tools, human approval, and an opt-in crash/recovery flow. Run `mason add ui --enable-crash`
+when a supervisor or deployed Databricks App will restart the process.
 
 Local clients can use `/invocations`. For a deployed Databricks App, use the equivalent
 `/api/invocations` route with an OAuth Bearer token; Databricks Apps reserves `/api/*` for
@@ -37,6 +45,7 @@ agent/                 # the agent (reasoning plane) — this is what you edit
 runtime/               # the HTTP surface — SDK-agnostic; rarely edited
   runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
   main.py              #   entry point: loads config, builds the app, runs uvicorn
+ui/                    # optional browser UI added by `mason add ui`
 tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
