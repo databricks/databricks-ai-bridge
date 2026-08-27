@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 _AGENTS_API = "/api/agents/v1"
+
+SessionHistoryHandler = Callable[[str], Awaitable[dict[str, Any]]]
 
 
 class MemoryEntryRequest(BaseModel):
@@ -211,7 +214,7 @@ def _require_session() -> None:
         )
 
 
-def install_ui(app: FastAPI) -> None:
+def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = None) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
 
@@ -237,6 +240,7 @@ def install_ui(app: FastAPI) -> None:
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
+                "history": bool(session_store or session_history),
                 "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": _session_actor(),
@@ -284,8 +288,11 @@ def install_ui(app: FastAPI) -> None:
 
     @app.get("/api/demo/sessions/{session_id}/items", include_in_schema=False)
     async def list_session_items(session_id: str) -> dict:
-        _require_session()
-        return await _managed_call(_state_client().list_session_items, session_id)
+        if _session_store():
+            return await _managed_call(_state_client().list_session_items, session_id)
+        if session_history is None:
+            raise HTTPException(status_code=503, detail="Session history is not available.")
+        return await session_history(session_id)
 
     @app.post("/api/demo/crash", include_in_schema=False)
     async def crash() -> dict:

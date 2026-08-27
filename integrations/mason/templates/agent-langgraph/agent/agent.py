@@ -55,7 +55,9 @@ def _check_databricks_auth() -> None:
         _workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        target = (
+            f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        )
         raise RuntimeError(
             f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
             "Fix one of:\n"
@@ -69,13 +71,37 @@ def _check_databricks_auth() -> None:
 async def create_agent_graph():
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
     tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
-    middleware = [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
+    middleware = (
+        [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
+    )
     return create_agent(
         model=ChatDatabricks(endpoint=MODEL, workspace_client=_workspace_client()),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),
     )
+
+
+async def session_history(session_id: str) -> dict:
+    """Return the messages and pending interrupts stored on a LangGraph session thread."""
+    graph = await create_agent_graph()
+    snapshot = await graph.aget_state(thread_config(session_id))
+    values = snapshot.values if isinstance(snapshot.values, dict) else {}
+    items = []
+    for index, message in enumerate(values.get("messages", [])):
+        data = message.model_dump() if hasattr(message, "model_dump") else message
+        items.append(
+            {
+                "item_id": str(getattr(message, "id", None) or index),
+                "data": data if isinstance(data, dict) else {"content": str(data)},
+            }
+        )
+    interrupts = [
+        {"id": interrupt.id, "value": interrupt.value}
+        for task in getattr(snapshot, "tasks", ())
+        for interrupt in getattr(task, "interrupts", ())
+    ]
+    return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
 
 
 def _session_id(request: dict) -> str:
@@ -119,10 +145,14 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
     # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
     resume = request.get("resume")
-    agent_input = Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
+    agent_input = (
+        Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
+    )
 
     async for event in _serialize_events(
-        agent.astream(input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"])
+        agent.astream(
+            input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"]
+        )
     ):
         yield event
 

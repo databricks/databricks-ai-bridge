@@ -27,6 +27,7 @@ _UI_FILES = {
 }
 _RUNTIME_IMPORT = "from runtime.runtime import build_app"
 _UI_IMPORT = "from runtime.ui import install_ui"
+_UI_CALL = "install_ui(app, session_history=agent.agent.session_history)"
 _APP_BUILD_PATTERN = re.compile(r"^app = build_app\(.+\)$", re.MULTILINE)
 _CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
 
@@ -41,7 +42,7 @@ def _validate_project(project: pathlib.Path) -> None:
 
 
 def _is_installed(main_text: str) -> bool:
-    return _UI_IMPORT in main_text and "install_ui(app)" in main_text
+    return _UI_IMPORT in main_text and "install_ui(app" in main_text
 
 
 def _patched_runtime_main(main_path: pathlib.Path) -> str | None:
@@ -61,7 +62,7 @@ def _patched_runtime_main(main_path: pathlib.Path) -> str | None:
     text = text.replace(_RUNTIME_IMPORT, f"{_RUNTIME_IMPORT}\n{_UI_IMPORT}", 1)
     patched_match = _APP_BUILD_PATTERN.search(text)
     assert patched_match is not None
-    return f"{text[: patched_match.end()]}\ninstall_ui(app){text[patched_match.end() :]}"
+    return f"{text[: patched_match.end()]}\n{_UI_CALL}{text[patched_match.end() :]}"
 
 
 def _resource_text(resource_name: str) -> str:

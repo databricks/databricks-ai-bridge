@@ -102,7 +102,7 @@ function setBusy(busy, label = "Working") {
   elements.searchMemory.disabled = busy || !state.config?.memory.enabled;
   elements.askMemory.disabled = busy || !state.config?.memory.enabled;
   elements.openSession.disabled = busy;
-  elements.refreshSession.disabled = busy || !state.config?.session.managed;
+  elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
   elements.crashButton.disabled = busy || !state.config?.crash.enabled;
@@ -406,20 +406,23 @@ async function ensureManagedSession() {
   return sessionId;
 }
 
-async function refreshManagedSession({ hydrateChat = false } = {}) {
-  if (!state.config?.session.managed) {
-    stateMessage(elements.sessionItems, "Connect a Session Store to mirror transcript items.");
+async function refreshSession({ hydrateChat = false } = {}) {
+  if (!state.config?.session.history) {
+    stateMessage(elements.sessionItems, "Session history is not available.");
     return;
   }
   try {
-    const sessionId = await ensureManagedSession();
+    const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
     const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/items`, {
       cache: "no-store",
     });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
-    if (hydrateChat) renderSessionTranscript(items);
+    if (hydrateChat) {
+      renderSessionTranscript(items);
+      for (const interrupt of result.interrupts || []) handleInterrupt(interrupt);
+    }
     addEvent("session.items.list", result);
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
@@ -443,19 +446,19 @@ async function openSessionById() {
   elements.approvalSummary.textContent =
     "Session opened by ID. If its LangGraph checkpoint is paused, approve or reject it below.";
   elements.approvalPanel.hidden = !state.config?.session.durable;
-  if (!state.config?.session.managed) {
-    addEvent("session.open", { session_id: sessionId, managed: false });
-    return;
-  }
-  stateMessage(elements.sessionItems, "Opening managed session…", "loading");
+  stateMessage(elements.sessionItems, "Opening session…", "loading");
   try {
-    const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}`, {
-      cache: "no-store",
-    });
-    const result = await jsonResponse(response);
-    state.managedSessionId = sessionId;
-    addEvent("session.open", result);
-    await refreshManagedSession({ hydrateChat: true });
+    if (state.config?.session.managed) {
+      const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}`, {
+        cache: "no-store",
+      });
+      const result = await jsonResponse(response);
+      state.managedSessionId = sessionId;
+      addEvent("session.open", result);
+    } else {
+      addEvent("session.open", { session_id: sessionId, managed: false });
+    }
+    await refreshSession({ hydrateChat: true });
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -473,7 +476,7 @@ async function recordSessionItems(items) {
     });
     const result = await jsonResponse(response);
     addEvent("session.items.append", result);
-    await refreshManagedSession();
+    await refreshSession();
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -708,7 +711,7 @@ function resetConversation() {
   elements.emptyState.hidden = false;
   elements.promptInput.focus();
   addEvent("session.new", { session_id: state.sessionId });
-  void refreshManagedSession();
+  void refreshSession();
 }
 
 async function loadConfig() {
@@ -728,13 +731,13 @@ async function loadConfig() {
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
     setCapability(elements.streamingStatus, config.streaming.enabled);
     setCapability(elements.backgroundStatus, config.background.enabled);
-    setCapability(elements.sessionStatus, config.session.managed);
+    setCapability(elements.sessionStatus, config.session.history);
     setCapability(elements.memoryStatus, config.memory.enabled);
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
     elements.askMemory.disabled = state.busy || !config.memory.enabled;
     elements.openSession.disabled = state.busy;
-    elements.refreshSession.disabled = state.busy || !config.session.managed;
+    elements.refreshSession.disabled = state.busy || !config.session.history;
     elements.resumeSession.disabled = state.busy || !config.session.durable;
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
@@ -742,7 +745,9 @@ async function loadConfig() {
       : "Deploy with --with-memory-store to expose managed entries and agent memory tools.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the same ID keys transcript and checkpoint state.`
-      : "The ID is stored in this browser and sent in every invocation body; no managed transcript is connected.";
+      : config.session.history
+        ? "Messages load from the in-process LangGraph checkpoint and remain available until the server restarts."
+        : "The ID is stored in this browser and sent in every invocation body; session history is unavailable.";
     elements.crashButton.disabled = state.busy || !config.crash.enabled;
     elements.recoveryStatus.textContent = !config.crash.enabled
       ? "Run mason add ui --enable-crash to opt in."
@@ -751,7 +756,7 @@ async function loadConfig() {
         : "Crash is enabled, but this in-process session will reset after restart.";
     setConnection("online", "Connected");
     addEvent("runtime.config", config);
-    void refreshManagedSession();
+    void refreshSession();
     if (config.memory.enabled) void listMemoryEntries();
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
@@ -901,7 +906,7 @@ elements.sessionIdInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") openSessionById();
 });
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));
-elements.refreshSession.addEventListener("click", () => refreshManagedSession({ hydrateChat: true }));
+elements.refreshSession.addEventListener("click", () => refreshSession({ hydrateChat: true }));
 elements.clearEvents.addEventListener("click", () => {
   state.events = [];
   elements.eventLog.innerHTML = '<div class="event-empty">Invocation events appear here.</div>';

@@ -119,8 +119,9 @@ mason add ui
 uv run start-server
 ```
 
-The UI exercises streaming, sticky background polling, same-ID session resume, managed Memory Store
-entries, managed Session Store transcript items, agent memory tools, human approval, and runtime status.
+The UI exercises streaming, sticky background polling, same-ID session resume, local checkpoint
+history, managed Memory Store entries, managed Session Store transcript items, agent memory tools,
+human approval, and runtime status.
 `mason add ui --enable-crash` also enables a demo-only endpoint that terminates the process so an
 auto-restarting dev server or deployed Databricks App can prove that the durable checkpointer resumes
 the same conversation after restart.

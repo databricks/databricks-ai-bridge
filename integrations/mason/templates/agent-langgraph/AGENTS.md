@@ -98,6 +98,8 @@ a file to `agent/tools/`.
 
 - Default: `agent/mason/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
+- The optional UI reads messages from that checkpoint when no managed Session Store is configured,
+  so opening a local session repopulates the chat until the process restarts.
 - The session id is the request body's `session_id`. Databricks Apps replica affinity is the separate
   `__Host-databricks-app-router` cookie, which browsers receive automatically and API clients send.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`

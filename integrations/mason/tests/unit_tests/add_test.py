@@ -16,8 +16,9 @@ def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     (project / "runtime").mkdir(parents=True)
     (project / "tests").mkdir()
     (project / "runtime/main.py").write_text(
+        "import agent.agent\n"
         "from runtime.runtime import build_app\n\n"
-        "app = build_app(agent.invoke_handler, agent.stream_handler)\n"
+        "app = build_app(agent.agent.invoke_handler, agent.agent.stream_handler)\n"
     )
     (project / "runtime/runtime.py").write_text("def build_app(*args): ...\n")
     (project / "pyproject.toml").write_text('[project]\nname = "demo"\n')
@@ -38,11 +39,11 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert "/api/demo/sessions/" in ui_script
     assert 'credentials: "same-origin"' in ui_script
     assert "renderSessionTranscript(items)" in ui_script
-    assert "refreshManagedSession({ hydrateChat: true })" in ui_script
+    assert "refreshSession({ hydrateChat: true })" in ui_script
     assert "Approve paused HITL" in (project / "ui/index.html").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
-    assert "install_ui(app)" in main
+    assert "install_ui(app, session_history=agent.agent.session_history)" in main
     assert "MASON_DEMO_CRASH_ENABLED" in (project / ".env.example").read_text()
 
 

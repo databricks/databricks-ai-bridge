@@ -196,6 +196,9 @@ curl -X POST http://localhost:8000/invocations -H "Content-Type: application/jso
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
 - **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
   checkpointer lives in `agent/mason/session_store.py`.
+- **Restore local chat history:** the optional UI reads messages directly from the current LangGraph
+  checkpoint, so reopening a session works while the local server process is alive. Managed Session
+  Store items remain the durable transcript source across restarts and replicas.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store name; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
   conversations). The optional UI also creates, lists, and searches managed entries directly.
