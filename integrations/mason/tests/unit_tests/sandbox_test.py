@@ -60,8 +60,9 @@ def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     ast.parse(generated)
     assert '"name": "catalog.schema.volume"' in generated
     assert '"permission": "read_only"' in generated
-    assert 'tool_filter={"allowed_tool_names": ["sandbox"]}' in generated
-    assert 'function_name="sandbox"' not in generated
+    assert '"/ai-gateway/mcp-services/system.ai.sandbox"' in generated
+    assert "from_uc_function" not in generated
+    assert 'tool_filter={"allowed_tool_names": ["run_code"]}' in generated
     assert "return [\n        _build_sandbox_mcp_server(),\n    ]" in generated
     assert 'meta["downscope"] = _SANDBOX_DOWNSCOPE' in generated
     assert "super().call_tool(tool_name, arguments, meta=meta, **kwargs)" in generated
@@ -82,17 +83,15 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     class FakeMcpServer:
         connection: dict[str, object]
 
-        def __init__(self):
-            self.connection = {}
-
-        @classmethod
-        def from_uc_function(cls, **kwargs):
-            instance = cls()
-            instance.connection = kwargs
-            return instance
+        def __init__(self, **kwargs):
+            self.connection = kwargs
 
         async def call_tool(self, tool_name, arguments, **kwargs):
             return tool_name, arguments, kwargs
+
+    class FakeWorkspaceClient:
+        def __init__(self):
+            self.config = types.SimpleNamespace(host="https://tilefood.example.com")
 
     agents = types.ModuleType("agents")
     agents_mcp = types.ModuleType("agents.mcp")
@@ -100,10 +99,13 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     databricks_openai = types.ModuleType("databricks_openai")
     databricks_openai_agents = types.ModuleType("databricks_openai.agents")
     databricks_openai_agents.__dict__["McpServer"] = FakeMcpServer
+    databricks_sdk = types.ModuleType("databricks.sdk")
+    databricks_sdk.__dict__["WorkspaceClient"] = FakeWorkspaceClient
     monkeypatch.setitem(sys.modules, "agents", agents)
     monkeypatch.setitem(sys.modules, "agents.mcp", agents_mcp)
     monkeypatch.setitem(sys.modules, "databricks_openai", databricks_openai)
     monkeypatch.setitem(sys.modules, "databricks_openai.agents", databricks_openai_agents)
+    monkeypatch.setitem(sys.modules, "databricks.sdk", databricks_sdk)
 
     namespace: dict[str, Any] = {}
     exec(compile(mcps.read_text(), str(mcps), "exec"), namespace)
@@ -126,10 +128,12 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
         },
         "trace_id": "123",
     }
-    assert server.connection["catalog"] == "system"
-    assert server.connection["schema"] == "ai"
-    assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox"]}
-    assert "function_name" not in server.connection
+    assert server.connection["url"] == (
+        "https://tilefood.example.com/ai-gateway/mcp-services/system.ai.sandbox"
+    )
+    assert isinstance(server.connection["workspace_client"], FakeWorkspaceClient)
+    assert server.connection["timeout"] == 120.0
+    assert server.connection["tool_filter"] == {"allowed_tool_names": ["run_code"]}
 
 
 def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pathlib.Path):

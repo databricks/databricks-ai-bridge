@@ -21,6 +21,7 @@ _SERVER_FACTORY = "_build_sandbox_mcp_server()"
 
 _GENERATED_TYPING_IMPORT = "from typing import Any"
 _GENERATED_MCP_IMPORT = "from databricks_openai.agents import McpServer"
+_GENERATED_WORKSPACE_CLIENT_IMPORT = "from databricks.sdk import WorkspaceClient"
 
 
 def _validate_uc_name(value: str, resource_type: str) -> str:
@@ -225,21 +226,35 @@ def _insert_imports(source: str) -> str:
         ):
             break
 
-    with_mcp_import = source
+    missing_imports: list[str] = []
     if not has_from_import("databricks_openai.agents", "McpServer"):
+        missing_imports.append(_GENERATED_MCP_IMPORT)
+    if not has_from_import("databricks.sdk", "WorkspaceClient"):
+        missing_imports.append(_GENERATED_WORKSPACE_CLIENT_IMPORT)
+
+    with_runtime_imports = source
+    if missing_imports:
         import_end_line, import_end_column = _end_position(protocol_imports[0])
         import_end = _offset(lines, import_end_line, import_end_column)
-        with_mcp_import = source[:import_end] + "\n" + _GENERATED_MCP_IMPORT + source[import_end:]
+        with_runtime_imports = (
+            source[:import_end] + "\n" + "\n".join(missing_imports) + source[import_end:]
+        )
 
     if has_from_import("typing", "Any"):
-        return with_mcp_import
+        return with_runtime_imports
 
     if insert_after is not None:
         end_line, end_column = _end_position(insert_after)
         insert_at = _offset(lines, end_line, end_column)
-        following = with_mcp_import[insert_at:].lstrip("\n")
-        return with_mcp_import[:insert_at] + "\n\n" + _GENERATED_TYPING_IMPORT + "\n\n" + following
-    return _GENERATED_TYPING_IMPORT + "\n\n" + with_mcp_import.lstrip("\n")
+        following = with_runtime_imports[insert_at:].lstrip("\n")
+        return (
+            with_runtime_imports[:insert_at]
+            + "\n\n"
+            + _GENERATED_TYPING_IMPORT
+            + "\n\n"
+            + following
+        )
+    return _GENERATED_TYPING_IMPORT + "\n\n" + with_runtime_imports.lstrip("\n")
 
 
 def _format_policy(policy: dict[str, list[dict[str, str]]]) -> str:
@@ -484,11 +499,16 @@ class _SandboxMcpServer(McpServer):
 
 
 def {_SERVER_FACTORY} -> McpServer:
-    return _SandboxMcpServer.from_uc_function(
-        catalog="system",
-        schema="ai",
+    workspace_client = WorkspaceClient()
+    return _SandboxMcpServer(
+        url=(
+            f"{{workspace_client.config.host.rstrip('/')}}"
+            "/ai-gateway/mcp-services/system.ai.sandbox"
+        ),
+        workspace_client=workspace_client,
+        timeout=120.0,
         name="system.ai.sandbox",
-        tool_filter={{"allowed_tool_names": ["sandbox"]}},
+        tool_filter={{"allowed_tool_names": ["run_code"]}},
     )
 
 
