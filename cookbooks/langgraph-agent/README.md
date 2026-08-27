@@ -73,6 +73,49 @@ identifies graph state across attempts. A client can provide
 `context.conversation_id`. If none is supplied for agent-session recovery, the
 server uses the generated `response_id` as `context.conversation_id`.
 
+## Durable HITL
+
+HITL uses two durable Responses. The first run creates a proposal and completes
+with `APPROVAL_REQUIRED`; the second run carries the human decision and reuses
+the same LangGraph thread.
+
+```bash
+curl -N -X POST "$APP_URL/responses" \
+  -H "Authorization: Bearer $APP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "background": true,
+    "stream": true,
+    "input": [{
+      "role": "user",
+      "content": "PROPOSAL: publish the release notes"
+    }],
+    "custom_inputs": {"thread_id": "approval-thread-1"}
+  }'
+```
+
+After the human reviews the persisted response, approve it with the same thread:
+
+```bash
+curl -N -X POST "$APP_URL/responses" \
+  -H "Authorization: Bearer $APP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "background": true,
+    "stream": true,
+    "input": [{
+      "role": "user",
+      "content": "APPROVED: wait for 60 seconds, then publish the release notes"
+    }],
+    "custom_inputs": {"thread_id": "approval-thread-1"}
+  }'
+```
+
+The runtime persists both Responses and their stream events; the LangGraph
+checkpointer preserves the proposal between turns. If the App stops during the
+approved run, the server reclaims it and applies the selected recovery strategy.
+Tools remain at-least-once and must be idempotent.
+
 ## Try It
 
 Start a background stream. The wait tool makes crash testing predictable:

@@ -86,6 +86,51 @@ identifies SDK history. For agent-session recovery, a client can provide
 the server logs a warning and uses the generated `response_id` as
 `context.conversation_id`.
 
+## Durable HITL
+
+HITL uses two durable Responses rather than holding a worker while waiting for
+a person. The proposal run completes with `APPROVAL_REQUIRED`; the approval is
+a new background streamed request using the same SDK session.
+
+```bash
+curl -N -X POST "$APP_URL/responses" \
+  -H "Authorization: Bearer $APP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "background": true,
+    "stream": true,
+    "input": [{
+      "role": "user",
+      "content": "PROPOSAL: publish the release notes"
+    }],
+    "custom_inputs": {"session_id": "approval-session-1"}
+  }'
+```
+
+After the human reviews the persisted response, submit approval with the same
+session ID:
+
+```bash
+curl -N -X POST "$APP_URL/responses" \
+  -H "Authorization: Bearer $APP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "background": true,
+    "stream": true,
+    "input": [{
+      "role": "user",
+      "content": "APPROVED: wait for 60 seconds, then publish the release notes"
+    }],
+    "custom_inputs": {"session_id": "approval-session-1"}
+  }'
+```
+
+The two Responses, their final results, and their stream events are durable.
+The SDK session preserves the proposal for the approval turn. If the App stops
+during the approved run, `LongRunningAgentServer` reclaims that Response and
+uses the configured recovery strategy. Tools remain at-least-once and must be
+idempotent.
+
 ## Try It
 
 Start a background stream. A long tool call makes crash testing easy:

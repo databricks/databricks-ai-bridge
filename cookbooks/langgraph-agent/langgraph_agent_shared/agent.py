@@ -35,11 +35,16 @@ async def wait_for_completion(seconds: int) -> str:
 
 def _create_agent(checkpointer: Any):
     return create_agent(
-        model=ChatDatabricks(endpoint=os.getenv("DATABRICKS_MODEL", "databricks-gpt-5-2")),
+        model=ChatDatabricks(
+            endpoint=os.getenv("DATABRICKS_MODEL", "databricks-gpt-5-2")
+        ),
         tools=[wait_for_completion],
         system_prompt=(
-            "Answer concisely. When the user asks you to wait, always call "
-            "wait_for_completion with the requested duration before answering."
+            "Answer concisely. For a message beginning with PROPOSAL:, describe the "
+            "planned action, end with APPROVAL_REQUIRED, and do not call tools. For a "
+            "message beginning with APPROVED:, or any other message asking you to wait, "
+            "always call wait_for_completion with the requested duration before "
+            "confirming completion."
         ),
         checkpointer=checkpointer,
     )
@@ -125,7 +130,9 @@ def _updated_messages(update: dict[str, Any]) -> Iterator[BaseMessage]:
         if isinstance(messages, BaseMessage):
             yield messages
         elif isinstance(messages, (list, tuple)):
-            yield from (message for message in messages if isinstance(message, BaseMessage))
+            yield from (
+                message for message in messages if isinstance(message, BaseMessage)
+            )
 
 
 async def stream_agent(
