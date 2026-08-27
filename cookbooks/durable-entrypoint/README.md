@@ -1,26 +1,79 @@
 # Durable Entrypoint
 
-This cookbook shows the AgentCore-style embedded runtime option.
-
-`openai_agent.py` contains a minimal OpenAI Agents SDK loop. It stores SDK
-conversation state under `context.session_id` and emits native SDK response
-events for durable replay. The complete application remains `agent.py`.
-
-`DatabricksDurableApp` supplies the HTTP server, background submission, status
-polling, heartbeat/recovery loop, final result storage, and durable SSE replay.
-
-The developer implements only:
+This cookbook shows the decorator-style durable app option with an OpenAI
+Agents SDK loop.
 
 ```python
 @app.entrypoint
-async def agent(payload, context):
-    output = await run_openai_agent(
-        payload["prompt"], context.session_id, context.emit
-    )
-    return {"output": output}
+async def agent(payload, context): ...
+
+@app.on_resume
+async def resume_agent(payload, context): ...
 ```
 
-Install `requirements.txt`, set `OPENAI_API_KEY` and
-`LAKEBASE_AUTOSCALING_ENDPOINT`, then run it with `python agent.py`. The
-generated API exposes `POST /runs`,
-`GET /runs/{run_id}`, and `GET /runs/{run_id}/events?after=N`.
+The app owns background execution, heartbeat recovery, final-result storage,
+and cursor-based SSE replay. The agent owns its `AsyncDatabricksSession`, maps
+JSON into the OpenAI SDK, and emits SDK events through `context.emit()`.
+
+## Durable HITL flow
+
+HITL is modeled as two durable runs. The runtime does not keep a worker alive
+while waiting for a person.
+
+1. A background streamed proposal completes with `requires_action`.
+2. The client reviews the persisted result.
+3. The client submits approval as another background streamed run using the
+   same `session_id`.
+
+Start the proposal and watch its persisted event stream:
+
+```bash
+curl -N -X POST localhost:8000/runs \
+  -H 'content-type: application/json' \
+  -d '{
+    "run_id": "proposal-1",
+    "session_id": "approval-session-1",
+    "background": true,
+    "stream": true,
+    "payload": {"action": "publish the release notes"}
+  }'
+```
+
+Poll `GET /runs/proposal-1`. Its persisted result contains
+`result.status=requires_action`. Then approve it:
+
+```bash
+curl -N -X POST localhost:8000/runs \
+  -H 'content-type: application/json' \
+  -d '{
+    "run_id": "approval-1",
+    "session_id": "approval-session-1",
+    "background": true,
+    "stream": true,
+    "payload": {
+      "action": "publish the release notes",
+      "decision": "approve",
+      "wait_seconds": 60
+    }
+  }'
+```
+
+Stop the process while the approved action is waiting. A new process reclaims
+the stale run, calls `@app.on_resume` with the original payload and same
+`session_id`, and appends events to the existing durable stream. Reconnect with:
+
+```bash
+curl -N 'localhost:8000/runs/approval-1/events?after=<last-event-id>'
+```
+
+Poll `GET /runs/approval-1` for the authoritative final result. External side
+effects remain at-least-once and must be idempotent.
+
+## Run
+
+```bash
+pip install -r requirements.txt
+export OPENAI_API_KEY=...
+export LAKEBASE_AUTOSCALING_ENDPOINT=projects/.../endpoints/...
+python agent.py
+```

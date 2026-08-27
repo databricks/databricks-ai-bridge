@@ -12,14 +12,29 @@ app = DatabricksDurableApp()
 
 @app.entrypoint
 async def agent(payload: dict, context: DurableAgentContext) -> dict:
-    output = await run_openai_agent(
-        prompt=str(payload["prompt"]),
+    result = await run_openai_agent(
+        payload=payload,
         session_id=context.session_id,
         emit=context.emit,
     )
 
     return {
-        "output": output,
+        "result": result,
+        "session_id": context.session_id,
+        "attempt": context.attempt,
+    }
+
+
+@app.on_resume
+async def resume_agent(payload: dict, context: DurableAgentContext) -> dict:
+    result = await run_openai_agent(
+        payload=payload,
+        session_id=context.session_id,
+        emit=context.emit,
+        is_recovery=True,
+    )
+    return {
+        "result": result,
         "session_id": context.session_id,
         "attempt": context.attempt,
     }

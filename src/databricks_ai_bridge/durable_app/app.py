@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -47,6 +47,8 @@ class RunSubmission(BaseModel):
     run_id: str
     session_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    background: bool = True
+    stream: bool = False
 
 
 class DatabricksDurableApp:
@@ -63,6 +65,7 @@ class DatabricksDurableApp:
         poll_seconds: float = 1.0,
     ) -> None:
         self._entrypoint: DurableAgentEntrypoint | None = None
+        self._resume_entrypoint: DurableAgentEntrypoint | None = None
         self.runtime = DatabricksDurableRuntime(
             self._execute,
             durability_store=durability_store,
@@ -98,6 +101,13 @@ class DatabricksDurableApp:
         self._entrypoint = function
         return function
 
+    def on_resume(self, function: DurableAgentEntrypoint) -> DurableAgentEntrypoint:
+        """Register the handler used after a stale attempt is reclaimed."""
+        if self._resume_entrypoint is not None:
+            raise RuntimeError("DatabricksDurableApp supports one resume entrypoint")
+        self._resume_entrypoint = function
+        return function
+
     async def __call__(self, scope, receive, send) -> None:
         await self.asgi_app(scope, receive, send)
 
@@ -118,15 +128,36 @@ class DatabricksDurableApp:
             attempt=execution_context.attempt,
             _execution_context=execution_context,
         )
-        return await self._entrypoint(copy.deepcopy(payload), context)
-
-    async def _submit(self, submission: RunSubmission) -> JSONResponse:
-        state = await self.runtime.submit(
-            submission.run_id,
-            {"session_id": submission.session_id, "payload": submission.payload},
+        function = (
+            self._resume_entrypoint
+            if context.is_recovery and self._resume_entrypoint is not None
+            else self._entrypoint
         )
-        status_code = 200 if state.is_terminal else 202
-        return JSONResponse(self._state_payload(state), status_code=status_code)
+        return await function(copy.deepcopy(payload), context)
+
+    async def _submit(self, submission: RunSubmission) -> Response:
+        request: JsonObject = {
+            "session_id": submission.session_id,
+            "payload": submission.payload,
+        }
+        if submission.stream:
+            await self.runtime.submit(submission.run_id, request)
+            return StreamingResponse(
+                self._event_stream(submission.run_id, 0),
+                media_type="text/event-stream",
+                headers={"Databricks-Run-Id": submission.run_id},
+            )
+
+        if submission.background:
+            state = await self.runtime.submit(submission.run_id, request)
+            status_code = 200 if state.is_terminal else 202
+            return JSONResponse(self._state_payload(state), status_code=status_code)
+
+        await self.runtime.invoke(submission.run_id, request)
+        state = await self.runtime.get(submission.run_id)
+        if state is None:
+            raise RuntimeError(f"run {submission.run_id!r} disappeared after completion")
+        return JSONResponse(self._state_payload(state))
 
     async def _get(self, run_id: str) -> JSONResponse:
         state = await self.runtime.get(run_id)

@@ -55,6 +55,34 @@ async def test_entrypoint_receives_stable_session_and_recovery_context():
     assert emitted == [{"type": "progress"}]
 
 
+@pytest.mark.asyncio
+async def test_resume_entrypoint_handles_recovered_attempt():
+    durable_app = DatabricksDurableApp(durability_store=AsyncMock())
+
+    @durable_app.entrypoint
+    async def agent(payload, context):
+        return {"handler": "entrypoint"}
+
+    @durable_app.on_resume
+    async def resume_agent(payload, context):
+        return {
+            "handler": "resume",
+            "payload": payload,
+            "session_id": context.session_id,
+        }
+
+    result = await durable_app._execute(
+        {"session_id": "session-1", "payload": {"message": "hello"}},
+        DurableExecutionContext("run-1", 2, _emit=AsyncMock()),
+    )
+
+    assert result == {
+        "handler": "resume",
+        "payload": {"message": "hello"},
+        "session_id": "session-1",
+    }
+
+
 def test_builtin_submission_route_maps_generic_payload():
     durable_app = DatabricksDurableApp(durability_store=AsyncMock())
 
@@ -85,6 +113,8 @@ def test_builtin_submission_route_maps_generic_payload():
                 "run_id": "run-1",
                 "session_id": "session-1",
                 "payload": {"message": "hello"},
+                "background": True,
+                "stream": False,
             },
         )
 
