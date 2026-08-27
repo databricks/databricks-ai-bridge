@@ -154,9 +154,10 @@ def _grant_session_store_lakebase(name: str, profile: Optional[str]) -> Optional
 @click.argument("name")
 @click.option(
     "--source",
-    required=True,
+    default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory for the deployment (containing app.yaml).",
+    help="Local source directory for the deployment (containing app.yaml). Defaults to the "
+    "current directory.",
 )
 @click.option(
     "--with-memory-store",
