@@ -12,7 +12,6 @@ from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import InMemorySaver
 
 
 def test_tools_autoregister():
@@ -60,36 +59,33 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
 
 
 def test_thread_config_from_session_id():
-    assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123"}}
+    # actor_id rides alongside thread_id — the durable saver maps it onto the Session's actor.
+    assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "abc-123"}}
 
 
-@pytest.mark.asyncio
-async def test_checkpointer_is_shared(monkeypatch):
-    # In-memory by default (no AGENT_SESSION_STORE); opened once and shared so multi-turn works.
+def test_checkpointer_is_shared(monkeypatch):
+    # In-memory by default (no AGENT_SESSION_STORE); built once and shared so multi-turn works.
     import agent.mason.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)  # reset the process-wide saver
-    assert await checkpointer() is await checkpointer()
+    assert checkpointer() is checkpointer()
 
 
-@pytest.mark.asyncio
-async def test_session_store_selects_durable_checkpointer(monkeypatch):
-    # AGENT_SESSION_STORE must route to the durable Lakebase path, not silently stay in-memory.
-    # We stub _durable_checkpointer so the test stays hermetic (no databricks-langchain / no DB).
+def test_session_store_selects_durable_saver(monkeypatch):
+    # AGENT_SESSION_STORE must route to the durable Session Store saver, not stay in-memory. Stub the
+    # REST client so it stays hermetic (no network); the saver builds without touching the API.
     import agent.mason.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)
-    called = False
-
-    async def fake_durable():
-        nonlocal called
-        called = True
-        return InMemorySaver()  # stand-in; real path returns a Lakebase AsyncCheckpointSaver
-
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
-    monkeypatch.setattr(ss, "_durable_checkpointer", fake_durable)
-    await checkpointer()
-    assert called, "AGENT_SESSION_STORE should select the durable checkpointer"
+    monkeypatch.setattr(ss, "SessionStoreClient", lambda *a, **k: _FakeStoreClient())
+    saver = checkpointer()
+    assert isinstance(saver, ss.DatabricksSessionStoreSaver)
+
+
+class _FakeStoreClient:
+    def set_session_store(self, name):
+        return self
 
 
 def test_session_id_from_request():

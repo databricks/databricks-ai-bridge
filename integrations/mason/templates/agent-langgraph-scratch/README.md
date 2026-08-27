@@ -24,7 +24,8 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
   mason/               #   plumbing that will move into Databricks SDKs later — rarely edited
-    session_store.py   #     LangGraph checkpointer: in-memory by default; swap for a durable one
+    session_store.py   #     LangGraph checkpointer: in-memory by default; DatabricksSessionStoreSaver when AGENT_SESSION_STORE is set
+    session_store_client.py #  vendored REST client for the managed Session Store (used by the durable saver)
     memory.py          #     remember / recall — memory_tools() returns them when AGENT_MEMORY_STORE is set
     tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
     mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
@@ -224,23 +225,17 @@ By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`)
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
 Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
-`agent/mason/session_store.py` returns a Lakebase-backed `AsyncCheckpointSaver` instead. A managed
-Session Store is provisioned into a service-managed Lakebase Postgres project; the saver runs
-LangGraph's real `AsyncPostgresSaver` against it, so full graph state — including paused HITL runs
-(pending writes + interrupts) — is durable across restarts and replicas. The project/branch are
-derived from the store name alone (no extra connection config). No agent code changes; the
-checkpointer swap is the only difference.
+`agent/mason/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
+`BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
+through the managed Session Store **REST API** — no database the app connects to directly. Full graph
+state — including paused HITL runs (pending writes + interrupts) — is durable across restarts and
+replicas, over RPCs only. No agent code changes; the checkpointer swap is the only difference.
 
-> **This is a deployed-app path.** The store's Lakebase project is granted to the app's service
-> principal (via the app resource binding), not to human users — so it works in the deployed app but
-> **not** under your local user credentials (Postgres rejects the connection; `session_store.py`
-> raises a clear error saying so). For local dev, leave `AGENT_SESSION_STORE` unset to use the
-> in-process checkpointer, or separately grant your user on the store's Lakebase project.
-
-> Checkpoints currently land in the shared project's default Lakebase database, not the per-store
-> database named after `AGENT_SESSION_STORE` (which holds the session's message items). The
-> `databricks-langchain` connection pool doesn't yet support targeting a specific database; once it
-> does, point the checkpointer at the per-store database to co-locate them. See `session_store.py`.
+> The saver is adapted from the first-party `databricks_agent_client.langgraph` prototype, over a
+> small vendored REST client (`agent/mason/session_store_client.py`) so the template needs no
+> unpublished dependency. Swap both for the published package when it lands. The store must already
+> exist; access uses the caller's normal Databricks auth (the deployed app's service principal, or
+> your profile locally — whichever the Session Store grants).
 
 ## Configuration
 
@@ -249,7 +244,7 @@ checkpointer swap is the only difference.
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store name → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (Lakebase); unset = in-process `InMemorySaver` |
+| `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
