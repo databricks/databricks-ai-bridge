@@ -37,7 +37,9 @@ pip install 'databricks-ai-bridge[memory]'
 
 The [`DatabricksDurableApp`](./src/databricks_ai_bridge/durable_app/app.py)
 prototype supplies a complete ASGI application around one `@app.entrypoint`.
-See the [minimal cookbook](./cookbooks/durable-entrypoint/README.md).
+Its header-based protocol preserves the application's JSON request and
+foreground response bodies. See the
+[minimal cookbook](./cookbooks/durable-entrypoint/README.md).
 
 ### Install from source
 

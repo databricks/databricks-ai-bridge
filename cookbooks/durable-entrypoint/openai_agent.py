@@ -10,6 +10,7 @@ from databricks_openai.agents import AsyncDatabricksSession
 
 EventEmitter = Callable[[dict[str, Any]], Awaitable[int]]
 
+
 @function_tool
 async def complete_approved_action(action: str, wait_seconds: int) -> str:
     """Simulate an approved side effect after a bounded delay."""
@@ -42,7 +43,9 @@ async def run_openai_agent(
     session = AsyncDatabricksSession(
         session_id=session_id,
         autoscaling_endpoint=os.environ["LAKEBASE_AUTOSCALING_ENDPOINT"],
-        schema=os.getenv("OPENAI_AGENT_SESSION_SCHEMA", "durable_openai_agent_sessions"),
+        schema=os.getenv(
+            "OPENAI_AGENT_SESSION_SCHEMA", "durable_openai_agent_sessions"
+        ),
     )
     action = str(payload["action"])
     decision = payload.get("decision")

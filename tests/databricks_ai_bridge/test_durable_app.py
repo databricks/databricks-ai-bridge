@@ -83,7 +83,7 @@ async def test_resume_entrypoint_handles_recovered_attempt():
     }
 
 
-def test_builtin_submission_route_maps_generic_payload():
+def test_header_submission_preserves_application_payload():
     durable_app = DatabricksDurableApp(durability_store=AsyncMock())
 
     @durable_app.entrypoint
@@ -108,14 +108,13 @@ def test_builtin_submission_route_maps_generic_payload():
         TestClient(durable_app) as client,
     ):
         response = client.post(
-            "/runs",
-            json={
-                "run_id": "run-1",
-                "session_id": "session-1",
-                "payload": {"message": "hello"},
-                "background": True,
-                "stream": False,
+            "/invocations",
+            headers={
+                "Idempotency-Key": "run-1",
+                "Databricks-Agent-Session-Id": "session-1",
+                "Databricks-Background": "true",
             },
+            json={"message": "hello"},
         )
 
     assert response.status_code == 202
@@ -125,6 +124,80 @@ def test_builtin_submission_route_maps_generic_payload():
         "attempt": 0,
         "result": None,
     }
+    assert response.headers["Databricks-Run-Id"] == "run-1"
+    assert response.headers["Databricks-Agent-Session-Id"] == "session-1"
+    submit.assert_awaited_once_with(
+        "run-1",
+        {"session_id": "session-1", "payload": {"message": "hello"}},
+    )
+
+
+def test_foreground_submission_preserves_agent_response_body():
+    durable_app = DatabricksDurableApp(durability_store=AsyncMock())
+
+    @durable_app.entrypoint
+    async def agent(payload, context):
+        return payload
+
+    with (
+        patch.object(durable_app.runtime, "start", new_callable=AsyncMock),
+        patch.object(durable_app.runtime, "stop", new_callable=AsyncMock),
+        patch.object(
+            durable_app.runtime,
+            "invoke",
+            new=AsyncMock(return_value={"answer": "unchanged"}),
+        ),
+        TestClient(durable_app) as client,
+    ):
+        response = client.post(
+            "/invocations",
+            headers={"Databricks-Agent-Session-Id": "session-1"},
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "unchanged"}
+    assert response.headers["Databricks-Agent-Session-Id"] == "session-1"
+
+
+def test_header_background_stream_preserves_body_and_returns_run_id():
+    durable_app = DatabricksDurableApp(durability_store=AsyncMock())
+
+    @durable_app.entrypoint
+    async def agent(payload, context):
+        return payload
+
+    completed = DurableExecution(
+        execution_id="run-1",
+        status=DurableExecutionStatus.COMPLETED,
+        attempt=1,
+        heartbeat_at=None,
+        request={"session_id": "session-1", "payload": {"message": "hello"}},
+        response={"message": "hello"},
+    )
+    submit = AsyncMock(return_value=completed)
+
+    with (
+        patch.object(durable_app.runtime, "start", new_callable=AsyncMock),
+        patch.object(durable_app.runtime, "stop", new_callable=AsyncMock),
+        patch.object(durable_app.runtime, "submit", submit),
+        patch.object(durable_app.runtime, "events", new=AsyncMock(return_value=[])),
+        patch.object(durable_app.runtime, "get", new=AsyncMock(return_value=completed)),
+        TestClient(durable_app) as client,
+    ):
+        response = client.post(
+            "/invocations",
+            headers={
+                "Idempotency-Key": "run-1",
+                "Databricks-Agent-Session-Id": "session-1",
+                "Databricks-Background": "true",
+                "Databricks-Stream": "true",
+            },
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["Databricks-Run-Id"] == "run-1"
     submit.assert_awaited_once_with(
         "run-1",
         {"session_id": "session-1", "payload": {"message": "hello"}},

@@ -1,7 +1,7 @@
-# Durable Entrypoint
+# Durable Header Entrypoint
 
-This cookbook shows the decorator-style durable app option with an OpenAI
-Agents SDK loop.
+This cookbook shows the decorator-style app with the application's JSON body
+left unchanged. Durable submission metadata is supplied through headers.
 
 ```python
 @app.entrypoint
@@ -11,9 +11,9 @@ async def agent(payload, context): ...
 async def resume_agent(payload, context): ...
 ```
 
-The app owns background execution, heartbeat recovery, final-result storage,
-and cursor-based SSE replay. The agent owns its `AsyncDatabricksSession`, maps
-JSON into the OpenAI SDK, and emits SDK events through `context.emit()`.
+The server validates the headers, persists their normalized values with the
+original body, and constructs `context` for each attempt. Recovery does not
+replay HTTP headers; it rebuilds `context` from the durable run record.
 
 ## Durable HITL flow
 
@@ -28,33 +28,32 @@ while waiting for a person.
 Start the proposal and watch its persisted event stream:
 
 ```bash
-curl -N -X POST localhost:8000/runs \
+curl -N -X POST localhost:8000/invocations \
   -H 'content-type: application/json' \
+  -H 'idempotency-key: proposal-1' \
+  -H 'databricks-agent-session-id: approval-session-1' \
+  -H 'databricks-background: true' \
+  -H 'databricks-stream: true' \
   -d '{
-    "run_id": "proposal-1",
-    "session_id": "approval-session-1",
-    "background": true,
-    "stream": true,
-    "payload": {"action": "publish the release notes"}
+    "action": "publish the release notes"
   }'
 ```
 
-Poll `GET /runs/proposal-1`. Its persisted result contains
+The request body is the application payload, not a runtime envelope. Poll
+`GET /invocations/proposal-1`. Its persisted result contains
 `result.status=requires_action`. Then approve it:
 
 ```bash
-curl -N -X POST localhost:8000/runs \
+curl -N -X POST localhost:8000/invocations \
   -H 'content-type: application/json' \
+  -H 'idempotency-key: approval-1' \
+  -H 'databricks-agent-session-id: approval-session-1' \
+  -H 'databricks-background: true' \
+  -H 'databricks-stream: true' \
   -d '{
-    "run_id": "approval-1",
-    "session_id": "approval-session-1",
-    "background": true,
-    "stream": true,
-    "payload": {
-      "action": "publish the release notes",
-      "decision": "approve",
-      "wait_seconds": 60
-    }
+    "action": "publish the release notes",
+    "decision": "approve",
+    "wait_seconds": 60
   }'
 ```
 
@@ -63,10 +62,10 @@ the stale run, calls `@app.on_resume` with the original payload and same
 `session_id`, and appends events to the existing durable stream. Reconnect with:
 
 ```bash
-curl -N 'localhost:8000/runs/approval-1/events?after=<last-event-id>'
+curl -N 'localhost:8000/invocations/approval-1/events?after=<last-event-id>'
 ```
 
-Poll `GET /runs/approval-1` for the authoritative final result. External side
+Poll `GET /invocations/approval-1` for the authoritative final result. External side
 effects remain at-least-once and must be idempotent.
 
 ## Run

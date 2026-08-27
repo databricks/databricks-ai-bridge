@@ -1,4 +1,4 @@
-"""ASGI application exposing one generic durable agent entrypoint."""
+"""ASGI application preserving the agent payload while adding durable metadata."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
 
 from databricks_ai_bridge.durable_runtime import (
     DatabricksDurableRuntime,
@@ -43,16 +42,8 @@ class DurableAgentContext:
         return await self._execution_context.emit(event)
 
 
-class RunSubmission(BaseModel):
-    run_id: str
-    session_id: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    background: bool = True
-    stream: bool = False
-
-
 class DatabricksDurableApp:
-    """Host one JSON entrypoint with durable background execution and replay."""
+    """Host one JSON entrypoint without wrapping the application's request body."""
 
     def __init__(
         self,
@@ -63,9 +54,11 @@ class DatabricksDurableApp:
         stale_seconds: float = 10.0,
         scan_seconds: float = 3.0,
         poll_seconds: float = 1.0,
+        path: str = "/invocations",
     ) -> None:
         self._entrypoint: DurableAgentEntrypoint | None = None
         self._resume_entrypoint: DurableAgentEntrypoint | None = None
+        self._path = path.rstrip("/") or "/"
         self.runtime = DatabricksDurableRuntime(
             self._execute,
             durability_store=durability_store,
@@ -85,10 +78,10 @@ class DatabricksDurableApp:
                 await self.runtime.stop()
 
         self.asgi_app = FastAPI(lifespan=lifespan)
-        self.asgi_app.add_api_route("/runs", self._submit, methods=["POST"])
-        self.asgi_app.add_api_route("/runs/{run_id}", self._get, methods=["GET"])
+        self.asgi_app.add_api_route(self._path, self._submit, methods=["POST"])
+        self.asgi_app.add_api_route(f"{self._path}/{{run_id}}", self._get, methods=["GET"])
         self.asgi_app.add_api_route(
-            "/runs/{run_id}/events",
+            f"{self._path}/{{run_id}}/events",
             self._events,
             methods=["GET"],
         )
@@ -135,29 +128,44 @@ class DatabricksDurableApp:
         )
         return await function(copy.deepcopy(payload), context)
 
-    async def _submit(self, submission: RunSubmission) -> Response:
+    async def _submit(self, http_request: Request) -> Response:
+        payload = await http_request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+
+        run_id = http_request.headers.get("Idempotency-Key") or str(uuid4())
+        session_id = http_request.headers.get("Databricks-Agent-Session-Id") or str(uuid4())
+        background = self._header_bool(http_request, "Databricks-Background", False)
+        stream = self._header_bool(http_request, "Databricks-Stream", False)
         request: JsonObject = {
-            "session_id": submission.session_id,
-            "payload": submission.payload,
+            "session_id": session_id,
+            "payload": payload,
         }
-        if submission.stream:
-            await self.runtime.submit(submission.run_id, request)
+        response_headers = {
+            "Databricks-Run-Id": run_id,
+            "Databricks-Agent-Session-Id": session_id,
+        }
+
+        if stream:
+            await self.runtime.submit(run_id, request)
             return StreamingResponse(
-                self._event_stream(submission.run_id, 0),
+                self._event_stream(run_id, 0),
                 media_type="text/event-stream",
-                headers={"Databricks-Run-Id": submission.run_id},
+                headers=response_headers,
             )
 
-        if submission.background:
-            state = await self.runtime.submit(submission.run_id, request)
+        if background:
+            state = await self.runtime.submit(run_id, request)
             status_code = 200 if state.is_terminal else 202
-            return JSONResponse(self._state_payload(state), status_code=status_code)
+            response_headers["Location"] = f"{self._path}/{run_id}"
+            return JSONResponse(
+                self._state_payload(state),
+                status_code=status_code,
+                headers=response_headers,
+            )
 
-        await self.runtime.invoke(submission.run_id, request)
-        state = await self.runtime.get(submission.run_id)
-        if state is None:
-            raise RuntimeError(f"run {submission.run_id!r} disappeared after completion")
-        return JSONResponse(self._state_payload(state))
+        result = await self.runtime.invoke(run_id, request)
+        return JSONResponse(result, headers=response_headers)
 
     async def _get(self, run_id: str) -> JSONResponse:
         state = await self.runtime.get(run_id)
@@ -205,3 +213,15 @@ class DatabricksDurableApp:
     @staticmethod
     async def _health() -> JsonObject:
         return {"status": "healthy"}
+
+    @staticmethod
+    def _header_bool(request: Request, name: str, default: bool) -> bool:
+        value = request.headers.get(name)
+        if value is None:
+            return default
+        normalized = value.lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        raise HTTPException(400, f"{name} must be true or false")
