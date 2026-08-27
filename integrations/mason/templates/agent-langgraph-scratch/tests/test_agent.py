@@ -1,19 +1,17 @@
 """Smoke tests for the agent.
 
-Hermetic tests import only the leaf modules (tools, session store, wire) — no Databricks auth
-needed, so they run anywhere. The live test builds the full agent and calls the model; it is
-skipped unless a workspace profile is configured.
+Hermetic tests import only the leaf modules (tools, session store, event serialization) — no
+Databricks auth needed, so they run anywhere. The live test builds the full agent and calls the
+model; it is skipped unless a workspace profile is configured.
 """
 
 import os
 
 import pytest
-from langchain_core.tools import BaseTool
-
+from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
-from agent.mason.wire.inbound import get_resume, get_session_id
-from agent.mason.wire.outbound import process_agent_astream_events
 from agent.tools import all_tools
+from langchain_core.tools import BaseTool
 
 
 def test_tools_autoregister():
@@ -31,11 +29,6 @@ def test_gated_tool_is_in_require_approval():
     assert "send_message" in {t.name for t in all_tools()}
 
 
-def test_get_resume_reads_native_payload():
-    assert get_resume({"resume": {"decisions": [{"type": "approve"}]}}) == {"decisions": [{"type": "approve"}]}
-    assert get_resume({"input": [{"role": "user", "content": "hi"}]}) is None
-
-
 class _FakeInterrupt:
     def __init__(self, value, id):  # mirrors langgraph.types.Interrupt's `.value` / `.id`
         self.value, self.id = value, id
@@ -47,10 +40,10 @@ async def _aiter(events):
 
 
 @pytest.mark.asyncio
-async def test_outbound_relays_interrupt_as_native_event():
+async def test_serialize_events_relays_interrupt_as_native_event():
     hitl = {"action_requests": [{"name": "send_message", "args": {"recipient": "x", "body": "y"}}]}
     stream = _aiter([("updates", {"__interrupt__": (_FakeInterrupt(hitl, "int-1"),)})])
-    events = [e async for e in process_agent_astream_events(stream)]
+    events = [e async for e in _serialize_events(stream)]
     assert events == [{"type": "interrupt", "id": "int-1", "value": hitl}]
 
 
@@ -75,13 +68,14 @@ def test_checkpointer_is_shared():
 
 
 def test_session_id_from_request():
+    # The runtime copies the X-Routing-Key header into `session_id` before calling the handler.
     request = {"input": [{"role": "user", "content": "hi"}], "session_id": "abc-123"}
-    assert get_session_id(request) == "abc-123"
+    assert _session_id(request) == "abc-123"
 
 
 def test_session_id_generated_when_absent():
-    generated = get_session_id({"input": [{"role": "user", "content": "hi"}]})
-    assert generated and generated != get_session_id({"input": [{"role": "user", "content": "hi"}]})
+    generated = _session_id({"input": [{"role": "user", "content": "hi"}]})
+    assert generated and generated != _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
 def _has_workspace_auth() -> bool:

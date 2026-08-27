@@ -2,23 +2,23 @@
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
 served from a **from-scratch FastAPI app** — no serving framework. It runs locally with **no
-database and no setup** — just an auth profile. It speaks LangGraph's **native** wire shape on both
-ends: `POST /responses` / `POST /invocations` take an `input` list of LangChain message dicts
-(streaming via SSE, plus an in-memory `background` mode with `GET /responses/{id}`) and return
-LangChain messages — nothing is reshaped into the Responses contract.
+database and no setup** — just an auth profile. It speaks LangGraph's **native** shape on both ends:
+`POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus an
+in-memory `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is
+reshaped into another contract.
 
-The HTTP surface is hand-written in `server/app.py` (routes, SSE framing, tracing spans, background
-wiring), so the template shows exactly how the agent is served — request and response bodies are
-plain dicts, no wrapper types.
+The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, tracing spans,
+background wiring), so the template shows exactly how the agent is served — request and response
+bodies are plain dicts, no wrapper types.
 
-This template is API-first (no bundled UI). Call it with the OpenAI SDK, `curl`, or from your own
-frontend / model-serving client.
+This template is API-first (no bundled UI). Call it with `curl` or from your own frontend /
+model-serving client.
 
 ## Project layout
 
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
-  agent.py             #   invoke / stream handlers + create_agent_graph()
+  agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
@@ -29,19 +29,16 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
     mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
     background.py      #     BackgroundRuns: in-memory store for background runs; swap for a durable one
-    wire/              #     agent-SDK boundary
-      inbound.py       #       get_session_id (request input -> LangGraph messages via the handler)
-      outbound.py      #       serialize LangGraph astream events to JSON dicts
-server/                # the HTTP surface — SDK-agnostic; rarely edited
-  app.py               #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
-  start_server.py      #   entry point: loads config, builds the app, runs uvicorn
+runtime/               # the HTTP surface — SDK-agnostic; rarely edited
+  runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
+  main.py              #   entry point: loads config, builds the app, runs uvicorn
 tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
 You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; everything in `agent/mason/` is
-plumbing (session checkpointer, tracing, MCP tool loading, wire translation) that's slated to move
-into Databricks SDKs, grouped so that migration is a localized change. `server/app.py` is the
+plumbing (session checkpointer, tracing, MCP tool loading, background store) that's slated to move
+into Databricks SDKs, grouped so that migration is a localized change. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
 package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
@@ -70,13 +67,16 @@ storage, tracing — is off by default and requires no setup.
 
 ## Client contract
 
-`POST /responses` (and its alias `POST /invocations`) take a JSON body with an `input` list of
-**LangChain message dicts** (e.g. `{ "role": "user", "content": "..." }`) — passed straight to the
-agent — plus an optional top-level `session_id` for multi-turn. The reply is
+`POST /invocations` takes a JSON body with an `input` list of **LangChain message dicts** (e.g.
+`{ "role": "user", "content": "..." }`) — passed straight to the agent. The reply is
 `{ "output": [...], "session_id": "..." }`, where `output` is a list of **LangChain message dicts**
-(LangGraph's native shape — e.g. `{ "type": "ai", "content": "...", "tool_calls": [...] }`), not
-Responses items. Streaming frames are likewise native: `{ "type": "message", "message": {...} }` for
-completed messages and `{ "type": "delta", "content": "...", "id": "..." }` for text chunks.
+(LangGraph's native shape — e.g. `{ "type": "ai", "content": "...", "tool_calls": [...] }`).
+Streaming frames are likewise native: `{ "type": "message", "message": {...} }` for completed
+messages and `{ "type": "delta", "content": "...", "id": "..." }` for text chunks.
+
+**Session id / multi-turn.** The session id travels in the **`X-Routing-Key`** header, not the body
+(one routing key generic across Apps and Agents). Send it to continue a conversation or resume a
+paused run; omit it and the server mints a fresh one and returns it as `session_id`.
 
 The examples below use `http://localhost:8000` (local dev). When deployed, use
 `https://<app>.databricksapps.com` with an `Authorization: Bearer <token>` header.
@@ -84,22 +84,22 @@ The examples below use `http://localhost:8000` (local dev). When deployed, use
 **Non-streaming:**
 
 ```bash
-curl -X POST http://localhost:8000/responses \
+curl -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{ "input": [{ "role": "user", "content": "hi" }] }'
 ```
 
 **Streaming** (add `"stream": true`) returns an SSE stream ending with `data: [DONE]`.
 
-**Background** (add `"background": true`) returns a `resp_...` id immediately; poll it:
+**Background** (add `"background": true`) returns an `inv_...` id immediately; poll it:
 
 ```bash
-# returns: { "id": "resp_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "in_progress" }
-curl -X POST http://localhost:8000/responses -H "Content-Type: application/json" \
+# returns: { "id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "in_progress" }
+curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
   -d '{ "input": [{ "role": "user", "content": "do something" }], "background": true }'
 
 # poll with the returned id until status is "completed"
-curl http://localhost:8000/responses/resp_1a2b3c4d5e6f7g8h9i0j1k2l
+curl http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
 ```
 
 > Background mode here is **in-memory and single-process** — a teaching stand-in. Runs are not
@@ -119,13 +119,15 @@ of running the tool, the run **pauses** and emits an `interrupt` event describin
              "args": { "recipient": "alice@x.com", "body": "hi" } }], "review_configs": [...] } }
 ```
 
-The paused run is checkpointed on the session's thread. **Resume** by POSTing back the same
-`session_id` with a native LangGraph `resume` payload — one decision per pending call:
+The paused run is checkpointed on the session's thread. **Resume** by sending the same session id
+(the `X-Routing-Key` header) with a native LangGraph `resume` payload — one decision per pending
+call:
 
 ```bash
 # Approve — the tool runs
-curl -X POST http://localhost:8000/responses -H "Content-Type: application/json" \
-  -d '{ "session_id": "<session-id>", "resume": { "decisions": [{ "type": "approve" }] } }'
+curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
+  -H "X-Routing-Key: <session-id>" \
+  -d '{ "resume": { "decisions": [{ "type": "approve" }] } }'
 
 # Reject — the tool is skipped; the message is fed back to the model
 #   { "type": "reject", "message": "Not allowed." }
@@ -146,17 +148,17 @@ entirely. Which decisions are allowed per tool is configurable — see LangChain
 > so it survives only within the running process. Back the checkpointer with a durable store (below)
 > for pauses that survive restarts / span replicas.
 
-**Multi-turn** — pass the `session_id` returned by the first turn back on the next request:
+**Multi-turn** — send the `session_id` returned by the first turn back as the `X-Routing-Key` header:
 
 ```bash
-# First turn returns: { "output": [...], "session_id": "..." }
-curl -X POST http://localhost:8000/responses -H "Content-Type: application/json" \
+# First turn returns: { "output": [...], "session_id": "abc-123" }
+curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
   -d '{ "input": [{ "role": "user", "content": "My name is Alice" }] }'
 
-# Second turn — agent remembers the first (same process; see durability note below)
-curl -X POST http://localhost:8000/responses -H "Content-Type: application/json" \
-  -d '{ "input": [{ "role": "user", "content": "What is my name?" }],
-        "session_id": "<session-id>" }'
+# Second turn — same routing key, agent remembers the first (same process; see durability note)
+curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
+  -H "X-Routing-Key: abc-123" \
+  -d '{ "input": [{ "role": "user", "content": "What is my name?" }] }'
 ```
 
 ## Customize the agent
@@ -172,13 +174,13 @@ curl -X POST http://localhost:8000/responses -H "Content-Type: application/json"
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store name; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
-- **Change the HTTP surface:** `server/app.py` — routes, SSE framing, background wiring (the run
+- **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `agent/mason/background.py`).
 
 ## Test
 
 ```bash
-uv run pytest                 # hermetic smoke tests (tools, session, wire)
+uv run pytest                 # hermetic smoke tests (tools, session, event serialization)
 ```
 
 The smoke tests need no auth. `tests/test_agent.py` also has one end-to-end test that calls the
@@ -187,10 +189,10 @@ model; it runs only when a workspace profile is configured (`DATABRICKS_CONFIG_P
 
 ## Deploy
 
-Deploy to Databricks Apps with the CLI:
+Deploy with the [Mason](../../README.md) CLI:
 
 ```bash
-databricks apps deploy agent-langgraph-scratch --source-code-path <workspace-path>
+mason deploy agent-langgraph-scratch --source .
 ```
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
@@ -214,7 +216,7 @@ Set neither half → tracing stays off. Examples:
 
 When both halves are present the agent enables MLflow autolog (`mlflow.langchain.autolog()`) and tags
 each trace with the session id. Otherwise it disables tracing outright, so the per-request span
-`server/app.py` opens has nothing to export and no traces are created.
+`runtime/runtime.py` opens has nothing to export and no traces are created.
 
 ### Enable durable conversation history (optional)
 
@@ -236,9 +238,9 @@ swap `agent/mason/session_store.py`'s checkpointer for a `PostgresSaver` over La
 
 ## Notes
 
-- **`agent/mason/wire/` is LangGraph-specific** — `inbound` reads the session id (input is converted
-  to LangGraph messages in the handler); `outbound` serializes LangGraph's native astream events to
-  JSON, without reshaping them into the Responses contract. **`server/app.py` is SDK-agnostic** — it
-  hosts any agent exposing the `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`agent/mason/background.py`, wired in `server/app.py`) —
+- **The event serialization in `agent/agent.py` (`_serialize_events`) is LangGraph-specific** — it
+  turns LangGraph's native `astream` events into JSON dicts without reshaping them into another
+  contract. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
+  `invoke_handler`/`stream_handler` dict contract.
+- **Background mode is in-memory** (`agent/mason/background.py`, wired in `runtime/runtime.py`) —
   non-durable, single-process; see the note under the client contract.
