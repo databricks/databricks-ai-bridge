@@ -1,5 +1,7 @@
+import os
 from collections.abc import AsyncGenerator
 
+from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
@@ -25,7 +27,30 @@ REQUIRE_APPROVAL = {"send_message": True}
 
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
+    _check_databricks_auth()
     tracing.configure()
+
+
+def _check_databricks_auth() -> None:
+    """Fail fast at startup with a clear message if Databricks auth isn't configured.
+
+    Without this, a missing/invalid profile only surfaces on the first model call — as a generic SDK
+    error buried in a request traceback. Resolving a WorkspaceClient here validates the same config
+    the model client uses, so the failure is immediate and actionable.
+    """
+    try:
+        WorkspaceClient()
+    except Exception as e:
+        profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
+        target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        raise RuntimeError(
+            f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
+            "Fix one of:\n"
+            "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
+            "  • run `databricks auth login --profile <name>` to create one, or\n"
+            "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
+            f"(underlying error: {e})"
+        ) from e
 
 
 async def create_agent_graph():

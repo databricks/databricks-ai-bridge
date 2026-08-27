@@ -54,6 +54,17 @@ async def test_outbound_relays_interrupt_as_native_event():
     assert events == [{"type": "interrupt", "id": "int-1", "value": hitl}]
 
 
+def test_configure_raises_clear_error_without_auth(monkeypatch):
+    from agent.agent import configure
+
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "/nonexistent-databrickscfg")
+    with pytest.raises(RuntimeError, match="Databricks auth is not configured"):
+        configure()
+
+
 def test_thread_config_from_session_id():
     assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123"}}
 
