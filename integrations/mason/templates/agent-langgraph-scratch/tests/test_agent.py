@@ -12,6 +12,7 @@ from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from langchain_core.tools import BaseTool
+from langgraph.checkpoint.memory import InMemorySaver
 
 
 def test_tools_autoregister():
@@ -67,15 +68,24 @@ def test_checkpointer_is_shared():
     assert checkpointer() is checkpointer()
 
 
-def test_durable_checkpointer_needs_lakebase_resolver(monkeypatch):
-    # With a Session Store named but no way to resolve its Lakebase instance yet, fail loudly rather
-    # than silently falling back to in-memory (which would lose durability the caller asked for).
-    checkpointer.cache_clear()  # bypass the lru_cache so the durable branch is exercised
+def test_session_store_selects_durable_checkpointer(monkeypatch):
+    # AGENT_SESSION_STORE must route to the durable Lakebase path, not silently stay in-memory.
+    # We stub _durable_checkpointer so the test stays hermetic (no databricks-langchain / no DB).
+    import agent.mason.session_store as ss
+
+    checkpointer.cache_clear()
+    called = False
+
+    def fake_durable():
+        nonlocal called
+        called = True
+        return InMemorySaver()  # stand-in; real path returns a Lakebase CheckpointSaver
+
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
-    monkeypatch.delenv("LAKEBASE_INSTANCE_NAME", raising=False)
-    with pytest.raises(NotImplementedError, match="backing Lakebase instance"):
-        checkpointer()
-    checkpointer.cache_clear()  # don't leak the failed-store state to other tests
+    monkeypatch.setattr(ss, "_durable_checkpointer", fake_durable)
+    checkpointer()
+    assert called, "AGENT_SESSION_STORE should select the durable checkpointer"
+    checkpointer.cache_clear()  # don't leak the stubbed result to other tests
 
 
 def test_session_id_from_request():

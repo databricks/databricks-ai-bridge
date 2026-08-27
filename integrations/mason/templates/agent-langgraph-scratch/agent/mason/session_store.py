@@ -7,11 +7,11 @@ is built with, and ``thread_config(session_id)`` maps a session id onto that thr
 Default (no config): an in-memory checkpointer (``InMemorySaver``) — multi-turn history is preserved
 within a single running process, no database. It does NOT survive restarts or span replicas.
 
-Durable (``AGENT_SESSION_STORE`` set): a ``DatabricksMemorySaver`` bound to that managed Session
-Store. The Session Store is backed by a service-managed Lakebase Postgres database; the saver runs
-LangGraph's real ``PostgresSaver`` against it, so full graph state — including human-in-the-loop
-pauses (pending writes + interrupts) — is durable across restarts and replicas. Setting the env var
-is the only change; the agent code is identical.
+Durable (``AGENT_SESSION_STORE`` set): a Lakebase-backed ``CheckpointSaver``. A managed Session Store
+is backed by a service-managed Lakebase Postgres project; the saver runs LangGraph's real
+``PostgresSaver`` against it, so full graph state — including human-in-the-loop pauses (pending writes
++ interrupts) — is durable across restarts and replicas. Setting the env var is the only change; the
+agent code is identical.
 """
 
 import os
@@ -22,8 +22,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 
+# Managed Session Stores are provisioned into one shared per-workspace Lakebase project, on its
+# default "production" branch (autoscaling). These match the service's provisioning convention, so
+# the durable checkpointer is derivable from AGENT_SESSION_STORE alone — no extra connection config.
+_SHARED_PROJECT = "databricks-internal-lakebase-agent-session-store"
+_DEFAULT_BRANCH = "production"
+
 # Checkpoint tables live in their own schema so they never collide with the Session Store's own
-# message-history tables (sessions / session_items) in the shared Lakebase database.
+# message-history tables (sessions / session_items).
 _CHECKPOINT_SCHEMA = "langgraph_checkpoints"
 
 
@@ -31,51 +37,42 @@ _CHECKPOINT_SCHEMA = "langgraph_checkpoints"
 def checkpointer() -> BaseCheckpointSaver:
     """The checkpointer the agent persists conversation state to.
 
-    In-memory by default; a durable ``DatabricksMemorySaver`` when ``AGENT_SESSION_STORE`` names a
-    managed Session Store. Cached so every request shares one saver — that's what makes multi-turn
-    work in-process, and (for the durable saver) reuses a single Lakebase connection pool.
+    In-memory by default; a durable Lakebase-backed ``CheckpointSaver`` when ``AGENT_SESSION_STORE``
+    names a managed Session Store. Cached so every request shares one saver — that's what makes
+    multi-turn work in-process, and (for the durable saver) reuses a single Lakebase connection pool.
     """
-    store = os.getenv(_SESSION_STORE_ENV)
-    if store:
-        return _durable_checkpointer(store)
+    if os.getenv(_SESSION_STORE_ENV):
+        return _durable_checkpointer()
     return InMemorySaver()
 
 
-def _durable_checkpointer(session_store_name: str) -> BaseCheckpointSaver:
-    """Open a Lakebase-backed ``CheckpointSaver`` for ``session_store_name`` (pool + tables ready).
+def _durable_checkpointer() -> BaseCheckpointSaver:
+    """A Lakebase-backed ``CheckpointSaver`` for the store's shared project (pool + tables ready).
 
     Delegates to ``databricks_langchain.checkpoint.CheckpointSaver`` — LangGraph's ``PostgresSaver``
-    over the Session Store's service-managed Lakebase, with a connection pool that rotates the
-    Lakebase OAuth token. Because it's a genuine Postgres checkpointer, HITL paused runs survive
-    restarts, unlike the in-memory default.
+    over the managed Session Store's Lakebase project, with a pool that rotates the Lakebase OAuth
+    token. Because it's a genuine Postgres checkpointer, HITL paused runs survive restarts, unlike the
+    in-memory default.
+
+    NOTE: the saver connects to the shared project's *default* Lakebase database, not the per-store
+    database named after ``AGENT_SESSION_STORE``. The Session Store's message items live in that
+    per-store database; the current ``databricks-langchain`` connection pool hardcodes the default
+    database name and can't target another, so checkpoints land alongside — in the same project, a
+    different database. When the pool allows overriding the database, point this at the per-store one
+    to co-locate checkpoints with the session's items (and match its access grants).
     """
     # Lazy import: the durable path needs databricks-langchain[memory]; the base template runs
     # in-memory without it.
     from databricks_langchain.checkpoint import CheckpointSaver
 
-    saver = CheckpointSaver(**_resolve_lakebase(session_store_name))
+    saver = CheckpointSaver(
+        project=_SHARED_PROJECT,
+        branch=_DEFAULT_BRANCH,
+        schema=_CHECKPOINT_SCHEMA,
+    )
     saver.__enter__()  # open the connection pool (process-lived; no explicit close)
     saver.setup()  # create checkpoint tables if absent
     return saver
-
-
-def _resolve_lakebase(session_store_name: str) -> dict:
-    """Resolve a Session Store name to the Lakebase kwargs for ``CheckpointSaver``.
-
-    The Session Store is backed by a service-managed Lakebase database; this maps the store name to
-    that instance. The public ``GetSessionStore`` response does not yet expose the backing Lakebase
-    instance — that resolver is a pending fast-follow in the Session Store API. Until it ships, set
-    the Lakebase instance explicitly via ``LAKEBASE_INSTANCE_NAME``.
-    """
-    instance = os.getenv("LAKEBASE_INSTANCE_NAME")
-    if not instance:
-        raise NotImplementedError(
-            f"{_SESSION_STORE_ENV}={session_store_name!r} is set, but resolving a Session Store to "
-            "its backing Lakebase instance is not yet available in the public API. As an interim, "
-            "set LAKEBASE_INSTANCE_NAME to the store's Lakebase instance; once the Session Store API "
-            "exposes its backend, this resolver will use the store name alone."
-        )
-    return {"instance_name": instance, "schema": _CHECKPOINT_SCHEMA}
 
 
 def thread_config(session_id: str) -> dict:
