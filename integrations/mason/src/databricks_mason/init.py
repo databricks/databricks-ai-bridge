@@ -58,6 +58,31 @@ def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) 
         shutil.copytree(src, dest)
 
 
+def _write_env(dest: pathlib.Path, profile: str) -> bool:
+    """Seed a local `.env` from `.env.example` with DATABRICKS_CONFIG_PROFILE=<profile>.
+
+    Returns True if a `.env` was written. Skips if `.env` already exists (never clobbers). The
+    template reads DATABRICKS_CONFIG_PROFILE for local model auth, so this makes the scaffolded
+    project runnable with `uv run start-server` without a manual `cp .env.example .env` step.
+    """
+    env_path = dest / ".env"
+    if env_path.exists():
+        return False
+    example = dest / ".env.example"
+    base = example.read_text() if example.exists() else ""
+    lines, replaced = [], False
+    for line in base.splitlines():
+        if line.startswith("DATABRICKS_CONFIG_PROFILE="):
+            lines.append(f"DATABRICKS_CONFIG_PROFILE={profile}")
+            replaced = True
+        else:
+            lines.append(line)
+    if not replaced:
+        lines.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}")
+    env_path.write_text("\n".join(lines) + "\n")
+    return True
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
@@ -67,15 +92,26 @@ def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) 
     show_default=True,
     help="Which basic agent template to scaffold.",
 )
+@click.option(
+    "--profile",
+    default=None,
+    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `uv run start-server` works "
+    "immediately (defaults to the profile from -p / `mason login`).",
+)
 @click.option("--repo", default=_DEFAULT_REPO, show_default=True, help="app-templates git repo URL.")
 @click.option("--ref", default=_DEFAULT_REF, show_default=True, help="Branch, tag, or ref to fetch.")
 @click.pass_obj
-def init(obj, directory: Optional[str], framework: str, repo: str, ref: str) -> None:
+def init(
+    obj, directory: Optional[str], framework: str, profile: Optional[str], repo: str, ref: str
+) -> None:
     """Scaffold a local agent project from an app-templates template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
     directory must not already exist. Once scaffolded, deploy it with
     `mason deploy <name> --source <directory>`.
+
+    Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
+    scaffolded project runs with `uv run start-server` right away.
     """
     template_dir = _TEMPLATES[framework]
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_dir)
@@ -88,18 +124,30 @@ def init(obj, directory: Optional[str], framework: str, repo: str, ref: str) -> 
 
     _fetch_template(repo, ref, template_dir, dest)
 
+    env_profile = profile or obj.profile
+    wrote_env = _write_env(dest, env_profile) if env_profile else False
+
     if obj.output == "json":
         render.emit_json(
-            {"framework": framework, "template": template_dir, "directory": str(dest)}
+            {
+                "framework": framework,
+                "template": template_dir,
+                "directory": str(dest),
+                "env_profile": env_profile if wrote_env else None,
+            }
         )
         return
 
+    run_step = (
+        "uv run start-server        # run locally"
+        if wrote_env
+        else "cp .env.example .env       # then set DATABRICKS_CONFIG_PROFILE, and: uv run start-server"
+    )
+    fields = {"Framework": framework, "Directory": str(dest)}
+    if wrote_env:
+        fields["Profile (.env)"] = env_profile
     render.success(
         f"Scaffolded '{template_dir}'",
-        fields={"Framework": framework, "Directory": str(dest)},
-        next_steps=[
-            f"cd {dest}",
-            "uv run start-server        # run locally",
-            f"mason deploy <name> --source {dest}",
-        ],
+        fields=fields,
+        next_steps=[f"cd {dest}", run_step, f"mason deploy <name> --source {dest}"],
     )

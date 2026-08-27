@@ -17,10 +17,11 @@ from databricks_mason.errors import AgentCliError
 
 
 class _Ctx:
-    """Stand-in for CliContext: init reads only .output."""
+    """Stand-in for CliContext: init reads .output and .profile."""
 
-    def __init__(self, output: str = "text"):
+    def __init__(self, output: str = "text", profile=None):
         self.output = output
+        self.profile = profile
 
 
 def test_framework_maps_to_template_dir():
@@ -75,6 +76,64 @@ def test_init_rejects_unknown_framework(tmp_path: pathlib.Path):
         init_mod.init, ["--framework", "nope", str(tmp_path / "x")], obj=_Ctx()
     )
     assert result.exit_code != 0  # click.Choice rejects it
+
+
+def test_write_env_seeds_profile_from_example(tmp_path: pathlib.Path):
+    (tmp_path / ".env.example").write_text(
+        "DATABRICKS_CONFIG_PROFILE=DEFAULT\n# MLFLOW_EXPERIMENT_ID=\n"
+    )
+    wrote = init_mod._write_env(tmp_path, "ml")
+    assert wrote is True
+    body = (tmp_path / ".env").read_text()
+    assert "DATABRICKS_CONFIG_PROFILE=ml" in body
+    assert "# MLFLOW_EXPERIMENT_ID=" in body  # rest of the example preserved
+
+
+def test_write_env_never_clobbers_existing(tmp_path: pathlib.Path):
+    (tmp_path / ".env").write_text("DATABRICKS_CONFIG_PROFILE=keepme\n")
+    assert init_mod._write_env(tmp_path, "ml") is False
+    assert "keepme" in (tmp_path / ".env").read_text()
+
+
+def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    def fake_fetch(repo, ref, template_dir, target):
+        target.mkdir(parents=True)
+        (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx()
+        )
+    assert result.exit_code == 0, result.output
+    assert "DATABRICKS_CONFIG_PROFILE=ml" in (dest / ".env").read_text()
+
+
+def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    def fake_fetch(repo, ref, template_dir, target):
+        target.mkdir(parents=True)
+        (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx(profile="from-login"))
+    assert result.exit_code == 0, result.output
+    assert "DATABRICKS_CONFIG_PROFILE=from-login" in (dest / ".env").read_text()
+
+
+def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    def fake_fetch(repo, ref, template_dir, target):
+        target.mkdir(parents=True)
+        (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert not (dest / ".env").exists()  # no profile -> scaffold-only, no .env
 
 
 def test_fetch_template_missing_dir_raises(tmp_path: pathlib.Path):
