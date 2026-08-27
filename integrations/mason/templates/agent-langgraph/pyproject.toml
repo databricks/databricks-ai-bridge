@@ -1,7 +1,7 @@
 [project]
-name = "agent-langgraph-scratch"
+name = "agent-langgraph"
 version = "0.1.0"
-description = "LangGraph agent on a from-scratch FastAPI server for Databricks Apps"
+description = "LangGraph agent on a FastAPI server for Databricks Apps"
 readme = "README.md"
 authors = [
     { name = "Agent Developer", email = "developer@example.com" }

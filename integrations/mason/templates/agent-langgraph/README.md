@@ -1,7 +1,7 @@
 # Agent — LangGraph (FastAPI)
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
-served from a **from-scratch FastAPI app** — no serving framework. It runs locally with **no
+served from a **FastAPI app** — no serving framework. It runs locally with **no
 database and no setup** — just an auth profile. It speaks LangGraph's **native** shape on both ends:
 `POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus an
 in-memory `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is
@@ -193,7 +193,7 @@ model; it runs only when a workspace profile is configured (`DATABRICKS_CONFIG_P
 Deploy with the [Mason](../../README.md) CLI:
 
 ```bash
-mason deploy agent-langgraph-scratch --source .
+mason deploy agent-langgraph --source .
 ```
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean

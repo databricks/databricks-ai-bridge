@@ -1,4 +1,4 @@
-"""The agent's HTTP surface: a from-scratch, SDK-agnostic FastAPI app.
+"""The agent's HTTP surface: a hand-written, SDK-agnostic FastAPI app.
 
 ``build_app`` wires the endpoints to two handlers with a generic contract:
 
@@ -24,9 +24,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # Request keys that control transport; stripped before the request reaches the handler.
-_STREAM_KEY = "stream"
-_BACKGROUND_KEY = "background"
-_ROUTING_KEY_HEADER = "X-Routing-Key"  # carries the session id (generic for Apps + Agents)
+_REQUEST_STREAM_PARAM_KEY = "stream"
+_REQUEST_BACKGROUND_PARAM_KEY = "background"
+_REQUEST_SESSION_ID_HEADER_KEY = "X-Routing-Key"  # carries the session id (generic for Apps + Agents)
 _TRACE_NAME_TAG = "mlflow.traceName"
 
 InvokeHandler = Callable[[dict], Awaitable[dict]]
@@ -73,10 +73,10 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
     @app.post("/invocations")
     async def invoke(request: Request):
         data = await request.json()
-        is_stream = bool(data.pop(_STREAM_KEY, False))
-        is_background = bool(data.pop(_BACKGROUND_KEY, False))
+        is_stream = bool(data.pop(_REQUEST_STREAM_PARAM_KEY, False))
+        is_background = bool(data.pop(_REQUEST_BACKGROUND_PARAM_KEY, False))
         # Session id rides the routing-key header; expose it to the handlers as `session_id`.
-        if routing_key := request.headers.get(_ROUTING_KEY_HEADER):
+        if routing_key := request.headers.get(_REQUEST_SESSION_ID_HEADER_KEY):
             data["session_id"] = routing_key
 
         if is_background:

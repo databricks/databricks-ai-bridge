@@ -1,6 +1,6 @@
 # Agent Development Guide
 
-A LangGraph agent backend for Databricks Apps, served from a from-scratch FastAPI app (no serving
+A LangGraph agent backend for Databricks Apps, served from a FastAPI app (no serving
 framework). Local-first: runs with no database and no setup beyond a Databricks auth profile. MLflow
 tracing is optional.
 
@@ -121,7 +121,7 @@ leave either half unset to skip. `runtime/runtime.py` opens a per-request span r
 | --- | --- |
 | Run locally | `uv run start-server` |
 | Test | `uv run pytest` (hermetic; live model test runs only with a profile) |
-| Deploy | `mason deploy agent-langgraph-scratch --source .` |
+| Deploy | `mason deploy agent-langgraph --source .` |
 
 ## Notes for maintainers
 

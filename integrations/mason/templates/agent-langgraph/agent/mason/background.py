@@ -4,9 +4,10 @@
 /invocations/{id}`` can poll them. This default is **in-memory and single-process**: runs live in a
 dict in this process, so they do NOT survive a restart and are NOT shared across replicas.
 
-For production durability (crash recovery, cross-pod resume, surviving the ~120s Apps proxy
-timeout), swap this for a shared durable store (e.g. Lakebase) with the same interface — that's the
-one edit needed; ``runtime/runtime.py`` only depends on ``start``/``complete``/``fail``/``get``.
+TODO: the SDK contract for managing background-run lifecycle isn't finalized. When it lands, replace
+this with a shared durable store (crash recovery, cross-pod resume, surviving the ~120s Apps proxy
+timeout) with the same interface — ``runtime/runtime.py`` only depends on
+``start``/``complete``/``fail``/``get``.
 """
 
 import uuid
@@ -31,4 +32,6 @@ class BackgroundRuns:
         self._runs[invocation_id] = {"status": "failed", "output": None, "error": error}
 
     def get(self, invocation_id: str) -> dict | None:
+        """The run's record — ``status`` plus ``output`` (when completed) or ``error`` (when failed);
+        ``None`` if the id is unknown. Not just the final result: it's the whole tracked state."""
         return self._runs.get(invocation_id)
