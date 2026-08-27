@@ -1,11 +1,12 @@
-"""`mason init` — scaffold a local agent project from an app-templates template.
+"""`mason init` — scaffold a local agent project from a mason template.
 
-Fetches one template directory out of the `databricks/app-templates` repo (a sparse,
-blobless clone so only the chosen template is materialized) and drops it into a local
-target directory. That directory is then ready for `mason deploy --source <dir>`.
+Fetches one template directory out of its git repo (a sparse, blobless clone so only the
+chosen template is materialized) and drops it into a local target directory, ready for
+`mason deploy --source <dir>`.
 
-`--framework` selects which basic template to lay down; the repo and ref are overridable
-so the command can target a fork/branch before a template has merged to the canonical repo.
+`--framework` selects which template to lay down; each framework knows its own repo, ref, and
+path (see `_TEMPLATES`). `--repo` / `--ref` override those, e.g. to pull from a fork or branch
+before a template has merged to its canonical repo.
 """
 
 from __future__ import annotations
@@ -21,14 +22,20 @@ import click
 from databricks_mason import render
 from databricks_mason.errors import AgentCliError
 
-_DEFAULT_REPO = "https://github.com/databricks/app-templates.git"
-_DEFAULT_REF = "main"
-
-# Framework -> template directory in the app-templates repo. Add an entry here when a new
-# basic template lands.
+# Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
+# (The two basic templates currently live in different repos; this keeps each pointed at its own.)
+# `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
 _TEMPLATES = {
-    "openai": "agent-openai-basic",
-    "langgraph": "agent-langgraph-basic",
+    "openai": {
+        "repo": "https://github.com/databricks/app-templates.git",
+        "ref": "main",
+        "path": "agent-openai-basic",
+    },
+    "langgraph": {
+        "repo": "https://github.com/databricks/databricks-ai-bridge.git",
+        "ref": "main",
+        "path": "integrations/mason/templates/agent-langgraph-scratch",
+    },
 }
 
 
@@ -98,13 +105,18 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `uv run start-server` works "
     "immediately (defaults to the profile from -p / `mason login`).",
 )
-@click.option("--repo", default=_DEFAULT_REPO, show_default=True, help="app-templates git repo URL.")
-@click.option("--ref", default=_DEFAULT_REF, show_default=True, help="Branch, tag, or ref to fetch.")
+@click.option("--repo", default=None, help="Override the git repo URL to fetch the template from.")
+@click.option("--ref", default=None, help="Override the branch, tag, or ref to fetch.")
 @click.pass_obj
 def init(
-    obj, directory: Optional[str], framework: str, profile: Optional[str], repo: str, ref: str
+    obj,
+    directory: Optional[str],
+    framework: str,
+    profile: Optional[str],
+    repo: Optional[str],
+    ref: Optional[str],
 ) -> None:
-    """Scaffold a local agent project from an app-templates template.
+    """Scaffold a local agent project from a mason template.
 
     DIRECTORY is the target path to create (defaults to the template's own name). The
     directory must not already exist. Once scaffolded, deploy it with
@@ -113,8 +125,9 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
-    template_dir = _TEMPLATES[framework]
-    dest = pathlib.Path(directory) if directory else pathlib.Path(template_dir)
+    spec = _TEMPLATES[framework]
+    template_path = spec["path"]
+    dest = pathlib.Path(directory) if directory else pathlib.Path(pathlib.PurePosixPath(template_path).name)
 
     if dest.exists():
         raise AgentCliError(
@@ -122,8 +135,9 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    _fetch_template(repo, ref, template_dir, dest)
+    _fetch_template(repo or spec["repo"], ref or spec["ref"], template_path, dest)
 
+    template_name = pathlib.PurePosixPath(template_path).name
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 
@@ -131,7 +145,7 @@ def init(
         render.emit_json(
             {
                 "framework": framework,
-                "template": template_dir,
+                "template": template_name,
                 "directory": str(dest),
                 "env_profile": env_profile if wrote_env else None,
             }
@@ -150,4 +164,4 @@ def init(
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
     steps += ["uv run start-server        # run locally", f"mason deploy <name> --source {dest}"]
-    render.success(f"Scaffolded '{template_dir}'", fields=fields, next_steps=steps)
+    render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

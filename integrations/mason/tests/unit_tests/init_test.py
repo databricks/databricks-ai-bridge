@@ -24,15 +24,21 @@ class _Ctx:
         self.profile = profile
 
 
-def test_framework_maps_to_template_dir():
-    assert init_mod._TEMPLATES["openai"] == "agent-openai-basic"
-    assert init_mod._TEMPLATES["langgraph"] == "agent-langgraph-basic"
+def test_framework_specs_have_repo_ref_path():
+    for fw in ("openai", "langgraph"):
+        spec = init_mod._TEMPLATES[fw]
+        assert spec["repo"] and spec["ref"] and spec["path"]
+    assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-basic"
+    assert (
+        init_mod._TEMPLATES["langgraph"]["path"]
+        == "integrations/mason/templates/agent-langgraph-scratch"
+    )
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     dest = tmp_path / "agent-openai-basic"
 
-    def fake_fetch(repo, ref, template_dir, target):
+    def fake_fetch(repo, ref, template_path, target):
         target.mkdir(parents=True)
         (target / "app.yaml").write_text("command: []\n")
 
@@ -42,10 +48,40 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
         )
     assert result.exit_code == 0, result.output
     fetched.assert_called_once()
-    # framework -> template dir passed through to the fetch
+    # framework's repo + path passed through to the fetch
+    assert fetched.call_args.args[0] == init_mod._TEMPLATES["openai"]["repo"]
     assert fetched.call_args.args[2] == "agent-openai-basic"
     assert (dest / "app.yaml").exists()
     assert "agent-openai-basic" in result.output
+
+
+def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
+    dest = tmp_path / "lg"
+
+    def fake_fetch(repo, ref, template_path, target):
+        target.mkdir(parents=True)
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
+        result = CliRunner().invoke(
+            init_mod.init, ["--framework", "langgraph", str(dest)], obj=_Ctx()
+        )
+    assert result.exit_code == 0, result.output
+    # langgraph pulls the nested template from the ai-bridge repo
+    assert "databricks-ai-bridge" in fetched.call_args.args[0]
+    assert fetched.call_args.args[2] == "integrations/mason/templates/agent-langgraph-scratch"
+
+
+def test_init_repo_ref_override(tmp_path: pathlib.Path):
+    dest = tmp_path / "ov"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", "--repo", "https://example.com/fork.git", "--ref", "wip", str(dest)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[0] == "https://example.com/fork.git"  # override wins
+    assert f.call_args.args[1] == "wip"
 
 
 def test_init_json_output(tmp_path: pathlib.Path):
@@ -57,7 +93,7 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["framework"] == "langgraph"
-    assert payload["template"] == "agent-langgraph-basic"
+    assert payload["template"] == "agent-langgraph-scratch"
     assert payload["directory"] == str(dest)
 
 
@@ -98,7 +134,7 @@ def test_write_env_never_clobbers_existing(tmp_path: pathlib.Path):
 def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_dir, target):
+    def fake_fetch(repo, ref, template_path, target):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
@@ -113,7 +149,7 @@ def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
 def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_dir, target):
+    def fake_fetch(repo, ref, template_path, target):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
@@ -126,7 +162,7 @@ def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
 def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_dir, target):
+    def fake_fetch(repo, ref, template_path, target):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 

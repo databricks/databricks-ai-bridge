@@ -32,12 +32,17 @@ _SESSION_ENV = "AGENT_SESSION_STORE"
 
 
 def _databricks(
-    args: list[str], profile: Optional[str], *, capture: bool = False, check: bool = True
+    args: list[str],
+    profile: Optional[str],
+    *,
+    capture: bool = False,
+    check: bool = True,
+    cwd: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture)
+    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip() if capture else None
         raise AgentCliError(f"`{' '.join(cmd)}` failed (exit {result.returncode})", hint=detail)
@@ -195,7 +200,10 @@ def deploy(
     if not _deployment_exists(name, obj.profile):
         _databricks(["apps", "create", name], obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
-    _databricks(["sync", str(source_dir), ws_path], obj.profile)
+    # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
+    # resolved against (often an internal proxy). The Apps build must resolve against its own
+    # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
+    _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
     _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
     if obj.output == "json":

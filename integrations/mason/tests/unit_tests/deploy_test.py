@@ -88,7 +88,8 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
 
     assert result.exit_code == 0, result.output
     ws = "/Workspace/Users/me@example.com/mason_deployments/myapp"
-    assert ["sync", str(src), ws] in calls
+    # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
+    assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "myapp", "--source-code-path", ws] in calls
     assert "AGENT_MEMORY_STORE" in (src / "app.yaml").read_text()
 
