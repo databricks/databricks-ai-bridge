@@ -34,7 +34,7 @@ _TEMPLATES = {
     "langgraph": {
         "repo": "https://github.com/databricks/databricks-ai-bridge.git",
         "ref": "main",
-        "path": "integrations/mason/templates/agent-langgraph-scratch",
+        "path": "integrations/mason/templates/agent-langgraph",
     },
 }
 

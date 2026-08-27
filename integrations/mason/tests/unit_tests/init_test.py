@@ -31,7 +31,7 @@ def test_framework_specs_have_repo_ref_path():
     assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-basic"
     assert (
         init_mod._TEMPLATES["langgraph"]["path"]
-        == "integrations/mason/templates/agent-langgraph-scratch"
+        == "integrations/mason/templates/agent-langgraph"
     )
 
 
@@ -68,7 +68,7 @@ def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     # langgraph pulls the nested template from the ai-bridge repo
     assert "databricks-ai-bridge" in fetched.call_args.args[0]
-    assert fetched.call_args.args[2] == "integrations/mason/templates/agent-langgraph-scratch"
+    assert fetched.call_args.args[2] == "integrations/mason/templates/agent-langgraph"
 
 
 def test_init_repo_ref_override(tmp_path: pathlib.Path):
@@ -93,7 +93,7 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["framework"] == "langgraph"
-    assert payload["template"] == "agent-langgraph-scratch"
+    assert payload["template"] == "agent-langgraph"
     assert payload["directory"] == str(dest)
 
 
