@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,7 @@ class InvocationRequest(BaseModel):
     session_id: str
     input: dict[str, Any] = Field(default_factory=dict)
     background: bool = True
+    stream: bool = False
 
 
 class DatabricksDurableServer:
@@ -55,6 +56,7 @@ class DatabricksDurableServer:
         self,
         handler: DurableRequestHandler,
         *,
+        on_resume: DurableRequestHandler | None = None,
         durability_store: DurabilityStore | None = None,
         schema: str = "databricks_durable_server",
         heartbeat_seconds: float = 3.0,
@@ -63,6 +65,7 @@ class DatabricksDurableServer:
         poll_seconds: float = 1.0,
     ) -> None:
         self.handler = handler
+        self.resume_handler = on_resume
         self.runtime = DatabricksDurableRuntime(
             self._execute,
             durability_store=durability_store,
@@ -106,13 +109,26 @@ class DatabricksDurableServer:
             attempt=execution_context.attempt,
             _execution_context=execution_context,
         )
-        return await self.handler(copy.deepcopy(payload), context)
+        handler = (
+            self.resume_handler
+            if context.is_recovery and self.resume_handler is not None
+            else self.handler
+        )
+        return await handler(copy.deepcopy(payload), context)
 
-    async def _invoke(self, request: InvocationRequest) -> JSONResponse:
+    async def _invoke(self, request: InvocationRequest) -> Response:
         persisted_request: JsonObject = {
             "session_id": request.session_id,
             "input": request.input,
         }
+        if request.stream:
+            await self.runtime.submit(request.id, persisted_request)
+            return StreamingResponse(
+                self._event_stream(request.id, 0),
+                media_type="text/event-stream",
+                headers={"Databricks-Run-Id": request.id},
+            )
+
         if request.background:
             state = await self.runtime.submit(request.id, persisted_request)
             status_code = 200 if state.is_terminal else 202

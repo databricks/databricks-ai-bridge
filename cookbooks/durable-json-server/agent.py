@@ -9,18 +9,32 @@ from databricks_ai_bridge.durable_server import (
 
 
 async def agent(payload: dict, context: DurableRequestContext) -> dict:
-    output = await run_openai_agent(
-        prompt=str(payload["prompt"]),
+    result = await run_openai_agent(
+        payload=payload,
         session_id=context.session_id,
         emit=context.emit,
     )
 
     return {
-        "output": output,
+        "result": result,
         "session_id": context.session_id,
         "attempt": context.attempt,
     }
 
 
-server = DatabricksDurableServer(agent)
+async def resume_agent(payload: dict, context: DurableRequestContext) -> dict:
+    result = await run_openai_agent(
+        payload=payload,
+        session_id=context.session_id,
+        emit=context.emit,
+        is_recovery=True,
+    )
+    return {
+        "result": result,
+        "session_id": context.session_id,
+        "attempt": context.attempt,
+    }
+
+
+server = DatabricksDurableServer(agent, on_resume=resume_agent)
 app = server.app
