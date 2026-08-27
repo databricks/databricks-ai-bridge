@@ -227,9 +227,9 @@ Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name
 `agent/mason/session_store.py` returns a Lakebase-backed `AsyncCheckpointSaver` instead. A managed
 Session Store is provisioned into a service-managed Lakebase Postgres project; the saver runs
 LangGraph's real `AsyncPostgresSaver` against it, so full graph state — including paused HITL runs
-(pending writes + interrupts) — is durable across restarts and replicas. The project/branch are derived from the store
-name alone (no extra connection config). No agent code changes; the checkpointer swap is the only
-difference.
+(pending writes + interrupts) — is durable across restarts and replicas. The project/branch are
+derived from the store name alone (no extra connection config). No agent code changes; the
+checkpointer swap is the only difference.
 
 > **This is a deployed-app path.** The store's Lakebase project is granted to the app's service
 > principal (via the app resource binding), not to human users — so it works in the deployed app but
