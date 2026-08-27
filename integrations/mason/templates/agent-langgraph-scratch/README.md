@@ -1,265 +1,127 @@
-# Agent — LangGraph (FastAPI)
+# LangGraph Agent
 
-A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
-served from a **from-scratch FastAPI app** — no serving framework. It runs locally with **no
-database and no setup** — just an auth profile. It speaks LangGraph's **native** shape on both ends:
-`POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus an
-in-memory `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is
-reshaped into another contract.
+This template is a small LangGraph agent hosted by `DatabricksDurableApp`. The SDK owns the
+FastAPI routes, background execution, polling, idempotency, recovery heartbeats, and SSE replay.
+The application only defines the agent entrypoint.
 
-The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, tracing spans,
-background wiring), so the template shows exactly how the agent is served — request and response
-bodies are plain dicts, no wrapper types.
+```python
+app = DatabricksDurableApp()
 
-This template is API-first (no bundled UI). Call it with `curl` or from your own frontend /
-model-serving client.
 
-## Project layout
-
-```
-agent/                 # the agent (reasoning plane) — this is what you edit
-  agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
-  tools/               #   function tools — drop a *.py file here to add one (auto-collected)
-    sample_tool.py     #     get_current_time — a working example (@tool)
-    send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
-  mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
-  mason/               #   plumbing that will move into Databricks SDKs later — rarely edited
-    session_store.py   #     LangGraph checkpointer: in-memory by default; swap for a durable one
-    memory.py          #     remember / recall — memory_tools() returns them when AGENT_MEMORY_STORE is set
-    tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
-    mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
-    background.py      #     BackgroundRuns: in-memory store for background runs; swap for a durable one
-runtime/               # the HTTP surface — SDK-agnostic; rarely edited
-  runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
-  main.py              #   entry point: loads config, builds the app, runs uvicorn
-tests/
-  test_agent.py        #   hermetic smoke tests + one gated live model call
+@app.entrypoint
+async def agent(request, context):
+    ...
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; everything in `agent/mason/` is
-plumbing (session checkpointer, tracing, MCP tool loading, background store) that's slated to move
-into Databricks SDKs, grouped so that migration is a localized change. `runtime/runtime.py` is the
-SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
-endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
-package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
-`mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+## Develop
 
-## Run locally
-
-No database required. Conversation state is kept in an in-process LangGraph checkpointer.
+`mason init --profile` writes the selected profile to `.env`, so the generated project can run
+without another configuration step.
 
 ```bash
-# 1. Configure a Databricks auth profile (used only to call the model)
-cp .env.example .env
-# edit .env: set DATABRICKS_CONFIG_PROFILE=<your-profile>
+mason init --framework langgraph --profile <profile> my-agent
+cd my-agent
+mason dev
+```
 
-# 2. Start the server (installs deps via uv on first run)
-uv run start-server        # serves at http://localhost:8000
+The server listens on `http://localhost:8000`. Run the hermetic tests with:
 
-# 3. Send a request
-curl -X POST http://localhost:8000/invocations \
+```bash
+uv run pytest
+```
+
+## Request contract
+
+`POST /invocations` passes the JSON body to the agent unchanged. Runtime context is carried in
+headers instead of wrapping or modifying the agent payload:
+
+- `Idempotency-Key`: one durable invocation ID. Reuse it to safely retry the same request.
+- `X-Routing-Key`: the conversation/session ID. Reuse it for multi-turn conversations.
+
+Both headers are optional. The runtime generates missing values and returns them in the response
+headers. The response body remains agent-defined.
+
+### Sync
+
+```bash
+curl -i -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
+  -H "Idempotency-Key: turn-1" \
+  -H "X-Routing-Key: conversation-1" \
+  -d '{"input":[{"role":"user","content":"What time is it? Use the tool."}]}'
 ```
 
-The model call goes to your Databricks workspace (via the profile). Everything else — session
-storage, tracing — is off by default and requires no setup.
+### Streaming
 
-## Client contract
-
-`POST /invocations` takes a JSON body with an `input` list of **LangChain message dicts** (e.g.
-`{ "role": "user", "content": "..." }`) — passed straight to the agent. The reply is
-`{ "output": [...], "session_id": "..." }`, where `output` is a list of **LangChain message dicts**
-(LangGraph's native shape — e.g. `{ "type": "ai", "content": "...", "tool_calls": [...] }`).
-Streaming frames are likewise native: `{ "type": "message", "message": {...} }` for completed
-messages and `{ "type": "delta", "content": "...", "id": "..." }` for text chunks.
-
-**Session id / multi-turn.** The session id travels in the **`X-Routing-Key`** header, not the body
-(one routing key generic across Apps and Agents). Send it to continue a conversation or resume a
-paused run; omit it and the server mints a fresh one and returns it as `session_id`.
-
-The examples below use `http://localhost:8000` (local dev). When deployed, use
-`https://<app>.databricksapps.com` with an `Authorization: Bearer <token>` header.
-
-**Non-streaming:**
+`stream` is a transport flag removed before the request reaches the entrypoint. The response is SSE
+and ends with `data: [DONE]`. Events are persisted before delivery, so the same run can be replayed
+from `GET /invocations/<id>/events?after=<cursor>`.
 
 ```bash
-curl -X POST http://localhost:8000/invocations \
+curl -sN -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{ "input": [{ "role": "user", "content": "hi" }] }'
+  -H "Idempotency-Key: turn-2" \
+  -H "X-Routing-Key: conversation-1" \
+  -d '{"input":[{"role":"user","content":"Count to three."}],"stream":true}'
 ```
 
-**Streaming** (add `"stream": true`) returns an SSE stream ending with `data: [DONE]`.
+### Background
 
-**Background** (add `"background": true`) returns an `inv_...` id immediately; poll it:
+`background` is also removed before the request reaches the entrypoint. The first response returns
+an invocation ID immediately; poll it until the status is terminal.
 
 ```bash
-# returns: { "id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "in_progress" }
-curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -d '{ "input": [{ "role": "user", "content": "do something" }], "background": true }'
+curl -sX POST http://localhost:8000/invocations \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: turn-3" \
+  -H "X-Routing-Key: conversation-1" \
+  -d '{"input":[{"role":"user","content":"Do something slow."}],"background":true}'
 
-# poll with the returned id until status is "completed"
-curl http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
+curl -s http://localhost:8000/invocations/turn-3
 ```
 
-> Background mode here is **in-memory and single-process** — a teaching stand-in. Runs are not
-> durable: they do not survive a restart and are not shared across replicas. For production
-> durability (crash recovery, cross-pod resume, surviving the ~120s Apps proxy timeout), back it with
-> a durable store.
+## State and durability
 
-### Human-in-the-loop (tool approval)
+With no extra configuration, local development uses process memory for both runtime state and the
+LangGraph checkpointer. Multi-turn requests work while the process is running.
 
-Tools named in `REQUIRE_APPROVAL` (in `agent/agent.py`) pause for human approval before they run. The
-template ships with one gated demo tool, `send_message` — ask the agent to send a message and instead
-of running the tool, the run **pauses** and emits an `interrupt` event describing the pending call:
-
-```json
-{ "type": "interrupt", "id": "int_...",
-  "value": { "action_requests": [{ "name": "send_message",
-             "args": { "recipient": "alice@x.com", "body": "hi" } }], "review_configs": [...] } }
-```
-
-The paused run is checkpointed on the session's thread. **Resume** by sending the same session id
-(the `X-Routing-Key` header) with a native LangGraph `resume` payload — one decision per pending
-call:
+For deployment, Mason can wire a managed Session Store:
 
 ```bash
-# Approve — the tool runs
-curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -H "X-Routing-Key: <session-id>" \
-  -d '{ "resume": { "decisions": [{ "type": "approve" }] } }'
-
-# Reject — the tool is skipped; the message is fed back to the model
-#   { "type": "reject", "message": "Not allowed." }
-# Edit — run the tool with changed args
-#   { "type": "edit", "edited_action": { "name": "send_message", "args": { "recipient": "...", "body": "..." } } }
-# Respond — answer on the tool's behalf without running it
-#   { "type": "respond", "message": "..." }
+mason deploy \
+  --with-session-store my-agent-sessions \
+  --create-stores
 ```
 
-Non-streaming replies to a gated turn come back with `"status": "interrupted"` and the `interrupt`
-event as the last `output` item; approved/rejected resumes return `"status": "completed"`.
+Setting `AGENT_SESSION_STORE` switches both components to the Session Store's Lakebase project:
 
-To gate more tools, add their names to `REQUIRE_APPROVAL`; empty the dict to disable approval
-entirely. Which decisions are allowed per tool is configurable — see LangChain's
-`HumanInTheLoopMiddleware`.
+- `DatabricksDurableApp` persists requests, results, heartbeats, and replayable events.
+- `AsyncCheckpointSaver` persists LangGraph conversation and tool state.
 
-> Like sessions, a paused run lives in the checkpointer — **in-memory and single-process** by default,
-> so it survives only within the running process. Back the checkpointer with a durable store (below)
-> for pauses that survive restarts / span replicas.
+The same agent code runs locally and deployed; only the storage selected by the environment changes.
 
-**Multi-turn** — send the `session_id` returned by the first turn back as the `X-Routing-Key` header:
+## Project map
 
-```bash
-# First turn returns: { "output": [...], "session_id": "abc-123" }
-curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -d '{ "input": [{ "role": "user", "content": "My name is Alice" }] }'
-
-# Second turn — same routing key, agent remembers the first (same process; see durability note)
-curl -X POST http://localhost:8000/invocations -H "Content-Type: application/json" \
-  -H "X-Routing-Key: abc-123" \
-  -d '{ "input": [{ "role": "user", "content": "What is my name?" }] }'
-```
-
-## Customize the agent
-
-- **Model / instructions:** `create_agent_graph()` in `agent/agent.py`.
-- **Add a tool:** drop a new file in `agent/tools/` with a `@tool`-decorated function; it's
-  collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
-- **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
-  human-in-the-loop section above); empty the dict to disable gating.
-- **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
-  checkpointer lives in `agent/mason/session_store.py`.
-- **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store name; `create_agent_graph()`
-  then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
-  conversations). Unset → the model isn't offered them.
-- **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
-  store itself is `agent/mason/background.py`).
-
-## Test
-
-```bash
-uv run pytest                 # hermetic smoke tests (tools, session, event serialization)
-```
-
-The smoke tests need no auth. `tests/test_agent.py` also has one end-to-end test that calls the
-model; it runs only when a workspace profile is configured (`DATABRICKS_CONFIG_PROFILE` or
-`DATABRICKS_HOST`+`DATABRICKS_TOKEN`) and skips otherwise.
+| File | Purpose |
+| --- | --- |
+| `agent/agent.py` | Model, tools, runtime entrypoint, event serialization |
+| `agent/session_store.py` | In-memory or managed Lakebase LangGraph checkpointer |
+| `agent/tools/sample_tool.py` | Example LangChain tool |
+| `app.yaml` | Databricks Apps start command and optional environment |
+| `tests/test_agent.py` | Hermetic template smoke tests |
 
 ## Deploy
 
-Deploy with the [Mason](../../README.md) CLI:
+From the project directory, the deployment name defaults to the directory name and Mason reuses the
+profile written by `mason init`:
 
 ```bash
-mason deploy agent-langgraph-scratch --source .
+mason deploy
 ```
 
-`app.yaml` carries the app's start command and env. By default the deployed app is the same lean
-backend: in-process session state, tracing off.
+Inspect it with:
 
-### Enable MLflow tracing (optional)
-
-Tracing turns on when MLflow has **both a destination and an experiment** — set one of each, in
-whichever form you have. The app code needs no change; MLflow resolves the specific value.
-
-- **Destination:** `MLFLOW_TRACKING_URI` (e.g. `"databricks"`) or `MLFLOW_TRACING_DESTINATION`
-  (an experiment id or a `catalog.schema`).
-- **Experiment:** `MLFLOW_EXPERIMENT_ID` or `MLFLOW_EXPERIMENT_NAME`.
-
-Set neither half → tracing stays off. Examples:
-
-- **Local:** `MLFLOW_TRACKING_URI="databricks"` + `MLFLOW_EXPERIMENT_ID=<id>` (or `..._NAME=<name>`)
-  in `.env`, pointing at an experiment in the workspace your profile targets.
-- **Deployed:** set the same env in `app.yaml` and attach an `experiment` resource (its `valueFrom`
-  binding injects `MLFLOW_EXPERIMENT_ID`).
-
-When both halves are present the agent enables MLflow autolog (`mlflow.langchain.autolog()`) and tags
-each trace with the session id. Otherwise it disables tracing outright, so the per-request span
-`runtime/runtime.py` opens has nothing to export and no traces are created.
-
-### Enable durable state (optional)
-
-By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
-human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
-
-Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
-`agent/mason/session_store.py` returns a Lakebase-backed `AsyncCheckpointSaver` instead. A managed
-Session Store is provisioned into a service-managed Lakebase Postgres project; the saver runs
-LangGraph's real `AsyncPostgresSaver` against it, so full graph state — including paused HITL runs
-(pending writes + interrupts) — is durable across restarts and replicas. The project/branch are derived from the store
-name alone (no extra connection config). No agent code changes; the checkpointer swap is the only
-difference.
-
-> **This is a deployed-app path.** The store's Lakebase project is granted to the app's service
-> principal (via the app resource binding), not to human users — so it works in the deployed app but
-> **not** under your local user credentials (Postgres rejects the connection; `session_store.py`
-> raises a clear error saying so). For local dev, leave `AGENT_SESSION_STORE` unset to use the
-> in-process checkpointer, or separately grant your user on the store's Lakebase project.
-
-> Checkpoints currently land in the shared project's default Lakebase database, not the per-store
-> database named after `AGENT_SESSION_STORE` (which holds the session's message items). The
-> `databricks-langchain` connection pool doesn't yet support targeting a specific database; once it
-> does, point the checkpointer at the per-store database to co-locate them. See `session_store.py`.
-
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
-| `PORT` | `8000` | Port the server listens on |
-| `AGENT_MEMORY_STORE` | _unset_ | Managed memory store name → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (Lakebase); unset = in-process `InMemorySaver` |
-| `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
-| `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
-| `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
-| `MLFLOW_EXPERIMENT_NAME` | _unset_ | Experiment to trace to (by name; alternative to the id) |
-
-## Notes
-
-- **The event serialization in `agent/agent.py` (`_serialize_events`) is LangGraph-specific** — it
-  turns LangGraph's native `astream` events into JSON dicts without reshaping them into another
-  contract. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
-  `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`agent/mason/background.py`, wired in `runtime/runtime.py`) —
-  non-durable, single-process; see the note under the client contract.
+```bash
+mason deployments get <name>
+mason deployments logs <name>
+```

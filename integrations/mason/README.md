@@ -26,6 +26,29 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+## Agent workflow
+
+```sh
+mason init --framework langgraph --profile <profile> my-agent
+cd my-agent
+mason dev
+uv run pytest
+mason deploy
+```
+
+`mason init` seeds the project `.env` with the explicitly selected profile. `mason dev` runs the
+project's `start-server` script. From the project directory, `mason deploy` infers the source and
+deployment name and reuses that seeded profile.
+
+Before a template merges into the default template repository, pass its repository and ref:
+
+```sh
+mason init --framework langgraph --profile <profile> \
+  --repo https://github.com/<owner>/databricks-ai-bridge.git \
+  --ref <branch> \
+  my-agent
+```
+
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
@@ -50,6 +73,8 @@ Use `--output json` for scripting.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
+  init         [DIRECTORY] --framework openai|langgraph [--profile P]
+  dev          [--source PATH] [--port N]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -59,7 +84,7 @@ mason [-p <profile>] [-o text|json]
   tracing
     setup      --catalog C --schema S [--experiment E]
     list | get | instrument
-  deploy       <name> --source PATH [--with-memory-store N]
+  deploy       [name] [--source PATH] [--with-memory-store N]
                [--with-session-store N] [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
 ```

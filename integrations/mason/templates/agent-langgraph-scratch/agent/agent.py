@@ -1,144 +1,77 @@
+"""LangGraph agent hosted by the Databricks durable runtime."""
+
 import logging
 import os
 from collections.abc import AsyncGenerator, AsyncIterator
+from pathlib import Path
 from typing import Any
 
+import uvicorn
 from databricks.sdk import WorkspaceClient
+from databricks_ai_bridge.durable_app import DatabricksDurableApp, DurableAgentContext
 from databricks_langchain import ChatDatabricks
+from dotenv import load_dotenv
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
-from langgraph.types import Command
-from uuid_utils import uuid7
 
-from agent.mason import mcp_runtime, tracing
-from agent.mason.memory import memory_tools
-from agent.mason.session_store import checkpointer, thread_config
+from agent.session_store import checkpointer, thread_config
+from agent.tools.sample_tool import get_current_time
 
-# Importing the tools package auto-registers every tool module.
-from agent.tools import all_tools
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 logger = logging.getLogger(__name__)
-
 MODEL = "databricks-gpt-5-2"
 
-# Tools that require human approval before they run. Map a tool name to True to allow every decision
-# (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
-# When a listed tool is about to run, the agent pauses and emits an `interrupt` event; the client
-# resumes by sending `resume` with the same session id. Empty this dict to disable approval gating.
-REQUIRE_APPROVAL = {"send_message": True}
+app = DatabricksDurableApp()
 
 
 def configure() -> None:
-    """Wire up global state; call once at server startup (not at import)."""
-    _check_databricks_auth()
-    tracing.configure()
-
-
-def _check_databricks_auth() -> None:
-    """Fail fast at startup with a clear message if Databricks auth isn't configured.
-
-    Without this, a missing/invalid profile only surfaces on the first model call — as a generic SDK
-    error buried in a request traceback. Resolving a WorkspaceClient here validates the same config
-    the model client uses, so the failure is immediate and actionable.
-    """
+    """Validate Databricks auth before accepting traffic."""
     try:
         WorkspaceClient()
-    except Exception as e:
+    except Exception as exc:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        target = f"profile {profile!r}" if profile else "default Databricks authentication"
         raise RuntimeError(
-            f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
-            "Fix one of:\n"
-            "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
-            "  • run `databricks auth login --profile <name>` to create one, or\n"
-            "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
-            f"(underlying error: {e})"
-        ) from e
+            f"Databricks auth is not configured for {target}. "
+            "Run `databricks auth login --profile <name>` or update .env."
+        ) from exc
 
 
 async def create_agent_graph():
-    """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
-    tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
-    middleware = [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
+    """Build the agent with tools and the configured conversation checkpointer."""
     return create_agent(
         model=ChatDatabricks(endpoint=MODEL),
-        tools=tools,
-        middleware=middleware,
+        tools=[get_current_time],
         checkpointer=await checkpointer(),
     )
 
 
-def _session_id(request: dict) -> str:
-    """The request's session id (for multi-turn / resume), or a fresh one for a new conversation.
-
-    The runtime copies the ``X-Routing-Key`` header into ``session_id`` before calling the handler.
-    """
-    return str(request.get("session_id") or uuid7())
-
-
-async def invoke_handler(request: dict) -> dict:
-    """Run one turn to completion. Called by the runtime for POST /invocations.
-
-    ``request`` is a dict with an ``input`` list of LangChain message dicts; the returned dict carries
-    the run's new messages (LangChain-native shape) and the ``session_id`` to pass back next turn. If a
-    gated tool needs approval the run pauses: ``output`` then ends with an ``interrupt`` event and
-    ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
-    payload.
-    """
-    request = {**request, "session_id": _session_id(request)}
-    outputs = [
-        event
-        async for event in stream_handler(request)
-        if event.get("type") in ("message", "interrupt")
-    ]
-    interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
-    return {
-        "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": request["session_id"],
-        "status": "interrupted" if interrupted else "completed",
-    }
-
-
-async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
-    """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
-    session_id = _session_id(request)
-    tracing.tag_session(session_id)
-
-    agent = await create_agent_graph()
-    # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from
-    # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
-    # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
-    resume = request.get("resume")
-    agent_input = Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
-
-    async for event in _serialize_events(
-        agent.astream(input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"])
-    ):
-        yield event
+@app.entrypoint
+async def agent(request: dict, context: DurableAgentContext) -> dict:
+    """Run one turn while the SDK owns HTTP, background work, and replay."""
+    graph = await create_agent_graph()
+    output = []
+    stream = graph.astream(
+        input={"messages": request.get("input") or []},
+        config=thread_config(context.session_id),
+        stream_mode=["updates", "messages"],
+    )
+    async for event in _serialize_events(stream):
+        await context.emit(event)
+        if event["type"] == "message":
+            output.append(event["message"])
+    return {"output": output, "session_id": context.session_id, "status": "completed"}
 
 
 async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[dict, None]:
-    """Turn LangGraph's ``astream`` events into JSON dicts in LangChain's native shape (not reshaped).
-
-    ``stream_mode=["updates", "messages"]`` yields completed node outputs (full LangChain messages,
-    incl. tool calls/results) and token-level chunks. Completed messages become
-    ``{"type": "message", "message": <dict>}`` and text chunks ``{"type": "delta", "content", "id"}``.
-    A human-approval gate surfaces as an ``__interrupt__`` update, relayed as
-    ``{"type": "interrupt", "id", "value"}``; the run is then paused on the session's thread until the
-    client resumes with the same session id.
-    """
-    async for event in async_stream:
-        mode, payload = event[0], event[1]
+    """Convert LangGraph events to JSON messages and token deltas."""
+    async for mode, payload in async_stream:
         if mode == "updates":
-            if interrupts := payload.get("__interrupt__"):
-                for it in interrupts:
-                    yield {"type": "interrupt", "id": it.id, "value": it.value}
-                continue
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
-                for msg in messages:
-                    yield {"type": "message", "message": msg.model_dump()}
+                for message in messages:
+                    yield {"type": "message", "message": message.model_dump()}
         elif mode == "messages":
             try:
                 chunk = payload[0]
@@ -146,3 +79,9 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
                     yield {"type": "delta", "content": content, "id": chunk.id}
             except Exception:
                 logger.exception("Error processing agent stream chunk")
+
+
+def main() -> None:
+    configure()
+    port = int(os.getenv("DATABRICKS_APP_PORT", os.getenv("PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=port)

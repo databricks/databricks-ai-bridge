@@ -28,6 +28,16 @@ _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
 
 
+def _project_profile(source: pathlib.Path) -> Optional[str]:
+    env_path = source / ".env"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text().splitlines():
+        if line.startswith("DATABRICKS_CONFIG_PROFILE="):
+            return line.partition("=")[2].strip().strip("\"'") or None
+    return None
+
+
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
 
@@ -107,10 +117,11 @@ def _ensure_session_store(client, name: str) -> dict:
 
 
 @click.command()
-@click.argument("name")
+@click.argument("name", required=False)
 @click.option(
     "--source",
-    required=True,
+    default=".",
+    show_default=True,
     type=click.Path(exists=True, file_okay=False),
     help="Local source directory for the deployment (containing app.yaml).",
 )
@@ -160,8 +171,14 @@ def deploy(
     create_stores,
     workspace_path,
 ) -> None:
-    """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
-    source_dir = pathlib.Path(source)
+    """Deploy an agent, defaulting to the current directory and its name."""
+    source_dir = pathlib.Path(source).resolve()
+    name = name or source_dir.name
+    project_profile = _project_profile(source_dir)
+    if project_profile and not getattr(obj, "profile_explicit", False):
+        obj.profile = project_profile
+        if hasattr(obj, "_client"):
+            obj._client = None
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.

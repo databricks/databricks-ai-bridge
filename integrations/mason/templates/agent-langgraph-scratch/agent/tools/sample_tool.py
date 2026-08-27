@@ -1,8 +1,4 @@
-"""Sample tool. A working example — add your own tools as new files in this package.
-
-Decorate a function with ``@tool`` (LangChain) and it becomes an agent tool; the package
-auto-collects it via ``all_tools()``, which ``create_agent_graph`` uses.
-"""
+"""Sample LangChain tool."""
 
 from datetime import datetime
 

@@ -14,6 +14,7 @@ except ImportError as exc:
         "Install it with: pip install databricks-ai-bridge[memory]"
     ) from exc
 
+from databricks_ai_bridge.durable_runtime.memory_store import InMemoryDurabilityStore
 from databricks_ai_bridge.durable_runtime.runtime import DatabricksDurableRuntime
 from databricks_ai_bridge.durable_runtime.store import (
     DEFAULT_DURABILITY_SCHEMA,
@@ -45,5 +46,6 @@ __all__ = [
     "DurableExecutor",
     "DurableRequestConflictError",
     "JsonObject",
+    "InMemoryDurabilityStore",
     "LakebaseDurabilityStore",
 ]

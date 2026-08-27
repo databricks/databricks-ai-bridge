@@ -26,7 +26,7 @@ class _Ctx:
 
 def test_framework_maps_to_template_dir():
     assert init_mod._TEMPLATES["openai"] == "agent-openai-basic"
-    assert init_mod._TEMPLATES["langgraph"] == "agent-langgraph-basic"
+    assert init_mod._TEMPLATES["langgraph"] == "agent-langgraph-scratch"
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
@@ -37,9 +37,7 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
         (target / "app.yaml").write_text("command: []\n")
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
-        result = CliRunner().invoke(
-            init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx()
-        )
+        result = CliRunner().invoke(init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     fetched.assert_called_once()
     # framework -> template dir passed through to the fetch
@@ -57,7 +55,7 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["framework"] == "langgraph"
-    assert payload["template"] == "agent-langgraph-basic"
+    assert payload["template"] == "agent-langgraph-scratch"
     assert payload["directory"] == str(dest)
 
 
@@ -103,9 +101,7 @@ def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
-        result = CliRunner().invoke(
-            init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx()
-        )
+        result = CliRunner().invoke(init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "DATABRICKS_CONFIG_PROFILE=ml" in (dest / ".env").read_text()
 

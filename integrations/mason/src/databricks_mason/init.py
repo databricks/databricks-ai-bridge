@@ -24,32 +24,52 @@ from databricks_mason.errors import AgentCliError
 _DEFAULT_REPO = "https://github.com/databricks/app-templates.git"
 _DEFAULT_REF = "main"
 
-# Framework -> template directory in the app-templates repo. Add an entry here when a new
-# basic template lands.
+# Framework -> template name. Add an entry here when a new basic template lands.
 _TEMPLATES = {
     "openai": "agent-openai-basic",
-    "langgraph": "agent-langgraph-basic",
+    "langgraph": "agent-langgraph-scratch",
 }
+
+# Templates live at the app-templates root after release and under integrations/mason/templates
+# while they are developed in this repository.
+_TEMPLATE_ROOTS = ("", "integrations/mason/templates")
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise AgentCliError(f"`git {' '.join(args)}` failed (exit {result.returncode})", hint=detail)
+        raise AgentCliError(
+            f"`git {' '.join(args)}` failed (exit {result.returncode})", hint=detail
+        )
     return result
 
 
 def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) -> None:
-    """Sparse-clone `template_dir` from `repo`@`ref` into `dest` (must not already exist)."""
+    """Sparse-clone a template from `repo`@`ref` into `dest`."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
         clone = pathlib.Path(tmp) / "app-templates"
-        _git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--branch", ref, repo, str(clone)])
-        _git(["sparse-checkout", "set", template_dir], cwd=clone)
-        src = clone / template_dir
-        if not src.is_dir():
+        _git(
+            [
+                "clone",
+                "--depth",
+                "1",
+                "--filter=blob:none",
+                "--sparse",
+                "--branch",
+                ref,
+                repo,
+                str(clone),
+            ]
+        )
+        candidates = [
+            f"{root}/{template_dir}" if root else template_dir for root in _TEMPLATE_ROOTS
+        ]
+        _git(["sparse-checkout", "set", *candidates], cwd=clone)
+        src = next(
+            (clone / candidate for candidate in candidates if (clone / candidate).is_dir()), None
+        )
+        if src is None:
             raise AgentCliError(
                 f"Template '{template_dir}' not found in {repo}@{ref}.",
                 hint="It may not have merged yet — pass --repo/--ref to target a fork or branch.",
@@ -98,8 +118,12 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `uv run start-server` works "
     "immediately (defaults to the profile from -p / `mason login`).",
 )
-@click.option("--repo", default=_DEFAULT_REPO, show_default=True, help="app-templates git repo URL.")
-@click.option("--ref", default=_DEFAULT_REF, show_default=True, help="Branch, tag, or ref to fetch.")
+@click.option(
+    "--repo", default=_DEFAULT_REPO, show_default=True, help="app-templates git repo URL."
+)
+@click.option(
+    "--ref", default=_DEFAULT_REF, show_default=True, help="Branch, tag, or ref to fetch."
+)
 @click.pass_obj
 def init(
     obj, directory: Optional[str], framework: str, profile: Optional[str], repo: str, ref: str
@@ -149,5 +173,5 @@ def init(
             "cp .env.example .env",
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
-    steps += ["uv run start-server        # run locally", f"mason deploy <name> --source {dest}"]
+    steps += ["mason dev", "mason deploy"]
     render.success(f"Scaffolded '{template_dir}'", fields=fields, next_steps=steps)

@@ -16,4 +16,14 @@ def test_sessions_verbs_are_flat_no_redundant_subgroup():
 
 def test_root_registers_login_and_logout():
     names = set(cli.mason.commands)
-    assert {"login", "logout", "memory", "sessions", "tracing", "deploy", "deployments"} <= names
+    assert {
+        "login",
+        "logout",
+        "init",
+        "dev",
+        "memory",
+        "sessions",
+        "tracing",
+        "deploy",
+        "deployments",
+    } <= names

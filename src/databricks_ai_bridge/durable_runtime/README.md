@@ -67,6 +67,32 @@ Events are stored before delivery, survive worker replacement, and use the retur
 sequence number as a replay cursor. HTTP and SSE adapters decide how those generic
 events are presented to clients.
 
+## SDK-hosted agent app
+
+`DatabricksDurableApp` supplies the HTTP adapter when the application does not need to own its
+server contract:
+
+```python
+from databricks_ai_bridge.durable_app import DatabricksDurableApp
+
+app = DatabricksDurableApp()
+
+
+@app.entrypoint
+async def agent(payload, context):
+    await context.emit({"type": "progress", "message": "started"})
+    return {"output": await run_agent(payload, context.session_id)}
+```
+
+`POST /invocations` passes the JSON body to the entrypoint unchanged. `Idempotency-Key` supplies
+the durable execution ID and `X-Routing-Key` supplies the session ID; missing values are generated
+and returned as response headers. This keeps runtime metadata out of framework-specific request
+models.
+
+With no Lakebase or managed Session Store configuration, the app uses process memory for local
+development. Lakebase configuration, or `AGENT_SESSION_STORE` in a Mason deployment, selects the
+Lakebase store without changing the entrypoint.
+
 Submitting the same ID and same JSON request is idempotent. If the response is
 already complete, `invoke` returns the cached response. Reusing the ID with a
 different request raises `DurableRequestConflictError`.

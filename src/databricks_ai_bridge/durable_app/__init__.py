@@ -9,6 +9,8 @@ except ImportError as exc:
     ) from exc
 
 from databricks_ai_bridge.durable_app.app import (
+    RUN_ID_HEADER,
+    SESSION_ID_HEADER,
     DatabricksDurableApp,
     DurableAgentContext,
     DurableAgentEntrypoint,
@@ -18,4 +20,6 @@ __all__ = [
     "DatabricksDurableApp",
     "DurableAgentContext",
     "DurableAgentEntrypoint",
+    "RUN_ID_HEADER",
+    "SESSION_ID_HEADER",
 ]
