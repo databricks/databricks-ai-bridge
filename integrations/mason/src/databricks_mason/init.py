@@ -52,7 +52,7 @@ def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.C
 def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) -> None:
     """Sparse-clone `template_dir` from `repo`@`ref` into `dest` (must not already exist)."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
-        clone = pathlib.Path(tmp) / "app-templates"
+        clone = pathlib.Path(tmp) / "repo"
         _git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--branch", ref, repo, str(clone)])
         _git(["sparse-checkout", "set", template_dir], cwd=clone)
         src = clone / template_dir
@@ -158,10 +158,10 @@ def init(
         fields["Profile (.env)"] = env_profile
     else:
         # No profile resolved, so no .env was seeded — call out the auth step explicitly rather
-        # than burying it, since `uv run start-server` fails without a Databricks profile.
+        # than burying it, since running locally fails without a Databricks profile.
         steps += [
             "cp .env.example .env",
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
-    steps += ["uv run start-server        # run locally", f"mason deploy <name> --source {dest}"]
+    steps += ["mason dev        # run locally", f"mason deploy <name> --source {dest}"]
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

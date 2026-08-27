@@ -27,17 +27,19 @@ from databricks_mason.errors import AgentCliError
 )
 @click.option(
     "--prepare-environment/--no-prepare-environment",
-    default=True,
-    help="Build the app's environment with uv before running (default: on). Requires uv.",
+    default=None,
+    help="Build the app's environment with uv before running. Default: build only if no .venv "
+    "exists yet, and reuse it otherwise. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
 @click.pass_obj
-def dev(obj, source: str, prepare_environment: bool, app_port: Optional[int]) -> None:
+def dev(obj, source: str, prepare_environment: Optional[bool], app_port: Optional[int]) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
     Reads the app's command + env from ``app.yaml`` and runs it the way the Apps runtime does — so
     local behavior matches a deployment. Auth uses the profile (``-p`` / ``mason login``), same as
-    ``mason deploy``.
+    ``mason deploy``. The environment is built on first run and reused after; pass
+    ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
     """
     source_dir = pathlib.Path(source)
     if not (source_dir / "app.yaml").exists():
@@ -45,6 +47,11 @@ def dev(obj, source: str, prepare_environment: bool, app_port: Optional[int]) ->
             f"No app.yaml in '{source_dir}'.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
+
+    # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
+    # --prepare-environment / --no-prepare-environment overrides the auto-detect.
+    if prepare_environment is None:
+        prepare_environment = not (source_dir / ".venv").exists()
 
     args = ["apps", "run-local"]
     if prepare_environment:

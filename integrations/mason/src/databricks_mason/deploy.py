@@ -108,6 +108,45 @@ def _ensure_session_store(client, name: str) -> dict:
     return client.get_session_store(name)
 
 
+# Managed session stores are backed by a service-owned Lakebase project (shared, on its "production"
+# branch). The durable checkpointer connects to it as the app's service principal, so the SP needs a
+# Postgres grant — modeled as a `postgres` app resource. See agent/mason/session_store.py.
+_SESSION_STORE_LAKEBASE_PROJECT = "databricks-internal-lakebase-agent-session-store"
+_SESSION_STORE_LAKEBASE_BRANCH = "production"
+_SESSION_STORE_LAKEBASE_DB = "databricks-postgres"
+
+
+def _grant_session_store_lakebase(name: str, profile: Optional[str]) -> Optional[str]:
+    """Attach the `postgres` resource that grants the app's SP access to the session store's Lakebase.
+
+    Best-effort: returns None on success, or a human-readable reason if the grant couldn't be applied
+    (most commonly the caller lacks MANAGE on the service-owned Lakebase project). Deploy proceeds
+    regardless — the app runs, but durable sessions won't work until the grant exists.
+    """
+    branch = f"projects/{_SESSION_STORE_LAKEBASE_PROJECT}/branches/{_SESSION_STORE_LAKEBASE_BRANCH}"
+    resource = {
+        "resources": [
+            {
+                "name": "postgres",
+                "postgres": {
+                    "branch": branch,
+                    "database": f"{branch}/databases/{_SESSION_STORE_LAKEBASE_DB}",
+                    "permission": "CAN_CONNECT_AND_CREATE",
+                },
+            }
+        ]
+    }
+    result = _databricks(
+        ["apps", "update", name, "--json", json.dumps(resource)],
+        profile,
+        capture=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return None
+    return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -206,8 +245,22 @@ def deploy(
     _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
     _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
+    # 4. Grant the app's SP access to the session store's Lakebase (best-effort; needs MANAGE on the
+    #    service-owned project). Without it the app runs but durable sessions fail to authenticate.
+    grant_error = _grant_session_store_lakebase(name, obj.profile) if session_store else None
+
     if obj.output == "json":
-        render.emit_json({"deployment": name, "workspace_path": ws_path, "env": env_updates})
+        render.emit_json(
+            {
+                "deployment": name,
+                "workspace_path": ws_path,
+                "env": env_updates,
+                "session_store_lakebase_grant": "skipped"
+                if not session_store
+                else ("granted" if grant_error is None else "failed"),
+                "session_store_lakebase_grant_error": grant_error,
+            }
+        )
         return
 
     steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
@@ -215,6 +268,15 @@ def deploy(
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
         )
+    if session_store and grant_error is not None:
+        steps.insert(
+            0,
+            "Durable sessions need a Lakebase grant that couldn't be applied automatically "
+            "(need MANAGE on the managed session-store Lakebase — ask an admin or re-run as one). "
+            f"Cause: {grant_error}",
+        )
+    if session_store and grant_error is None:
+        provisioned["Session store Lakebase"] = "granted (postgres resource)"
     render.success(
         f"Deployed agent '{name}'",
         fields={"Workspace path": ws_path, **provisioned},
