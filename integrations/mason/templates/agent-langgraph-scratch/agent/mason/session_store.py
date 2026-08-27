@@ -7,15 +7,19 @@ is built with, and ``thread_config(session_id)`` maps a session id onto that thr
 Default (no config): an in-memory checkpointer (``InMemorySaver``) — multi-turn history is preserved
 within a single running process, no database. It does NOT survive restarts or span replicas.
 
-Durable (``AGENT_SESSION_STORE`` set): a Lakebase-backed ``CheckpointSaver``. A managed Session Store
-is backed by a service-managed Lakebase Postgres project; the saver runs LangGraph's real
-``PostgresSaver`` against it, so full graph state — including human-in-the-loop pauses (pending writes
-+ interrupts) — is durable across restarts and replicas. Setting the env var is the only change; the
-agent code is identical.
+Durable (``AGENT_SESSION_STORE`` set): a Lakebase-backed ``AsyncCheckpointSaver``. A managed Session
+Store is provisioned into a service-managed Lakebase Postgres project; the saver runs LangGraph's real
+``AsyncPostgresSaver`` against it, so full graph state — including human-in-the-loop pauses (pending
+writes + interrupts) — is durable across restarts and replicas. Setting the env var is the only
+change; the agent code is identical.
+
+``checkpointer()`` is async because the agent drives the graph with ``astream`` (async), and the
+durable saver must expose the async checkpoint methods (``aget_tuple`` / ``aput`` / ``aput_writes``)
+that async execution calls — the *sync* ``CheckpointSaver`` leaves those unimplemented, so it can't
+back an async graph.
 """
 
 import os
-from functools import lru_cache
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,27 +36,30 @@ _DEFAULT_BRANCH = "production"
 # message-history tables (sessions / session_items).
 _CHECKPOINT_SCHEMA = "langgraph_checkpoints"
 
+# One saver per process, opened lazily on first use and shared thereafter — that's what makes
+# multi-turn work in-process and (for the durable saver) reuses a single Lakebase connection pool.
+_saver: BaseCheckpointSaver | None = None
 
-@lru_cache(maxsize=1)
-def checkpointer() -> BaseCheckpointSaver:
-    """The checkpointer the agent persists conversation state to.
 
-    In-memory by default; a durable Lakebase-backed ``CheckpointSaver`` when ``AGENT_SESSION_STORE``
-    names a managed Session Store. Cached so every request shares one saver — that's what makes
-    multi-turn work in-process, and (for the durable saver) reuses a single Lakebase connection pool.
+async def checkpointer() -> BaseCheckpointSaver:
+    """The checkpointer the agent persists conversation state to (opened once, then shared).
+
+    In-memory by default; a durable Lakebase-backed ``AsyncCheckpointSaver`` when
+    ``AGENT_SESSION_STORE`` names a managed Session Store.
     """
-    if os.getenv(_SESSION_STORE_ENV):
-        return _durable_checkpointer()
-    return InMemorySaver()
+    global _saver
+    if _saver is None:
+        _saver = await _durable_checkpointer() if os.getenv(_SESSION_STORE_ENV) else InMemorySaver()
+    return _saver
 
 
-def _durable_checkpointer() -> BaseCheckpointSaver:
-    """A Lakebase-backed ``CheckpointSaver`` for the store's shared project (pool + tables ready).
+async def _durable_checkpointer() -> BaseCheckpointSaver:
+    """A Lakebase-backed ``AsyncCheckpointSaver`` for the store's shared project (pool + tables ready).
 
-    Delegates to ``databricks_langchain.checkpoint.CheckpointSaver`` — LangGraph's ``PostgresSaver``
-    over the managed Session Store's Lakebase project, with a pool that rotates the Lakebase OAuth
-    token. Because it's a genuine Postgres checkpointer, HITL paused runs survive restarts, unlike the
-    in-memory default.
+    Delegates to ``databricks_langchain.checkpoint.AsyncCheckpointSaver`` — LangGraph's
+    ``AsyncPostgresSaver`` over the managed Session Store's Lakebase project, with a pool that rotates
+    the Lakebase OAuth token. Being a genuine async Postgres checkpointer, it works with the async
+    graph and keeps HITL paused runs durable across restarts.
 
     NOTE: the saver connects to the shared project's *default* Lakebase database, not the per-store
     database named after ``AGENT_SESSION_STORE``. The Session Store's message items live in that
@@ -63,16 +70,19 @@ def _durable_checkpointer() -> BaseCheckpointSaver:
     """
     # Imported here (not at module load) so the in-memory default path doesn't pull in the Lakebase
     # connection-pool machinery it never uses.
-    from databricks_langchain.checkpoint import CheckpointSaver
+    from databricks_langchain.checkpoint import AsyncCheckpointSaver
 
-    saver = CheckpointSaver(
+    # Uses default SDK auth: in a deployed Databricks App that resolves to the app's service
+    # principal (which the store's Lakebase project grants). Do NOT pass a user-scoped
+    # WorkspaceClient here — end-user credentials have no grant on the store's database.
+    saver = AsyncCheckpointSaver(
         project=_SHARED_PROJECT,
         branch=_DEFAULT_BRANCH,
         schema=_CHECKPOINT_SCHEMA,
     )
     try:
-        saver.__enter__()  # open the connection pool (process-lived; no explicit close)
-        saver.setup()  # create checkpoint tables if absent
+        await saver.__aenter__()  # open the async connection pool (process-lived; no explicit close)
+        await saver.setup()  # create checkpoint tables if absent
     except Exception as e:
         # The store's Lakebase project is granted to the deployed app's service principal (via the
         # app resource binding), not to individual human users. Running locally under your own

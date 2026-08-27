@@ -224,10 +224,10 @@ By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`)
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
 Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
-`agent/mason/session_store.py` returns a Lakebase-backed `CheckpointSaver` instead. A managed Session
-Store is provisioned into a service-managed Lakebase Postgres project; the saver runs LangGraph's real
-`PostgresSaver` against it, so full graph state — including paused HITL runs (pending writes +
-interrupts) — is durable across restarts and replicas. The project/branch are derived from the store
+`agent/mason/session_store.py` returns a Lakebase-backed `AsyncCheckpointSaver` instead. A managed
+Session Store is provisioned into a service-managed Lakebase Postgres project; the saver runs
+LangGraph's real `AsyncPostgresSaver` against it, so full graph state — including paused HITL runs
+(pending writes + interrupts) — is durable across restarts and replicas. The project/branch are derived from the store
 name alone (no extra connection config). No agent code changes; the checkpointer swap is the only
 difference.
 

@@ -97,7 +97,7 @@ a file to `agent/tools/`.
 - The session id arrives in the `X-Routing-Key` header; `runtime/runtime.py` copies it into the
   request dict as `session_id` before calling the handler.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
-  returns a Lakebase-backed `CheckpointSaver` (LangGraph `PostgresSaver`), so full graph state —
+  returns a Lakebase-backed `AsyncCheckpointSaver` (LangGraph `AsyncPostgresSaver`), so full graph state —
   incl. paused HITL runs — survives restarts/replicas. Project/branch derive from the store name.
   Deployed-app path: the store's Lakebase grants the app's service principal, not human users, so it
   fails under local user creds (clear error in `session_store.py`) — leave unset for local dev.
