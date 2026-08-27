@@ -96,13 +96,16 @@ a file to `agent/tools/`.
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
 - The session id arrives in the `X-Routing-Key` header; `runtime/runtime.py` copies it into the
   request dict as `session_id` before calling the handler.
-- For durable, shared history, swap the checkpointer for a `PostgresSaver` over Lakebase.
+- For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
+  returns a `DatabricksMemorySaver` (LangGraph `PostgresSaver` over the store's Lakebase), so full
+  graph state — incl. paused HITL runs — survives restarts/replicas. (Interim: also set
+  `LAKEBASE_INSTANCE_NAME` until the API resolves it from the store name; needs `databricks-langchain[memory]`.)
 - Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
   `resume` with the same routing key — no runtime change; it rides `/invocations` through the handlers.
-  Durability follows the checkpointer (in-memory by default).
+  Durability follows the checkpointer: in-process by default, cross-restart with `AGENT_SESSION_STORE`.
 
 ## MLflow tracing
 

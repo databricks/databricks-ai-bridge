@@ -218,11 +218,22 @@ When both halves are present the agent enables MLflow autolog (`mlflow.langchain
 each trace with the session id. Otherwise it disables tracing outright, so the per-request span
 `runtime/runtime.py` opens has nothing to export and no traces are created.
 
-### Enable durable conversation history (optional)
+### Enable durable state (optional)
 
-By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn works
-within a running process but does not survive restarts or span replicas. For durable, shared history,
-swap `agent/mason/session_store.py`'s checkpointer for a `PostgresSaver` over Lakebase.
+By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
+human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
+
+Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
+`agent/mason/session_store.py` returns a `DatabricksMemorySaver` instead. The Session Store is backed
+by a service-managed Lakebase Postgres database; the saver runs LangGraph's real `PostgresSaver`
+against it, so full graph state — including paused HITL runs (pending writes + interrupts) — is
+durable across restarts and replicas. No agent code changes; the checkpointer swap is the only
+difference.
+
+> Resolving a Session Store name to its backing Lakebase instance is a pending fast-follow in the
+> Session Store API. Until it ships, also set `LAKEBASE_INSTANCE_NAME` to the store's Lakebase
+> instance; `session_store.py` raises a clear error if `AGENT_SESSION_STORE` is set without it. The
+> durable path needs `databricks-langchain[memory]`.
 
 ## Configuration
 
@@ -231,6 +242,8 @@ swap `agent/mason/session_store.py`'s checkpointer for a `PostgresSaver` over La
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store name → registers `remember`/`recall` long-term-memory tools |
+| `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (Lakebase); unset = in-process `InMemorySaver` |
+| `LAKEBASE_INSTANCE_NAME` | _unset_ | Interim: the Session Store's backing Lakebase instance (until the API resolves it from the store name) |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
