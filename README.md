@@ -24,6 +24,23 @@ For frameworks without dedicated integration packages:
 pip install databricks-ai-bridge
 ```
 
+## Durable Runtime
+
+[`DatabricksDurableRuntime`](./src/databricks_ai_bridge/durable_runtime/README.md)
+adds Lakebase-backed request, result, and event persistence with heartbeat-based
+stale-attempt recovery around a caller-owned async handler. The handler remains
+responsible for agent sessions and checkpoints.
+
+```sh
+pip install 'databricks-ai-bridge[memory]'
+```
+
+The [`DatabricksDurableApp`](./src/databricks_ai_bridge/durable_app/app.py) supplies a complete ASGI
+application around one `@app.entrypoint`. Agent JSON stays in the request body while
+`Idempotency-Key` and `X-Routing-Key` carry run and session context. Local development uses an
+in-memory store automatically; Lakebase configuration or `AGENT_SESSION_STORE` enables durable
+execution without changing the agent code.
+
 ### Install from source
 
 With https:

@@ -9,6 +9,8 @@
 
 ### Improvements
 - databricks-openai: `DatabricksOpenAI` and `AsyncDatabricksOpenAI` clients now follow HTTP redirects by default, configurable via the new `follow_redirects` parameter (#445)
+- databricks-ai-bridge: Add a transport-neutral `DatabricksDurableRuntime` with Lakebase request, response, event persistence, and stale-attempt recovery
+- databricks-ai-bridge: Add an AgentCore-style `DatabricksDurableApp` with header-based run/session context, local in-memory execution, and Lakebase-backed deployment durability
 
 ### Bug Fixes
 - databricks-ai-bridge: Genie now returns the full answer text aggregated from all text attachments (#432)

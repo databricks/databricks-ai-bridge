@@ -1,0 +1,7 @@
+command: ["uv", "run", "start-server"]
+# Databricks Apps listen on port 8000. No env is required by default.
+# `mason deploy --with-session-store <name>` adds AGENT_SESSION_STORE here, which makes both the
+# SDK runtime and LangGraph checkpointer Lakebase-backed.
+# env:
+#   - name: AGENT_SESSION_STORE
+#     value: "my-agent-sessions"

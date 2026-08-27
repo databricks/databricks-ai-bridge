@@ -13,6 +13,8 @@ import click
 from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.client import AgentApiClient
 from databricks_mason.deploy import deploy, deployments
+from databricks_mason.dev import dev
+from databricks_mason.init import init
 from databricks_mason.memory import memory
 from databricks_mason.sessions import sessions
 from databricks_mason.tracing import tracing
@@ -21,8 +23,9 @@ from databricks_mason.tracing import tracing
 class CliContext:
     """Shared per-invocation state: selected profile, output mode, lazily-built client."""
 
-    def __init__(self, profile: Optional[str], output: str):
+    def __init__(self, profile: Optional[str], output: str, *, profile_explicit: bool = False):
         self.profile = profile
+        self.profile_explicit = profile_explicit
         self.output = output
         self._client: Optional[AgentApiClient] = None
 
@@ -52,11 +55,17 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
     or rely on the SDK's default resolution).
     """
-    ctx.obj = CliContext(profile=profile or load_default_profile(), output=output)
+    ctx.obj = CliContext(
+        profile=profile or load_default_profile(),
+        output=output,
+        profile_explicit=profile is not None,
+    )
 
 
 mason.add_command(login)
 mason.add_command(logout)
+mason.add_command(init)
+mason.add_command(dev)
 mason.add_command(memory)
 mason.add_command(sessions)
 mason.add_command(tracing)

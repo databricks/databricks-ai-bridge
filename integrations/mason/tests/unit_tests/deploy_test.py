@@ -93,6 +93,77 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert "AGENT_MEMORY_STORE" in (src / "app.yaml").read_text()
 
 
+def test_deploy_defaults_to_current_directory_name_and_project_profile(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "my-agent"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / ".env").write_text("DATABRICKS_CONFIG_PROFILE=e2-dogfood\n")
+
+    calls: list[tuple[list[str], str | None]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda name, profile: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append((args, profile))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.chdir(src)
+
+    class Ctx:
+        profile = None
+        profile_explicit = False
+        output = "text"
+        _client = None
+
+        def client(self):
+            return _FakeClient()
+
+    result = CliRunner().invoke(deploy_mod.deploy, [], obj=Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert (
+        [
+            "apps",
+            "deploy",
+            "my-agent",
+            "--source-code-path",
+            "/Workspace/Users/me@example.com/mason_deployments/my-agent",
+        ],
+        "e2-dogfood",
+    ) in calls
+
+
+def test_explicit_profile_wins_over_project_env(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "my-agent"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / ".env").write_text("DATABRICKS_CONFIG_PROFILE=project-profile\n")
+
+    profiles = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda name, profile: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: profiles.append(profile)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    class Ctx:
+        profile = "explicit-profile"
+        profile_explicit = True
+        output = "text"
+
+        def client(self):
+            return _FakeClient()
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["my-agent", "--source", str(src)], obj=Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert set(profiles) == {"explicit-profile"}
+
+
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
