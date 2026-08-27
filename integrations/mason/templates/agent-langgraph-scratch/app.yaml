@@ -1,14 +1,10 @@
 command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
-
-env:
-  # Resolve dependencies from public PyPI at deploy time.
-  - name: UV_INDEX_URL
-    value: "https://pypi.org/simple"
-
-# Nothing else is required by default. To enable tracing / a session or memory store, add the
-# matching entries above (literal values):
 #
+# No env vars are required by default. To enable tracing / a session or memory store, add the
+# matching entries below (literal values):
+#
+# env:
 #   # Tracing (set a destination + an experiment). Destination: MLFLOW_TRACKING_URI or
 #   # MLFLOW_TRACING_DESTINATION. Experiment: MLFLOW_EXPERIMENT_ID or MLFLOW_EXPERIMENT_NAME.
 #   - name: MLFLOW_TRACKING_URI
@@ -18,6 +14,7 @@ env:
 #   # Long-term memory tools: a managed memory store name (registers remember/recall).
 #   - name: AGENT_MEMORY_STORE
 #     value: "<memory-store-name>"
-#   # Durable state: a managed Session Store name (Lakebase-backed checkpointer; deployed-app only).
-#   - name: AGENT_SESSION_STORE
-#     value: "<session-store-name>"
+#
+# Conversation history uses an in-process checkpointer by default (no config). For durable,
+# cross-replica history, swap the checkpointer in agent/mason/session_store.py for a PostgresSaver
+# over Lakebase — a code change, not an env var.
