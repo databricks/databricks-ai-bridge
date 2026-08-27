@@ -29,7 +29,7 @@ def test_create_memory_store(workspace_client):
     c.create_memory_store("acme", "desc")
     do.assert_called_once_with(
         "POST",
-        "/api/2.0/agents/memory-stores",
+        "/api/agents/v1/memory-stores",
         query=None,
         body={"display_name": "acme", "description": "desc"},
     )
@@ -40,7 +40,7 @@ def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)
     do.assert_called_once_with(
-        "GET", "/api/2.0/agents/memory-stores", query={"page_size": 10}, body=None
+        "GET", "/api/agents/v1/memory-stores", query={"page_size": 10}, body=None
     )
 
 
@@ -62,7 +62,7 @@ def test_list_mcp_services_query(workspace_client):
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")
-    do.assert_called_once_with("GET", "/api/2.0/agents/memory-stores/abc123", query=None, body=None)
+    do.assert_called_once_with("GET", "/api/agents/v1/memory-stores/abc123", query=None, body=None)
 
 
 @mock.patch("databricks_mason._api_client.WorkspaceClient")
@@ -73,7 +73,7 @@ def test_update_memory_store_retains_empty_description(workspace_client):
 
     do.assert_called_once_with(
         "PATCH",
-        "/api/2.0/agents/memory-stores/abc123",
+        "/api/agents/v1/memory-stores/abc123",
         query={"update_mask": "description"},
         body={"description": ""},
     )
@@ -87,7 +87,7 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
 
     do.assert_called_once_with(
         "GET",
-        "/api/2.0/agents/memory-stores/abc123/entries/entry1",
+        "/api/agents/v1/memory-stores/abc123/entries/entry1",
         query={"read_mask": "name,content"},
         body=None,
     )
@@ -107,7 +107,7 @@ def test_search_memory_entries(workspace_client):
     )
     do.assert_called_once_with(
         "POST",
-        "/api/2.0/agents/memory-stores/s1/entries:search",
+        "/api/agents/v1/memory-stores/s1/entries:search",
         query=None,
         body={
             "actor_id": "alice",
@@ -126,7 +126,7 @@ def test_create_session_puts_session_id_in_query(workspace_client):
     c.create_session("store1", "alice", session_id="sid")
     do.assert_called_once_with(
         "POST",
-        "/api/2.0/agents/session-stores/store1/sessions",
+        "/api/agents/v1/session-stores/store1/sessions",
         query={"session_id": "sid"},
         body={"actor_id": "alice"},
     )
@@ -137,8 +137,8 @@ def test_get_session_scoped_vs_unscoped(workspace_client):
     c, do = _client(workspace_client)
     c.get_session("sid", store="store1")
     c.get_session("sid")
-    assert do.call_args_list[0].args[1] == "/api/2.0/agents/session-stores/store1/sessions/sid"
-    assert do.call_args_list[1].args[1] == "/api/2.0/agents/sessions/sid"
+    assert do.call_args_list[0].args[1] == "/api/agents/v1/session-stores/store1/sessions/sid"
+    assert do.call_args_list[1].args[1] == "/api/agents/v1/sessions/sid"
 
 
 @mock.patch("databricks_mason._api_client.WorkspaceClient")
@@ -147,7 +147,7 @@ def test_append_wraps_items_in_data(workspace_client):
     c.append_session_items("store1", "sid", [{"role": "user", "content": "hi"}])
     do.assert_called_once_with(
         "POST",
-        "/api/2.0/agents/session-stores/store1/sessions/sid/items:append",
+        "/api/agents/v1/session-stores/store1/sessions/sid/items:append",
         query=None,
         body={"items": [{"data": {"role": "user", "content": "hi"}}]},
     )
@@ -159,7 +159,7 @@ def test_delete_session_always_cascades(workspace_client):
     c.delete_session("store1", "sid")
     do.assert_called_once_with(
         "DELETE",
-        "/api/2.0/agents/session-stores/store1/sessions/sid",
+        "/api/agents/v1/session-stores/store1/sessions/sid",
         query=None,
         body=None,
     )
@@ -267,5 +267,5 @@ def test_delete_session_store_normalizes_path(workspace_client):
     client, do = _client(workspace_client)
     client.delete_session_store("session-stores/s1")
     do.assert_called_once_with(
-        "DELETE", "/api/2.0/agents/session-stores/s1", query=None, body=None
+        "DELETE", "/api/agents/v1/session-stores/s1", query=None, body=None
     )

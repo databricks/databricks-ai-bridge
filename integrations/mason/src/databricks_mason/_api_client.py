@@ -16,7 +16,7 @@ from databricks.sdk import WorkspaceClient
 
 from databricks_mason.errors import AgentCliError, wrap_api_error
 
-_BASE = "/api/2.0/agents"
+_BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 

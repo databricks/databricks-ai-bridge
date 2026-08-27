@@ -54,7 +54,7 @@ class CliContext:
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Mason: deploy agents and manage their memory and sessions.
 
-    Targets the 2.0/agents preview APIs served on a workspace; auth comes from a
+    Targets the agents/v1 preview APIs served on a workspace; auth comes from a
     .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
     or rely on the SDK's default resolution).
     """
