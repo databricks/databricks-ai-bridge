@@ -25,12 +25,13 @@ def _get_openai_api_key():
 
 
 class BearerAuth(Auth):
-    def __init__(self, get_headers_func):
-        self.get_headers_func = get_headers_func
+    def __init__(self, workspace_client: WorkspaceClient):
+        self.workspace_client = workspace_client
 
     def auth_flow(self, request: Request) -> Generator[Request, Response, None]:
-        auth_headers = self.get_headers_func()
-        request.headers["Authorization"] = auth_headers["Authorization"]
+        request.headers.update(self.workspace_client.config.authenticate())
+        if workspace_id := self.workspace_client.config.workspace_id:
+            request.headers["X-Databricks-Workspace-Id"] = str(workspace_id)
         yield request
 
 
@@ -140,14 +141,14 @@ def _resolve_base_url(
 def _get_authorized_http_client(
     workspace_client: WorkspaceClient, follow_redirects: bool = True
 ) -> Client:
-    databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
+    databricks_token_auth = BearerAuth(workspace_client)
     return Client(auth=databricks_token_auth, follow_redirects=follow_redirects)
 
 
 def _get_authorized_async_http_client(
     workspace_client: WorkspaceClient, follow_redirects: bool = True
 ) -> AsyncClient:
-    databricks_token_auth = BearerAuth(workspace_client.config.authenticate)
+    databricks_token_auth = BearerAuth(workspace_client)
     return AsyncClient(auth=databricks_token_auth, follow_redirects=follow_redirects)
 
 

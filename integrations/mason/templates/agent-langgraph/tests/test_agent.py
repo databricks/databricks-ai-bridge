@@ -6,9 +6,10 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
+from unittest.mock import patch
 
 import pytest
-from agent.agent import _serialize_events, _session_id
+from agent.agent import _serialize_events, _session_id, _workspace_client
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from langchain_core.tools import BaseTool
@@ -56,6 +57,19 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", "/nonexistent-databrickscfg")
     with pytest.raises(RuntimeError, match="Databricks auth is not configured"):
         configure()
+
+
+def test_workspace_client_prefers_named_profile(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test-profile")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://inherited.example.com")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "inherited-token")
+
+    with patch("agent.agent.WorkspaceClient") as workspace_client:
+        _workspace_client()
+
+    workspace_client.assert_called_once_with(profile="test-profile")
+    assert "DATABRICKS_HOST" not in os.environ
+    assert "DATABRICKS_TOKEN" not in os.environ
 
 
 def test_thread_config_from_session_id():

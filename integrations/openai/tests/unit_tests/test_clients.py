@@ -30,6 +30,7 @@ def mock_workspace_client():
     """Create a mock WorkspaceClient for testing."""
     mock_client = MagicMock(spec=WorkspaceClient)
     mock_client.config.host = "https://test.databricks.com"
+    mock_client.config.workspace_id = None
 
     # Mock the authenticate method to return headers
     mock_client.config.authenticate.return_value = {"Authorization": "Bearer test-token-123"}
@@ -122,6 +123,16 @@ class TestDatabricksOpenAI:
 
         # Verify authenticate was called
         mock_workspace_client.config.authenticate.assert_called()
+
+    def test_bearer_auth_adds_workspace_routing_header(self, mock_workspace_client):
+        mock_workspace_client.config.workspace_id = 123456789
+        http_client = _get_authorized_http_client(mock_workspace_client)
+        request = Request("GET", "https://test.databricks.com/api/test")
+
+        assert http_client.auth is not None
+        authenticated_request = next(http_client.auth.auth_flow(request))
+
+        assert authenticated_request.headers["X-Databricks-Workspace-Id"] == "123456789"
 
     def test_follow_redirects_default_and_override(self, mock_workspace_client):
         """follow_redirects defaults to True and can be disabled."""

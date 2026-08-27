@@ -35,6 +35,15 @@ def configure() -> None:
     tracing.configure()
 
 
+def _workspace_client() -> WorkspaceClient:
+    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
+    if profile:
+        os.environ.pop("DATABRICKS_HOST", None)
+        os.environ.pop("DATABRICKS_TOKEN", None)
+        return WorkspaceClient(profile=profile)
+    return WorkspaceClient()
+
+
 def _check_databricks_auth() -> None:
     """Fail fast at startup with a clear message if Databricks auth isn't configured.
 
@@ -43,7 +52,7 @@ def _check_databricks_auth() -> None:
     the model client uses, so the failure is immediate and actionable.
     """
     try:
-        WorkspaceClient()
+        _workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
         target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
@@ -62,7 +71,7 @@ async def create_agent_graph():
     tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
     middleware = [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     return create_agent(
-        model=ChatDatabricks(endpoint=MODEL),
+        model=ChatDatabricks(endpoint=MODEL, workspace_client=_workspace_client()),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),

@@ -41,6 +41,11 @@ def _sse(data: dict | str) -> str:
     return f"data: {json.dumps(data) if isinstance(data, dict) else data}\n\n"
 
 
+def _set_trace_name(name: str) -> None:
+    if mlflow.get_current_active_span() is not None:
+        mlflow.update_current_trace(tags={_TRACE_NAME_TAG: name})
+
+
 def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> FastAPI:
     """Build the FastAPI app wiring the endpoints to the agent's invoke/stream handlers."""
     app = FastAPI(title="Agent Server")
@@ -48,7 +53,7 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
 
     async def _invoke(request: dict) -> dict:
         with mlflow.start_span(name="invoke_handler") as span:
-            mlflow.update_current_trace(tags={_TRACE_NAME_TAG: "invoke_handler"})
+            _set_trace_name("invoke_handler")
             span.set_inputs(request)
             result = await invoke_handler(request)
             span.set_outputs(result)
@@ -56,7 +61,7 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
 
     async def _stream(request: dict) -> AsyncGenerator[str, None]:
         with mlflow.start_span(name="stream_handler") as span:
-            mlflow.update_current_trace(tags={_TRACE_NAME_TAG: "stream_handler"})
+            _set_trace_name("stream_handler")
             span.set_inputs(request)
             chunks: list[dict] = []
             try:
