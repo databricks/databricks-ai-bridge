@@ -1,270 +1,239 @@
-"""Typed, forward-compatible views over agents/v1 JSON responses.
+"""Typed resource models for the Mason Python SDK.
 
-Every model subclasses `dict` and holds the complete raw response, so mapping
-access (`store["name"]`), `json.dumps`, and any new/unknown server fields keep
-working. Subclasses add typed `@property` accessors as a convenience layer;
-they never mutate the stored data, so nothing is lost as the preview API grows.
-
-Accessors are intentionally named to avoid shadowing `dict` methods (e.g. list
-models expose `.stores` / `.session_items`, never `.items`).
+These dataclasses wrap the raw ``agents/v1`` JSON returned by :class:`AgentApiClient`
+and carry a back-reference to the SDK store client, so nested calls
+(``store.add(...)``, ``session.append(...)``) stay scoped to the right resource.
+The CLI works with raw dicts; only the SDK layer (:mod:`databricks_mason.sdk`) uses
+these types.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from databricks_mason.sdk import MemoryStoreClient, SessionStoreClient
 
 
-class _Model(dict):
-    """A dict-backed API response with typed accessors over the raw JSON."""
-
-    def to_dict(self) -> dict:
-        """A plain-dict shallow copy of the raw response."""
-        return dict(self)
+def _resource_id(name: str) -> str:
+    return name.rsplit("/", 1)[-1]
 
 
-def _wrap(value: Any, cls: type) -> Any:
-    return cls(value) if isinstance(value, dict) else None
-
-
-def _wrap_list(value: Any, cls: type) -> list:
-    return [cls(v) for v in value if isinstance(v, dict)] if isinstance(value, list) else []
-
-
-class StorageBackend(_Model):
-    @property
-    def backend_type(self) -> Optional[str]:
-        return self.get("backend_type")
-
-    @property
-    def backend_id(self) -> Optional[str]:
-        return self.get("backend_id")
-
-
-class MemoryStore(_Model):
-    @property
-    def name(self) -> Optional[str]:
-        return self.get("name")
+@dataclass(frozen=True)
+class ManagedMemoryEntry:
+    name: str
+    actor_id: str
+    path: str
+    session_id: Optional[str] = None
+    content: Optional[str] = None
+    description: Optional[str] = None
+    source_type: Optional[str] = None
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
 
     @property
-    def display_name(self) -> Optional[str]:
-        return self.get("display_name")
+    def entry_id(self) -> str:
+        return _resource_id(self.name)
+
+
+@dataclass(frozen=True)
+class ManagedMemoryStore:
+    name: str
+    display_name: str
+    workspace_id: Optional[int] = None
+    storage_backend: Optional[dict[str, Any]] = None
+    owner_user_id: Optional[str] = None
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    description: Optional[str] = None
+    _client: "MemoryStoreClient" = field(repr=False, compare=False, default=None)
 
     @property
-    def workspace_id(self) -> Optional[str]:
-        return self.get("workspace_id")
+    def store_id(self) -> str:
+        return _resource_id(self.name)
 
-    @property
-    def owner_user_id(self) -> Optional[str]:
-        return self.get("owner_user_id")
+    def add(
+        self,
+        *,
+        actor_id: str,
+        path: str,
+        content: str,
+        session_id: Optional[str] = None,
+        description: Optional[str] = None,
+        source_type: Optional[str] = None,
+    ) -> ManagedMemoryEntry:
+        return self._client.add(
+            self,
+            actor_id=actor_id,
+            path=path,
+            content=content,
+            session_id=session_id,
+            description=description,
+            source_type=source_type,
+        )
 
-    @property
-    def description(self) -> Optional[str]:
-        return self.get("description")
+    def append(
+        self,
+        *,
+        actor_id: str,
+        path: str,
+        content: str,
+        session_id: Optional[str] = None,
+        description: Optional[str] = None,
+        source_type: Optional[str] = None,
+    ) -> ManagedMemoryEntry:
+        return self._client.append(
+            self,
+            actor_id=actor_id,
+            path=path,
+            content=content,
+            session_id=session_id,
+            description=description,
+            source_type=source_type,
+        )
 
-    @property
-    def storage_backend(self) -> Optional[StorageBackend]:
-        return _wrap(self.get("storage_backend"), StorageBackend)
+    def list(
+        self,
+        *,
+        actor_id: str,
+        path_prefix: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> list[ManagedMemoryEntry]:
+        return self._client.list(
+            self,
+            actor_id=actor_id,
+            path_prefix=path_prefix,
+            session_id=session_id,
+        )
 
-    @property
-    def create_time(self) -> Optional[str]:
-        return self.get("create_time")
+    def get(self, *, entry_id: str) -> ManagedMemoryEntry:
+        return self._client.get_entry(self, entry_id=entry_id)
 
-    @property
-    def update_time(self) -> Optional[str]:
-        return self.get("update_time")
+    def search(
+        self, *, actor_id: str, query: str, limit: Optional[int] = None
+    ) -> list[ManagedMemoryEntry]:
+        return self._client.search(self, actor_id=actor_id, query=query, limit=limit)
 
-
-class MemoryEntry(_Model):
-    @property
-    def name(self) -> Optional[str]:
-        return self.get("name")
-
-    @property
-    def actor_id(self) -> Optional[str]:
-        return self.get("actor_id")
-
-    @property
-    def path(self) -> Optional[str]:
-        return self.get("path")
-
-    @property
-    def content(self) -> Optional[str]:
-        return self.get("content")
-
-    @property
-    def description(self) -> Optional[str]:
-        return self.get("description")
-
-    @property
-    def session_id(self) -> Optional[str]:
-        return self.get("session_id")
-
-    @property
-    def source_type(self) -> Optional[str]:
-        return self.get("source_type")
-
-    @property
-    def create_time(self) -> Optional[str]:
-        return self.get("create_time")
-
-    @property
-    def update_time(self) -> Optional[str]:
-        return self.get("update_time")
-
-
-class MemoryStoreList(_Model):
-    @property
-    def stores(self) -> list[MemoryStore]:
-        return _wrap_list(self.get("managed_memory_stores"), MemoryStore)
-
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
+    def delete(self, *, entry_id: str) -> None:
+        self._client.delete(self, entry_id=entry_id)
 
 
-class MemoryEntryList(_Model):
-    @property
-    def entries(self) -> list[MemoryEntry]:
-        return _wrap_list(self.get("managed_memory_entries"), MemoryEntry)
-
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
+@dataclass(frozen=True)
+class SessionItem:
+    item_id: str
+    data: Any
+    create_time: Optional[datetime] = None
 
 
-class MemorySearchHit(_Model):
-    @property
-    def entry(self) -> Optional[MemoryEntry]:
-        return _wrap(self.get("managed_memory_entry"), MemoryEntry)
-
-    @property
-    def score(self) -> Optional[float]:
-        return self.get("score")
+@dataclass(frozen=True)
+class SessionItemPage:
+    items: list[SessionItem] = field(default_factory=list)
+    next_page_token: Optional[str] = None
 
 
-class MemorySearchResult(_Model):
-    @property
-    def entries(self) -> list[MemoryEntry]:
-        return _wrap_list(self.get("managed_memory_entries"), MemoryEntry)
+@dataclass(frozen=True)
+class Session:
+    session_store_name: str
+    session_id: str
+    actor_id: str
+    parent_session_id: Optional[str] = None
+    root_session_id: Optional[str] = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    last_activity_time: Optional[datetime] = None
+    _client: "SessionStoreClient" = field(repr=False, compare=False, default=None)
 
-    @property
-    def results(self) -> list[MemorySearchHit]:
-        return _wrap_list(self.get("results"), MemorySearchHit)
+    def update(self, *, metadata: dict[str, str]) -> "Session":
+        return self._client.update_session(self, metadata=metadata)
 
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
+    def delete(self, *, force: bool = False) -> None:
+        self._client.delete_session(self, force=force)
 
+    def fork(
+        self,
+        *,
+        actor_id: str,
+        up_to_item_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        metadata: Optional[dict[str, str]] = None,
+    ) -> "Session":
+        return self._client.fork_session(
+            self,
+            actor_id=actor_id,
+            up_to_item_id=up_to_item_id,
+            session_id=session_id,
+            metadata=metadata,
+        )
 
-class SessionStore(_Model):
-    @property
-    def session_store_name(self) -> Optional[str]:
-        return self.get("session_store_name")
+    def list_items(
+        self,
+        *,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+        order_by: Optional[str] = None,
+    ) -> SessionItemPage:
+        return self._client.list_items(
+            self, page_size=page_size, page_token=page_token, order_by=order_by
+        )
 
-    @property
-    def session_store_id(self) -> Optional[str]:
-        return self.get("session_store_id")
+    def append(self, items: list[Any]) -> list[SessionItem]:
+        return self._client.append_items(self, items=items)
 
-    @property
-    def creator_user_id(self) -> Optional[str]:
-        return self.get("creator_user_id")
+    def pop(self) -> Optional[SessionItem]:
+        return self._client.pop_item(self)
 
-    @property
-    def description(self) -> Optional[str]:
-        return self.get("description")
-
-    @property
-    def create_time(self) -> Optional[str]:
-        return self.get("create_time")
-
-    @property
-    def update_time(self) -> Optional[str]:
-        return self.get("update_time")
-
-
-class SessionStoreList(_Model):
-    @property
-    def stores(self) -> list[SessionStore]:
-        return _wrap_list(self.get("session_stores"), SessionStore)
-
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
-
-
-class Session(_Model):
-    @property
-    def session_store_name(self) -> Optional[str]:
-        return self.get("session_store_name")
-
-    @property
-    def session_id(self) -> Optional[str]:
-        return self.get("session_id")
-
-    @property
-    def actor_id(self) -> Optional[str]:
-        return self.get("actor_id")
-
-    @property
-    def root_session_id(self) -> Optional[str]:
-        return self.get("root_session_id")
-
-    @property
-    def parent_session_id(self) -> Optional[str]:
-        return self.get("parent_session_id")
-
-    @property
-    def metadata(self) -> Optional[dict]:
-        return self.get("metadata")
-
-    @property
-    def create_time(self) -> Optional[str]:
-        return self.get("create_time")
-
-    @property
-    def update_time(self) -> Optional[str]:
-        return self.get("update_time")
-
-    @property
-    def last_activity_time(self) -> Optional[str]:
-        return self.get("last_activity_time")
+    def clear(self) -> None:
+        self._client.clear_items(self)
 
 
-class SessionList(_Model):
-    @property
-    def sessions(self) -> list[Session]:
-        return _wrap_list(self.get("sessions"), Session)
+@dataclass(frozen=True)
+class SessionStore:
+    session_store_name: str
+    session_store_id: Optional[str] = None
+    creator_user_id: Optional[str] = None
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    description: Optional[str] = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    _client: "SessionStoreClient" = field(repr=False, compare=False, default=None)
 
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
+    def update(
+        self, *, description: Optional[str] = None, metadata: Optional[dict[str, str]] = None
+    ) -> "SessionStore":
+        return self._client.update(self, description=description, metadata=metadata)
 
+    def delete(self) -> None:
+        self._client.delete(self)
 
-class SessionItem(_Model):
-    @property
-    def item_id(self) -> Optional[str]:
-        return self.get("item_id")
+    def create_session(
+        self,
+        *,
+        actor_id: str,
+        session_id: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+        metadata: Optional[dict[str, str]] = None,
+    ) -> Session:
+        return self._client.create_session(
+            self,
+            actor_id=actor_id,
+            session_id=session_id,
+            parent_session_id=parent_session_id,
+            metadata=metadata,
+        )
 
-    @property
-    def data(self) -> Any:
-        return self.get("data")
+    def list_sessions(
+        self,
+        *,
+        page_size: Optional[int] = None,
+        filter: Optional[str] = None,
+        order_by: Optional[str] = None,
+    ) -> list[Session]:
+        return self._client.list_sessions(
+            self, page_size=page_size, filter=filter, order_by=order_by
+        )
 
-    @property
-    def create_time(self) -> Optional[str]:
-        return self.get("create_time")
-
-
-class SessionItemList(_Model):
-    @property
-    def session_items(self) -> list[SessionItem]:
-        return _wrap_list(self.get("session_items"), SessionItem)
-
-    @property
-    def next_page_token(self) -> Optional[str]:
-        return self.get("next_page_token")
-
-
-class PoppedSessionItem(_Model):
-    @property
-    def item(self) -> Optional[SessionItem]:
-        return _wrap(self.get("item"), SessionItem)
+    def get_session(self, *, session_id: str) -> Session:
+        return self._client.get_session(self, session_id=session_id)

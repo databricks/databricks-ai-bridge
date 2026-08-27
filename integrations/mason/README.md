@@ -54,28 +54,47 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 ## Python SDK
 
-The same memory and session APIs are available programmatically through
-`MasonClient`, which authenticates exactly like the CLI (a `.databrickscfg` profile
-or the SDK's default resolution):
+Besides the CLI, Mason ships a typed, importable SDK for the same memory and session
+APIs. It wraps the CLI's `AgentApiClient` (so it shares profile-based auth), returns typed
+handles instead of raw dicts, auto-consumes pagination, and adds convenience lookups.
 
 ```python
-from databricks_mason import MasonClient
+from databricks_mason import DatabricksAgentClient
 
-client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
+client = DatabricksAgentClient(profile="my-profile")  # or default SDK auth
 
-store = client.create_memory_store("my-store")
-print(store.name, store.display_name)  # typed attribute access
+# Memory: bound store handles, get-or-create, and read-modify-write append
+store = client.memory_store.get(
+    display_name="coding_agent_memory",
+    create_if_not_exists=True,
+    description="Long-term coding-agent memory",
+)
+store.add(
+    actor_id="alice",
+    session_id="project-sess-1",
+    path="/memories/preferences.md",
+    content="The user prefers concise answers.",
+)
+hits = store.search(actor_id="alice", query="response preferences")
 
-client.create_memory_entry("my-store", actor_id="alice", path="/notes/1.md", content="hi")
-for entry in client.list_memory_entries("my-store", actor_id="alice").entries:
-    print(entry.path, entry.content)
+# Sessions: bound stores/sessions and durable transcript items
+sstore = client.session_store.create(session_store_name="support-agent-sessions")
+session = sstore.create_session(actor_id="customer-123", session_id="case-456")
+session.append(
+    [
+        {"type": "message", "role": "user", "content": "I need help with my cluster."},
+        {"type": "message", "role": "assistant", "content": "Let's take a look."},
+    ]
+)
+page = session.list_items(page_size=100, order_by="create_time asc")
 ```
 
-Each method maps to one `/api/agents/v1` operation. Responses come back as typed
-models (`MemoryStore`, `Session`, `SessionItemList`, ...) that expose attribute
-accessors (`store.name`) while remaining plain dicts underneath — so `store["name"]`,
-`json.dumps(store)`, and any new server-side fields keep working. API errors raise
-`databricks_mason.AgentCliError`. Deployment, sandbox, and tracing remain CLI-only.
+`memory_store.list(...)`, `session_store.list()`, and `store.list_sessions()` consume all
+server pages; `list_sessions()` defaults to `order_by="create_time desc"` for exactly-once
+enumeration. `session.list_items()` returns one `SessionItemPage`; pass its `next_page_token`
+for the next page. Every list/search `page_size` must be between 1 and 100. `session.fork(...)`
+creates an independent copy, optionally through a specific item; deleting a session cascades to
+its descendants.
 
 ## Commands
 
