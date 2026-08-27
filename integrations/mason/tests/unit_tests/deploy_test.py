@@ -127,6 +127,40 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
 
 
+def _run_deploy(src, monkeypatch, extra_args):
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    return CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src), *extra_args], obj=_FakeCtx()
+    )
+
+
+def test_deploy_injects_public_pypi_index_by_default(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    result = _run_deploy(src, monkeypatch, [])
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    for name in ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"):
+        assert env[name] == "https://pypi.org/simple/"
+
+
+def test_deploy_empty_pip_index_disables_override(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    result = _run_deploy(src, monkeypatch, ["--pip-index-url", ""])
+    assert result.exit_code == 0, result.output
+    doc = yaml.safe_load((src / "app.yaml").read_text())
+    env = {e["name"]: e["value"] for e in (doc.get("env") or [])}
+    assert "PIP_INDEX_URL" not in env  # empty -> no override, use the build's default index
+
+
 class _JsonCtx:
     profile = "prof"
     output = "json"

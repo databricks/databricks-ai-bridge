@@ -27,6 +27,13 @@ from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
 
+# TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
+# time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
+# until the proxy is reachable from the build sandbox again, then drop this default. pip reads
+# PIP_INDEX_URL; uv reads UV_INDEX_URL / UV_DEFAULT_INDEX — set all three to cover both build paths.
+_DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
+_PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
+
 
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
@@ -189,6 +196,14 @@ def _grant_session_store_lakebase(name: str, profile: Optional[str]) -> Optional
     help="Create the referenced stores if they don't exist (idempotent).",
 )
 @click.option(
+    "--pip-index-url",
+    default=_DEFAULT_PIP_INDEX_URL,
+    show_default=True,
+    help="Package index the Apps build installs from. Defaults to public PyPI as a temporary "
+    "workaround: the Apps build environment currently can't reach the internal proxy. Pass an "
+    "empty string to use the build's default index.",
+)
+@click.option(
     "--workspace-path",
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
@@ -203,6 +218,7 @@ def deploy(
     traces_destination,
     traces_experiment,
     create_stores,
+    pip_index_url,
     workspace_path,
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
@@ -230,6 +246,10 @@ def deploy(
         provisioned["Traces"] = traces_destination
     if traces_experiment:
         env_updates[TRACES_EXPERIMENT_ENV] = traces_experiment
+    if pip_index_url:
+        for env in _PIP_INDEX_ENVS:
+            env_updates[env] = pip_index_url
+        provisioned["Package index"] = pip_index_url
 
     # 2. Patch the app.yaml manifest with the store identifiers.
     scaffolded = False
