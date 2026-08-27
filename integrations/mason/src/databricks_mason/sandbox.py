@@ -9,6 +9,7 @@ import stat
 import tempfile
 import textwrap
 from collections.abc import Sequence
+from importlib import resources
 
 import click
 
@@ -17,7 +18,9 @@ from databricks_mason.errors import AgentCliError
 
 _BEGIN_MARKER = "# BEGIN: mason add-sandbox"
 _END_MARKER = "# END: mason add-sandbox"
-_SERVER_FACTORY = "_build_sandbox_mcp_server()"
+_DOWNSCOPE_PLACEHOLDER = "# __MASON_SANDBOX_DOWNSCOPE__"
+_SERVER_FACTORY_CALL = "_build_sandbox_mcp_server()"
+_TEMPLATE_NAME = "sandbox_mcp.py.tmpl"
 
 _GENERATED_TYPING_IMPORT = "from typing import Any"
 _GENERATED_MCP_IMPORT = "from databricks_openai.agents import McpServer"
@@ -144,7 +147,7 @@ def _append_server_to_list(source: str) -> str:
     closing_indent = " " * (function.col_offset + 4)
 
     if not server_list.elts:
-        replacement = f"[\n{item_indent}{_SERVER_FACTORY},\n{closing_indent}]"
+        replacement = f"[\n{item_indent}{_SERVER_FACTORY_CALL},\n{closing_indent}]"
         return source[:start] + replacement + source[end:]
 
     if server_list.lineno == server_list.end_lineno:
@@ -155,7 +158,9 @@ def _append_server_to_list(source: str) -> str:
                 raise AgentCliError("Could not preserve the existing MCP server list.")
             existing.append(textwrap.indent(textwrap.dedent(segment), item_indent))
         replacement = (
-            "[\n" + ",\n".join(existing) + f",\n{item_indent}{_SERVER_FACTORY},\n{closing_indent}]"
+            "[\n"
+            + ",\n".join(existing)
+            + f",\n{item_indent}{_SERVER_FACTORY_CALL},\n{closing_indent}]"
         )
         return source[:start] + replacement + source[end:]
 
@@ -176,7 +181,7 @@ def _append_server_to_list(source: str) -> str:
         source[:last_end]
         + comma
         + source[last_end:closing_line_start]
-        + f"{item_indent}{_SERVER_FACTORY},\n"
+        + f"{item_indent}{_SERVER_FACTORY_CALL},\n"
         + source[closing_line_start:]
     )
     return with_item
@@ -479,41 +484,18 @@ def _write_text_atomic(target: pathlib.Path, content: str) -> None:
 
 
 def _generated_block(policy: dict[str, list[dict[str, str]]]) -> str:
-    return f"""{_BEGIN_MARKER}
-# The downscope is fixed when this file is generated. It is sent as MCP metadata,
-# outside model-controlled tool arguments, on every sandbox call.
-{_format_policy(policy)}
-
-
-class _SandboxMcpServer(McpServer):
-    async def call_tool(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any] | None,
-        **kwargs: Any,
-    ) -> Any:
-        incoming_meta = kwargs.pop("meta", None)
-        meta = dict(incoming_meta) if isinstance(incoming_meta, dict) else {{}}
-        meta["downscope"] = _SANDBOX_DOWNSCOPE
-        return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
-
-
-def {_SERVER_FACTORY} -> McpServer:
-    workspace_client = WorkspaceClient()
-    return _SandboxMcpServer(
-        url=(
-            f"{{workspace_client.config.host.rstrip('/')}}"
-            "/ai-gateway/mcp-services/system.ai.sandbox"
-        ),
-        workspace_client=workspace_client,
-        timeout=120.0,
-        name="system.ai.sandbox",
-        tool_filter={{"allowed_tool_names": ["run_code"]}},
-    )
-
-
-{_END_MARKER}
-"""
+    try:
+        template = (
+            resources.files("databricks_mason")
+            .joinpath("templates")
+            .joinpath(_TEMPLATE_NAME)
+            .read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError) as exc:
+        raise AgentCliError("Could not read the packaged sandbox MCP template.") from exc
+    if template.count(_DOWNSCOPE_PLACEHOLDER) != 1:
+        raise AgentCliError("The packaged sandbox MCP template is invalid.")
+    return template.replace(_DOWNSCOPE_PLACEHOLDER, _format_policy(policy))
 
 
 def _add_sandbox_to_source(source: str, policy: dict[str, list[dict[str, str]]]) -> str:

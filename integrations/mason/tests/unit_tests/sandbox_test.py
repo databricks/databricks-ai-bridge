@@ -8,6 +8,7 @@ import json
 import pathlib
 import sys
 import types
+from importlib import resources
 from typing import Any
 
 import pytest
@@ -44,6 +45,37 @@ def _project(
     mcps = agent / "mcps.py"
     mcps.write_text(content)
     return project, mcps
+
+
+def test_generated_block_reads_packaged_template_at_render_time(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir()
+    (template_dir / "sandbox_mcp.py.tmpl").write_text(
+        "# BEGIN: mason add-sandbox\n"
+        "# __MASON_SANDBOX_DOWNSCOPE__\n"
+        'TEMPLATE_SOURCE = "loaded"\n'
+        "# END: mason add-sandbox\n"
+    )
+    monkeypatch.setattr(resources, "files", lambda package: tmp_path)
+
+    rendered = sandbox_mod._generated_block(
+        {
+            "volumes": [
+                {"name": "catalog.schema.volume", "permission": "read_only"},
+            ]
+        }
+    )
+
+    assert 'TEMPLATE_SOURCE = "loaded"' in rendered
+    namespace: dict[str, Any] = {}
+    exec(compile(rendered, "sandbox_mcp.py", "exec"), namespace)
+    assert namespace["_SANDBOX_DOWNSCOPE"] == {
+        "volumes": [
+            {"name": "catalog.schema.volume", "permission": "read_only"},
+        ]
+    }
 
 
 def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
