@@ -23,6 +23,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["agent"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 
 [dependency-groups]
 dev = [
