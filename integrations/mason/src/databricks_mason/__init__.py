@@ -7,15 +7,13 @@ The framework-neutral runtime helpers (``configure_tracing``, ``tag_session``,
 
 from typing import TYPE_CHECKING
 
-from databricks_mason.models import (
+from databricks_mason.client import DatabricksAgentClient
+from databricks_mason.memory_store import (
     ManagedMemoryEntry,
+    ManagedMemoryEntrySearchResult,
     ManagedMemoryStore,
-    Session,
-    SessionItem,
-    SessionItemPage,
-    SessionStore,
 )
-from databricks_mason.sdk import DatabricksAgentClient
+from databricks_mason.session_store import Session, SessionItem, SessionItemPage, SessionStore
 
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
@@ -28,6 +26,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DatabricksAgentClient",
     "ManagedMemoryEntry",
+    "ManagedMemoryEntrySearchResult",
     "ManagedMemoryStore",
     "Session",
     "SessionItem",

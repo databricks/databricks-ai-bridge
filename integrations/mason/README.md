@@ -54,33 +54,34 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 ## Python SDK
 
-Besides the CLI, Mason ships a typed, importable SDK for the same memory and session
-APIs. It wraps the CLI's `AgentApiClient` (so it shares profile-based auth), returns typed
-handles instead of raw dicts, auto-consumes pagination, and adds convenience lookups.
+Besides the CLI, Mason ships typed, importable clients for the memory and session APIs.
+They share the CLI's profile-based authentication, return bound resource handles instead
+of raw dictionaries, auto-consume collection pagination, and add convenience lookups.
 
 ```python
 from databricks_mason import DatabricksAgentClient
 
 client = DatabricksAgentClient(profile="my-profile")  # or default SDK auth
 
-# Memory: bound store handles, get-or-create, and read-modify-write append
-store = client.memory_store.get(
+# Memory: plural collections and explicit entry operations
+store = client.memory_stores.get_or_create(
     display_name="coding_agent_memory",
-    create_if_not_exists=True,
     description="Long-term coding-agent memory",
 )
-store.add(
+store.create_entry(
     actor_id="alice",
     session_id="project-sess-1",
     path="/memories/preferences.md",
     content="The user prefers concise answers.",
 )
-hits = store.search(actor_id="alice", query="response preferences")
+hits = store.search_entries(actor_id="alice", query="response preferences")
+for hit in hits:
+    print(hit.managed_memory_entry.path, hit.score)
 
 # Sessions: bound stores/sessions and durable transcript items
-sstore = client.session_store.create(session_store_name="support-agent-sessions")
+sstore = client.session_stores.create(session_store_name="support-agent-sessions")
 session = sstore.create_session(actor_id="customer-123", session_id="case-456")
-session.append(
+session.append_items(
     [
         {"type": "message", "role": "user", "content": "I need help with my cluster."},
         {"type": "message", "role": "assistant", "content": "Let's take a look."},
@@ -89,12 +90,15 @@ session.append(
 page = session.list_items(page_size=100, order_by="create_time asc")
 ```
 
-`memory_store.list(...)`, `session_store.list()`, and `store.list_sessions()` consume all
-server pages; `list_sessions()` defaults to `order_by="create_time desc"` for exactly-once
-enumeration. `session.list_items()` returns one `SessionItemPage`; pass its `next_page_token`
-for the next page. Every list/search `page_size` must be between 1 and 100. `session.fork(...)`
-creates an independent copy, optionally through a specific item; deleting a session cascades to
-its descendants.
+`client.memory_stores.list()`, `client.session_stores.list()`, `store.list_entries()`, and
+`store.list_sessions()` consume all server pages. `list_sessions()` defaults to
+`order_by="create_time desc"` for exactly-once enumeration. `session.list_items()` returns one
+`SessionItemPage`; pass its `next_page_token` for the next page. Every list/search `page_size`
+must be between 1 and 100. `session.fork(...)` creates an independent copy, optionally through a
+specific item; deleting a session always cascades to its descendants.
+
+`store.append_entry_content(...)` is available when needed, but it is a non-atomic client-side
+read-modify-write operation. Concurrent calls can overwrite each other.
 
 ## Commands
 

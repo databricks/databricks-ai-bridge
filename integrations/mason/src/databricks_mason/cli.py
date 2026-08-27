@@ -1,7 +1,7 @@
 """`mason` — the Databricks CLI for agent deployment, memory, and sessions.
 
 Root Click group. Global `--profile` and `--output` flow to every subcommand via
-`CliContext` on `ctx.obj`; subcommands build a `MasonClient` from it on demand.
+`CliContext` on `ctx.obj`; subcommands build an `AgentApiClient` from it on demand.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from typing import Optional
 import click
 
 from databricks_mason import errors
+from databricks_mason._api_client import AgentApiClient
 from databricks_mason.auth import load_default_profile, login, logout
-from databricks_mason.client import MasonClient
 from databricks_mason.deploy import deploy, deployments
 from databricks_mason.dev import dev
 from databricks_mason.help import configure_help
@@ -30,11 +30,11 @@ class CliContext:
     def __init__(self, profile: Optional[str], output: str):
         self.profile = profile
         self.output = output
-        self._client: Optional[MasonClient] = None
+        self._client: Optional[AgentApiClient] = None
 
-    def client(self) -> MasonClient:
+    def client(self) -> AgentApiClient:
         if self._client is None:
-            self._client = MasonClient(self.profile)
+            self._client = AgentApiClient(self.profile)
         return self._client
 
 
@@ -54,7 +54,7 @@ class CliContext:
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Mason: deploy agents and manage their memory and sessions.
 
-    Targets the agents/v1 preview APIs served on a workspace; auth comes from a
+    Targets the 2.0/agents preview APIs served on a workspace; auth comes from a
     .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
     or rely on the SDK's default resolution).
     """

@@ -25,7 +25,7 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def sessions() -> None:
-    """Manage agent session stores, sessions, and items (/api/agents/v1/session-stores)."""
+    """Manage agent session stores, sessions, and items (/api/2.0/agents/session-stores)."""
 
 
 @sessions.group()
@@ -250,7 +250,7 @@ def _session_starter_code(obj, store: str, session_id: str) -> list[tuple[str, s
             "curl",
             "bash",
             f"""
-curl -X POST "{obj.client().host}/api/agents/v1/session-stores/{store}/sessions/{session_id}/items:append" \\
+curl -X POST "{obj.client().host}/api/2.0/agents/session-stores/{store}/sessions/{session_id}/items:append" \\
   -H "Authorization: Bearer $DATABRICKS_TOKEN" -H "Content-Type: application/json" \\
   -d '{{"items": [{{"data": {{"role": "user", "content": "Hello"}}}}]}}'
 """,

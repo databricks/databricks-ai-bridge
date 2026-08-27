@@ -56,7 +56,7 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def memory() -> None:
-    """Manage agent memory stores and entries (/api/agents/v1/memory-stores)."""
+    """Manage agent memory stores and entries (/api/2.0/agents/memory-stores)."""
 
 
 @memory.group()
@@ -155,7 +155,7 @@ def _store_starter_code(obj, store: dict) -> list[tuple[str, str, str]]:
             "curl",
             "bash",
             f"""
-curl -X POST "{obj.client().host}/api/agents/v1/{name}/entries" \\
+curl -X POST "{obj.client().host}/api/2.0/agents/{name}/entries" \\
   -H "Authorization: Bearer $DATABRICKS_TOKEN" -H "Content-Type: application/json" \\
   -d '{{"actor_id": "alice", "path": "/preferences/style.md", "content": "Terse, code first."}}'
 """,
@@ -433,15 +433,25 @@ def entries_list(obj, store, actor_id, path_prefix, session_id, page_size, page_
 @click.option("--store", required=True)
 @click.option("--actor-id", required=True)
 @click.option("--query", required=True)
-@click.option("--limit", type=int, default=None)
+@click.option("--page-size", type=int, default=None)
 @click.pass_obj
-def entries_search(obj, store, actor_id, query, limit) -> None:
+def entries_search(obj, store, actor_id, query, page_size) -> None:
     """Full-text search an actor's entries, ranked (includes content)."""
-    data = obj.client().search_memory_entries(store, actor_id, query, limit)
+    data = obj.client().search_memory_entries(
+        store,
+        actor_id,
+        query,
+        page_size=page_size,
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
-    items = field(data, "managed_memory_entries") or []
+    results = field(data, "results")
+    items = (
+        [field(result, "managed_memory_entry") for result in results]
+        if results is not None
+        else field(data, "managed_memory_entries") or []
+    )
     rows = [
         [
             field(e, "path"),

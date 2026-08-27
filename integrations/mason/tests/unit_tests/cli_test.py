@@ -31,6 +31,8 @@ def test_root_registers_supported_commands():
     assert {
         "login",
         "logout",
+        "init",
+        "dev",
         "memory",
         "sessions",
         "tracing",
@@ -169,3 +171,17 @@ def test_group_comment_layout_is_uniform():
     )
     # no command line carries a trailing inline comment
     assert not any(ln.strip().startswith("mason") and " # " in ln for ln in epilog.splitlines())
+def test_memory_search_uses_canonical_page_size_option():
+    entries = cli.memory.commands["entries"]
+    assert isinstance(entries, click.Group)
+    search = entries.commands["search"]
+    parameter_names = {parameter.name for parameter in search.params}
+
+    assert "page_size" in parameter_names
+    assert "limit" not in parameter_names
+
+
+def test_session_delete_has_no_removed_force_option():
+    delete = cli.sessions.commands["delete"]
+
+    assert "force" not in {parameter.name for parameter in delete.params}
