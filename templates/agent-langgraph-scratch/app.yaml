@@ -11,9 +11,10 @@ command: ["uv", "run", "start-server"]
 #     value: "databricks"
 #   - name: MLFLOW_EXPERIMENT_ID
 #     value: "<experiment-id>"
-#   # Durable conversation history: a managed session store name (else local SQLite).
-#   - name: AGENT_SESSION_STORE
-#     value: "<session-store-name>"
 #   # Long-term memory tools: a managed memory store name (registers remember/recall).
 #   - name: AGENT_MEMORY_STORE
 #     value: "<memory-store-name>"
+#
+# Conversation history uses an in-process checkpointer by default (no config). For durable,
+# cross-replica history, swap the checkpointer in agent/mason/session_store.py for a PostgresSaver
+# over Lakebase — a code change, not an env var.
