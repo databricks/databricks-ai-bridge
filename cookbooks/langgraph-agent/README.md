@@ -11,6 +11,56 @@ These two Databricks Apps run the same small LangGraph agent. Only the
 Both strategies persist Responses API events for SSE replay. The LangGraph
 checkpointer is a separate store used only for graph execution state.
 
+## Background, streaming, and client impact
+
+This cookbook runs LangGraph behind the Responses protocol; it is not a
+LangGraph Agent Server and does not expose the native threads/runs API.
+
+With a native LangGraph deployment, the client can remain framework-specific:
+
+```python
+thread = await langgraph.threads.create()
+run = await langgraph.runs.create(
+    thread["thread_id"], "agent", input={"messages": messages}
+)
+result = await langgraph.runs.join(thread["thread_id"], run["run_id"])
+
+async for event in langgraph.runs.stream(
+    thread["thread_id"], "agent", input={"messages": messages}
+):
+    consume(event)
+```
+
+With `LongRunningAgentServer`, the developer translates Responses input/events
+to and from the graph, and the client changes to the durable Responses API:
+
+```python
+async with http.stream(
+    "POST",
+    "/responses",
+    json={
+        "background": True,
+        "stream": True,
+        "input": [{"role": "user", "content": "hello"}],
+        "custom_inputs": {"thread_id": thread_id},
+    },
+) as response:
+    async for line in response.aiter_lines():
+        last_sequence = remember_sse_sequence(line, last_sequence)
+
+# Reconnect with ?stream=true&starting_after=<last_sequence>; poll without
+# stream=true for the final stored Response.
+```
+
+The server owns background execution, final-result storage, and event replay.
+The handler must yield Responses events; the LangGraph checkpointer restores
+agent state using the stable `thread_id`. Keeping `langgraph_sdk` unchanged
+would require a framework-native server or a LangGraph protocol adapter.
+
+References: [LangGraph background runs](https://docs.langchain.com/langsmith/runs),
+[LangGraph resumable streaming](https://docs.langchain.com/langsmith/streaming),
+and [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution).
+
 ## Files
 
 ```text

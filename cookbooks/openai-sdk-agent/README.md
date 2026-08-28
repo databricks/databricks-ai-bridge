@@ -11,6 +11,47 @@ These two Databricks Apps run the same small OpenAI Agents SDK agent. Only the
 Both strategies always persist stream events, support `starting_after` SSE
 replay, heartbeat active work, and atomically claim stale attempts.
 
+## Background, streaming, and client impact
+
+| Capability | Developer contract | Client contract |
+| --- | --- | --- |
+| Background | Implement `@invoke()` and/or `@stream()` using Responses types. The server stores status and the terminal Responses JSON. | Send `background=true`. A non-streaming POST returns an `in_progress` response ID; poll `GET /responses/{id}`. |
+| Durable streaming | Yield valid Responses stream events from `@stream()`. The server persists them automatically. | Send `stream=true`, retain event sequence numbers, and reconnect through `GET /responses/{id}?stream=true&starting_after=<sequence>`. |
+
+`background=true, stream=true` starts one durable Response and returns SSE. A
+disconnect does not cancel execution; polling returns the authoritative final
+Response.
+
+The OpenAI Agents SDK itself is in-process and has no deployment client. Before
+this server, an application defined its own route around
+`Runner.run_streamed()`. With this server, its remote client adopts the
+Responses protocol:
+
+```python
+async with http.stream(
+    "POST",
+    "/responses",
+    json={
+        "background": True,
+        "stream": True,
+        "input": [{"role": "user", "content": "hello"}],
+        "custom_inputs": {"session_id": "conversation-1"},
+    },
+) as response:
+    async for line in response.aiter_lines():
+        last_sequence = remember_sse_sequence(line, last_sequence)
+        response_id = remember_response_id(line, response_id)
+
+final = (await http.get(f"/responses/{response_id}")).json()
+```
+
+An existing Responses-compatible client keeps its request/response shape and
+changes only the base URL. A LangGraph SDK client is not compatible with these
+routes; see the LangGraph cookbook for the exact before/after difference.
+
+References: [OpenAI Agents SDK streaming](https://openai.github.io/openai-agents-python/streaming/)
+and [LangGraph background runs](https://docs.langchain.com/langsmith/runs).
+
 ## Files
 
 ```text
