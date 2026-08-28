@@ -41,11 +41,6 @@ _TEMPLATES = {
     },
 }
 
-_RUNTIME_TEMPLATES = {
-    "openai": "mcp_runtime_openai.py",
-    "langgraph": "mcp_runtime_langgraph.py",
-}
-
 
 def _runtime_template(name: str) -> str:
     try:
@@ -59,7 +54,7 @@ def _runtime_template(name: str) -> str:
         raise AgentCliError(f"Could not read packaged runtime template {name!r}.") from exc
 
 
-def _install_runtime_plumbing(project: pathlib.Path, framework: str) -> None:
+def _install_runtime_plumbing(project: pathlib.Path) -> None:
     """Install template-owned runtime seams without modifying user agent code."""
     mason = project / "agent" / "mason"
     mason.mkdir(parents=True, exist_ok=True)
@@ -67,7 +62,7 @@ def _install_runtime_plumbing(project: pathlib.Path, framework: str) -> None:
         _runtime_template("tool_manifest_runtime.py"), encoding="utf-8"
     )
     (mason / "mcp_runtime.py").write_text(
-        _runtime_template(_RUNTIME_TEMPLATES[framework]), encoding="utf-8"
+        _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
     )
 
 
@@ -188,7 +183,8 @@ def init(
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
     AgentProject.create(dest, framework=framework).write()
-    _install_runtime_plumbing(dest, framework)
+    if framework == "langgraph":
+        _install_runtime_plumbing(dest)
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

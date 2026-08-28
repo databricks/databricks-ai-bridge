@@ -15,10 +15,7 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.errors import AgentCliError
 
-_TEMPLATE_BY_FRAMEWORK = {
-    "openai": "python_tool_openai.py",
-    "langgraph": "python_tool_langgraph.py",
-}
+_PYTHON_TOOL_TEMPLATE = "python_tool_langgraph.py"
 _PYTHON_TEST_TEMPLATE = "python_tool_test.py"
 
 
@@ -68,9 +65,17 @@ def _emit_change(
 
 def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
     project = AgentProject.load(source)
+    _require_runtime_adapter(project)
     changed = project.add_tool(spec)
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
+
+
+def _require_runtime_adapter(project: AgentProject) -> None:
+    if project.framework != "langgraph":
+        raise AgentCliError(
+            f"Mason tools supports only the 'langgraph' framework; found {project.framework!r}."
+        )
 
 
 def add_sandbox_to_manifest(
@@ -244,6 +249,7 @@ def add_uc_function(
 def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
     """Scaffold a framework-native local Python tool and starter test."""
     project = AgentProject.load(source)
+    _require_runtime_adapter(project)
     function = _identifier(name)
     spec = ToolSpec.python(
         name,
@@ -264,7 +270,7 @@ def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
     project.add_tool(spec)
     files = {
         source_path: _render_python_template(
-            _TEMPLATE_BY_FRAMEWORK[project.framework],
+            _PYTHON_TOOL_TEMPLATE,
             module=function,
             function=function,
         ),

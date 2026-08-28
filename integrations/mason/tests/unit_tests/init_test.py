@@ -102,30 +102,43 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     }
 
 
-def test_init_installs_static_manifest_runtime_without_editing_agent_code(
+def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_code(
     tmp_path: pathlib.Path,
 ):
-    for framework in ("openai", "langgraph"):
-        dest = tmp_path / framework
+    dest = tmp_path / "langgraph"
 
-        def fake_fetch(repo, ref, template_path, target):
-            (target / "agent" / "mason").mkdir(parents=True)
-            (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
-            (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
+    def fake_fetch(repo, ref, template_path, target):
+        (target / "agent" / "mason").mkdir(parents=True)
+        (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
+        (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
 
-        with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
-            result = CliRunner().invoke(
-                init_mod.init,
-                ["--framework", framework, str(dest)],
-                obj=_Ctx(),
-            )
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
 
-        assert result.exit_code == 0, result.output
-        assert (dest / "agent" / "agent.py").read_text() == "USER_AGENT = True\n"
-        ast.parse((dest / "agent" / "mason" / "tool_manifest.py").read_text())
-        runtime = (dest / "agent" / "mason" / "mcp_runtime.py").read_text()
-        ast.parse(runtime)
-        assert f'load_tools(expected_framework="{framework}")' in runtime
+    assert result.exit_code == 0, result.output
+    assert (dest / "agent" / "agent.py").read_text() == "USER_AGENT = True\n"
+    ast.parse((dest / "agent" / "mason" / "tool_manifest.py").read_text())
+    runtime = (dest / "agent" / "mason" / "mcp_runtime.py").read_text()
+    ast.parse(runtime)
+    assert 'load_tools(expected_framework="langgraph")' in runtime
+
+
+def test_init_openai_records_manifest_without_installing_runtime_adapter(tmp_path: pathlib.Path):
+    dest = tmp_path / "openai"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "agent" / "mason").exists()
 
 
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):

@@ -59,6 +59,13 @@ mason [-p <profile>] [-o text|json]
   tracing
     setup      --catalog C --schema S [--experiment E]
     list | get | instrument
+  init          [--framework openai|langgraph] [--profile P] [DIRECTORY]
+  tools
+    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
+    add mcp          SERVICE [--name NAME] [--source PATH]
+    add uc-function  FUNCTION [--name NAME] [--source PATH]
+    add python       NAME [--source PATH]
+    list             [--source PATH]
   add-sandbox  --scope SCOPE [--scope SCOPE ...]
                [--permission read_only|read_write] [--source PATH]
                [--framework openai|langgraph]
@@ -67,40 +74,34 @@ mason [-p <profile>] [-o text|json]
   deployments  list | get | logs | start | stop | delete
 ```
 
-## Add a downscoped sandbox
+## Agent tools
 
-`mason init --framework openai|langgraph` records the selected framework and
-template in `.mason/project.toml`. Later source-editing commands use that stable
-project metadata instead of guessing from the current contents of `agent/mcps.py`.
+`mason init` writes portable tool intent to `agent.toml` and template provenance to
+`.mason/project.toml`. The manifest runtime is currently implemented only by the in-repository
+`agent-langgraph` template; `mason tools add` fails explicitly for other frameworks until they
+provide an adapter at the same runtime seam.
 
-From a Mason agent project, add the `system.ai.sandbox` MCP server and fix its
-allowed resources at configuration time:
-
-```sh
-mason add-sandbox --scope catalog.schema.volume
-```
-
-The command selects a framework adapter from `.mason/project.toml` and updates
-the framework's MCP wiring. Every sandbox call carries the selected downscope
-in MCP `_meta`, outside the tool arguments controlled by the model. OpenAI uses
-its `McpServer.call_tool` hook; LangGraph uses the supported
-`langchain-mcp-adapters` tool interceptor path.
-Scopes default to read-only access. Repeat `--scope` to allow more than one
-resource, use `/Workspace/...` for a workspace path, or prefix a table with
-`table:`:
+Remote tools update only `agent.toml`; they do not generate framework source. The LangGraph runtime
+loads the manifest and materializes its native MCP tools when the agent runs, so a direct manifest
+edit and a CLI edit have the same behavior:
 
 ```sh
-mason add-sandbox \
-  --scope catalog.schema.volume \
-  --scope /Workspace/Users/alice@example.com \
-  --scope table:catalog.schema.table
+mason tools add sandbox --scope table:samples.nyctaxi.trips
+mason tools add mcp system.ai.web_search
+mason tools add uc-function catalog.schema.lookup_ticket
+mason tools add python lookup-ticket
+mason tools list
 ```
 
-Pass `--permission read_write` to grant write access to every supplied scope,
-or `--source /path/to/project` when running outside the project root. Re-running
-the command with the same policy leaves the existing configuration unchanged;
-a different policy fails without modifying the file so it cannot silently report
-stale access. Edit or remove the generated block before intentionally changing
-the sandbox policy. Projects created by an older Mason release can be detected
-from their `databricks-openai` or `databricks-langchain` dependency; use
-`--framework` when that dependency set is ambiguous.
+The Python command additionally creates user-owned `agent/tools/<name>.py` and
+`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. `mason dev` and
+`mason deploy` preserve `agent.toml`; they do not generate or patch agent source.
+
+Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
+`volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
+agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
+arguments controlled by the model.
+
+`mason add-sandbox` remains as a compatibility alias. For manifest-backed projects it follows the
+same LangGraph-only behavior as `mason tools add sandbox`; its older source-editing path remains for
+legacy projects that do not yet contain `agent.toml`.

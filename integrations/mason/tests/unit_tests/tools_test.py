@@ -6,6 +6,7 @@ import ast
 import json
 import pathlib
 
+import pytest
 from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
@@ -112,8 +113,31 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
     ]
 
 
-def test_add_python_writes_manifest_source_and_test_atomically(tmp_path: pathlib.Path):
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
+        ["add", "mcp", "system.ai.web_search"],
+        ["add", "uc-function", "main.tools.lookup_ticket"],
+        ["add", "python", "lookup-ticket"],
+    ],
+)
+def test_add_rejects_framework_without_runtime_adapter(tmp_path: pathlib.Path, command: list[str]):
     project = _project(tmp_path, framework="openai")
+
+    result = CliRunner().invoke(
+        tools,
+        [*command, "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "supports only the 'langgraph' framework" in result.output
+    assert AgentProject.load(project).tools == []
+
+
+def test_add_python_writes_manifest_source_and_test_atomically(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
 
     result = CliRunner().invoke(
         tools,
@@ -126,24 +150,10 @@ def test_add_python_writes_manifest_source_and_test_atomically(tmp_path: pathlib
     test = project / "tests" / "tools" / "test_lookup_ticket.py"
     ast.parse(source.read_text(encoding="utf-8"))
     ast.parse(test.read_text(encoding="utf-8"))
-    assert "@function_tool" in source.read_text(encoding="utf-8")
+    assert "from langchain_core.tools import tool" in source.read_text(encoding="utf-8")
+    assert "@tool" in source.read_text(encoding="utf-8")
     loaded = AgentProject.load(project)
     assert loaded.tools[0].source.entrypoint == "agent.tools.lookup_ticket:lookup_ticket"
-
-
-def test_add_python_uses_langgraph_native_decorator(tmp_path: pathlib.Path):
-    project = _project(tmp_path, framework="langgraph")
-
-    result = CliRunner().invoke(
-        tools,
-        ["add", "python", "matrix-marker", "--source", str(project)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    source = (project / "agent" / "tools" / "matrix_marker.py").read_text(encoding="utf-8")
-    assert "from langchain_core.tools import tool" in source
-    assert "@tool" in source
 
 
 def test_add_python_refuses_existing_user_file_without_manifest_change(tmp_path: pathlib.Path):
