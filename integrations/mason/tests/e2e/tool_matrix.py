@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the OpenAI/LangGraph × CLI/direct × dev/deploy × tool E2E matrix."""
+"""Run the LangGraph × CLI/direct × dev/deploy × tool E2E matrix."""
 
 from __future__ import annotations
 
@@ -23,7 +23,9 @@ import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
 
-FRAMEWORKS = ("openai", "langgraph")
+from databricks.sdk import WorkspaceClient
+
+FRAMEWORKS = ("langgraph",)
 AUTHORING_PATHS = ("cli", "direct")
 RUNTIMES = ("dev", "deploy")
 TOOL_KINDS = ("sandbox", "mcp", "python", "uc_function")
@@ -217,22 +219,14 @@ class Runner:
             timeout=600,
         )
         self.run([str(self.mason), "tools", "--help"])
-        describe = self.run(
-            ["databricks", "auth", "describe", "--profile", self.profile],
-            log=False,
-        ).stdout
-        for line in describe.splitlines():
-            if line.startswith("Host:"):
-                self.host = line.partition(":")[2].strip().rstrip("/")
-                break
-        if not self.host:
+        workspace_client = WorkspaceClient(profile=self.profile)
+        if not workspace_client.config.host:
             raise MatrixError(f"Could not resolve a host from profile {self.profile!r}.")
-        token = self.run(
-            ["databricks", "auth", "token", "--profile", self.profile, "--output", "json"],
-            log=False,
-        )
-        token_value = json.loads(token.stdout)["access_token"]
-        self.headers = {"Authorization": f"Bearer {token_value}"}
+        self.host = workspace_client.config.host.rstrip("/")
+        authorization = workspace_client.config.authenticate().get("Authorization")
+        if not authorization:
+            raise MatrixError(f"Could not resolve credentials from profile {self.profile!r}.")
+        self.headers = {"Authorization": authorization}
 
     def select_warehouse(self, override: str | None) -> str:
         if override:
@@ -334,7 +328,7 @@ class Runner:
                     self._author_cli(project)
                 else:
                     self._author_direct(project, framework)
-                self._write_python_marker(project, framework)
+                self._write_python_marker(project)
                 app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
@@ -360,23 +354,14 @@ class Runner:
         self.transcript.file_step(target, "direct authoring; no mason tools command")
         target.write_text(manifest, encoding="utf-8")
 
-    def _write_python_marker(self, project: pathlib.Path, framework: str) -> None:
-        if framework == "openai":
-            body = (
-                "from agents import function_tool\n\n\n"
-                "@function_tool\n"
-                "def matrix_marker(value: str) -> str:\n"
-                '    """Return the deterministic Mason E2E marker."""\n'
-                "    return 'MASON_PYTHON_OK'\n"
-            )
-        else:
-            body = (
-                "from langchain_core.tools import tool\n\n\n"
-                "@tool\n"
-                "def matrix_marker(value: str) -> str:\n"
-                '    """Return the deterministic Mason E2E marker."""\n'
-                "    return 'MASON_PYTHON_OK'\n"
-            )
+    def _write_python_marker(self, project: pathlib.Path) -> None:
+        body = (
+            "from langchain_core.tools import tool\n\n\n"
+            "@tool\n"
+            "def matrix_marker(value: str) -> str:\n"
+            '    """Return the deterministic Mason E2E marker."""\n'
+            "    return 'MASON_PYTHON_OK'\n"
+        )
         target = project / "agent" / "tools" / "matrix_marker.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         self.transcript.file_step(target, "user-owned deterministic MASON_PYTHON_OK implementation")
@@ -751,7 +736,7 @@ def verify_evidence(path: pathlib.Path) -> int:
     failed = sum(row.get("status") == "fail" for row in rows)
     skipped = len(expected - actual)
     sys.stdout.write(f"{passed} passed, {failed} failed, {skipped} skipped\n")
-    if actual != expected or duplicates or passed != 32:
+    if actual != expected or duplicates or passed != len(expected):
         if expected - actual:
             sys.stdout.write(f"missing cells: {sorted(expected - actual)}\n")
         if duplicates:

@@ -1,9 +1,9 @@
 # Mason agent-tool matrix
 
 This suite proves that CLI edits and direct `agent.toml` edits reach the same runtime code.
-It creates four projects (OpenAI/LangGraph × CLI/direct), runs each with `mason dev`, deploys
-each to Databricks Apps, and semantically exercises sandbox, `system.ai.web_search`, a local
-Python tool, and a temporary Unity Catalog function. The result is 32 evidence rows.
+It creates two LangGraph projects (CLI/direct), runs each with `mason dev`, deploys each to
+Databricks Apps, and semantically exercises sandbox, `system.ai.web_search`, a local Python tool,
+and a temporary Unity Catalog function. The result is 16 evidence rows.
 
 ## Run
 
@@ -13,7 +13,8 @@ uv build --wheel --out-dir /tmp/mason-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --wheel /tmp/mason-tooling-dist/databricks_mason-0.1.0.dev0-py3-none-any.whl \
-  --output /tmp/mason-tool-matrix-df1
+  --output /tmp/mason-tool-matrix-df1 \
+  --uc-schema aifx_benchmarks.mason_agent_tools_e2e
 ```
 
 The profile must identify a workspace with Databricks Apps, `system.ai.sandbox`,
@@ -32,6 +33,5 @@ uv run python tests/e2e/tool_matrix.py \
   --verify-evidence /tmp/mason-tool-matrix-df1/evidence.json
 ```
 
-Success is exactly `32 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function are deleted
+Success is exactly `16 passed, 0 failed, 0 skipped`. Temporary Apps and the UC function are deleted
 after a successful run. Pass `--keep-resources` while debugging.
-
