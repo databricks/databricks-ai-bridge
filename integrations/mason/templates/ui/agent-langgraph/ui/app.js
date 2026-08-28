@@ -29,6 +29,7 @@ const elements = {
   memoryQuery: document.querySelector("#memory-query"),
   memoryResults: document.querySelector("#memory-results"),
   memoryStatus: document.querySelector("#memory-status"),
+  newSession: document.querySelector("#new-session"),
   promptInput: document.querySelector("#prompt-input"),
   askMemory: document.querySelector("#ask-memory"),
   searchMemory: document.querySelector("#search-memory"),
@@ -44,6 +45,7 @@ const elements = {
   sendButton: document.querySelector("#send-button"),
   sessionId: document.querySelector("#session-id"),
   sessionItems: document.querySelector("#session-items"),
+  sessionList: document.querySelector("#session-list"),
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
   sessionStoreLabel: document.querySelector("#session-store-label"),
@@ -108,9 +110,13 @@ function setBusy(busy, label = "Working") {
   elements.rememberButton.disabled = busy || !state.config?.memory.enabled;
   elements.searchMemory.disabled = busy || !state.config?.memory.enabled;
   elements.askMemory.disabled = busy || !state.config?.memory.enabled;
+  elements.newSession.disabled = busy;
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
+  document.querySelectorAll(".session-open-button").forEach((button) => {
+    button.disabled = busy;
+  });
   updateRecoveryControls();
   if (busy) setStatus(label, "busy");
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
@@ -369,6 +375,10 @@ function sessionItems(payload) {
   return payload?.session_items || [];
 }
 
+function sessions(payload) {
+  return payload?.sessions || [];
+}
+
 function renderMemoryEntries(entries, emptyMessage = "No matching memory entries.") {
   renderStateItems(elements.memoryResults, entries, emptyMessage, (entry) => ({
     title: entry.path || entry.name || "Memory entry",
@@ -386,6 +396,43 @@ function renderSessionItems(items) {
       meta: [item.item_id, item.create_time, data.transport].filter(Boolean).join(" · "),
     };
   });
+}
+
+function renderSessions(items) {
+  elements.sessionList.replaceChildren();
+  if (!items.length) {
+    stateMessage(elements.sessionList, "No sessions yet.");
+    return;
+  }
+  for (const session of items) {
+    const current = session.session_id === state.sessionId;
+    const item = document.createElement("article");
+    item.className = `state-item session-item${current ? " current" : ""}`;
+    const heading = document.createElement("div");
+    heading.className = "session-item-heading";
+    const title = document.createElement("strong");
+    title.textContent = current ? "Current session" : "Session";
+    heading.append(title);
+    if (!current && state.config?.session.managed) {
+      const open = document.createElement("button");
+      open.className = "text-button session-open-button";
+      open.type = "button";
+      open.textContent = "Open";
+      open.disabled = state.busy;
+      open.addEventListener("click", () => openSession(session.session_id));
+      heading.append(open);
+    }
+    const content = document.createElement("p");
+    content.textContent = session.session_id || "Unknown session";
+    const meta = document.createElement("small");
+    meta.textContent = [
+      session.actor_id,
+      session.last_activity_time || session.create_time,
+      current ? "active routing cookie" : "",
+    ].filter(Boolean).join(" · ");
+    item.append(heading, content, meta);
+    elements.sessionList.append(item);
+  }
 }
 
 function renderSessionTranscript(items) {
@@ -452,6 +499,24 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
 }
 
+async function refreshSessions() {
+  stateMessage(elements.sessionList, "Loading sessions…", "loading");
+  try {
+    const response = await fetch("/api/demo/sessions", { cache: "no-store" });
+    const result = await jsonResponse(response);
+    renderSessions(sessions(result));
+    addEvent("sessions.list", result);
+  } catch (error) {
+    stateMessage(elements.sessionList, error instanceof Error ? error.message : String(error), "error");
+    addEvent("session.error", { message: String(error) });
+  }
+}
+
+async function refreshSessionView({ hydrateChat = false } = {}) {
+  await refreshSession({ hydrateChat });
+  await refreshSessions();
+}
+
 async function recordSessionItems(items) {
   if (!state.config?.session.managed || !items.length) return;
   try {
@@ -463,7 +528,7 @@ async function recordSessionItems(items) {
     });
     const result = await jsonResponse(response);
     addEvent("session.items.append", result);
-    await refreshSession();
+    await refreshSessionView();
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -688,15 +753,88 @@ async function resume(decision) {
   }
 }
 
-function clearChat() {
+function clearChat({ recordEvent = true } = {}) {
   state.pendingInterrupt = null;
   state.draft = null;
   state.draftText = "";
+  state.lastAssistantText = "";
   elements.approvalPanel.hidden = true;
   elements.chatLog.replaceChildren(elements.emptyState);
   elements.emptyState.hidden = false;
   elements.promptInput.focus();
-  addEvent("chat.cleared", { session_id: state.sessionId });
+  if (recordEvent) addEvent("chat.cleared", { session_id: state.sessionId });
+}
+
+function resetSessionState() {
+  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
+  state.lastDurabilityAttempt = 0;
+  state.lastDurabilityHeartbeat = "";
+  state.lastRecoveryStatus = "";
+  state.recovery = null;
+  state.recoveryPollTimer = null;
+  state.recoverySessionId = "";
+  state.recoverySignature = "";
+  clearChat({ recordEvent: false });
+  stateMessage(elements.sessionList, "Loading sessions…", "loading");
+  stateMessage(elements.sessionItems, "Loading transcript…", "loading");
+  stateMessage(elements.recoverySteps, "No recovery sequence started for this session.");
+  elements.durabilityExecution.textContent = "Not started";
+  elements.durabilityAttempt.textContent = "—";
+  elements.durabilityOwner.textContent = "—";
+  elements.durabilityHeartbeat.textContent = "Not started";
+  elements.recoveryStatus.textContent = state.config?.recovery.enabled
+    ? "Start App to run the durable tool sequence for this session."
+    : "Stop is included, but durability needs a managed Session Store.";
+  updateRecoveryControls();
+}
+
+async function createNewSession() {
+  if (state.busy) return;
+  setBusy(true, "Creating session");
+  try {
+    const response = await fetch("/api/session/new", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const result = await jsonResponse(response);
+    setSessionId(result.session_id);
+    resetSessionState();
+    addEvent("session.new", result);
+    if (state.config?.session.managed) await ensureManagedSession();
+    await refreshSessionView({ hydrateChat: true });
+    if (state.config?.recovery.enabled) {
+      await monitorRecovery(state.sessionId, { autoResume: false });
+    }
+    setConnection("online", "Connected");
+  } catch (error) {
+    appendError(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function openSession(sessionId) {
+  if (state.busy || !sessionId || sessionId === state.sessionId) return;
+  setBusy(true, "Opening session");
+  try {
+    const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const result = await jsonResponse(response);
+    setSessionId(result.session_id);
+    resetSessionState();
+    addEvent("session.open", result);
+    await refreshSessionView({ hydrateChat: true });
+    if (state.config?.recovery.enabled) {
+      await monitorRecovery(state.sessionId, { autoResume: true });
+    }
+    setConnection("online", "Connected");
+  } catch (error) {
+    appendError(error);
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function loadConfig() {
@@ -728,6 +866,7 @@ async function loadConfig() {
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
     elements.askMemory.disabled = state.busy || !config.memory.enabled;
+    elements.newSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;
     elements.resumeSession.disabled = state.busy || !config.session.durable;
     elements.rejectSession.disabled = state.busy || !config.session.durable;
@@ -745,7 +884,7 @@ async function loadConfig() {
       : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
     setConnection("online", "Connected");
     addEvent("runtime.config", config);
-    void refreshSession({ hydrateChat: true });
+    void refreshSessionView({ hydrateChat: true });
     if (config.recovery.enabled) {
       const recoverySessionId = state.recoverySessionId || state.sessionId;
       void monitorRecovery(recoverySessionId, { autoResume: true });
@@ -1064,7 +1203,8 @@ elements.copySession.addEventListener("click", async () => {
 });
 
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));
-elements.refreshSession.addEventListener("click", () => refreshSession({ hydrateChat: true }));
+elements.newSession.addEventListener("click", createNewSession);
+elements.refreshSession.addEventListener("click", () => refreshSessionView({ hydrateChat: true }));
 elements.clearEvents.addEventListener("click", () => {
   state.events = [];
   elements.eventLog.innerHTML = '<div class="event-empty">Invocation events appear here.</div>';

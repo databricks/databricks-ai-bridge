@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from agent.mason import recovery
-from databricks.sdk import WorkspaceClient
+from agent.mason.workspace import workspace_client
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = recovery.process_id()
@@ -22,6 +24,17 @@ _MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _AGENTS_API = "/api/agents/v1"
+_MESSAGE_ROLES = {
+    "ai",
+    "assistant",
+    "developer",
+    "function",
+    "human",
+    "human_decision",
+    "system",
+    "tool",
+    "user",
+}
 
 
 class MemoryEntryRequest(BaseModel):
@@ -44,9 +57,7 @@ def _execution_identity() -> str:
         return "Databricks App service principal"
     profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
     return (
-        f"Local Databricks profile: {profile}"
-        if profile
-        else "Databricks default authentication"
+        f"Local Databricks profile: {profile}" if profile else "Databricks default authentication"
     )
 
 
@@ -68,7 +79,7 @@ def _session_actor() -> str:
 
 class _ManagedStateClient:
     def __init__(self) -> None:
-        self._workspace = WorkspaceClient()
+        self._workspace = workspace_client()
 
     def _do(
         self,
@@ -94,9 +105,7 @@ class _ManagedStateClient:
         }
         if request.description:
             body["description"] = request.description
-        return self._do(
-            "POST", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", body=body
-        )
+        return self._do("POST", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", body=body)
 
     def list_memory_entries(self, path_prefix: str | None = None) -> dict:
         query = {"actor_id": _memory_actor(), "page_size": 100}
@@ -144,9 +153,18 @@ class _ManagedStateClient:
             f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}",
         )
 
-    def append_session_items(
-        self, session_id: str, items: list[dict[str, Any]]
-    ) -> dict:
+    def list_sessions(self) -> dict:
+        return self._do(
+            "GET",
+            f"{_AGENTS_API}/session-stores/{_session_store()}/sessions",
+            query={
+                "filter": f"actor_id = {json.dumps(_session_actor())}",
+                "order_by": "last_activity_time desc",
+                "page_size": 50,
+            },
+        )
+
+    def append_session_items(self, session_id: str, items: list[dict[str, Any]]) -> dict:
         return self._do(
             "POST",
             f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}/items:append",
@@ -228,11 +246,36 @@ async def _checkpoint_history(session_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
 
 
+def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    sessions = []
+    for session in result.get("sessions", []):
+        if not isinstance(session, dict):
+            continue
+        metadata = session.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if metadata.get("client") == "mason-demo-durability" or metadata.get("public_session_id"):
+            continue
+        sessions.append(session)
+    return sessions
+
+
+def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
+    items = []
+    for item in result.get("session_items", []):
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict) or data.get("event_type") or "content" not in data:
+            continue
+        role = str(data.get("role") or data.get("type") or "").lower()
+        if role in _MESSAGE_ROLES:
+            items.append(item)
+    return {**result, "session_items": items}
+
+
 def install_ui(app: FastAPI) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
-    app.mount(
-        "/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets"
-    )
+    app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
@@ -259,9 +302,7 @@ def install_ui(app: FastAPI) -> None:
                 "durable": bool(session_store),
                 "managed": bool(session_store),
                 "history": True,
-                "mode": "Managed Session Store"
-                if session_store
-                else "In-process checkpointer",
+                "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": _session_actor(),
             },
@@ -298,9 +339,7 @@ def install_ui(app: FastAPI) -> None:
         }
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
-    async def create_memory_entry(
-        request: Request, payload: MemoryEntryRequest
-    ) -> dict:
+    async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:
         _require_memory()
         return await _managed_call(
             _state_client().create_memory_entry, payload, request.state.session_id
@@ -321,21 +360,56 @@ def install_ui(app: FastAPI) -> None:
     @app.post("/api/demo/sessions", include_in_schema=False)
     async def ensure_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(
-            _state_client().ensure_session, request.state.session_id
+        return await _managed_call(_state_client().ensure_session, request.state.session_id)
+
+    @app.get("/api/demo/sessions", include_in_schema=False)
+    async def list_sessions(request: Request) -> dict:
+        session_id = request.state.session_id
+        if not _session_store():
+            return {
+                "sessions": [
+                    {
+                        "session_id": session_id,
+                        "actor_id": _session_actor(),
+                        "metadata": {"client": "mason-demo-ui-local"},
+                    }
+                ],
+                "current_session_id": session_id,
+                "managed": False,
+            }
+        result = await _managed_call(_state_client().list_sessions)
+        return {
+            **result,
+            "sessions": _chat_sessions(result),
+            "current_session_id": session_id,
+            "managed": True,
+        }
+
+    @app.post("/api/demo/sessions/{session_id}/open", include_in_schema=False)
+    async def open_session(request: Request, session_id: str) -> JSONResponse:
+        _require_session()
+        session = await _managed_call(_state_client().get_session, session_id)
+        if session.get("actor_id") != _session_actor():
+            raise HTTPException(status_code=403, detail="Session belongs to another actor.")
+        previous_session_id = request.state.session_id
+        request.state.session_id = session_id
+        response = JSONResponse(
+            {
+                "session_id": session_id,
+                "previous_session_id": previous_session_id,
+                "managed": True,
+            }
         )
+        rotate_session_cookie(request, response, session_id)
+        return response
 
     @app.get("/api/demo/session", include_in_schema=False)
     async def get_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(
-            _state_client().get_session, request.state.session_id
-        )
+        return await _managed_call(_state_client().get_session, request.state.session_id)
 
     @app.post("/api/demo/session/items", include_in_schema=False)
-    async def append_session_items(
-        request: Request, payload: SessionItemsRequest
-    ) -> dict:
+    async def append_session_items(request: Request, payload: SessionItemsRequest) -> dict:
         _require_session()
         return await _managed_call(
             _state_client().append_session_items,
@@ -347,7 +421,8 @@ def install_ui(app: FastAPI) -> None:
     async def list_session_items(request: Request) -> dict:
         session_id = request.state.session_id
         if _session_store():
-            return await _managed_call(_state_client().list_session_items, session_id)
+            result = await _managed_call(_state_client().list_session_items, session_id)
+            return _chat_session_items(result)
         return await _checkpoint_history(session_id)
 
     @app.get("/api/demo/recovery", include_in_schema=False)

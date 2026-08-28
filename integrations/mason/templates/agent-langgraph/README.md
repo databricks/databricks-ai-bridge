@@ -146,9 +146,16 @@ poll reaches the same replica, but the run itself does not survive a restart.
 
 When initialized with `mason init --framework langgraph --enable-chat-app`, the browser also calls:
 
+- `POST /api/session/new` to generate a fresh session id and replace the routing cookie. The request
+  has no body-level `session_id`; the response includes the new and previous ids.
 - `POST /api/demo/sessions` to create or resolve the current cookie-backed managed session.
+- `GET /api/demo/sessions` to list recent sessions for the configured actor. In local in-memory mode
+  it returns only the current browser session.
+- `POST /api/demo/sessions/{session_id}/open` to verify an actor-scoped managed session, replace the
+  routing cookie, and load that session's transcript and pending state.
 - `GET /api/demo/session/items` to load the current transcript. Without a managed Session Store it
-  reconstructs messages and pending interrupts from the in-process LangGraph checkpoint.
+  reconstructs messages and pending interrupts from the in-process LangGraph checkpoint. Managed
+  responses filter out checkpoint fragments and durability events before returning items to the UI.
 - `POST /api/demo/session/items` to mirror user, assistant, tool, and human-decision items into the
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and

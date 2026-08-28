@@ -52,6 +52,7 @@ def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     )
     shutil.copyfile(template_mason / "tool_manifest.py", mason / "tool_manifest.py")
     shutil.copyfile(template_mason / "mcp_runtime.py", mason / "mcp_runtime.py")
+    shutil.copyfile(template_mason / "workspace.py", mason / "workspace.py")
     return project
 
 

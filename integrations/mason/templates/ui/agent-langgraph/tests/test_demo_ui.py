@@ -16,11 +16,7 @@ class _FakeStateClient:
         return {"managed_memory_entries": [{"path": f"{path_prefix or ''}/profile.md"}]}
 
     def search_memory_entries(self, request):
-        return {
-            "managed_memory_entries": [
-                {"path": "/profile.md", "content": request.query}
-            ]
-        }
+        return {"managed_memory_entries": [{"path": "/profile.md", "content": request.query}]}
 
     def ensure_session(self, session_id):
         return {"session_id": session_id, "actor_id": "alice"}
@@ -28,13 +24,53 @@ class _FakeStateClient:
     def get_session(self, session_id):
         return {"session_id": session_id, "actor_id": "alice"}
 
+    def list_sessions(self):
+        return {
+            "sessions": [
+                {
+                    "session_id": "s1",
+                    "actor_id": "alice",
+                    "last_activity_time": "2026-08-28T12:00:00Z",
+                },
+                {
+                    "session_id": "s2",
+                    "actor_id": "alice",
+                    "last_activity_time": "2026-08-27T12:00:00Z",
+                },
+                {
+                    "session_id": "durability-s1",
+                    "actor_id": "alice",
+                    "metadata": {
+                        "client": "mason-demo-durability",
+                        "public_session_id": "s1",
+                    },
+                    "last_activity_time": "2026-08-28T12:01:00Z",
+                },
+            ]
+        }
+
     def append_session_items(self, session_id, items):
         return {"session_items": [{"item_id": "1", "data": item} for item in items]}
 
     def list_session_items(self, session_id):
         return {
             "session_items": [
-                {"item_id": "1", "data": {"role": "user", "content": session_id}}
+                {"item_id": "1", "data": {"role": "user", "content": session_id}},
+                {
+                    "item_id": "2",
+                    "data": {"type": "assistant", "content": "saved reply"},
+                },
+                {
+                    "item_id": "3",
+                    "data": {"event_type": "checkpoint", "checkpoint_id": "checkpoint-1"},
+                },
+                {
+                    "item_id": "4",
+                    "data": {
+                        "event_type": "mason_demo_durability",
+                        "event": "heartbeat",
+                    },
+                },
             ]
         }
 
@@ -100,9 +136,7 @@ async def _recovery_resume(session_id):
     return await _recovery_start(session_id)
 
 
-def _client(
-    monkeypatch, *, configured=False, history=False, session_id="routing-session"
-):
+def _client(monkeypatch, *, configured=False, history=False, session_id="routing-session"):
     monkeypatch.delenv("MASON_DEMO_TOOL_STEP_SECONDS", raising=False)
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
@@ -128,7 +162,7 @@ def _client(
 
     app = build_app(invoke_handler, stream_handler)
     ui.install_ui(app)
-    client = TestClient(app)
+    client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
     return client
 
@@ -136,11 +170,19 @@ def _client(
 def test_demo_ui_routes(monkeypatch):
     client = _client(monkeypatch)
 
-    assert client.get("/").status_code == 200
+    index = client.get("/")
+    assert index.status_code == 200
+    assert 'id="new-session"' in index.text
+    assert 'id="session-list"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
-    assert "refreshSession({ hydrateChat: true })" in app_script.text
+    assert "refreshSessionView({ hydrateChat: true })" in app_script.text
+    assert 'fetch("/api/session/new"' in app_script.text
+    assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
+    styles = client.get("/ui-assets/styles.css").text
+    assert "@media (min-width: 1181px)" in styles
+    assert "scrollbar-gutter: stable" in styles
 
     config = client.get("/api/demo/config").json()
     assert config["session_id"] == "routing-session"
@@ -154,14 +196,21 @@ def test_demo_ui_routes(monkeypatch):
     assert config["heartbeat"]["enabled"] is False
     assert config["recovery"]["enabled"] is False
 
-    assert (
-        client.post("/api/demo/memory/search", json={"query": "profile"}).status_code
-        == 503
-    )
-    assert (
-        client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code
-        == 503
-    )
+    sessions = client.get("/api/demo/sessions").json()
+    assert sessions == {
+        "sessions": [
+            {
+                "session_id": "routing-session",
+                "actor_id": "agent",
+                "metadata": {"client": "mason-demo-ui-local"},
+            }
+        ],
+        "current_session_id": "routing-session",
+        "managed": False,
+    }
+
+    assert client.post("/api/demo/memory/search", json={"query": "profile"}).status_code == 503
+    assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
 def test_unmanaged_checkpoint_history_route(monkeypatch):
@@ -177,6 +226,57 @@ def test_unmanaged_checkpoint_history_route(monkeypatch):
         "local-session",
         "checkpoint reply",
     ]
+
+
+def test_managed_session_list_is_actor_scoped(monkeypatch):
+    monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
+    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", 'alice "demo"')
+    state_client = object.__new__(ui._ManagedStateClient)
+    calls = []
+    state_client._do = lambda method, path, **kwargs: calls.append((method, path, kwargs)) or {
+        "sessions": []
+    }
+
+    assert state_client.list_sessions() == {"sessions": []}
+    assert calls == [
+        (
+            "GET",
+            "/api/agents/v1/session-stores/sessions/sessions",
+            {
+                "query": {
+                    "filter": 'actor_id = "alice \\"demo\\""',
+                    "order_by": "last_activity_time desc",
+                    "page_size": 50,
+                }
+            },
+        )
+    ]
+
+
+def test_chat_session_items_exclude_checkpoints_and_durability_events():
+    result = ui._chat_session_items(
+        {
+            "session_items": [
+                {"item_id": "1", "data": {"role": "user", "content": "hello"}},
+                {"item_id": "2", "data": {"type": "ai", "content": "hi"}},
+                {"item_id": "3", "data": {"event_type": "checkpoint"}},
+                {
+                    "item_id": "4",
+                    "data": {"event_type": "mason_demo_durability", "event": "heartbeat"},
+                },
+                {"item_id": "5", "data": {"content": "missing role"}},
+            ],
+            "next_page_token": "next",
+        }
+    )
+
+    assert result == {
+        "session_items": [
+            {"item_id": "1", "data": {"role": "user", "content": "hello"}},
+            {"item_id": "2", "data": {"type": "ai", "content": "hi"}},
+        ],
+        "next_page_token": "next",
+    }
 
 
 @pytest.mark.asyncio
@@ -266,19 +366,18 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert created.status_code == 200
     assert created.json()["path"] == "/profile.md"
     assert created.json()["session_id"] == "s1"
-    assert (
-        client.get("/api/demo/memory/entries", params={"path_prefix": "/"}).status_code
-        == 200
-    )
+    assert client.get("/api/demo/memory/entries", params={"path_prefix": "/"}).status_code == 200
     search = client.post("/api/demo/memory/search", json={"query": "Databricks"})
     assert search.json()["managed_memory_entries"][0]["content"] == "Databricks"
 
     assert (
-        client.post("/api/demo/sessions", json={"session_id": "ignored"}).json()[
-            "session_id"
-        ]
+        client.post("/api/demo/sessions", json={"session_id": "ignored"}).json()["session_id"]
         == "s1"
     )
+    listed = client.get("/api/demo/sessions").json()
+    assert [session["session_id"] for session in listed["sessions"]] == ["s1", "s2"]
+    assert listed["current_session_id"] == "s1"
+    assert listed["managed"] is True
     assert client.get("/api/demo/session").json()["session_id"] == "s1"
     appended = client.post(
         "/api/demo/session/items",
@@ -286,13 +385,39 @@ def test_managed_memory_and_session_routes(monkeypatch):
     )
     assert appended.json()["session_items"][0]["data"]["content"] == "hello"
     assert (
-        client.get("/api/demo/session/items").json()["session_items"][0]["data"][
-            "content"
-        ]
-        == "s1"
+        client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s1"
+    )
+    assert [
+        item["data"]["content"]
+        for item in client.get("/api/demo/session/items").json()["session_items"]
+    ] == ["s1", "saved reply"]
+
+    opened = client.post("/api/demo/sessions/s2/open")
+    assert opened.json() == {
+        "session_id": "s2",
+        "previous_session_id": "s1",
+        "managed": True,
+    }
+    assert client.get("/api/demo/config").json()["session_id"] == "s2"
+    assert (
+        client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
     )
 
     assert client.get("/api/demo/recovery").json()["needs_resume"] is True
     assert client.post("/api/demo/recovery/start").json()["worker_active"] is True
     assert client.post("/api/demo/app/start").json()["worker_active"] is True
     assert client.post("/api/demo/recovery/resume").json()["worker_active"] is True
+
+
+def test_open_session_rejects_another_actor(monkeypatch):
+    client = _client(monkeypatch, configured=True, session_id="s1")
+
+    class _ForeignActorClient(_FakeStateClient):
+        def get_session(self, session_id):
+            return {"session_id": session_id, "actor_id": "bob"}
+
+    monkeypatch.setattr(ui, "_state_client", lambda: _ForeignActorClient())
+
+    response = client.post("/api/demo/sessions/s2/open")
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Session belongs to another actor."

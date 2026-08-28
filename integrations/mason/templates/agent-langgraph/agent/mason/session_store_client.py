@@ -17,6 +17,8 @@ from typing import Any, Iterator, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
 
+from agent.mason.workspace import workspace_client as default_workspace_client
+
 _API_ROOT = "/api/agents/v1"
 
 
@@ -42,7 +44,7 @@ class SessionStoreClient:
     """Thin REST client over the managed Session Store API."""
 
     def __init__(self, workspace_client: Optional[WorkspaceClient] = None) -> None:
-        self._api = (workspace_client or WorkspaceClient()).api_client
+        self._api = (workspace_client or default_workspace_client()).api_client
         self._store_name: Optional[str] = None
 
     def set_session_store(self, session_store_name: str) -> "SessionStoreClient":

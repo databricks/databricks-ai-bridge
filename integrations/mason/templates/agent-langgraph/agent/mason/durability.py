@@ -13,6 +13,8 @@ from typing import Any, cast
 
 from databricks.sdk import WorkspaceClient
 
+from agent.mason.workspace import workspace_client as default_workspace_client
+
 _EVENT_TYPE = "mason_demo_durability"
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
@@ -35,7 +37,7 @@ class _SessionStoreClient:
     """Minimal Session Store client kept local to the generated durability demo."""
 
     def __init__(self, workspace_client: WorkspaceClient | None = None) -> None:
-        self._workspace = workspace_client or WorkspaceClient()
+        self._workspace = workspace_client or default_workspace_client()
         self._store_name = ""
 
     def set_session_store(self, session_store_name: str) -> "_SessionStoreClient":

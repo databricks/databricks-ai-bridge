@@ -29,6 +29,18 @@ the application session id; request bodies do not carry `session_id`. Local deve
 runtime's `mason-local-session` fallback cookie. TODO: switch to `X-Routing-Key` when Apps supports
 it.
 
+The Sessions card calls `POST /api/session/new` to replace that routing cookie with a fresh UUID and
+start an empty conversation. With a managed Session Store, `GET /api/demo/sessions` lists the most
+recent sessions for the configured actor and each Open action calls
+`POST /api/demo/sessions/{session_id}/open`. Opening a listed session verifies that it belongs to the
+same actor, replaces the routing cookie, and reloads its transcript and pending LangGraph state. In
+local in-memory mode only the current browser session can be listed because there is no shared
+session index.
+
+The session list excludes internal `mason-demo-durability` execution sessions. Transcript responses
+also include only user, assistant, tool, system, and human-decision message items; checkpoint
+fragments and durability events remain in Session Store but are never returned to the chat UI.
+
 The recovery flow is intentionally a demo, not a production lease implementation: ownership is
 last-writer-wins, the worker persists heartbeats, the browser detects a stale owner, and work resumes
 at the first node whose output was not checkpointed.

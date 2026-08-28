@@ -15,9 +15,10 @@ documented router cookie for sticky routing.
 
 Endpoints: ``POST /invocations`` (``stream: true`` → SSE ending with ``data: [DONE]``;
 ``background: true`` → an ``invocation_id`` to poll), ``GET /invocations/{invocation_id}`` to poll a
-background run, and ``GET /health``. Each route also has an ``/api`` alias because Databricks Apps
-accepts programmatic Bearer-token authentication only on paths under ``/api/``. Each request is
-wrapped in an MLflow span for tracing.
+background run, ``POST /api/session/new`` to rotate the routing session, and ``GET /health``. The
+invocation and health routes also have ``/api`` aliases because Databricks Apps accepts programmatic
+Bearer-token authentication only on paths under ``/api/``. Each request is wrapped in an MLflow span
+for tracing.
 """
 
 import asyncio
@@ -26,7 +27,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import mlflow
 from agent.mason.background import BackgroundRuns
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from uuid_utils import uuid7
 
@@ -53,6 +54,27 @@ def _sse(data: dict | str) -> str:
 def _set_trace_name(name: str) -> None:
     if mlflow.get_current_active_span() is not None:
         mlflow.update_current_trace(tags={_TRACE_NAME_TAG: name})
+
+
+def rotate_session_cookie(request: Request, response: Response, session_id: str) -> None:
+    if request.cookies.get(_ROUTING_COOKIE):
+        response.set_cookie(
+            _ROUTING_COOKIE,
+            session_id,
+            secure=True,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(_LOCAL_SESSION_COOKIE, path="/")
+    elif request.cookies.get(_LOCAL_SESSION_COOKIE):
+        response.set_cookie(
+            _LOCAL_SESSION_COOKIE,
+            session_id,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
 
 
 def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> FastAPI:
@@ -135,5 +157,19 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/session/new")
+    async def new_session(request: Request) -> JSONResponse:
+        previous_session_id = request.state.session_id
+        session_id = str(uuid7())
+        request.state.session_id = session_id
+        response = JSONResponse(
+            {
+                "session_id": session_id,
+                "previous_session_id": previous_session_id,
+            }
+        )
+        rotate_session_cookie(request, response, session_id)
+        return response
 
     return app

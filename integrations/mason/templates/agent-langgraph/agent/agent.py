@@ -3,7 +3,6 @@ import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
-from databricks.sdk import WorkspaceClient
 from databricks_langchain import ChatDatabricks
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
@@ -13,6 +12,7 @@ from langgraph.types import Command
 from agent.mason import mcp_runtime, tracing
 from agent.mason.memory import memory_tools
 from agent.mason.session_store import checkpointer, thread_config
+from agent.mason.workspace import workspace_client, workspace_headers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
@@ -26,6 +26,16 @@ MODEL = "databricks-gpt-5-2"
 # When a listed tool is about to run, the agent pauses and emits an `interrupt` event; the client
 # resumes by sending `resume` with the same session id. Empty this dict to disable approval gating.
 REQUIRE_APPROVAL = {"send_message": True}
+
+
+class _RoutedChatDatabricks(ChatDatabricks):
+    """Forward account-host workspace routing to the underlying OpenAI clients."""
+
+    def _get_client_kwargs(self) -> dict[str, Any]:
+        kwargs = super()._get_client_kwargs()
+        if headers := workspace_headers():
+            kwargs["default_headers"] = headers
+        return kwargs
 
 
 def configure() -> None:
@@ -42,7 +52,7 @@ def _check_databricks_auth() -> None:
     the model client uses, so the failure is immediate and actionable.
     """
     try:
-        WorkspaceClient()
+        workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
         target = (
@@ -65,7 +75,7 @@ async def create_agent_graph():
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
     return create_agent(
-        model=ChatDatabricks(endpoint=MODEL),
+        model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),

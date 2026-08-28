@@ -6,6 +6,7 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
+from uuid import UUID
 
 import pytest
 from agent.agent import _serialize_events, _session_id
@@ -60,14 +61,29 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
         configure()
 
 
+def test_chat_model_forwards_account_routing_header(monkeypatch):
+    from agent.agent import _RoutedChatDatabricks
+
+    monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
+    model = _RoutedChatDatabricks(endpoint="test-endpoint")
+
+    assert model._get_client_kwargs()["default_headers"] == {
+        "X-Databricks-Org-Id": "123456"
+    }
+
+
 def test_thread_config_from_session_id():
     # actor_id rides alongside thread_id — the durable saver maps it onto the Session's actor.
-    assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "abc-123"}}
+    assert thread_config("abc-123") == {
+        "configurable": {"thread_id": "abc-123", "actor_id": "abc-123"}
+    }
 
 
 def test_thread_config_uses_configured_actor(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
-    assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "alice"}}
+    assert thread_config("abc-123") == {
+        "configurable": {"thread_id": "abc-123", "actor_id": "alice"}
+    }
 
 
 def test_checkpointer_is_shared(monkeypatch):
@@ -148,6 +164,63 @@ def test_runtime_sets_local_session_cookie_when_apps_router_is_absent():
     assert first.status_code == 200
     assert first.cookies.get("mason-local-session") == first.json()["session_id"]
     assert second.json()["session_id"] == first.json()["session_id"]
+
+
+def test_runtime_rotates_local_session_cookie():
+    async def invoke_handler(request):
+        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    client = TestClient(build_app(invoke_handler, stream_handler))
+    current = client.post("/invocations", json={"input": []}).json()["session_id"]
+    created = client.post("/api/session/new")
+
+    assert created.status_code == 200
+    assert created.json()["previous_session_id"] == current
+    assert created.json()["session_id"] != current
+    UUID(created.json()["session_id"])
+    assert created.cookies.get("mason-local-session") == created.json()["session_id"]
+    assert (
+        client.post("/invocations", json={"input": []}).json()["session_id"]
+        == created.json()["session_id"]
+    )
+
+
+def test_runtime_rotates_apps_routing_cookie_and_clears_local_fallback():
+    async def invoke_handler(request):
+        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    client = TestClient(build_app(invoke_handler, stream_handler), base_url="https://testserver")
+    created = client.post(
+        "/api/session/new",
+        headers={"cookie": "__Host-databricks-app-router=old-session; mason-local-session=stale"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["previous_session_id"] == "old-session"
+    session_id = created.json()["session_id"]
+    set_cookie_headers = created.headers.get_list("set-cookie")
+    routing_cookie = next(
+        header
+        for header in set_cookie_headers
+        if header.startswith("__Host-databricks-app-router=")
+    ).lower()
+    assert "httponly" in routing_cookie
+    assert "path=/" in routing_cookie
+    assert "samesite=lax" in routing_cookie
+    assert "secure" in routing_cookie
+    assert any(
+        header.startswith('mason-local-session=""') and "Max-Age=0" in header
+        for header in set_cookie_headers
+    )
+    assert client.post("/invocations", json={"input": []}).json()["session_id"] == session_id
 
 
 def _has_workspace_auth() -> bool:

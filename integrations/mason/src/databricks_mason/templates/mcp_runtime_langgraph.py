@@ -10,8 +10,11 @@ from agent.mason.tool_manifest import (  # ty: ignore[unresolved-import]
     downscope_wire,
     load_tools,
 )
+from agent.mason.workspace import (  # ty: ignore[unresolved-import]
+    workspace_client,
+    workspace_headers,
+)
 from agent.mcps import build_mcp_servers  # ty: ignore[unresolved-import]
-from databricks.sdk import WorkspaceClient
 from databricks_langchain import (  # ty: ignore[unresolved-import]
     DatabricksMCPServer,
     DatabricksMultiServerMCPClient,
@@ -22,13 +25,14 @@ logger = logging.getLogger(__name__)
 
 
 def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
-    workspace_client = WorkspaceClient()
-    host = workspace_client.config.host.rstrip("/")
+    client = workspace_client()
+    host = client.config.host.rstrip("/")
     if tool.kind in {"sandbox", "mcp"}:
         return DatabricksMCPServer(
             name=tool.id,
             url=f"{host}/ai-gateway/mcp-services/{tool.service}",
-            workspace_client=workspace_client,
+            headers=workspace_headers() or None,
+            workspace_client=client,
             timeout=120.0,
         )
     if tool.kind == "uc_function":
@@ -38,7 +42,8 @@ def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
             schema=schema,
             function_name=function_name,
             name=tool.id,
-            workspace_client=workspace_client,
+            headers=workspace_headers() or None,
+            workspace_client=client,
             timeout=120.0,
         )
     return None
