@@ -126,7 +126,9 @@ def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
         )
     assert result.exit_code == 0, result.output
     resolve.assert_called_once()  # same resolution path as deploy
-    env = {e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]}
+    env = {
+        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    }
     assert env == {"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"}  # patched before run
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 

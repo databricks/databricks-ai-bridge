@@ -86,4 +86,6 @@ def test_resolve_pg_host_reads_endpoint(monkeypatch):
             returncode=0, stdout=endpoint_json, stderr=""
         ),
     )
-    assert sa._resolve_pg_host(session_store_access.backend("s"), "prof") == "ep-plain.databricks.com"
+    assert (
+        sa._resolve_pg_host(session_store_access.backend("s"), "prof") == "ep-plain.databricks.com"
+    )

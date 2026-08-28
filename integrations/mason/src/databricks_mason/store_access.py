@@ -78,7 +78,9 @@ class LakebaseBackend:
         }
 
 
-def apply_postgres_resources(app: str, backends: list[LakebaseBackend], profile: Optional[str]) -> Optional[str]:
+def apply_postgres_resources(
+    app: str, backends: list[LakebaseBackend], profile: Optional[str]
+) -> Optional[str]:
     """Bind each backend's database as a `postgres` app resource in one update.
 
     `apps update --json` replaces the whole resources array, so all needed backends must be applied

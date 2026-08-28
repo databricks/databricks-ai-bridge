@@ -39,6 +39,7 @@ def default_experiment(user: str, app: Optional[str]) -> str:
         return _DEFAULT_EXPERIMENT
     return f"/Users/{user}/mason-traces/{app}"
 
+
 # Env vars the deployed agent reads (see deploy.py). MLFLOW_TRACING_DESTINATION is MLflow's own
 # "catalog.schema" convention; MLFLOW_EXPERIMENT_NAME is the standard MLflow experiment selector.
 TRACES_DEST_ENV = "MLFLOW_TRACING_DESTINATION"
@@ -107,9 +108,16 @@ def _configure(mlflow, profile: Optional[str], warehouse_id: Optional[str]) -> N
         os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
 
 
-def _ensure_experiment(mlflow, name: str) -> str:
+def _ensure_experiment(mlflow, client, name: str) -> str:
     experiment = mlflow.get_experiment_by_name(name)
-    return experiment.experiment_id if experiment else mlflow.create_experiment(name)
+    if experiment:
+        return experiment.experiment_id
+    # create_experiment won't make the intermediate workspace folder for a nested path (e.g.
+    # /Users/<you>/mason-traces/<app>), so create the parent dir first.
+    parent = name.rsplit("/", 1)[0]
+    if parent:
+        client.ensure_workspace_dir(parent)
+    return mlflow.create_experiment(name)
 
 
 def _attr(obj: Any, *paths: str, default: Any = None) -> Any:
@@ -187,8 +195,9 @@ def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -
     # Default the agent name to the current directory, matching `mason dev`/`deploy`, so running
     # setup from a project dir needs no --app and still lands in that agent's own experiment.
     app = app or pathlib.Path.cwd().name
-    exp_name = experiment or default_experiment(obj.client().current_user, app)
-    exp_id = _ensure_experiment(mlflow, exp_name)
+    client = obj.client()
+    exp_name = experiment or default_experiment(client.current_user, app)
+    exp_id = _ensure_experiment(mlflow, client, exp_name)
 
     UCSchemaLocation, set_location, unset_location = _uc_trace_symbols()
     _link_trace_location(
@@ -199,7 +208,7 @@ def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -
         relink,
     )
     destination = f"{catalog}.{schema}"
-    url = _experiment_url(obj.client().host, exp_id)
+    url = _experiment_url(client.host, exp_id)
 
     if obj.output == "json":
         render.emit_json(

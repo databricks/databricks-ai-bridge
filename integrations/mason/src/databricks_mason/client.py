@@ -56,6 +56,14 @@ class AgentApiClient:
         """The authenticated user's name (used to derive the app source workspace path)."""
         return str(self._w.current_user.me().user_name or "unknown")
 
+    def ensure_workspace_dir(self, path: str) -> None:
+        """Create a workspace directory (and parents), idempotently.
+
+        MLflow's create_experiment won't create the intermediate folder for a nested experiment
+        path, so callers make the parent dir first.
+        """
+        self._w.workspace.mkdirs(path)
+
     def _do(
         self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
     ) -> Any:

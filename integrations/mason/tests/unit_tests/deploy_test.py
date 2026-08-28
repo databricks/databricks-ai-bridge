@@ -105,7 +105,9 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)  # app doesn't exist yet
+    monkeypatch.setattr(
+        deploy_mod, "_deployment_exists", lambda a, p: False
+    )  # app doesn't exist yet
     waited = {"called": False}
     monkeypatch.setattr(
         deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)

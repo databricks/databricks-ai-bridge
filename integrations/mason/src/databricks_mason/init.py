@@ -40,12 +40,12 @@ _TEMPLATES = {
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise AgentCliError(f"`git {' '.join(args)}` failed (exit {result.returncode})", hint=detail)
+        raise AgentCliError(
+            f"`git {' '.join(args)}` failed (exit {result.returncode})", hint=detail
+        )
     return result
 
 
@@ -53,7 +53,19 @@ def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) 
     """Sparse-clone `template_dir` from `repo`@`ref` into `dest` (must not already exist)."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
         clone = pathlib.Path(tmp) / "repo"
-        _git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--branch", ref, repo, str(clone)])
+        _git(
+            [
+                "clone",
+                "--depth",
+                "1",
+                "--filter=blob:none",
+                "--sparse",
+                "--branch",
+                ref,
+                repo,
+                str(clone),
+            ]
+        )
         _git(["sparse-checkout", "set", template_dir], cwd=clone)
         src = clone / template_dir
         if not src.is_dir():
@@ -127,7 +139,11 @@ def init(
     """
     spec = _TEMPLATES[framework]
     template_path = spec["path"]
-    dest = pathlib.Path(directory) if directory else pathlib.Path(pathlib.PurePosixPath(template_path).name)
+    dest = (
+        pathlib.Path(directory)
+        if directory
+        else pathlib.Path(pathlib.PurePosixPath(template_path).name)
+    )
 
     if dest.exists():
         raise AgentCliError(

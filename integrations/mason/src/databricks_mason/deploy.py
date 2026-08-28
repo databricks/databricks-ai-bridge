@@ -179,7 +179,9 @@ def resolve_store_env(
         # The agent enables tracing only when BOTH a destination and an experiment are set, so
         # default the experiment to this agent's per-app path (matching `mason tracing setup --app`),
         # otherwise --with-traces alone would ship a half-config that silently disables tracing.
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(client.current_user, app)
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(
+            client.current_user, app
+        )
     elif traces_experiment:
         env[TRACES_EXPERIMENT_ENV] = traces_experiment
     return env

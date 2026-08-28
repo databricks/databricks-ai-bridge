@@ -30,8 +30,7 @@ def test_framework_specs_have_repo_ref_path():
         assert spec["repo"] and spec["ref"] and spec["path"]
     assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-basic"
     assert (
-        init_mod._TEMPLATES["langgraph"]["path"]
-        == "integrations/mason/templates/agent-langgraph"
+        init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
     )
 
 
@@ -43,9 +42,7 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
         (target / "app.yaml").write_text("command: []\n")
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
-        result = CliRunner().invoke(
-            init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx()
-        )
+        result = CliRunner().invoke(init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     fetched.assert_called_once()
     # framework's repo + path passed through to the fetch
@@ -85,7 +82,15 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
             init_mod.init,
-            ["--framework", "langgraph", "--repo", "https://example.com/fork.git", "--ref", "wip", str(dest)],
+            [
+                "--framework",
+                "langgraph",
+                "--repo",
+                "https://example.com/fork.git",
+                "--ref",
+                "wip",
+                str(dest),
+            ],
             obj=_Ctx(),
         )
     assert result.exit_code == 0, result.output
@@ -112,7 +117,8 @@ def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
     with mock.patch.object(init_mod, "_fetch_template") as fetched:
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code != 0
-    assert "already exists" in result.output
+    # Rich may wrap the message across lines on a narrow terminal, so match whitespace-insensitively.
+    assert "already exists" in " ".join(result.output.split())
     fetched.assert_not_called()
 
 
@@ -148,9 +154,7 @@ def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
-        result = CliRunner().invoke(
-            init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx()
-        )
+        result = CliRunner().invoke(init_mod.init, ["--profile", "ml", str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "DATABRICKS_CONFIG_PROFILE=ml" in (dest / ".env").read_text()
 
