@@ -14,6 +14,14 @@ Package: rich
 Project URL: https://github.com/Textualize/rich
 Copyright: 2020 Will McGugan
 
+Package: tomli
+Project URL: https://github.com/hukkin/tomli
+Copyright: 2021 Taneli Hukkinen
+
+Package: tomlkit
+Project URL: https://github.com/python-poetry/tomlkit
+Copyright: 2018 Sébastien Eustace
+
 # Apache License 2.0
 
 This Software contains code from the following open source projects, licensed under the Apache License 2.0 license (https://www.apache.org/licenses/LICENSE-2.0).
@@ -24,7 +32,7 @@ Copyright: 2023 Databricks, Inc.
 
 # BSD 3-Clause License
 
-This Software contains code from the following open source projects, licensed under the BSD 3-Clause License license (https://opensource.org/license/bsd-3-clause).
+This Software contains code from the following open source projects, licensed under the BSD 3-Clause License (https://opensource.org/license/bsd-3-clause).
 
 Package: click
 Project URL: https://github.com/pallets/click
