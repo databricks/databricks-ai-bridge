@@ -7,7 +7,10 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any, cast
 
-import tomllib  # ty: ignore[unresolved-import]
+try:
+    import tomllib  # ty: ignore[unresolved-import]
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 @dataclass(frozen=True)
