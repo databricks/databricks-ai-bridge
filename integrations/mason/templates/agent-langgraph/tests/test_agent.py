@@ -11,7 +11,9 @@ import pytest
 from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
+from fastapi.testclient import TestClient
 from langchain_core.tools import BaseTool
+from runtime.runtime import build_app
 
 
 def test_tools_autoregister():
@@ -63,6 +65,11 @@ def test_thread_config_from_session_id():
     assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "abc-123"}}
 
 
+def test_thread_config_uses_configured_actor(monkeypatch):
+    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
+    assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "alice"}}
+
+
 def test_checkpointer_is_shared(monkeypatch):
     # In-memory by default (no AGENT_SESSION_STORE); built once and shared so multi-turn works.
     import agent.mason.session_store as ss
@@ -89,14 +96,58 @@ class _FakeStoreClient:
 
 
 def test_session_id_from_request():
-    # The runtime copies the X-Routing-Key header into `session_id` before calling the handler.
     request = {"input": [{"role": "user", "content": "hi"}], "session_id": "abc-123"}
     assert _session_id(request) == "abc-123"
 
 
-def test_session_id_generated_when_absent():
-    generated = _session_id({"input": [{"role": "user", "content": "hi"}]})
-    assert generated and generated != _session_id({"input": [{"role": "user", "content": "hi"}]})
+def test_session_id_is_required_from_runtime():
+    with pytest.raises(KeyError):
+        _session_id({"input": [{"role": "user", "content": "hi"}]})
+
+
+def test_runtime_uses_apps_routing_cookie_for_resume_request():
+    captured = {}
+
+    async def invoke_handler(request):
+        captured.update(request)
+        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    client = TestClient(build_app(invoke_handler, stream_handler))
+    client.cookies.set("__Host-databricks-app-router", "same-session-id")
+    response = client.post(
+        "/invocations",
+        json={
+            "session_id": "body-value-is-ignored",
+            "resume": {"decisions": [{"type": "approve"}]},
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "resume": {"decisions": [{"type": "approve"}]},
+        "session_id": "same-session-id",
+    }
+
+
+def test_runtime_sets_local_session_cookie_when_apps_router_is_absent():
+    async def invoke_handler(request):
+        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    client = TestClient(build_app(invoke_handler, stream_handler))
+    first = client.post("/invocations", json={"input": []})
+    second = client.post("/invocations", json={"input": []})
+
+    assert first.status_code == 200
+    assert first.cookies.get("mason-local-session") == first.json()["session_id"]
+    assert second.json()["session_id"] == first.json()["session_id"]
 
 
 def _has_workspace_auth() -> bool:

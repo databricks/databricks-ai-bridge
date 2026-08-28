@@ -2,13 +2,18 @@
 
 `MasonClient` is Mason's public Python entry point: construct it with a
 `.databrickscfg` profile (or rely on the SDK's default auth) and call one method per
-API operation. It wraps a databricks-sdk `WorkspaceClient` and returns the raw JSON
-response dicts from `/api/agents/v1`.
+API operation. It wraps a databricks-sdk `WorkspaceClient` and returns typed models
+over the JSON responses from `/api/agents/v1`. Account-routed profiles retain their
+configured vanity host and add the resolved workspace id as a routing header, matching
+the authentication behavior of the Databricks CLI.
 Deployment is handled separately (deploy.py) since it wraps the `databricks apps` CLI.
 """
 
 from __future__ import annotations
 
+import configparser
+import os
+import pathlib
 from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
@@ -42,6 +47,36 @@ def memory_entry_path(store: str, entry: str) -> str:
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
+def _profile_host(profile: str) -> Optional[str]:
+    config_path = pathlib.Path(
+        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
+    )
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path)
+    except (OSError, configparser.Error):
+        return None
+    return parser.get(profile, "host", fallback=None)
+
+
+def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
+    client = WorkspaceClient(profile=profile)
+    if not profile or not client.config.workspace_id:
+        return client
+
+    configured_host = _profile_host(profile)
+    resolved_host = client.config.host
+    if not configured_host or configured_host.rstrip("/") == (resolved_host or "").rstrip("/"):
+        return client
+
+    workspace_id = str(client.config.workspace_id)
+    return WorkspaceClient(
+        profile=profile,
+        host=configured_host,
+        custom_headers={"X-Databricks-Org-Id": workspace_id},
+    )
+
+
 class MasonClient:
     """Thin, authenticated wrapper over the agents/v1 REST surface.
 
@@ -54,7 +89,7 @@ class MasonClient:
 
     def __init__(self, profile: Optional[str] = None):
         try:
-            self._w = WorkspaceClient(profile=profile)
+            self._w = _workspace_client(profile)
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
@@ -70,6 +105,14 @@ class MasonClient:
     def current_user(self) -> str:
         """The authenticated user's name (used to derive the app source workspace path)."""
         return str(self._w.current_user.me().user_name or "unknown")
+
+    def ensure_workspace_dir(self, path: str) -> None:
+        """Create a workspace directory (and parents), idempotently.
+
+        MLflow's create_experiment won't create the intermediate folder for a nested experiment
+        path, so callers make the parent dir first.
+        """
+        self._w.workspace.mkdirs(path)
 
     def _do(
         self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None

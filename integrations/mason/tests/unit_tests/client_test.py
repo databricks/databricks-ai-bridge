@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from unittest import mock
 
-from databricks_mason.client import MasonClient, memory_entry_path, memory_store_path
+from databricks_mason.client import (
+    MasonClient,
+    _workspace_client,
+    memory_entry_path,
+    memory_store_path,
+)
 from databricks_mason.errors import AgentCliError
 
 
@@ -115,6 +120,32 @@ def test_preview_error_is_mapped_with_hint(workspace_client):
     except AgentCliError as mapped:
         assert mapped.error_code == "NOT_IMPLEMENTED"
         assert mapped.hint is not None
+
+
+def test_account_routed_profile_uses_configured_host_and_workspace_header():
+    resolved = mock.Mock()
+    resolved.config.host = "https://workspace.example.com"
+    resolved.config.workspace_id = "123"
+    routed = mock.Mock()
+
+    with (
+        mock.patch("databricks_mason.client.WorkspaceClient", side_effect=[resolved, routed]) as wc,
+        mock.patch(
+            "databricks_mason.client._profile_host",
+            return_value="https://account.example.com",
+        ),
+    ):
+        client = _workspace_client("p")
+
+    assert client is routed
+    assert wc.call_args_list == [
+        mock.call(profile="p"),
+        mock.call(
+            profile="p",
+            host="https://account.example.com",
+            custom_headers={"X-Databricks-Org-Id": "123"},
+        ),
+    ]
 
 
 def test_path_helpers():

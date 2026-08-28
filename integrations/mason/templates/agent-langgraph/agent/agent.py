@@ -9,7 +9,6 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
-from uuid_utils import uuid7
 
 from agent.mason import mcp_runtime, tracing
 from agent.mason.memory import memory_tools
@@ -46,7 +45,9 @@ def _check_databricks_auth() -> None:
         WorkspaceClient()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        target = (
+            f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
+        )
         raise RuntimeError(
             f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
             "Fix one of:\n"
@@ -60,7 +61,9 @@ def _check_databricks_auth() -> None:
 async def create_agent_graph():
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
     tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
-    middleware = [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
+    middleware = (
+        [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
+    )
     return create_agent(
         model=ChatDatabricks(endpoint=MODEL),
         tools=tools,
@@ -70,11 +73,12 @@ async def create_agent_graph():
 
 
 def _session_id(request: dict) -> str:
-    """The request's session id (for multi-turn / resume), or a fresh one for a new conversation.
+    """Return the session id derived by the runtime from the Apps routing cookie.
 
-    The runtime copies the ``X-Routing-Key`` header into ``session_id`` before calling the handler.
+    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
+    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
     """
-    return str(request.get("session_id") or uuid7())
+    return str(request["session_id"])
 
 
 async def invoke_handler(request: dict) -> dict:
@@ -110,10 +114,14 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
     # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
     resume = request.get("resume")
-    agent_input = Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
+    agent_input = (
+        Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
+    )
 
     async for event in _serialize_events(
-        agent.astream(input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"])
+        agent.astream(
+            input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"]
+        )
     ):
         yield event
 

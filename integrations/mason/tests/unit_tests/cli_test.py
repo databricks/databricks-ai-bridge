@@ -25,4 +25,5 @@ def test_root_registers_login_and_logout():
         "deploy",
         "deployments",
         "add-sandbox",
+        "tools",
     } <= names
