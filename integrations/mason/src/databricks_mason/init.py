@@ -20,6 +20,7 @@ from typing import Optional
 import click
 
 from databricks_mason import render
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
@@ -156,6 +157,7 @@ def init(
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
+    AgentProject.create(dest, framework=framework).write()
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

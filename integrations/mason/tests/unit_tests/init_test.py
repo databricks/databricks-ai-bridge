@@ -82,6 +82,25 @@ def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
     }
 
 
+def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": "openai"},
+    }
+
+
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
     dest = tmp_path / "lg"
 
