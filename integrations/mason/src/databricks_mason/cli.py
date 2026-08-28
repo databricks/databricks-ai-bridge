@@ -14,6 +14,7 @@ from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.client import AgentApiClient
 from databricks_mason.deploy import deploy, deployments
 from databricks_mason.memory import memory
+from databricks_mason.sandbox import add_sandbox
 from databricks_mason.sessions import sessions
 from databricks_mason.tracing import tracing
 
@@ -62,6 +63,7 @@ mason.add_command(sessions)
 mason.add_command(tracing)
 mason.add_command(deploy)
 mason.add_command(deployments)
+mason.add_command(add_sandbox)
 
 
 def main() -> None:

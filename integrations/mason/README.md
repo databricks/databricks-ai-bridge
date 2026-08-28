@@ -59,7 +59,38 @@ mason [-p <profile>] [-o text|json]
   tracing
     setup      --catalog C --schema S [--experiment E]
     list | get | instrument
+  add-sandbox  --scope SCOPE [--scope SCOPE ...]
+               [--permission read_only|read_write] [--source PATH]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
+
+## Add a downscoped sandbox
+
+From a Mason agent project, add the `system.ai.sandbox` MCP server and fix its
+allowed resources at configuration time:
+
+```sh
+mason add-sandbox --scope catalog.schema.volume
+```
+
+The command updates `agent/mcps.py`. Every sandbox call carries the selected
+downscope in MCP `_meta`, outside the tool arguments controlled by the model.
+Scopes default to read-only access. Repeat `--scope` to allow more than one
+resource, use `/Workspace/...` for a workspace path, or prefix a table with
+`table:`:
+
+```sh
+mason add-sandbox \
+  --scope catalog.schema.volume \
+  --scope /Workspace/Users/alice@example.com \
+  --scope table:catalog.schema.table
+```
+
+Pass `--permission read_write` to grant write access to every supplied scope,
+or `--source /path/to/project` when running outside the project root. Re-running
+the command with the same policy leaves the existing configuration unchanged;
+a different policy fails without modifying the file so it cannot silently report
+stale access. Edit or remove the generated block before intentionally changing
+the sandbox policy.
