@@ -242,6 +242,12 @@ class Runner:
                 f"App auth profile {self.app_auth_profile!r} targets {app_auth_host}, "
                 f"not {self.host}."
             )
+        if app_auth_client.config.auth_type == "pat":
+            raise MatrixError(
+                f"App auth profile {self.app_auth_profile!r} uses a PAT. "
+                "Databricks Apps /api routes require OAuth; run `databricks auth login` "
+                "for a profile on the same workspace."
+            )
         authorization = app_auth_client.config.authenticate().get("Authorization")
         if not authorization:
             raise MatrixError(
