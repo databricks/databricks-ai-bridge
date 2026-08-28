@@ -97,6 +97,33 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem"
 
 
+def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    sync = next(args for args in calls if args[0] == "sync")
+    assert sync[:3] == [
+        "sync",
+        str(src),
+        "/Workspace/Users/me@example.com/mason_deployments/myapp",
+    ]
+    excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
+    assert "agent.toml" not in excluded
+
+
 def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
     # A brand-new app isn't RUNNING right after `apps create`; deploy must wait, or it races and
     # fails ("not in RUNNING state"). Verify create -> wait -> sync/deploy ordering.
