@@ -86,6 +86,8 @@ mason [-p <profile>] [-o text|json]
   tracing
     setup      --catalog C --schema S [--experiment E]
     list | get | instrument
+  mcp
+    list             [--schema CATALOG.SCHEMA]
   init          [--framework openai|langgraph] [--profile P] [DIRECTORY]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
@@ -93,9 +95,6 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
-  add-sandbox  --scope SCOPE [--scope SCOPE ...]
-               [--permission read_only|read_write] [--source PATH]
-               [--framework openai|langgraph]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
@@ -121,6 +120,16 @@ mason tools add python lookup-ticket
 mason tools list
 ```
 
+Discover the MCP Services available to your user before adding one. By default Mason lists the
+Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
+schema. Text output includes a copyable add command, while `--output json` returns normalized service
+records for scripts:
+
+```sh
+mason mcp list
+mason mcp list --schema main.tools
+```
+
 The Python command additionally creates user-owned `agent/tools/<name>.py` and
 `tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. `mason dev` and
 `mason deploy` preserve `agent.toml`; they do not generate or patch agent source.
@@ -129,10 +138,6 @@ Sandbox scopes default to read-only access. Repeat `--scope` to allow more than 
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
 arguments controlled by the model.
-
-`mason add-sandbox` remains as a compatibility alias. For manifest-backed projects it follows the
-same LangGraph-only behavior as `mason tools add sandbox`; its older source-editing path remains for
-legacy projects that do not yet contain `agent.toml`.
 
 ## Initialize the chat app demo
 
