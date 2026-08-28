@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = recovery.process_id()
-_CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
+_STOP_ENV = "MASON_DEMO_STOP_ENABLED"
+_LEGACY_CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
 _MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 _MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
@@ -51,6 +52,10 @@ class SessionItemsRequest(BaseModel):
 
 def _enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _stop_enabled() -> bool:
+    return _enabled(_STOP_ENV) or _enabled(_LEGACY_CRASH_ENV)
 
 
 def _execution_identity() -> str:
@@ -215,10 +220,10 @@ def _require_session() -> None:
 
 
 def _require_recovery() -> None:
-    if not _enabled(_CRASH_ENV):
+    if not _stop_enabled():
         raise HTTPException(
             status_code=503,
-            detail=f"Run `mason add ui --enable-crash` or set {_CRASH_ENV}=true.",
+            detail=f"Run `mason add ui --enable-stop` or set {_STOP_ENV}=true.",
         )
     _require_session()
 
@@ -247,6 +252,7 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
         )
         memory_store = _memory_store()
         session_store = _session_store()
+        durability_enabled = bool(session_store and _stop_enabled())
         return {
             "instance_id": _INSTANCE_ID,
             "viewer": viewer,
@@ -266,12 +272,27 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": _memory_actor(),
             },
-            "crash": {
-                "enabled": _enabled(_CRASH_ENV),
+            "durability": {
+                "enabled": durability_enabled,
+                "mode": (
+                    "Session Store checkpoint + event log"
+                    if durability_enabled
+                    else "Not configured"
+                ),
+                "claim_mode": "Last-writer-wins demo lease",
+                "atomic_claim": False,
+            },
+            "heartbeat": {
+                "enabled": durability_enabled,
+                "interval_seconds": recovery.heartbeat_seconds(),
+                "stale_after_seconds": recovery.stale_seconds(),
+            },
+            "app_control": {
+                "stop_enabled": _stop_enabled(),
                 "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
             },
             "recovery": {
-                "enabled": bool(session_store and _enabled(_CRASH_ENV)),
+                "enabled": durability_enabled,
                 "automatic_resume": True,
                 "steps": recovery.step_names(),
                 "step_seconds": recovery.step_seconds(),
@@ -326,21 +347,26 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
         _require_recovery()
         return await _recovery_call(recovery.start, session_id)
 
+    @app.post("/api/demo/app/{session_id}/start", include_in_schema=False)
+    async def start_app(session_id: str) -> dict:
+        _require_recovery()
+        return await _recovery_call(recovery.start, session_id)
+
     @app.post("/api/demo/recovery/{session_id}/resume", include_in_schema=False)
     async def resume_recovery(session_id: str) -> dict:
         _require_recovery()
         return await _recovery_call(recovery.resume, session_id)
 
-    @app.post("/api/demo/crash", include_in_schema=False)
-    async def crash() -> dict:
-        if not _enabled(_CRASH_ENV):
+    @app.post("/api/demo/app/stop", include_in_schema=False)
+    async def stop_app() -> dict:
+        if not _stop_enabled():
             raise HTTPException(
                 status_code=403,
-                detail=f"Set {_CRASH_ENV}=true to enable the demo crash endpoint.",
+                detail=f"Set {_STOP_ENV}=true to enable the demo stop endpoint.",
             )
         asyncio.get_running_loop().call_later(0.5, os._exit, 86)
         return {
-            "status": "crashing",
+            "status": "stopping",
             "instance_id": _INSTANCE_ID,
             "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
         }

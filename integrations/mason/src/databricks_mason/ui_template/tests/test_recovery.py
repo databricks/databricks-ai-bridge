@@ -65,7 +65,7 @@ async def test_resume_skips_checkpointed_steps_and_retries_incomplete_step():
         calls.append(4)
         return {"tool": "tool_step_4", "output": "four"}
 
-    config = recovery_config("crash-demo")
+    config = recovery_config("stop-start-demo")
     first_graph = build_recovery_graph(
         saver,
         [

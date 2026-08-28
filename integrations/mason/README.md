@@ -51,7 +51,7 @@ mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   add
-    ui         [--enable-crash] [--force] [directory]
+    ui         [--enable-stop] [--force] [directory]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -126,15 +126,20 @@ The UI exercises streaming, sticky background polling, same-ID session resume, l
 history, managed Memory Store entries, managed Session Store transcript items, agent memory tools,
 human approval, and runtime status. Capability dots are automatic: streaming/background reflect the
 runtime contract, Session turns green when history is available, and Memory turns green only when
-`AGENT_MEMORY_STORE` is configured. The transport selector itself is manual.
-`mason add ui --enable-crash` also enables a demo-only endpoint that terminates the process so an
-auto-restarting dev server or deployed Databricks App can prove that the durable checkpointer resumes
-the same conversation after restart.
+`AGENT_MEMORY_STORE` is configured. Durability and Heartbeat turn green when a managed Session Store
+and the stop/start demo are enabled. The transport selector itself is manual.
+
+`mason add ui --enable-stop` enables a demo-only endpoint that terminates the current app process. A
+deployed Databricks App restarts the HTTP process; for a local run, restart `uv run start-server`
+yourself. The tool workflow persists LangGraph checkpoints plus an append-only attempt and heartbeat
+log in Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds. Once
+the old owner is stale, the browser starts a new attempt with the same public session ID, restores
+completed outputs, and resumes at the first incomplete tool.
 
 For the full deployed demo, connect both managed stores:
 
 ```sh
-mason add ui --enable-crash
+mason add ui --enable-stop
 mason --profile <profile> deploy mason-agent-demo --source . \
   --with-session-store mason-demo-sessions \
   --with-memory-store mason-demo-memory \
@@ -145,8 +150,15 @@ mason --profile <profile> deploy mason-agent-demo --source . \
 `mason deploy` provisions or resolves the stores and injects their names plus the shared actor id.
 The UI can create, list, and search memory entries for the actor; it also creates a managed session
 and mirrors user/assistant turns into Session Store items. It can pause on the sample approval-gated
-tool, crash the app, wait for a new process, and approve the same paused run. The crash card also
-runs `tool_step_1` through `tool_step_4` in a deterministic checkpointed graph. Crash after a few
-steps complete: after Databricks Apps restarts the process, the browser automatically resumes the
-same session, restores completed outputs, skips those completed nodes, and continues at the first
-incomplete tool. A tool interrupted before its output checkpoint is committed can run again.
+tool, stop the app process, wait for a new process, and approve the same paused run. The durability
+card runs `tool_step_1` through `tool_step_4` in a deterministic checkpointed graph. Stop App after a
+few steps complete: after Databricks Apps restarts the process and the previous heartbeat becomes
+stale, the browser automatically starts a new attempt, restores completed outputs, skips those
+completed nodes, and continues at the first incomplete tool. A tool interrupted before its output
+checkpoint is committed can run again.
+
+This scaffold deliberately shows the mechanics rather than presenting Session Store as a complete
+durable-task engine. Attempt claims are append-only, last-writer-wins demo leases; they are not an
+atomic compare-and-swap across replicas. Production durability additionally needs transactional
+ownership, proactive stale-run scanning, idempotent tool side effects, and durable event replay. The
+UI reports `atomic_claim: false` so that limitation stays visible during the demo.

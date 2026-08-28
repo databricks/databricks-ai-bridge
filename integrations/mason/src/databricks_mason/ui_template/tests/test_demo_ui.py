@@ -42,32 +42,53 @@ async def _session_history(session_id):
 async def _recovery_status(session_id):
     return {
         "session_id": session_id,
-        "status": "waiting_for_resume",
+        "status": "stopped",
         "steps": ["tool_step_1", "tool_step_2"],
         "outputs": [{"tool": "tool_step_1", "output": "done"}],
         "current_step": "tool_step_2",
         "worker_active": False,
+        "owner_active": False,
         "needs_resume": True,
         "error": None,
         "instance_id": "instance-1",
         "step_seconds": 1,
+        "execution_id": "execution-1",
+        "attempt": 1,
+        "owner_id": "instance-0",
+        "heartbeat_at": "2026-08-28T00:00:00+00:00",
+        "heartbeat_age_seconds": 11,
+        "heartbeat_fresh": False,
+        "heartbeat_interval_seconds": 3,
+        "stale_after_seconds": 10,
+        "durability_event_count": 4,
+        "recent_durability_events": [],
+        "claim_mode": "session_store_last_writer_wins",
+        "atomic_claim": False,
     }
 
 
 async def _recovery_start(session_id):
     result = await _recovery_status(session_id)
-    return {**result, "status": "running", "worker_active": True, "needs_resume": False}
+    return {
+        **result,
+        "status": "running",
+        "worker_active": True,
+        "owner_active": True,
+        "heartbeat_fresh": True,
+        "needs_resume": False,
+    }
 
 
 async def _recovery_resume(session_id):
     return await _recovery_start(session_id)
 
 
-def _client(monkeypatch, *, configured=False, history=False, crash=False):
+def _client(monkeypatch, *, configured=False, history=False, stop=False):
+    monkeypatch.delenv("MASON_DEMO_STOP_ENABLED", raising=False)
     monkeypatch.delenv("MASON_DEMO_CRASH_ENABLED", raising=False)
     monkeypatch.delenv("MASON_DEMO_TOOL_STEP_SECONDS", raising=False)
-    if crash:
-        monkeypatch.setenv("MASON_DEMO_CRASH_ENABLED", "true")
+    if stop:
+        monkeypatch.setenv("MASON_DEMO_STOP_ENABLED", "true")
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "memory-stores/store")
         monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
@@ -97,12 +118,14 @@ def test_demo_ui_routes(monkeypatch):
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is False
-    assert config["crash"]["enabled"] is False
+    assert config["app_control"]["stop_enabled"] is False
+    assert config["durability"]["enabled"] is False
+    assert config["heartbeat"]["enabled"] is False
     assert config["recovery"]["enabled"] is False
 
     assert client.post("/api/demo/memory/search", json={"query": "profile"}).status_code == 503
     assert client.post("/api/demo/sessions", json={"session_id": "s1"}).status_code == 503
-    assert client.post("/api/demo/crash").status_code == 403
+    assert client.post("/api/demo/app/stop").status_code == 403
 
 
 def test_unmanaged_checkpoint_history_route(monkeypatch):
@@ -121,7 +144,7 @@ def test_unmanaged_checkpoint_history_route(monkeypatch):
 
 
 def test_managed_memory_and_session_routes(monkeypatch):
-    client = _client(monkeypatch, configured=True, crash=True)
+    client = _client(monkeypatch, configured=True, stop=True)
 
     config = client.get("/api/demo/config").json()
     assert config["memory"] == {
@@ -132,6 +155,17 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"
     assert config["session"]["history"] is True
+    assert config["durability"] == {
+        "enabled": True,
+        "mode": "Session Store checkpoint + event log",
+        "claim_mode": "Last-writer-wins demo lease",
+        "atomic_claim": False,
+    }
+    assert config["heartbeat"] == {
+        "enabled": True,
+        "interval_seconds": 3,
+        "stale_after_seconds": 10,
+    }
     assert config["recovery"] == {
         "enabled": True,
         "automatic_resume": True,
@@ -163,4 +197,14 @@ def test_managed_memory_and_session_routes(monkeypatch):
 
     assert client.get("/api/demo/recovery/s1").json()["needs_resume"] is True
     assert client.post("/api/demo/recovery/s1/start").json()["worker_active"] is True
+    assert client.post("/api/demo/app/s1/start").json()["worker_active"] is True
     assert client.post("/api/demo/recovery/s1/resume").json()["worker_active"] is True
+
+
+def test_legacy_crash_env_still_enables_stop_control(monkeypatch):
+    monkeypatch.setenv("MASON_DEMO_CRASH_ENABLED", "true")
+    client = _client(monkeypatch, configured=True)
+    monkeypatch.setenv("MASON_DEMO_CRASH_ENABLED", "true")
+
+    config = client.get("/api/demo/config").json()
+    assert config["app_control"]["stop_enabled"] is True

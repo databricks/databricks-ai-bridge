@@ -64,6 +64,16 @@
                 <span><strong>Memory</strong><small id="memory-mode-value">Checking…</small></span>
                 <span id="memory-status" class="status-orb"></span>
               </div>
+              <div class="capability-row">
+                <span class="capability-icon">⬡</span>
+                <span><strong>Durability</strong><small id="durability-mode-value">Checking…</small></span>
+                <span id="durability-status" class="status-orb"></span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon">♥</span>
+                <span><strong>Heartbeat</strong><small id="heartbeat-mode-value">Checking…</small></span>
+                <span id="heartbeat-status" class="status-orb"></span>
+              </div>
             </div>
           </section>
 
@@ -182,17 +192,23 @@
           <section class="control-card recovery-card">
             <div class="control-card-heading">
               <span class="control-number">02</span>
-              <div><p class="eyebrow">Durability</p><h2>Crash &amp; recover</h2></div>
+              <div><p class="eyebrow">Durability</p><h2>Stop &amp; start</h2></div>
             </div>
-            <p class="supporting-text recovery-intro">Run four checkpointed tools in order. After a few finish, crash the process; the restarted app automatically resumes at the first incomplete step.</p>
+            <p class="supporting-text recovery-intro">Start four checkpointed tools, then stop the current process. The host restarts HTTP; after the old heartbeat becomes stale, the app claims a new attempt and resumes at the first incomplete step.</p>
+            <dl class="durability-facts">
+              <div><dt>Execution</dt><dd><code id="durability-execution">Not started</code></dd></div>
+              <div><dt>Attempt</dt><dd id="durability-attempt">—</dd></div>
+              <div><dt>Owner</dt><dd><code id="durability-owner">—</code></dd></div>
+              <div><dt>Heartbeat</dt><dd id="durability-heartbeat">Not started</dd></div>
+            </dl>
             <div id="recovery-steps" class="recovery-steps" aria-live="polite">
-              <div class="state-empty">Connect a Session Store and enable crash recovery.</div>
+              <div class="state-empty">Connect a Session Store and enable stop/start durability.</div>
             </div>
             <div class="button-row recovery-actions">
-              <button id="start-recovery" class="button button-primary" type="button" disabled>Start tool sequence</button>
-              <button id="crash-button" class="button button-danger" type="button" disabled>Crash app now</button>
+              <button id="start-app" class="button button-primary" type="button" disabled>Start App</button>
+              <button id="stop-app" class="button button-danger" type="button" disabled>Stop App</button>
             </div>
-            <p id="recovery-status" class="supporting-text">Completed tool outputs are restored from the Session Store checkpoint after restart.</p>
+            <p id="recovery-status" class="supporting-text">Checkpoints, attempts, and heartbeats are persisted as Session Store items.</p>
           </section>
 
           <section class="control-card event-card">

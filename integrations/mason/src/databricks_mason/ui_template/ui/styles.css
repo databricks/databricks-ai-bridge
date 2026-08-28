@@ -816,6 +816,42 @@ h2 {
   margin-top: 0;
 }
 
+.durability-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 13px 0 0;
+}
+
+.durability-facts > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
+.durability-facts dt {
+  color: var(--ink-soft);
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.durability-facts dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.durability-facts code {
+  font-size: inherit;
+}
+
 .recovery-steps {
   margin-top: 13px;
   overflow: hidden;

@@ -1,4 +1,4 @@
-"""Deterministic long-running tools used by the Mason crash/recovery demo."""
+"""Deterministic long-running tools used by the Mason stop/start demo."""
 
 from __future__ import annotations
 

@@ -19,6 +19,7 @@ _REQUIRED_PROJECT_FILES = (
     "runtime/runtime.py",
 )
 _UI_FILES = {
+    "agent/mason/durability.py": "ui_template/agent/mason/durability.py",
     "agent/mason/recovery.py": "ui_template/agent/mason/recovery.py",
     "agent/tools/long_running.py": "ui_template/agent/tools/long_running.py",
     "runtime/ui.py": "ui_template/runtime/ui.py",
@@ -26,13 +27,14 @@ _UI_FILES = {
     "ui/styles.css": "ui_template/ui/styles.css",
     "ui/app.js": "ui_template/ui/app.js",
     "tests/test_demo_ui.py": "ui_template/tests/test_demo_ui.py",
+    "tests/test_durability.py": "ui_template/tests/test_durability.py",
     "tests/test_recovery.py": "ui_template/tests/test_recovery.py",
 }
 _RUNTIME_IMPORT = "from runtime.runtime import build_app"
 _UI_IMPORT = "from runtime.ui import install_ui"
 _UI_CALL = "install_ui(app, session_history=agent.agent.session_history)"
 _APP_BUILD_PATTERN = re.compile(r"^app = build_app\(.+\)$", re.MULTILINE)
-_CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
+_STOP_ENV = "MASON_DEMO_STOP_ENABLED"
 
 
 def _validate_project(project: pathlib.Path) -> None:
@@ -86,15 +88,17 @@ def _install_files(project: pathlib.Path, *, overwrite: bool = False) -> list[st
     return list(_UI_FILES)
 
 
-def _document_crash_setting(project: pathlib.Path) -> None:
+def _document_stop_setting(project: pathlib.Path) -> None:
     example = project / ".env.example"
     text = example.read_text() if example.exists() else ""
-    if _CRASH_ENV in text:
+    if _STOP_ENV in text:
         return
     suffix = (
-        "\n# --- Optional: Mason demo crash/recovery control ---\n"
-        "# Demo-only. Lets the UI terminate the process so a supervisor or Databricks Apps can restart it.\n"
-        f"# {_CRASH_ENV}=true\n"
+        "\n# --- Optional: Mason demo stop/start durability control ---\n"
+        "# Demo-only. Lets the UI stop the process so a supervisor or Databricks Apps can restart it.\n"
+        f"# {_STOP_ENV}=true\n"
+        "# MASON_DEMO_HEARTBEAT_SECONDS=3\n"
+        "# MASON_DEMO_STALE_SECONDS=10\n"
     )
     example.write_text(f"{text.rstrip()}\n{suffix}" if text else suffix.lstrip())
 
@@ -109,11 +113,11 @@ def _set_dotenv(project: pathlib.Path) -> None:
         if example.exists()
         else ""
     )
-    pattern = re.compile(rf"^{re.escape(_CRASH_ENV)}=.*$", re.MULTILINE)
+    pattern = re.compile(rf"^{re.escape(_STOP_ENV)}=.*$", re.MULTILINE)
     if pattern.search(text):
-        text = pattern.sub(f"{_CRASH_ENV}=true", text, count=1)
+        text = pattern.sub(f"{_STOP_ENV}=true", text, count=1)
     else:
-        text = f"{text.rstrip()}\n{_CRASH_ENV}=true\n" if text else f"{_CRASH_ENV}=true\n"
+        text = f"{text.rstrip()}\n{_STOP_ENV}=true\n" if text else f"{_STOP_ENV}=true\n"
     env_path.write_text(text)
 
 
@@ -124,9 +128,9 @@ def _set_app_yaml_env(project: pathlib.Path) -> None:
     env = document.get("env")
     if env is None:
         block = (
-            "\n# Demo-only: enables the Mason UI crash/recovery control.\n"
+            "\n# Demo-only: enables the Mason UI stop/start durability control.\n"
             "env:\n"
-            f"  - name: {_CRASH_ENV}\n"
+            f"  - name: {_STOP_ENV}\n"
             '    value: "true"\n'
         )
         app_yaml.write_text(f"{text.rstrip()}\n{block}")
@@ -134,12 +138,12 @@ def _set_app_yaml_env(project: pathlib.Path) -> None:
     if not isinstance(env, list):
         raise AgentCliError("app.yaml has an unsupported `env` value; expected a list.")
     for item in env:
-        if isinstance(item, dict) and item.get("name") == _CRASH_ENV:
+        if isinstance(item, dict) and item.get("name") == _STOP_ENV:
             if str(item.get("value", "")).lower() == "true":
                 return
             raise AgentCliError(
-                f"app.yaml already defines {_CRASH_ENV} with a non-true value.",
-                hint="Set it to true manually to enable the demo crash endpoint.",
+                f"app.yaml already defines {_STOP_ENV} with a non-true value.",
+                hint="Set it to true manually to enable the demo stop endpoint.",
             )
     lines = text.splitlines()
     env_start = next(
@@ -158,7 +162,7 @@ def _set_app_yaml_env(project: pathlib.Path) -> None:
         if line and not line.startswith((" ", "\t", "#")):
             insert_at = index
             break
-    lines[insert_at:insert_at] = [f"  - name: {_CRASH_ENV}", '    value: "true"']
+    lines[insert_at:insert_at] = [f"  - name: {_STOP_ENV}", '    value: "true"']
     app_yaml.write_text("\n".join(lines) + "\n")
 
 
@@ -170,9 +174,15 @@ def add() -> None:
 @add.command(name="ui")
 @click.argument("directory", required=False, default=".")
 @click.option(
-    "--enable-crash",
+    "--enable-stop",
     is_flag=True,
-    help="Enable the demo-only endpoint that terminates the app for restart/recovery testing.",
+    help="Enable the demo-only endpoint that stops the app process for durability testing.",
+)
+@click.option(
+    "--enable-crash",
+    "legacy_enable_crash",
+    is_flag=True,
+    hidden=True,
 )
 @click.option(
     "--force",
@@ -180,8 +190,15 @@ def add() -> None:
     help="Overwrite Mason-managed UI files to refresh an existing installation.",
 )
 @click.pass_obj
-def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
+def add_ui(
+    obj,
+    directory: str,
+    enable_stop: bool,
+    legacy_enable_crash: bool,
+    force: bool,
+) -> None:
     """Add a zero-build chat and runtime demo UI to DIRECTORY."""
+    enable_stop = enable_stop or legacy_enable_crash
     project = pathlib.Path(directory).expanduser().resolve()
     _validate_project(project)
 
@@ -201,8 +218,8 @@ def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
     files = _install_files(project, overwrite=force) if force or not installed else []
     if patched_main is not None:
         main_path.write_text(patched_main)
-    _document_crash_setting(project)
-    if enable_crash:
+    _document_stop_setting(project)
+    if enable_stop:
         _set_dotenv(project)
         _set_app_yaml_env(project)
 
@@ -210,7 +227,7 @@ def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
         "directory": str(project),
         "installed": bool(files or patched_main),
         "updated": bool(installed and force),
-        "crash_enabled": enable_crash,
+        "stop_enabled": enable_stop,
         "files": files,
     }
     if getattr(obj, "output", "text") == "json":
@@ -222,8 +239,8 @@ def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
         "uv run start-server",
         "Open http://localhost:8000",
     ]
-    if not enable_crash:
-        next_steps.append("mason add ui --enable-crash .   # opt in to the crash/recovery demo")
+    if not enable_stop:
+        next_steps.append("mason add ui --enable-stop .   # opt in to the stop/start demo")
     else:
         next_steps.append("Deploy with --with-session-store to verify recovery across restarts")
     render.success(
@@ -236,7 +253,7 @@ def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
         ),
         fields={
             "Directory": str(project),
-            "Crash control": "enabled" if enable_crash else "disabled",
+            "Stop control": "enabled" if enable_stop else "disabled",
         },
         next_steps=next_steps,
     )

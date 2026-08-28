@@ -34,7 +34,9 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert (project / "ui/index.html").is_file()
     assert (project / "runtime/ui.py").is_file()
     assert (project / "tests/test_demo_ui.py").is_file()
+    assert (project / "tests/test_durability.py").is_file()
     assert (project / "tests/test_recovery.py").is_file()
+    assert (project / "agent/mason/durability.py").is_file()
     assert (project / "agent/mason/recovery.py").is_file()
     assert (project / "agent/tools/long_running.py").is_file()
     ui_script = (project / "ui/app.js").read_text()
@@ -44,35 +46,45 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert "renderSessionTranscript(items)" in ui_script
     assert "refreshSession({ hydrateChat: true })" in ui_script
     assert "/api/demo/recovery/" in ui_script
-    assert "startRecoverySequence" in ui_script
+    assert "async function startApp" in ui_script
+    assert "/api/demo/app/stop" in ui_script
+    assert "/api/demo/app/${encodeURIComponent(sessionId)}/start" in ui_script
     assert "Approve paused HITL" in (project / "ui/index.html").read_text()
     assert "tool_step_1" in (project / "agent/tools/long_running.py").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
     assert "install_ui(app, session_history=agent.agent.session_history)" in main
-    assert "MASON_DEMO_CRASH_ENABLED" in (project / ".env.example").read_text()
+    assert "MASON_DEMO_STOP_ENABLED" in (project / ".env.example").read_text()
 
 
-def test_add_ui_enables_crash_locally_and_when_deployed(tmp_path: pathlib.Path):
+def test_add_ui_enables_stop_locally_and_when_deployed(tmp_path: pathlib.Path):
     project = _project(tmp_path)
-    result = CliRunner().invoke(add, ["ui", "--enable-crash", str(project)], obj=_Ctx())
+    result = CliRunner().invoke(add, ["ui", "--enable-stop", str(project)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     env = (project / ".env").read_text()
     assert "DATABRICKS_CONFIG_PROFILE=DEFAULT" in env
-    assert "MASON_DEMO_CRASH_ENABLED=true" in env
+    assert "MASON_DEMO_STOP_ENABLED=true" in env
     app_yaml = (project / "app.yaml").read_text()
-    assert "name: MASON_DEMO_CRASH_ENABLED" in app_yaml
+    assert "name: MASON_DEMO_STOP_ENABLED" in app_yaml
     assert 'value: "true"' in app_yaml
 
 
-def test_add_ui_can_enable_crash_after_install(tmp_path: pathlib.Path):
+def test_add_ui_can_enable_stop_after_install(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
-    second = CliRunner().invoke(add, ["ui", "--enable-crash", str(project)], obj=_Ctx())
+    second = CliRunner().invoke(add, ["ui", "--enable-stop", str(project)], obj=_Ctx())
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
     assert "already installed" in second.output
-    assert "MASON_DEMO_CRASH_ENABLED=true" in (project / ".env").read_text()
+    assert "MASON_DEMO_STOP_ENABLED=true" in (project / ".env").read_text()
+
+
+def test_add_ui_keeps_enable_crash_as_hidden_compatibility_alias(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    result = CliRunner().invoke(add, ["ui", "--enable-crash", str(project)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "MASON_DEMO_STOP_ENABLED=true" in (project / ".env").read_text()
 
 
 def test_add_ui_force_refreshes_existing_install(tmp_path: pathlib.Path):
@@ -86,7 +98,8 @@ def test_add_ui_force_refreshes_existing_install(tmp_path: pathlib.Path):
 
     assert refreshed.exit_code == 0, refreshed.output
     assert "Updated agent demo UI" in refreshed.output
-    assert "startRecoverySequence" in (project / "ui/app.js").read_text()
+    assert "async function startApp" in (project / "ui/app.js").read_text()
+    assert (project / "agent/mason/durability.py").is_file()
     assert (project / "agent/mason/recovery.py").is_file()
 
 
@@ -125,4 +138,4 @@ def test_add_ui_json_output(tmp_path: pathlib.Path):
     payload = json.loads(result.output)
     assert payload["directory"] == str(project.resolve())
     assert payload["installed"] is True
-    assert payload["crash_enabled"] is False
+    assert payload["stop_enabled"] is False

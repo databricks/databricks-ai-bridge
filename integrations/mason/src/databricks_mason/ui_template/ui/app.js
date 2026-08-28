@@ -9,12 +9,19 @@ const elements = {
   composer: document.querySelector("#composer"),
   connectionStatus: document.querySelector("#connection-status"),
   copySession: document.querySelector("#copy-session"),
-  crashButton: document.querySelector("#crash-button"),
+  durabilityAttempt: document.querySelector("#durability-attempt"),
+  durabilityExecution: document.querySelector("#durability-execution"),
+  durabilityHeartbeat: document.querySelector("#durability-heartbeat"),
+  durabilityMode: document.querySelector("#durability-mode-value"),
+  durabilityOwner: document.querySelector("#durability-owner"),
+  durabilityStatus: document.querySelector("#durability-status"),
   emptyState: document.querySelector("#empty-state"),
   environmentBadge: document.querySelector("#environment-badge"),
   eventLog: document.querySelector("#event-log"),
   identitySummary: document.querySelector("#identity-summary"),
   identityValue: document.querySelector("#identity-value"),
+  heartbeatMode: document.querySelector("#heartbeat-mode-value"),
+  heartbeatStatus: document.querySelector("#heartbeat-status"),
   memoryFact: document.querySelector("#memory-fact"),
   memoryHelp: document.querySelector("#memory-help"),
   memoryMode: document.querySelector("#memory-mode-value"),
@@ -43,7 +50,8 @@ const elements = {
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
   sessionStoreLabel: document.querySelector("#session-store-label"),
-  startRecovery: document.querySelector("#start-recovery"),
+  startApp: document.querySelector("#start-app"),
+  stopApp: document.querySelector("#stop-app"),
   streamingMode: document.querySelector("#streaming-mode-value"),
   streamingStatus: document.querySelector("#streaming-status"),
   viewerValue: document.querySelector("#viewer-value"),
@@ -56,6 +64,9 @@ const state = {
   draftText: "",
   events: [],
   instanceId: null,
+  lastDurabilityAttempt: 0,
+  lastDurabilityHeartbeat: "",
+  lastRecoveryStatus: "",
   lastAssistantText: "",
   managedSessionId: "",
   mode: "streaming",
@@ -121,16 +132,21 @@ function setCapability(element, enabled) {
 }
 
 function recoveryInProgress() {
-  return Boolean(state.recovery?.worker_active || state.recovery?.needs_resume);
+  return Boolean(
+    state.recovery?.worker_active
+      || state.recovery?.owner_active
+      || state.recovery?.needs_resume,
+  );
 }
 
 function updateRecoveryControls() {
-  const canStart = state.config?.recovery.enabled && (!state.recovery || state.recovery.status === "not_started");
+  const canStart = state.config?.recovery.enabled
+    && (!state.recovery || state.recovery.status === "not_started" || state.recovery.needs_resume);
   const checkpointedSteps = state.recovery?.outputs?.length || 0;
-  const canCrash = state.config?.crash.enabled
+  const canStop = state.config?.app_control.stop_enabled
     && (state.pendingInterrupt || (state.recovery?.worker_active && checkpointedSteps >= 2));
-  elements.startRecovery.disabled = state.busy || !canStart;
-  elements.crashButton.disabled = state.busy || !canCrash;
+  elements.startApp.disabled = state.busy || !canStart;
+  elements.stopApp.disabled = state.busy || !canStop;
 }
 
 function formatJson(value) {
@@ -290,8 +306,8 @@ function handleInterrupt(interrupt) {
   elements.approvalSummary.textContent = interruptSummary(interrupt);
   elements.approvalPanel.hidden = false;
   appendMessage("system", interruptSummary(interrupt), "Approval required");
-  if (state.config?.crash.enabled && state.config?.session.durable) {
-    elements.recoveryStatus.textContent = "Paused run detected. Crash now, then approve it after restart.";
+  if (state.config?.app_control.stop_enabled && state.config?.session.durable) {
+    elements.recoveryStatus.textContent = "Paused run detected. Stop App, then approve it after restart.";
   }
 }
 
@@ -728,6 +744,15 @@ function resetConversation() {
   state.recovery = null;
   state.recoverySessionId = "";
   state.recoverySignature = "";
+  state.lastDurabilityAttempt = 0;
+  state.lastDurabilityHeartbeat = "";
+  state.lastRecoveryStatus = "";
+  elements.durabilityExecution.textContent = "Not started";
+  elements.durabilityExecution.title = "";
+  elements.durabilityAttempt.textContent = "—";
+  elements.durabilityOwner.textContent = "—";
+  elements.durabilityOwner.title = "";
+  elements.durabilityHeartbeat.textContent = "Not started";
   localStorage.removeItem("mason.demo.recovery");
   if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
   elements.approvalPanel.hidden = true;
@@ -746,7 +771,7 @@ async function loadConfig() {
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
-    elements.environmentBadge.textContent = config.crash.restart_managed ? "Databricks App" : "Local runtime";
+    elements.environmentBadge.textContent = config.app_control.restart_managed ? "Databricks App" : "Local runtime";
     elements.viewerValue.textContent = config.viewer;
     elements.identityValue.textContent = config.execution_identity;
     elements.identitySummary.textContent = `Agent executes as ${config.execution_identity}`;
@@ -754,10 +779,16 @@ async function loadConfig() {
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
+    elements.durabilityMode.textContent = config.durability.mode;
+    elements.heartbeatMode.textContent = config.heartbeat.enabled
+      ? `Every ${config.heartbeat.interval_seconds}s · stale after ${config.heartbeat.stale_after_seconds}s`
+      : "Not connected";
     setCapability(elements.streamingStatus, config.streaming.enabled);
     setCapability(elements.backgroundStatus, config.background.enabled);
     setCapability(elements.sessionStatus, config.session.history);
     setCapability(elements.memoryStatus, config.memory.enabled);
+    setCapability(elements.durabilityStatus, config.durability.enabled);
+    setCapability(elements.heartbeatStatus, config.heartbeat.enabled);
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
     elements.askMemory.disabled = state.busy || !config.memory.enabled;
@@ -774,10 +805,10 @@ async function loadConfig() {
         ? "Messages load from the in-process LangGraph checkpoint and remain available until the server restarts."
         : "The ID is stored in this browser and sent in every invocation body; session history is unavailable.";
     updateRecoveryControls();
-    elements.recoveryStatus.textContent = !config.crash.enabled
-      ? "Run mason add ui --enable-crash to opt in."
+    elements.recoveryStatus.textContent = !config.app_control.stop_enabled
+      ? "Run mason add ui --enable-stop to opt in."
       : !config.session.durable
-        ? "Crash is enabled, but the tool sequence needs a managed Session Store."
+        ? "Stop is enabled, but durability needs a managed Session Store."
         : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
     setConnection("online", "Connected");
     addEvent("runtime.config", config);
@@ -806,12 +837,18 @@ function recoveryStatusText(result) {
       ? "Recovered and completed. Earlier tool outputs were restored and skipped on this process."
       : "All tool steps completed. Start a new session to run the demo again.";
   }
-  if (result.needs_resume) return "Checkpoint found. Automatically resuming the first incomplete step…";
+  if (result.needs_resume) {
+    return `Heartbeat is stale. Starting attempt ${result.attempt + 1} from the first incomplete checkpoint…`;
+  }
+  if (result.owner_active && !result.worker_active) {
+    const age = Number(result.heartbeat_age_seconds || 0).toFixed(1);
+    return `Previous owner heartbeat is ${age}s old. Waiting until ${result.stale_after_seconds}s before takeover…`;
+  }
   if (result.worker_active && result.outputs.length >= 2) {
-    return `${result.outputs.length} steps are checkpointed. Crash now to test recovery.`;
+    return `${result.outputs.length} steps are checkpointed. Stop App now to test recovery.`;
   }
   if (result.worker_active) return `Running ${result.current_step || "the next tool"}…`;
-  return "Start the sequence, wait for a few completed outputs, then crash the app.";
+  return "Start App, wait for a few completed outputs, then stop the app process.";
 }
 
 function renderRecovery(result) {
@@ -843,7 +880,9 @@ function renderRecovery(result) {
     } else if (result.current_step === name) {
       detail.textContent = result.worker_active
         ? `Running on process ${result.instance_id}`
-        : "Will resume from this checkpoint";
+        : result.owner_active
+          ? `Owned by process ${result.owner_id}`
+          : "Will resume from this checkpoint";
     } else {
       detail.textContent = "Waiting";
     }
@@ -853,8 +892,46 @@ function renderRecovery(result) {
   }
 
   elements.recoveryStatus.textContent = recoveryStatusText(result);
+  elements.durabilityExecution.textContent = result.execution_id || "Not started";
+  elements.durabilityExecution.title = result.execution_id || "";
+  elements.durabilityAttempt.textContent = result.attempt || "—";
+  elements.durabilityOwner.textContent = result.owner_id || "—";
+  elements.durabilityOwner.title = result.owner_id || "";
+  elements.durabilityHeartbeat.textContent = result.heartbeat_at
+    ? `${Number(result.heartbeat_age_seconds || 0).toFixed(1)}s ago · ${result.heartbeat_fresh ? "fresh" : "stale"}`
+    : "Not started";
+
+  if (result.attempt && result.attempt !== state.lastDurabilityAttempt) {
+    state.lastDurabilityAttempt = result.attempt;
+    addEvent("durability.attempt", {
+      execution_id: result.execution_id,
+      attempt: result.attempt,
+      owner_id: result.owner_id,
+      atomic_claim: result.atomic_claim,
+      claim_mode: result.claim_mode,
+    });
+  }
+  if (result.heartbeat_at && result.heartbeat_at !== state.lastDurabilityHeartbeat) {
+    state.lastDurabilityHeartbeat = result.heartbeat_at;
+    addEvent("durability.heartbeat", {
+      execution_id: result.execution_id,
+      attempt: result.attempt,
+      owner_id: result.owner_id,
+      heartbeat_at: result.heartbeat_at,
+      stale_after_seconds: result.stale_after_seconds,
+    });
+  }
+  if (result.status === "stopped" && state.lastRecoveryStatus !== "stopped") {
+    addEvent("durability.stale", {
+      execution_id: result.execution_id,
+      attempt: result.attempt,
+      heartbeat_age_seconds: result.heartbeat_age_seconds,
+    });
+  }
+  state.lastRecoveryStatus = result.status;
   const signature = JSON.stringify([
     result.status,
+    result.attempt,
     result.current_step,
     result.worker_active,
     result.needs_resume,
@@ -875,14 +952,14 @@ function scheduleRecoveryPoll(sessionId, delay = 1000) {
 }
 
 async function resumeRecoverySequence(sessionId) {
-  const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}/resume`, {
+  const response = await fetch(`/api/demo/app/${encodeURIComponent(sessionId)}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
   const result = await jsonResponse(response);
   renderRecovery(result);
-  addEvent("recovery.resume", result);
+    addEvent("app.start", result);
   scheduleRecoveryPoll(sessionId);
   return result;
 }
@@ -899,7 +976,7 @@ async function monitorRecovery(sessionId, { autoResume = false } = {}) {
     renderRecovery(result);
     setConnection("online", "Connected");
     if (result.needs_resume && autoResume) return resumeRecoverySequence(sessionId);
-    if (result.worker_active || result.needs_resume) scheduleRecoveryPoll(sessionId);
+    if (result.status === "running" || result.needs_resume) scheduleRecoveryPoll(sessionId);
     return result;
   } catch (error) {
     if (recoveryInProgress()) {
@@ -912,22 +989,22 @@ async function monitorRecovery(sessionId, { autoResume = false } = {}) {
   }
 }
 
-async function startRecoverySequence() {
+async function startApp() {
   if (state.busy || !state.config?.recovery.enabled) return;
   const sessionId = ensureSessionId();
   state.recoverySessionId = sessionId;
   localStorage.setItem("mason.demo.recovery", sessionId);
-  elements.startRecovery.disabled = true;
-  elements.recoveryStatus.textContent = "Starting checkpointed tool sequence…";
+  elements.startApp.disabled = true;
+  elements.recoveryStatus.textContent = "Starting durable app work…";
   try {
-    const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}/start`, {
+    const response = await fetch(`/api/demo/app/${encodeURIComponent(sessionId)}/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
     const result = await jsonResponse(response);
     renderRecovery(result);
-    addEvent("recovery.start", result);
+    addEvent("app.start", result);
     scheduleRecoveryPoll(sessionId);
   } catch (error) {
     elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
@@ -960,18 +1037,18 @@ async function waitForRestart(previousInstanceId) {
   throw new Error("The app did not restart within three minutes. Local runs need an auto-restarting supervisor.");
 }
 
-async function restartRuntime() {
+async function stopCurrentApp() {
   const previousInstanceId = state.instanceId;
-  setBusy(true, "Restarting");
-  elements.recoveryStatus.textContent = "Crashing this process…";
+  setBusy(true, "Stopping");
+  elements.recoveryStatus.textContent = "Stopping the current app process…";
   try {
-    const response = await fetch("/api/demo/crash", {
+    const response = await fetch("/api/demo/app/stop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
     const result = await jsonResponse(response);
-    addEvent("runtime.crash", result);
+    addEvent("app.stop", result);
     await waitForRestart(previousInstanceId);
     await loadConfig();
   } finally {
@@ -979,11 +1056,11 @@ async function restartRuntime() {
   }
 }
 
-async function crashAndRecover() {
-  if (state.busy || !state.config?.crash.enabled) return;
+async function stopAndRecover() {
+  if (state.busy || !state.config?.app_control.stop_enabled) return;
   if (state.pendingInterrupt) {
     try {
-      await restartRuntime();
+      await stopCurrentApp();
       elements.approvalPanel.hidden = false;
       elements.recoveryStatus.textContent = "New process is ready. Approve or reject the same paused run.";
     } catch (error) {
@@ -993,13 +1070,13 @@ async function crashAndRecover() {
     return;
   }
   if (!state.recovery?.worker_active || !state.recoverySessionId) {
-    appendError(new Error("Start the checkpointed tool sequence before crashing the app."));
+    appendError(new Error("Start App before stopping the app process."));
     return;
   }
   const sessionId = state.recoverySessionId;
   try {
-    await restartRuntime();
-    elements.recoveryStatus.textContent = "Process restarted. Loading the durable checkpoint…";
+    await stopCurrentApp();
+    elements.recoveryStatus.textContent = "Host restarted. Waiting for stale-heartbeat takeover…";
     await monitorRecovery(sessionId, { autoResume: true });
   } catch (error) {
     elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
@@ -1078,8 +1155,8 @@ elements.askMemory.addEventListener("click", async () => {
   await sendText(`Use the recall tool to find what you remember about ${query}.`, "sync").catch(() => {});
 });
 
-elements.startRecovery.addEventListener("click", startRecoverySequence);
-elements.crashButton.addEventListener("click", crashAndRecover);
+elements.startApp.addEventListener("click", startApp);
+elements.stopApp.addEventListener("click", stopAndRecover);
 
 setSessionId(state.sessionId || makeSessionId());
 loadConfig().catch((error) => {
