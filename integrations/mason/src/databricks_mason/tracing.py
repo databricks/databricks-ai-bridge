@@ -51,14 +51,37 @@ def _uc_trace_symbols():
     """
     try:
         from mlflow.entities import UCSchemaLocation  # noqa: PLC0415 - lazy, version-specific
-        from mlflow.tracing.enablement import set_experiment_trace_location  # noqa: PLC0415
+        from mlflow.tracing import (  # noqa: PLC0415
+            set_experiment_trace_location,
+            unset_experiment_trace_location,
+        )
 
-        return UCSchemaLocation, set_experiment_trace_location
+        return UCSchemaLocation, set_experiment_trace_location, unset_experiment_trace_location
     except ImportError as exc:
         raise AgentCliError(
             "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
             hint="Upgrade it: pip install 'mlflow[databricks]>=3.9.0'",
         ) from exc
+
+
+def _link_trace_location(set_location, unset_location, location, exp_id: str, relink: bool) -> None:
+    """Link the experiment to the UC schema, handling the already-linked case.
+
+    MLflow raises if the experiment is already bound to a storage location. With `relink`, unset the
+    existing binding first and re-link; otherwise surface a clean error pointing at `--relink`.
+    """
+    try:
+        set_location(location=location, experiment_id=exp_id)
+    except Exception as exc:  # noqa: BLE001 - mlflow raises a generic error when already linked
+        if "already" not in str(exc).lower():
+            raise
+        if not relink:
+            raise AgentCliError(
+                "This experiment is already linked to a trace storage location.",
+                hint="Re-run with --relink to replace the existing link.",
+            ) from exc
+        unset_location(location=location, experiment_id=exp_id)
+        set_location(location=location, experiment_id=exp_id)
 
 
 def _configure(mlflow, profile: Optional[str], warehouse_id: Optional[str]) -> None:
@@ -99,6 +122,11 @@ def _split_destination(destination: str) -> tuple[str, str]:
     return catalog, schema
 
 
+def _experiment_url(host: str, experiment_id: str) -> str:
+    """Workspace URL for an experiment's Traces tab."""
+    return f"{host.rstrip('/')}/ml/experiments/{experiment_id}?compareRunsMode=TRACES"
+
+
 # --- group ------------------------------------------------------------------
 
 
@@ -121,31 +149,50 @@ def tracing() -> None:
     default=None,
     help="SQL warehouse id for trace queries (MLFLOW_TRACING_SQL_WAREHOUSE_ID).",
 )
+@click.option(
+    "--relink",
+    is_flag=True,
+    help="Replace an existing trace-location link on the experiment (unset, then re-link).",
+)
 @click.pass_obj
-def tracing_setup(obj, catalog, schema, experiment, warehouse_id) -> None:
+def tracing_setup(obj, catalog, schema, experiment, warehouse_id, relink) -> None:
     """Link a UC schema to an MLflow experiment so agent traces land in Unity Catalog."""
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, warehouse_id)
     exp_name = experiment or _DEFAULT_EXPERIMENT
     exp_id = _ensure_experiment(mlflow, exp_name)
 
-    UCSchemaLocation, set_experiment_trace_location = _uc_trace_symbols()
-    set_experiment_trace_location(
-        location=UCSchemaLocation(catalog_name=catalog, schema_name=schema), experiment_id=exp_id
+    UCSchemaLocation, set_location, unset_location = _uc_trace_symbols()
+    _link_trace_location(
+        set_location,
+        unset_location,
+        UCSchemaLocation(catalog_name=catalog, schema_name=schema),
+        exp_id,
+        relink,
     )
     destination = f"{catalog}.{schema}"
+    url = _experiment_url(obj.client().host, exp_id)
 
     if obj.output == "json":
         render.emit_json(
-            {"experiment": exp_name, "experiment_id": exp_id, "destination": destination}
+            {
+                "experiment": exp_name,
+                "experiment_id": exp_id,
+                "destination": destination,
+                "url": url,
+            }
         )
         return
+    # --with-traces defaults the experiment to _DEFAULT_EXPERIMENT, so only spell out
+    # --traces-experiment when the user picked a non-default one.
+    exp_flag = "" if exp_name == _DEFAULT_EXPERIMENT else f" --traces-experiment {exp_name}"
     render.success(
         f"Linked traces for '{exp_name}' to {destination}",
-        fields={"Experiment": exp_name, "Destination": destination},
+        fields={"Experiment": exp_name, "Destination": destination, "View traces": url},
         next_steps=[
+            f"mason dev --with-traces {destination}{exp_flag}",
+            f"mason deploy <name> --with-traces {destination}{exp_flag}",
             f"mason tracing instrument --destination {destination}",
-            f"mason deploy <name> --source ./app --with-traces {destination}",
             f"mason tracing list --experiment {exp_name}",
         ],
     )

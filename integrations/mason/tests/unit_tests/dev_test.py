@@ -15,6 +15,9 @@ class _Ctx:
         self.output = output
         self.profile = profile
 
+    def client(self):  # only used when --with-* flags are passed
+        return mock.Mock()
+
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")  # no .venv -> auto-prepare
@@ -101,6 +104,43 @@ def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "--entry-point" not in db.call_args.args[0]  # nothing to strip -> use app.yaml as-is
     assert not (tmp_path / ".mason-dev.app.yaml").exists()
+
+
+def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
+    import yaml
+
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    with (
+        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(
+            dev_mod,
+            "resolve_store_env",
+            return_value={"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"},
+        ) as resolve,
+    ):
+        result = CliRunner().invoke(
+            dev_mod.dev,
+            ["--source", str(tmp_path), "--with-session-store", "s", "--with-memory-store", "m"],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    resolve.assert_called_once()  # same resolution path as deploy
+    env = {e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]}
+    assert env == {"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"}  # patched before run
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]
+
+
+def test_dev_without_flags_does_not_touch_app_yaml(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".venv").mkdir()
+    with (
+        mock.patch.object(dev_mod, "_databricks"),
+        mock.patch.object(dev_mod, "resolve_store_env") as resolve,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    resolve.assert_not_called()  # no --with-* -> no store resolution, app.yaml untouched
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import time
 from typing import Any, Optional
 
 import click
@@ -22,7 +23,7 @@ from databricks_mason import memory_store_access, render, session_store_access, 
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
-from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
+from databricks_mason.tracing import _DEFAULT_EXPERIMENT, TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
@@ -51,6 +52,34 @@ def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
         return json.loads(result.stdout).get("service_principal_client_id")
     except json.JSONDecodeError:
         return None
+
+
+def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
+    """The app's compute state (e.g. RUNNING), or None if it can't be read."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("compute_status", {}).get("state")
+    except json.JSONDecodeError:
+        return None
+
+
+def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -> None:
+    """Block until a just-created app's compute is RUNNING (or raise on timeout).
+
+    `apps create` returns before compute is provisioned, but `apps deploy` requires RUNNING — so a
+    first deploy races without this wait.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _app_compute_state(name, profile) == "ACTIVE":
+            return
+        time.sleep(5)
+    raise AgentCliError(
+        f"App '{name}' did not reach a running state within {timeout_s}s.",
+        hint=f"Check `mason deployments get {name}`, then re-run deploy once it's running.",
+    )
 
 
 # --- app.yaml manifest handling ---------------------------------------------
@@ -113,6 +142,47 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
     store = client.get_memory_store(memory_store)
     backend_id = field(field(store, "storage_backend") or {}, "backend_id")
     return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
+
+
+def resolve_store_env(
+    client,
+    *,
+    memory_store: Optional[str],
+    session_store: Optional[str],
+    traces_destination: Optional[str],
+    traces_experiment: Optional[str],
+    create_stores: bool,
+) -> dict[str, str]:
+    """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
+
+    Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
+    way. With `create_stores`, missing stores are created (idempotent); otherwise they must already
+    exist. The memory store resolves to its bare id (the runtime re-adds the `memory-stores/` prefix
+    when building the entries URL); the session store and trace destination are used verbatim.
+    """
+    env: dict[str, str] = {}
+    if memory_store:
+        store = (
+            _ensure_memory_store(client, memory_store)
+            if create_stores
+            else client.get_memory_store(memory_store)
+        )
+        store_name = field(store, "name") or memory_store
+        env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
+    if session_store:
+        if create_stores:
+            _ensure_session_store(client, session_store)
+        env[_SESSION_ENV] = session_store
+    if traces_destination:
+        env[TRACES_DEST_ENV] = traces_destination
+        # The agent enables tracing only when BOTH a destination and an experiment are set. The
+        # destination's experiment is bound server-side by `mason tracing setup` (which defaults to
+        # _DEFAULT_EXPERIMENT), so default the experiment here too — otherwise --with-traces alone
+        # would ship a half-config that silently leaves tracing disabled.
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment or _DEFAULT_EXPERIMENT
+    elif traces_experiment:
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment
+    return env
 
 
 def _grant_store_access(
@@ -219,29 +289,21 @@ def deploy(
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.
-    env_updates: dict[str, str] = {}
+    env_updates = resolve_store_env(
+        client,
+        memory_store=memory_store,
+        session_store=session_store,
+        traces_destination=traces_destination,
+        traces_experiment=traces_experiment,
+        create_stores=create_stores,
+    )
     provisioned: dict[str, Any] = {}
-    if memory_store:
-        store = (
-            _ensure_memory_store(client, memory_store)
-            if create_stores
-            else client.get_memory_store(memory_store)
-        )
-        # The API's store name is `memory-stores/<id>`; the agent runtime wants the bare <id>
-        # (it re-adds the `memory-stores/` prefix when building the entries URL), so strip it.
-        store_name = field(store, "name") or memory_store
-        env_updates[_MEMORY_ENV] = store_name.split("/", 1)[-1]
+    if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
-    if session_store:
-        if create_stores:
-            _ensure_session_store(client, session_store)
-        env_updates[_SESSION_ENV] = session_store
-        provisioned["Session store"] = session_store
+    if _SESSION_ENV in env_updates:
+        provisioned["Session store"] = env_updates[_SESSION_ENV]
     if traces_destination:
-        env_updates[TRACES_DEST_ENV] = traces_destination
         provisioned["Traces"] = traces_destination
-    if traces_experiment:
-        env_updates[TRACES_EXPERIMENT_ENV] = traces_experiment
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -255,6 +317,9 @@ def deploy(
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
         _databricks(["apps", "create", name], obj.profile)
+        # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
+        # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
+        _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own

@@ -15,6 +15,7 @@ from typing import Optional
 import click
 import yaml
 
+from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
 
@@ -39,14 +40,57 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     "exists yet, and reuse it otherwise. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
+@click.option(
+    "--with-memory-store",
+    "memory_store",
+    default=None,
+    help="Memory store display name to wire in via AGENT_MEMORY_STORE (same as `mason deploy`).",
+)
+@click.option(
+    "--with-session-store",
+    "session_store",
+    default=None,
+    help="Session store name to wire in via AGENT_SESSION_STORE (same as `mason deploy`).",
+)
+@click.option(
+    "--with-traces",
+    "traces_destination",
+    default=None,
+    help="UC trace destination 'catalog.schema' to wire in via MLFLOW_TRACING_DESTINATION.",
+)
+@click.option(
+    "--traces-experiment",
+    default=None,
+    help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
+)
+@click.option(
+    "--create-stores",
+    is_flag=True,
+    help="Create the referenced stores if they don't exist (idempotent).",
+)
 @click.pass_obj
-def dev(obj, source: str, prepare_environment: Optional[bool], app_port: Optional[int]) -> None:
+def dev(
+    obj,
+    source: str,
+    prepare_environment: Optional[bool],
+    app_port: Optional[int],
+    memory_store: Optional[str],
+    session_store: Optional[str],
+    traces_destination: Optional[str],
+    traces_experiment: Optional[str],
+    create_stores: bool,
+) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
     Reads the app's command + env from ``app.yaml`` and runs it the way the Apps runtime does — so
     local behavior matches a deployment. Auth uses the profile (``-p`` / ``mason login``), same as
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
+
+    The ``--with-*`` flags wire an agent's stores/traces into ``app.yaml`` before running, exactly as
+    ``mason deploy`` does — so you can iterate locally against a real store without hand-editing env.
+    Locally the store owner (you) already has access, so no service-principal grant is needed here;
+    that grant happens at ``mason deploy`` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -55,6 +99,19 @@ def dev(obj, source: str, prepare_environment: Optional[bool], app_port: Optiona
             f"No app.yaml in '{source_dir}'.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
+
+    # Wire any requested stores/traces into app.yaml first, so run-local reads the updated env.
+    if memory_store or session_store or traces_destination or traces_experiment:
+        env_updates = resolve_store_env(
+            obj.client(),
+            memory_store=memory_store,
+            session_store=session_store,
+            traces_destination=traces_destination,
+            traces_experiment=traces_experiment,
+            create_stores=create_stores,
+        )
+        if env_updates:
+            _upsert_manifest_env(source_dir, env_updates)
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.

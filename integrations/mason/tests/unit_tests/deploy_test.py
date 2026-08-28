@@ -97,6 +97,53 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem"
 
 
+def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
+    # A brand-new app isn't RUNNING right after `apps create`; deploy must wait, or it races and
+    # fails ("not in RUNNING state"). Verify create -> wait -> sync/deploy ordering.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)  # app doesn't exist yet
+    waited = {"called": False}
+    monkeypatch.setattr(
+        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert ["apps", "create", "myapp"] in calls
+    assert waited["called"], "must wait for the new app to be running before deploying"
+    # the wait happens after create and before sync/deploy
+    create_i = calls.index(["apps", "create", "myapp"])
+    sync_i = next(i for i, a in enumerate(calls) if a[:1] == ["sync"])
+    assert create_i < sync_i
+
+
+def test_wait_for_running_returns_when_compute_active(monkeypatch):
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "ACTIVE")
+    deploy_mod._wait_for_running("app", "prof", timeout_s=1)  # returns without raising
+
+
+def test_wait_for_running_times_out(monkeypatch):
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "STARTING")
+    monkeypatch.setattr(deploy_mod.time, "sleep", lambda s: None)  # don't actually wait
+    try:
+        deploy_mod._wait_for_running("app", "prof", timeout_s=0)
+        raise AssertionError("expected AgentCliError on timeout")
+    except AgentCliError:
+        pass
+
+
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
@@ -128,6 +175,21 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
     env = {e["name"]: e["value"] for e in doc["env"]}
     assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
+
+
+def test_with_traces_defaults_the_experiment():
+    # --with-traces alone must still set the experiment, or the agent ships tracing half-configured
+    # (destination set, experiment missing) and silently disables it.
+    env = deploy_mod.resolve_store_env(
+        _FakeClient(),
+        memory_store=None,
+        session_store=None,
+        traces_destination="cat.schema",
+        traces_experiment=None,
+        create_stores=False,
+    )
+    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
+    assert env["MLFLOW_EXPERIMENT_NAME"] == deploy_mod._DEFAULT_EXPERIMENT
 
 
 def _run_deploy(src, monkeypatch, extra_args):
