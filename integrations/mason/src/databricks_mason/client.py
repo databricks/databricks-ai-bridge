@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
 
+from databricks_mason import models
 from databricks_mason.errors import AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
@@ -21,6 +22,11 @@ _BASE = "/api/agents/v1"
 def _query(**kwargs: Any) -> dict[str, Any]:
     """Build a query dict, dropping None and empty values."""
     return {k: v for k, v in kwargs.items() if v is not None and v != ""}
+
+
+def _as(cls: type, resp: Any) -> Any:
+    """Wrap a JSON response in a typed model, passing non-dicts through unchanged."""
+    return cls(resp) if isinstance(resp, dict) else resp
 
 
 def memory_store_path(name: str) -> str:
@@ -75,29 +81,40 @@ class MasonClient:
 
     # --- memory stores -------------------------------------------------------
 
-    def create_memory_store(self, display_name: str, description: Optional[str] = None) -> dict:
+    def create_memory_store(
+        self, display_name: str, description: Optional[str] = None
+    ) -> models.MemoryStore:
         body = _query(display_name=display_name, description=description)
-        return self._do("POST", f"{_BASE}/memory-stores", body=body)
+        return _as(models.MemoryStore, self._do("POST", f"{_BASE}/memory-stores", body=body))
 
-    def get_memory_store(self, name: str) -> dict:
-        return self._do("GET", f"{_BASE}/{memory_store_path(name)}")
+    def get_memory_store(self, name: str) -> models.MemoryStore:
+        return _as(models.MemoryStore, self._do("GET", f"{_BASE}/{memory_store_path(name)}"))
 
     def list_memory_stores(
         self, page_size: Optional[int] = None, page_token: Optional[str] = None
-    ) -> dict:
-        return self._do(
-            "GET",
-            f"{_BASE}/memory-stores",
-            query=_query(page_size=page_size, page_token=page_token),
+    ) -> models.MemoryStoreList:
+        return _as(
+            models.MemoryStoreList,
+            self._do(
+                "GET",
+                f"{_BASE}/memory-stores",
+                query=_query(page_size=page_size, page_token=page_token),
+            ),
         )
 
     def update_memory_store(
         self, name: str, display_name: Optional[str] = None, description: Optional[str] = None
-    ) -> dict:
+    ) -> models.MemoryStore:
         body = _query(display_name=display_name, description=description)
         mask = ",".join(body.keys())
-        return self._do(
-            "PATCH", f"{_BASE}/{memory_store_path(name)}", query=_query(update_mask=mask), body=body
+        return _as(
+            models.MemoryStore,
+            self._do(
+                "PATCH",
+                f"{_BASE}/{memory_store_path(name)}",
+                query=_query(update_mask=mask),
+                body=body,
+            ),
         )
 
     def delete_memory_store(self, name: str) -> dict:
@@ -114,7 +131,7 @@ class MasonClient:
         description: Optional[str] = None,
         session_id: Optional[str] = None,
         source_type: Optional[str] = None,
-    ) -> dict:
+    ) -> models.MemoryEntry:
         body = _query(
             actor_id=actor_id,
             path=path,
@@ -123,10 +140,15 @@ class MasonClient:
             session_id=session_id,
             source_type=source_type,
         )
-        return self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries", body=body)
+        return _as(
+            models.MemoryEntry,
+            self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries", body=body),
+        )
 
-    def get_memory_entry(self, store: str, entry: str) -> dict:
-        return self._do("GET", f"{_BASE}/{memory_entry_path(store, entry)}")
+    def get_memory_entry(self, store: str, entry: str) -> models.MemoryEntry:
+        return _as(
+            models.MemoryEntry, self._do("GET", f"{_BASE}/{memory_entry_path(store, entry)}")
+        )
 
     def list_memory_entries(
         self,
@@ -136,24 +158,30 @@ class MasonClient:
         session_id: Optional[str] = None,
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
-    ) -> dict:
-        return self._do(
-            "GET",
-            f"{_BASE}/{memory_store_path(store)}/entries",
-            query=_query(
-                actor_id=actor_id,
-                path_prefix=path_prefix,
-                session_id=session_id,
-                page_size=page_size,
-                page_token=page_token,
+    ) -> models.MemoryEntryList:
+        return _as(
+            models.MemoryEntryList,
+            self._do(
+                "GET",
+                f"{_BASE}/{memory_store_path(store)}/entries",
+                query=_query(
+                    actor_id=actor_id,
+                    path_prefix=path_prefix,
+                    session_id=session_id,
+                    page_size=page_size,
+                    page_token=page_token,
+                ),
             ),
         )
 
     def search_memory_entries(
         self, store: str, actor_id: str, query: str, limit: Optional[int] = None
-    ) -> dict:
+    ) -> models.MemorySearchResult:
         body = _query(actor_id=actor_id, query=query, limit=limit)
-        return self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries:search", body=body)
+        return _as(
+            models.MemorySearchResult,
+            self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries:search", body=body),
+        )
 
     def update_memory_entry(
         self,
@@ -161,9 +189,12 @@ class MasonClient:
         entry: str,
         content: Optional[str] = None,
         description: Optional[str] = None,
-    ) -> dict:
+    ) -> models.MemoryEntry:
         body = _query(content=content, description=description)
-        return self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body)
+        return _as(
+            models.MemoryEntry,
+            self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
+        )
 
     def delete_memory_entry(self, store: str, entry: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{memory_entry_path(store, entry)}")
@@ -172,31 +203,40 @@ class MasonClient:
 
     def create_session_store(
         self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
-    ) -> dict:
+    ) -> models.SessionStore:
         body = _query(description=description, metadata=metadata)
-        return self._do(
-            "POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body
+        return _as(
+            models.SessionStore,
+            self._do(
+                "POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body
+            ),
         )
 
-    def get_session_store(self, name: str) -> dict:
-        return self._do("GET", f"{_BASE}/session-stores/{name}")
+    def get_session_store(self, name: str) -> models.SessionStore:
+        return _as(models.SessionStore, self._do("GET", f"{_BASE}/session-stores/{name}"))
 
     def list_session_stores(
         self, page_size: Optional[int] = None, page_token: Optional[str] = None
-    ) -> dict:
-        return self._do(
-            "GET",
-            f"{_BASE}/session-stores",
-            query=_query(page_size=page_size, page_token=page_token),
+    ) -> models.SessionStoreList:
+        return _as(
+            models.SessionStoreList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores",
+                query=_query(page_size=page_size, page_token=page_token),
+            ),
         )
 
     def update_session_store(
         self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
-    ) -> dict:
+    ) -> models.SessionStore:
         body = _query(description=description, metadata=metadata)
         mask = ",".join(body.keys())
-        return self._do(
-            "PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body
+        return _as(
+            models.SessionStore,
+            self._do(
+                "PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body
+            ),
         )
 
     def delete_session_store(self, name: str) -> dict:
@@ -211,13 +251,16 @@ class MasonClient:
         session_id: Optional[str] = None,
         parent_session_id: Optional[str] = None,
         metadata: Optional[dict] = None,
-    ) -> dict:
+    ) -> models.Session:
         body = _query(actor_id=actor_id, parent_session_id=parent_session_id, metadata=metadata)
-        return self._do(
-            "POST",
-            f"{_BASE}/session-stores/{store}/sessions",
-            query=_query(session_id=session_id),
-            body=body,
+        return _as(
+            models.Session,
+            self._do(
+                "POST",
+                f"{_BASE}/session-stores/{store}/sessions",
+                query=_query(session_id=session_id),
+                body=body,
+            ),
         )
 
     def list_sessions(
@@ -227,26 +270,34 @@ class MasonClient:
         order_by: Optional[str] = None,
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
-    ) -> dict:
-        return self._do(
-            "GET",
-            f"{_BASE}/session-stores/{store}/sessions",
-            query=_query(
-                filter=filter, order_by=order_by, page_size=page_size, page_token=page_token
+    ) -> models.SessionList:
+        return _as(
+            models.SessionList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores/{store}/sessions",
+                query=_query(
+                    filter=filter, order_by=order_by, page_size=page_size, page_token=page_token
+                ),
             ),
         )
 
-    def get_session(self, session_id: str, store: Optional[str] = None) -> dict:
+    def get_session(self, session_id: str, store: Optional[str] = None) -> models.Session:
         if store:
-            return self._do("GET", f"{_BASE}/session-stores/{store}/sessions/{session_id}")
-        return self._do("GET", f"{_BASE}/sessions/{session_id}")
+            path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
+        else:
+            path = f"{_BASE}/sessions/{session_id}"
+        return _as(models.Session, self._do("GET", path))
 
-    def update_session(self, store: str, session_id: str, metadata: dict) -> dict:
-        return self._do(
-            "PATCH",
-            f"{_BASE}/session-stores/{store}/sessions/{session_id}",
-            query={"update_mask": "metadata"},
-            body=_query(metadata=metadata),
+    def update_session(self, store: str, session_id: str, metadata: dict) -> models.Session:
+        return _as(
+            models.Session,
+            self._do(
+                "PATCH",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}",
+                query={"update_mask": "metadata"},
+                body=_query(metadata=metadata),
+            ),
         )
 
     def delete_session(self, store: str, session_id: str, force: bool = False) -> dict:
@@ -264,7 +315,7 @@ class MasonClient:
         up_to_item_id: Optional[str] = None,
         session_id: Optional[str] = None,
         metadata: Optional[dict] = None,
-    ) -> dict:
+    ) -> models.Session:
         body = _query(
             source_session_id=source_session_id,
             actor_id=actor_id,
@@ -272,7 +323,10 @@ class MasonClient:
             session_id=session_id,
             metadata=metadata,
         )
-        return self._do("POST", f"{_BASE}/session-stores/{store}/sessions:fork", body=body)
+        return _as(
+            models.Session,
+            self._do("POST", f"{_BASE}/session-stores/{store}/sessions:fork", body=body),
+        )
 
     # --- session items -------------------------------------------------------
 
@@ -283,22 +337,35 @@ class MasonClient:
         order_by: Optional[str] = None,
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
-    ) -> dict:
-        return self._do(
-            "GET",
-            f"{_BASE}/session-stores/{store}/sessions/{session_id}/items",
-            query=_query(order_by=order_by, page_size=page_size, page_token=page_token),
+    ) -> models.SessionItemList:
+        return _as(
+            models.SessionItemList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/items",
+                query=_query(order_by=order_by, page_size=page_size, page_token=page_token),
+            ),
         )
 
-    def append_session_items(self, store: str, session_id: str, items: list[dict]) -> dict:
+    def append_session_items(
+        self, store: str, session_id: str, items: list[dict]
+    ) -> models.SessionItemList:
         body = {"items": [{"data": item} for item in items]}
-        return self._do(
-            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:append", body=body
+        return _as(
+            models.SessionItemList,
+            self._do(
+                "POST",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:append",
+                body=body,
+            ),
         )
 
-    def pop_session_item(self, store: str, session_id: str) -> dict:
-        return self._do(
-            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:pop", body={}
+    def pop_session_item(self, store: str, session_id: str) -> models.PoppedSessionItem:
+        return _as(
+            models.PoppedSessionItem,
+            self._do(
+                "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:pop", body={}
+            ),
         )
 
     def clear_session_items(self, store: str, session_id: str) -> dict:

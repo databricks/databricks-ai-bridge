@@ -16,10 +16,40 @@ its default resolution. API errors surface as `AgentCliError`.
 
 from databricks_mason.client import MasonClient, memory_entry_path, memory_store_path
 from databricks_mason.errors import AgentCliError
+from databricks_mason.models import (
+    MemoryEntry,
+    MemoryEntryList,
+    MemorySearchHit,
+    MemorySearchResult,
+    MemoryStore,
+    MemoryStoreList,
+    PoppedSessionItem,
+    Session,
+    SessionItem,
+    SessionItemList,
+    SessionList,
+    SessionStore,
+    SessionStoreList,
+    StorageBackend,
+)
 
 __all__ = [
     "MasonClient",
     "AgentCliError",
     "memory_store_path",
     "memory_entry_path",
+    "MemoryStore",
+    "MemoryStoreList",
+    "MemoryEntry",
+    "MemoryEntryList",
+    "MemorySearchResult",
+    "MemorySearchHit",
+    "StorageBackend",
+    "SessionStore",
+    "SessionStoreList",
+    "Session",
+    "SessionList",
+    "SessionItem",
+    "SessionItemList",
+    "PoppedSessionItem",
 ]

@@ -56,13 +56,18 @@ from databricks_mason import MasonClient
 client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
 
 store = client.create_memory_store("my-store")
-client.create_memory_entry("my-store", actor_id="alice", path="notes/1.md", content="hi")
-entries = client.list_memory_entries("my-store", actor_id="alice")
+print(store.name, store.display_name)  # typed attribute access
+
+client.create_memory_entry("my-store", actor_id="alice", path="/notes/1.md", content="hi")
+for entry in client.list_memory_entries("my-store", actor_id="alice").entries:
+    print(entry.path, entry.content)
 ```
 
-Each method maps to one `/api/agents/v1` operation and returns the raw JSON response
-dict. API errors raise `databricks_mason.AgentCliError`. Deployment, sandbox, and
-tracing remain CLI-only.
+Each method maps to one `/api/agents/v1` operation. Responses come back as typed
+models (`MemoryStore`, `Session`, `SessionItemList`, ...) that expose attribute
+accessors (`store.name`) while remaining plain dicts underneath — so `store["name"]`,
+`json.dumps(store)`, and any new server-side fields keep working. API errors raise
+`databricks_mason.AgentCliError`. Deployment, sandbox, and tracing remain CLI-only.
 
 ## Commands
 
