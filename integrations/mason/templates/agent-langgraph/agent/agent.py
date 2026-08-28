@@ -9,7 +9,6 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
-from uuid_utils import uuid7
 
 from agent.mason import mcp_runtime, tracing
 from agent.mason.memory import memory_tools
@@ -35,15 +34,6 @@ def configure() -> None:
     tracing.configure()
 
 
-def _workspace_client() -> WorkspaceClient:
-    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-    if profile:
-        os.environ.pop("DATABRICKS_HOST", None)
-        os.environ.pop("DATABRICKS_TOKEN", None)
-        return WorkspaceClient(profile=profile)
-    return WorkspaceClient()
-
-
 def _check_databricks_auth() -> None:
     """Fail fast at startup with a clear message if Databricks auth isn't configured.
 
@@ -52,7 +42,7 @@ def _check_databricks_auth() -> None:
     the model client uses, so the failure is immediate and actionable.
     """
     try:
-        _workspace_client()
+        WorkspaceClient()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
         target = (
@@ -75,7 +65,7 @@ async def create_agent_graph():
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
     return create_agent(
-        model=ChatDatabricks(endpoint=MODEL, workspace_client=_workspace_client()),
+        model=ChatDatabricks(endpoint=MODEL),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),
@@ -83,11 +73,12 @@ async def create_agent_graph():
 
 
 def _session_id(request: dict) -> str:
-    """The request's session id (for multi-turn / resume), or a fresh one for a new conversation.
+    """Return the session id derived by the runtime from the Apps routing cookie.
 
-    The runtime passes the request body's ``session_id`` through before calling the handler.
+    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
+    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
     """
-    return str(request.get("session_id") or uuid7())
+    return str(request["session_id"])
 
 
 async def invoke_handler(request: dict) -> dict:

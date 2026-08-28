@@ -17,20 +17,17 @@ from pydantic import BaseModel, Field
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = recovery.process_id()
-_STOP_ENV = "MASON_DEMO_STOP_ENABLED"
-_LEGACY_CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
 _MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 _MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
-_PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 _AGENTS_API = "/api/agents/v1"
+
 
 class MemoryEntryRequest(BaseModel):
     path: str = Field(min_length=1, pattern=r"^/")
     content: str = Field(min_length=1)
     description: str | None = None
-    session_id: str | None = None
 
 
 class MemorySearchRequest(BaseModel):
@@ -38,20 +35,8 @@ class MemorySearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=100)
 
 
-class SessionRequest(BaseModel):
-    session_id: str = Field(min_length=1)
-
-
 class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
-
-
-def _enabled(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _stop_enabled() -> bool:
-    return _enabled(_STOP_ENV) or _enabled(_LEGACY_CRASH_ENV)
 
 
 def _execution_identity() -> str:
@@ -59,7 +44,9 @@ def _execution_identity() -> str:
         return "Databricks App service principal"
     profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
     return (
-        f"Local Databricks profile: {profile}" if profile else "Databricks default authentication"
+        f"Local Databricks profile: {profile}"
+        if profile
+        else "Databricks default authentication"
     )
 
 
@@ -81,17 +68,7 @@ def _session_actor() -> str:
 
 class _ManagedStateClient:
     def __init__(self) -> None:
-        profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        if profile:
-            inherited = {name: os.environ.pop(name, None) for name in _PROFILE_CONFLICT_ENV}
-            try:
-                self._workspace = WorkspaceClient(profile=profile)
-            finally:
-                for name, value in inherited.items():
-                    if value is not None:
-                        os.environ[name] = value
-        else:
-            self._workspace = WorkspaceClient()
+        self._workspace = WorkspaceClient()
 
     def _do(
         self,
@@ -101,29 +78,25 @@ class _ManagedStateClient:
         query: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
     ) -> dict:
-        headers = None
-        if self._workspace.config.workspace_id:
-            headers = {"X-Databricks-Workspace-Id": str(self._workspace.config.workspace_id)}
-        result = self._workspace.api_client.do(
-            method, path, query=query, body=body, headers=headers
-        )
+        result = self._workspace.api_client.do(method, path, query=query, body=body)
         if not isinstance(result, dict):
             raise RuntimeError(
                 f"Expected an object response from {path}, got {type(result).__name__}"
             )
         return result
 
-    def create_memory_entry(self, request: MemoryEntryRequest) -> dict:
+    def create_memory_entry(self, request: MemoryEntryRequest, session_id: str) -> dict:
         body = {
             "actor_id": _memory_actor(),
             "path": request.path,
             "content": request.content,
+            "session_id": session_id,
         }
         if request.description:
             body["description"] = request.description
-        if request.session_id:
-            body["session_id"] = request.session_id
-        return self._do("POST", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", body=body)
+        return self._do(
+            "POST", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", body=body
+        )
 
     def list_memory_entries(self, path_prefix: str | None = None) -> dict:
         query = {"actor_id": _memory_actor(), "page_size": 100}
@@ -150,7 +123,10 @@ class _ManagedStateClient:
                 "POST",
                 f"{_AGENTS_API}/session-stores/{_session_store()}/sessions",
                 query={"session_id": session_id},
-                body={"actor_id": _session_actor(), "metadata": {"client": "mason-demo-ui"}},
+                body={
+                    "actor_id": _session_actor(),
+                    "metadata": {"client": "mason-demo-ui"},
+                },
             )
         except Exception as exc:
             code = str(getattr(exc, "error_code", "")).upper()
@@ -164,10 +140,13 @@ class _ManagedStateClient:
 
     def get_session(self, session_id: str) -> dict:
         return self._do(
-            "GET", f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}"
+            "GET",
+            f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}",
         )
 
-    def append_session_items(self, session_id: str, items: list[dict[str, Any]]) -> dict:
+    def append_session_items(
+        self, session_id: str, items: list[dict[str, Any]]
+    ) -> dict:
         return self._do(
             "POST",
             f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}/items:append",
@@ -215,11 +194,6 @@ def _require_session() -> None:
 
 
 def _require_recovery() -> None:
-    if not _stop_enabled():
-        raise HTTPException(
-            status_code=503,
-            detail=f"Set {_STOP_ENV}=true to enable stop/start recovery.",
-        )
     _require_session()
 
 
@@ -256,7 +230,9 @@ async def _checkpoint_history(session_id: str) -> dict[str, Any]:
 
 def install_ui(app: FastAPI) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
-    app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
+    app.mount(
+        "/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets"
+    )
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
@@ -271,8 +247,9 @@ def install_ui(app: FastAPI) -> None:
         )
         memory_store = _memory_store()
         session_store = _session_store()
-        durability_enabled = bool(session_store and _stop_enabled())
+        durability_enabled = bool(session_store)
         return {
+            "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
             "viewer": viewer,
             "execution_identity": _execution_identity(),
@@ -282,7 +259,9 @@ def install_ui(app: FastAPI) -> None:
                 "durable": bool(session_store),
                 "managed": bool(session_store),
                 "history": True,
-                "mode": "Managed Session Store" if session_store else "In-process checkpointer",
+                "mode": "Managed Session Store"
+                if session_store
+                else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": _session_actor(),
             },
@@ -307,7 +286,7 @@ def install_ui(app: FastAPI) -> None:
                 "stale_after_seconds": recovery.stale_seconds(),
             },
             "app_control": {
-                "stop_enabled": _stop_enabled(),
+                "stop_enabled": True,
                 "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
             },
             "recovery": {
@@ -319,12 +298,18 @@ def install_ui(app: FastAPI) -> None:
         }
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
-    async def create_memory_entry(request: MemoryEntryRequest) -> dict:
+    async def create_memory_entry(
+        request: Request, payload: MemoryEntryRequest
+    ) -> dict:
         _require_memory()
-        return await _managed_call(_state_client().create_memory_entry, request)
+        return await _managed_call(
+            _state_client().create_memory_entry, payload, request.state.session_id
+        )
 
     @app.get("/api/demo/memory/entries", include_in_schema=False)
-    async def list_memory_entries(path_prefix: str | None = Query(default=None)) -> dict:
+    async def list_memory_entries(
+        path_prefix: str | None = Query(default=None),
+    ) -> dict:
         _require_memory()
         return await _managed_call(_state_client().list_memory_entries, path_prefix)
 
@@ -334,53 +319,59 @@ def install_ui(app: FastAPI) -> None:
         return await _managed_call(_state_client().search_memory_entries, request)
 
     @app.post("/api/demo/sessions", include_in_schema=False)
-    async def ensure_session(request: SessionRequest) -> dict:
+    async def ensure_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().ensure_session, request.session_id)
+        return await _managed_call(
+            _state_client().ensure_session, request.state.session_id
+        )
 
-    @app.get("/api/demo/sessions/{session_id}", include_in_schema=False)
-    async def get_session(session_id: str) -> dict:
+    @app.get("/api/demo/session", include_in_schema=False)
+    async def get_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().get_session, session_id)
+        return await _managed_call(
+            _state_client().get_session, request.state.session_id
+        )
 
-    @app.post("/api/demo/sessions/{session_id}/items", include_in_schema=False)
-    async def append_session_items(session_id: str, request: SessionItemsRequest) -> dict:
+    @app.post("/api/demo/session/items", include_in_schema=False)
+    async def append_session_items(
+        request: Request, payload: SessionItemsRequest
+    ) -> dict:
         _require_session()
-        return await _managed_call(_state_client().append_session_items, session_id, request.items)
+        return await _managed_call(
+            _state_client().append_session_items,
+            request.state.session_id,
+            payload.items,
+        )
 
-    @app.get("/api/demo/sessions/{session_id}/items", include_in_schema=False)
-    async def list_session_items(session_id: str) -> dict:
+    @app.get("/api/demo/session/items", include_in_schema=False)
+    async def list_session_items(request: Request) -> dict:
+        session_id = request.state.session_id
         if _session_store():
             return await _managed_call(_state_client().list_session_items, session_id)
         return await _checkpoint_history(session_id)
 
-    @app.get("/api/demo/recovery/{session_id}", include_in_schema=False)
-    async def recovery_status(session_id: str) -> dict:
+    @app.get("/api/demo/recovery", include_in_schema=False)
+    async def recovery_status(request: Request) -> dict:
         _require_recovery()
-        return await _recovery_call(recovery.status, session_id)
+        return await _recovery_call(recovery.status, request.state.session_id)
 
-    @app.post("/api/demo/recovery/{session_id}/start", include_in_schema=False)
-    async def start_recovery(session_id: str) -> dict:
+    @app.post("/api/demo/recovery/start", include_in_schema=False)
+    async def start_recovery(request: Request) -> dict:
         _require_recovery()
-        return await _recovery_call(recovery.start, session_id)
+        return await _recovery_call(recovery.start, request.state.session_id)
 
-    @app.post("/api/demo/app/{session_id}/start", include_in_schema=False)
-    async def start_app(session_id: str) -> dict:
+    @app.post("/api/demo/app/start", include_in_schema=False)
+    async def start_app(request: Request) -> dict:
         _require_recovery()
-        return await _recovery_call(recovery.start, session_id)
+        return await _recovery_call(recovery.start, request.state.session_id)
 
-    @app.post("/api/demo/recovery/{session_id}/resume", include_in_schema=False)
-    async def resume_recovery(session_id: str) -> dict:
+    @app.post("/api/demo/recovery/resume", include_in_schema=False)
+    async def resume_recovery(request: Request) -> dict:
         _require_recovery()
-        return await _recovery_call(recovery.resume, session_id)
+        return await _recovery_call(recovery.resume, request.state.session_id)
 
     @app.post("/api/demo/app/stop", include_in_schema=False)
     async def stop_app() -> dict:
-        if not _stop_enabled():
-            raise HTTPException(
-                status_code=403,
-                detail=f"Set {_STOP_ENV}=true to enable the demo stop endpoint.",
-            )
         asyncio.get_running_loop().call_later(0.5, os._exit, 86)
         return {
             "status": "stopping",

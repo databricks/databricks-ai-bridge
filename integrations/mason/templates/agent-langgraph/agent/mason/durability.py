@@ -18,7 +18,6 @@ _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _HEARTBEAT_SECONDS_ENV = "MASON_DEMO_HEARTBEAT_SECONDS"
 _STALE_SECONDS_ENV = "MASON_DEMO_STALE_SECONDS"
-_PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 _AGENTS_API = "/api/agents/v1"
 
 
@@ -36,7 +35,7 @@ class _SessionStoreClient:
     """Minimal Session Store client kept local to the generated durability demo."""
 
     def __init__(self, workspace_client: WorkspaceClient | None = None) -> None:
-        self._workspace = workspace_client or _workspace_client()
+        self._workspace = workspace_client or WorkspaceClient()
         self._store_name = ""
 
     def set_session_store(self, session_store_name: str) -> "_SessionStoreClient":
@@ -82,7 +81,9 @@ class _SessionStoreClient:
                 query=query,
             )
             if not isinstance(response, dict):
-                raise RuntimeError("Expected an object response while listing durability events.")
+                raise RuntimeError(
+                    "Expected an object response while listing durability events."
+                )
             response_object = cast(dict[str, Any], response)
             items.extend(
                 _SessionItem(item["data"])
@@ -95,19 +96,6 @@ class _SessionStoreClient:
 
     def _sessions_path(self) -> str:
         return f"{_AGENTS_API}/session-stores/{self._store_name}/sessions"
-
-
-def _workspace_client() -> WorkspaceClient:
-    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-    if not profile:
-        return WorkspaceClient()
-    inherited = {name: os.environ.pop(name, None) for name in _PROFILE_CONFLICT_ENV}
-    try:
-        return WorkspaceClient(profile=profile)
-    finally:
-        for name, value in inherited.items():
-            if value is not None:
-                os.environ[name] = value
 
 
 def execution_id(session_id: str) -> str:
@@ -166,10 +154,14 @@ class SessionStoreDurabilityLog:
         client: Any | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        self._store_name = session_store_name or os.getenv(_SESSION_STORE_ENV, "").strip()
+        self._store_name = (
+            session_store_name or os.getenv(_SESSION_STORE_ENV, "").strip()
+        )
         self._client = None
         if self._store_name:
-            self._client = (client or _SessionStoreClient()).set_session_store(self._store_name)
+            self._client = (client or _SessionStoreClient()).set_session_store(
+                self._store_name
+            )
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._sessions: dict[str, Any] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -267,8 +259,11 @@ class SessionStoreDurabilityLog:
         client = self._required_client()
         return [
             item.data
-            for item in client.list_items(self._session(session_id), order_by="create_time asc")
-            if isinstance(item.data, dict) and item.data.get("event_type") == _EVENT_TYPE
+            for item in client.list_items(
+                self._session(session_id), order_by="create_time asc"
+            )
+            if isinstance(item.data, dict)
+            and item.data.get("event_type") == _EVENT_TYPE
         ]
 
     def _session(self, session_id: str) -> Any:
@@ -297,7 +292,9 @@ class SessionStoreDurabilityLog:
         self._sessions[durable_id] = session
         return session
 
-    def _state_from_events(self, session_id: str, events: list[dict[str, Any]]) -> DurabilityState:
+    def _state_from_events(
+        self, session_id: str, events: list[dict[str, Any]]
+    ) -> DurabilityState:
         durable_id = execution_id(session_id)
         starts = [
             (index, event)
@@ -322,7 +319,9 @@ class SessionStoreDurabilityLog:
         start_index, started = starts[-1]
         lease_id = str(started["lease_id"])
         lease_events = [
-            event for event in events[start_index:] if str(event.get("lease_id")) == lease_id
+            event
+            for event in events[start_index:]
+            if str(event.get("lease_id")) == lease_id
         ]
         terminal = next(
             (
@@ -341,9 +340,17 @@ class SessionStoreDurabilityLog:
             started,
         )
         heartbeat_at = str(last_heartbeat["timestamp"])
-        heartbeat_age = max(0.0, (self._now() - _parse_time(heartbeat_at)).total_seconds())
+        heartbeat_age = max(
+            0.0, (self._now() - _parse_time(heartbeat_at)).total_seconds()
+        )
         heartbeat_fresh = terminal is None and heartbeat_age <= stale_seconds()
-        status = str(terminal["event"]) if terminal else "running" if heartbeat_fresh else "stopped"
+        status = (
+            str(terminal["event"])
+            if terminal
+            else "running"
+            if heartbeat_fresh
+            else "stopped"
+        )
         return DurabilityState(
             session_id=session_id,
             execution_id=durable_id,
@@ -378,7 +385,10 @@ def _parse_time(value: str) -> datetime:
 
 def _is_not_found(error: Exception) -> bool:
     code = str(getattr(error, "error_code", "")).upper()
-    return code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"} or "not found" in str(error).lower()
+    return (
+        code in {"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"}
+        or "not found" in str(error).lower()
+    )
 
 
 def _is_already_exists(error: Exception) -> bool:

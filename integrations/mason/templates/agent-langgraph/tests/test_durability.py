@@ -28,7 +28,9 @@ class _FakeSessionStoreClient:
     def create_session(self, *, actor_id, session_id=None, metadata=None):
         if session_id in self.sessions:
             raise _ApiError("already exists", "ALREADY_EXISTS")
-        session = SimpleNamespace(session_id=session_id, actor_id=actor_id, metadata=metadata or {})
+        session = SimpleNamespace(
+            session_id=session_id, actor_id=actor_id, metadata=metadata or {}
+        )
         self.sessions[session_id] = session
         self.items[session_id] = []
         return session

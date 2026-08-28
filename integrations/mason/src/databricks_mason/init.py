@@ -41,6 +41,10 @@ _TEMPLATES = {
     },
 }
 
+_CHAT_APP_TEMPLATES = {
+    "langgraph": "integrations/mason/templates/ui/agent-langgraph",
+}
+
 
 def _runtime_template(name: str) -> str:
     try:
@@ -76,8 +80,14 @@ def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.C
     return result
 
 
-def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) -> None:
-    """Sparse-clone `template_dir` from `repo`@`ref` into `dest` (must not already exist)."""
+def _fetch_template(
+    repo: str,
+    ref: str,
+    template_dir: str,
+    dest: pathlib.Path,
+    overlay_dirs: tuple[str, ...] = (),
+) -> None:
+    """Sparse-clone a template and optional overlays from `repo`@`ref` into `dest`."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
         clone = pathlib.Path(tmp) / "repo"
         _git(
@@ -93,15 +103,18 @@ def _fetch_template(repo: str, ref: str, template_dir: str, dest: pathlib.Path) 
                 str(clone),
             ]
         )
-        _git(["sparse-checkout", "set", template_dir], cwd=clone)
-        src = clone / template_dir
-        if not src.is_dir():
-            raise AgentCliError(
-                f"Template '{template_dir}' not found in {repo}@{ref}.",
-                hint="It may not have merged yet — pass --repo/--ref to target a fork or branch.",
-            )
-        # Copy the template contents (not the .git) into the destination.
-        shutil.copytree(src, dest)
+        template_dirs = (template_dir, *overlay_dirs)
+        _git(["sparse-checkout", "set", *template_dirs], cwd=clone)
+        for index, path in enumerate(template_dirs):
+            src = clone / path
+            if not src.is_dir():
+                raise AgentCliError(
+                    f"Template '{path}' not found in {repo}@{ref}.",
+                    hint=(
+                        "It may not have merged yet — pass --repo/--ref to target a fork or branch."
+                    ),
+                )
+            shutil.copytree(src, dest, dirs_exist_ok=index > 0)
 
 
 def _write_env(dest: pathlib.Path, profile: str) -> bool:
@@ -144,6 +157,11 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `uv run start-server` works "
     "immediately (defaults to the profile from -p / `mason login`).",
 )
+@click.option(
+    "--enable-chat-app",
+    is_flag=True,
+    help="Include the framework-specific browser chat app and stop/start durability demo.",
+)
 @click.option("--repo", default=None, help="Override the git repo URL to fetch the template from.")
 @click.option("--ref", default=None, help="Override the branch, tag, or ref to fetch.")
 @click.pass_obj
@@ -152,6 +170,7 @@ def init(
     directory: Optional[str],
     framework: str,
     profile: Optional[str],
+    enable_chat_app: bool,
     repo: Optional[str],
     ref: Optional[str],
 ) -> None:
@@ -164,6 +183,12 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
+    if enable_chat_app and framework not in _CHAT_APP_TEMPLATES:
+        raise AgentCliError(
+            f"--enable-chat-app is not available for framework '{framework}'.",
+            hint="Use --framework langgraph.",
+        )
+
     spec = _TEMPLATES[framework]
     template_path = spec["path"]
     dest = (
@@ -178,7 +203,14 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    _fetch_template(repo or spec["repo"], ref or spec["ref"], template_path, dest)
+    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if enable_chat_app else ()
+    _fetch_template(
+        repo or spec["repo"],
+        ref or spec["ref"],
+        template_path,
+        dest,
+        overlay_dirs,
+    )
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
@@ -194,12 +226,15 @@ def init(
                 "framework": framework,
                 "template": template_name,
                 "directory": str(dest),
+                "chat_app_enabled": enable_chat_app,
                 "env_profile": env_profile if wrote_env else None,
             }
         )
         return
 
     fields = {"Framework": framework, "Directory": str(dest)}
+    if enable_chat_app:
+        fields["Chat app"] = "enabled"
     steps = [f"cd {dest}"]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
@@ -210,5 +245,8 @@ def init(
             "cp .env.example .env",
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
-    steps += ["mason dev        # run locally", f"mason deploy <name> --source {dest}"]
+    steps += ["mason dev        # run locally"]
+    if enable_chat_app:
+        steps.append("Open http://localhost:8000")
+    steps.append(f"mason deploy <name> --source {dest}")
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

@@ -16,8 +16,7 @@ from agent.mason.durability import (
     heartbeat_seconds,
     stale_seconds,
 )
-from agent.mason.session_store import checkpointer, thread_config  # ty: ignore[unresolved-import]
-from agent.tools.long_running import (
+from agent.mason.long_running import (
     process_id,
     step_seconds,
     tool_step_1,
@@ -25,6 +24,7 @@ from agent.tools.long_running import (
     tool_step_3,
     tool_step_4,
 )
+from agent.mason.session_store import checkpointer, thread_config  # ty: ignore[unresolved-import]
 from langgraph.checkpoint.base import BaseCheckpointSaver  # ty: ignore[unresolved-import]
 from langgraph.graph import END, START, StateGraph  # ty: ignore[unresolved-import]
 
@@ -52,8 +52,14 @@ def step_names() -> list[str]:
 def recovery_config(session_id: str) -> dict[str, Any]:
     """Map the public session id onto a separate durable workflow thread."""
     configurable = thread_config(session_id)["configurable"]
-    actor_id = configurable.get("actor_id") or os.getenv("AGENT_SESSION_ACTOR_ID") or session_id
-    return {"configurable": {"thread_id": execution_id(session_id), "actor_id": actor_id}}
+    actor_id = (
+        configurable.get("actor_id")
+        or os.getenv("AGENT_SESSION_ACTOR_ID")
+        or session_id
+    )
+    return {
+        "configurable": {"thread_id": execution_id(session_id), "actor_id": actor_id}
+    }
 
 
 def _tool_runner(tool: Any) -> StepRunner:
@@ -79,7 +85,9 @@ def build_recovery_graph(
     steps: Sequence[StepDefinition] | None = None,
 ):
     """Build the sequential graph; exposed for the checkpoint-boundary recovery test."""
-    definitions = list(steps or [(tool.name, _tool_runner(tool)) for tool in _STEP_TOOLS])
+    definitions = list(
+        steps or [(tool.name, _tool_runner(tool)) for tool in _STEP_TOOLS]
+    )
     graph = StateGraph(RecoveryState)
     for name, runner in definitions:
         graph.add_node(name, _step_node(runner))
@@ -130,7 +138,9 @@ async def _heartbeat_loop(lease: DurabilityLease) -> None:
             if not await _durability_log().heartbeat(lease):
                 return
         except Exception:
-            logger.exception("Failed to persist durability heartbeat for %s", lease.execution_id)
+            logger.exception(
+                "Failed to persist durability heartbeat for %s", lease.execution_id
+            )
 
 
 async def _run_attempt(
@@ -148,7 +158,9 @@ async def _run_attempt(
         try:
             await _durability_log().fail(lease, str(error))
         except Exception:
-            logger.exception("Failed to persist failed durability attempt %s", lease.execution_id)
+            logger.exception(
+                "Failed to persist failed durability attempt %s", lease.execution_id
+            )
         raise
     else:
         try:
@@ -225,7 +237,9 @@ async def start(session_id: str) -> dict[str, Any]:
     if current["status"] in {"running", "completed"}:
         return current
     graph_input: RecoveryState | None = (
-        {"session_id": session_id, "outputs": []} if current["status"] == "not_started" else None
+        {"session_id": session_id, "outputs": []}
+        if current["status"] == "not_started"
+        else None
     )
     await _launch(session_id, graph_input)
     await asyncio.sleep(0)
@@ -237,7 +251,9 @@ async def resume(session_id: str) -> dict[str, Any]:
     if current["worker_active"] or current["status"] == "completed":
         return current
     if not current["needs_resume"]:
-        raise ValueError(f"No incomplete recovery sequence exists for session {session_id!r}.")
+        raise ValueError(
+            f"No incomplete recovery sequence exists for session {session_id!r}."
+        )
     await _launch(session_id, None)
     await asyncio.sleep(0)
     return await status(session_id)

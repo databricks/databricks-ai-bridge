@@ -6,9 +6,9 @@
     stream_handler(request: dict) -> AsyncGenerator[dict]
 
 Nothing here is SDK-specific — the agent lives entirely behind those handlers (``agent/agent.py``).
-The session id (used for multi-turn and to resume a paused run) travels in the JSON body as
-``session_id``. Databricks Apps replica affinity is handled separately by the
-``__Host-databricks-app-router`` cookie.
+The Databricks Apps ``__Host-databricks-app-router`` cookie is both the replica-affinity key and the
+application session id. Clients never send ``session_id`` in the JSON body. Local development uses
+an HTTP-only fallback cookie because the Apps router is not present.
 
 TODO: Prefer ``X-Routing-Key`` for API clients once Databricks Apps supports it; until then, use the
 documented router cookie for sticky routing.
@@ -28,6 +28,7 @@ import mlflow
 from agent.mason.background import BackgroundRuns
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from uuid_utils import uuid7
 
 # Request keys that control transport; stripped before the request reaches the handler.
 _REQUEST_STREAM_PARAM_KEY = "stream"
@@ -36,6 +37,10 @@ _REQUEST_SESSION_ID_HEADER_KEY = (
     "X-Routing-Key"  # carries the session id (generic for Apps + Agents)
 )
 _TRACE_NAME_TAG = "mlflow.traceName"
+_ROUTING_COOKIE = "__Host-databricks-app-router"
+_LOCAL_SESSION_COOKIE = "mason-local-session"
+
+# TODO: Replace the Apps routing cookie with X-Routing-Key when Databricks Apps supports it.
 
 InvokeHandler = Callable[[dict], Awaitable[dict]]
 StreamHandler = Callable[[dict], AsyncGenerator[dict, None]]
@@ -54,6 +59,21 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
     """Build the FastAPI app wiring the endpoints to the agent's invoke/stream handlers."""
     app = FastAPI(title="Agent Server")
     runs = BackgroundRuns()
+
+    @app.middleware("http")
+    async def bind_session(request: Request, call_next):
+        routing_session = request.cookies.get(_ROUTING_COOKIE)
+        local_session = request.cookies.get(_LOCAL_SESSION_COOKIE)
+        request.state.session_id = routing_session or local_session or str(uuid7())
+        response = await call_next(request)
+        if not routing_session and not local_session:
+            response.set_cookie(
+                _LOCAL_SESSION_COOKIE,
+                request.state.session_id,
+                httponly=True,
+                samesite="lax",
+            )
+        return response
 
     async def _invoke(request: dict) -> dict:
         with mlflow.start_span(name="invoke_handler") as span:
@@ -89,6 +109,8 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
         data = await request.json()
         is_stream = bool(data.pop(_REQUEST_STREAM_PARAM_KEY, False))
         is_background = bool(data.pop(_REQUEST_BACKGROUND_PARAM_KEY, False))
+        data.pop("session_id", None)
+        data["session_id"] = request.state.session_id
 
         if is_background:
             invocation_id = runs.start()

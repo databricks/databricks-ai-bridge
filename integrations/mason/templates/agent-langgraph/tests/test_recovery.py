@@ -2,14 +2,9 @@ import asyncio
 from contextlib import suppress
 
 import pytest
+from agent.mason.long_running import process_id
 from agent.mason.recovery import build_recovery_graph, recovery_config
-from agent.tools import all_tools  # ty: ignore[unresolved-import]
-from agent.tools.long_running import process_id
 from langgraph.checkpoint.memory import InMemorySaver  # ty: ignore[unresolved-import]
-
-
-def test_long_running_tools_are_registered():
-    assert {f"tool_step_{step}" for step in range(1, 5)} <= {tool.name for tool in all_tools()}
 
 
 def test_recovery_config_uses_same_actor_and_separate_thread(monkeypatch):
@@ -26,7 +21,9 @@ def test_recovery_config_uses_same_actor_and_separate_thread(monkeypatch):
 async def test_default_sequence_runs_all_registered_tools(monkeypatch):
     monkeypatch.setenv("MASON_DEMO_TOOL_STEP_SECONDS", "0")
     graph = build_recovery_graph(InMemorySaver())
-    result = await graph.ainvoke({"outputs": []}, config=recovery_config("complete-demo"))
+    result = await graph.ainvoke(
+        {"outputs": []}, config=recovery_config("complete-demo")
+    )
 
     assert [output["tool"] for output in result["outputs"]] == [
         "tool_step_1",

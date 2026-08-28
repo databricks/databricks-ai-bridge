@@ -19,51 +19,54 @@ No database needed — conversation state uses an in-process LangGraph checkpoin
 ## Sample requests
 
 `input` is a list of LangChain message dicts; the reply is `{ "output": [...], "session_id": "..." }`
-where `output` is LangChain messages (native shape). Send `session_id` in the JSON body to continue a
-conversation. For deployed API clients, also reuse it in the `__Host-databricks-app-router` cookie
-for best-effort replica affinity; browsers handle that cookie automatically.
+where `output` is LangChain messages (native shape). The `__Host-databricks-app-router` cookie is
+both the Apps routing key and application session id; never send `session_id` in the JSON body. Use a
+cookie jar locally so the server's `mason-local-session` fallback is reused.
 
 The examples below use local `/invocations` routes. Deployed Databricks Apps also expose the same
 handlers under `/api/invocations` so OAuth Bearer-token calls pass through the Apps API gateway.
 
 ```bash
+COOKIE_JAR=/tmp/mason-agent.cookies
+curl -s -c "$COOKIE_JAR" http://localhost:8000/health
+
 # Sync — run a turn to completion
-curl -sX POST http://localhost:8000/invocations \
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{"input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
 
 # Streaming — SSE frames ending with `data: [DONE]`
-curl -sN -X POST http://localhost:8000/invocations \
+curl -sNb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{"input": [{"role": "user", "content": "Count to 3."}], "stream": true}'
 # frames: {"type":"message","message":{...}} (completed) and {"type":"delta","content":"...","id":"..."}
 
 # Background — returns an inv_ id immediately; poll it
-curl -sX POST http://localhost:8000/invocations \
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{"input": [{"role": "user", "content": "Do something slow."}], "background": true}'
 # -> {"id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "in_progress"}
-curl -s http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
+curl -sb "$COOKIE_JAR" http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
 # -> {"id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "completed", "output": [...], "session_id": "..."}
 
 # Human-in-the-loop — the gated send_message tool pauses for approval
-curl -sX POST http://localhost:8000/invocations \
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"S","input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
+  -d '{"input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
 # -> {"output": [..., {"type":"interrupt","id":"int_...","value":{"action_requests":[...]}}], "session_id":"S", "status":"interrupted"}
-# Resume with the same session id and a native decision (approve | edit | reject | respond):
-curl -sX POST http://localhost:8000/invocations \
+# Resume with the same cookie and a native decision (approve | edit | reject | respond):
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"S","resume": {"decisions": [{"type": "approve"}]}}'
+  -d '{"resume": {"decisions": [{"type": "approve"}]}}'
 # -> {"output": [...], "session_id": "S", "status": "completed"}
 
-# Multi-turn — send back the returned session_id in the body (same process; in-memory checkpointer)
-curl -sX POST http://localhost:8000/invocations \
+# Multi-turn — reuse the same cookie jar (same process; in-memory checkpointer)
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
   -d '{"input": [{"role": "user", "content": "My name is Alice."}]}'
-curl -sX POST http://localhost:8000/invocations \
+curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"session_id":"<session-id>","input": [{"role": "user", "content": "What is my name?"}]}'
+  -d '{"input": [{"role": "user", "content": "What is my name?"}]}'
 ```
 
 ## Where things live
@@ -84,8 +87,9 @@ curl -sX POST http://localhost:8000/invocations \
 plain `dict -> dict` / `dict -> AsyncGenerator[dict]`) to the endpoints. The agent SDK lives entirely
 behind those handlers in `agent/agent.py`, so the serving layer is the same regardless of SDK.
 
-`agent/mason/` holds plumbing (session checkpointer, tracing, MCP tool loading, background store)
-slated to move into Databricks SDKs — grouped so that migration is localized.
+`agent/mason/` holds plumbing (session checkpointer, tracing, MCP tool loading, background store,
+durability log, and recovery workflow) slated to move into Databricks SDKs — grouped so that
+migration is localized.
 
 ## How tools register
 
@@ -98,8 +102,9 @@ a file to `agent/tools/`.
 
 - Default: `agent/mason/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
-- The session id is the request body's `session_id`. Databricks Apps replica affinity is the separate
-  `__Host-databricks-app-router` cookie, which browsers receive automatically and API clients send.
+- The `__Host-databricks-app-router` cookie is both the Apps routing key and the session id. The
+  runtime injects it into the internal handler request; body `session_id` values are ignored.
+- TODO: replace the cookie with `X-Routing-Key` when Databricks Apps supports it.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
   returns a `DatabricksSessionStoreSaver` — a `BaseCheckpointSaver` that serializes checkpoints into
   Session Store items via the REST API (no DB connection), so full graph state incl. paused HITL runs
@@ -111,7 +116,7 @@ a file to `agent/tools/`.
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
-  `resume` with the same session id — no runtime change; it rides `/invocations` through the handlers.
+  `resume` with the same cookie — no runtime change; it rides `/invocations` through the handlers.
   Durability follows the checkpointer: in-process by default, cross-restart with `AGENT_SESSION_STORE`.
 
 ## MLflow tracing

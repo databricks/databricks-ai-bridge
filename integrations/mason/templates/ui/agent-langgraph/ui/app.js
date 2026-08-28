@@ -29,8 +29,6 @@ const elements = {
   memoryQuery: document.querySelector("#memory-query"),
   memoryResults: document.querySelector("#memory-results"),
   memoryStatus: document.querySelector("#memory-status"),
-  newSession: document.querySelector("#new-session"),
-  openSession: document.querySelector("#open-session"),
   promptInput: document.querySelector("#prompt-input"),
   askMemory: document.querySelector("#ask-memory"),
   searchMemory: document.querySelector("#search-memory"),
@@ -45,7 +43,6 @@ const elements = {
   runStatus: document.querySelector("#run-status"),
   sendButton: document.querySelector("#send-button"),
   sessionId: document.querySelector("#session-id"),
-  sessionIdInput: document.querySelector("#session-id-input"),
   sessionItems: document.querySelector("#session-items"),
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
@@ -73,28 +70,22 @@ const state = {
   pendingInterrupt: null,
   recovery: null,
   recoveryPollTimer: null,
-  recoverySessionId: localStorage.getItem("mason.demo.recovery") || "",
+  recoverySessionId: "",
   recoverySignature: "",
-  sessionId: localStorage.getItem("mason.demo.session") || "",
+  sessionId: "",
 };
 
-function makeSessionId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 function ensureSessionId() {
-  if (!state.sessionId) setSessionId(makeSessionId());
+  if (!state.sessionId) throw new Error("The routing session is not initialized yet.");
   return state.sessionId;
 }
 
 function setSessionId(value) {
-  const nextSessionId = value || makeSessionId();
+  const nextSessionId = String(value || "");
+  if (!nextSessionId) return;
   if (state.sessionId !== nextSessionId) state.managedSessionId = "";
   state.sessionId = nextSessionId;
-  localStorage.setItem("mason.demo.session", state.sessionId);
   elements.sessionId.textContent = state.sessionId;
-  elements.sessionIdInput.value = state.sessionId;
 }
 
 function setConnection(status, label) {
@@ -117,7 +108,6 @@ function setBusy(busy, label = "Working") {
   elements.rememberButton.disabled = busy || !state.config?.memory.enabled;
   elements.searchMemory.disabled = busy || !state.config?.memory.enabled;
   elements.askMemory.disabled = busy || !state.config?.memory.enabled;
-  elements.openSession.disabled = busy;
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
@@ -333,7 +323,7 @@ function invocationHeaders() {
 }
 
 function invocationPayload(payload) {
-  return { ...payload, session_id: ensureSessionId() };
+  return { ...payload };
 }
 
 async function jsonResponse(response) {
@@ -432,7 +422,7 @@ async function ensureManagedSession() {
   const response = await fetch("/api/demo/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId }),
+    body: "{}",
   });
   const result = await jsonResponse(response);
   state.managedSessionId = sessionId;
@@ -447,9 +437,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/items`, {
-      cache: "no-store",
-    });
+    const response = await fetch("/api/demo/session/items", { cache: "no-store" });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -464,47 +452,11 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
 }
 
-async function openSessionById() {
-  const sessionId = elements.sessionIdInput.value.trim();
-  if (!sessionId || state.busy) {
-    elements.sessionIdInput.focus();
-    return;
-  }
-  setSessionId(sessionId);
-  state.pendingInterrupt = null;
-  state.draft = null;
-  state.draftText = "";
-  state.lastAssistantText = "";
-  elements.chatLog.replaceChildren(elements.emptyState);
-  elements.emptyState.hidden = false;
-  elements.approvalSummary.textContent =
-    "Session opened by ID. If its LangGraph checkpoint is paused, approve or reject it below.";
-  elements.approvalPanel.hidden = !state.config?.session.durable;
-  stateMessage(elements.sessionItems, "Opening session…", "loading");
-  try {
-    if (state.config?.session.managed) {
-      const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}`, {
-        cache: "no-store",
-      });
-      const result = await jsonResponse(response);
-      state.managedSessionId = sessionId;
-      addEvent("session.open", result);
-    } else {
-      addEvent("session.open", { session_id: sessionId, managed: false });
-    }
-    await refreshSession({ hydrateChat: true });
-    await monitorRecovery(sessionId, { autoResume: true });
-  } catch (error) {
-    stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
-    addEvent("session.error", { message: String(error) });
-  }
-}
-
 async function recordSessionItems(items) {
   if (!state.config?.session.managed || !items.length) return;
   try {
     const sessionId = await ensureManagedSession();
-    const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/items`, {
+    const response = await fetch("/api/demo/session/items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -706,7 +658,7 @@ async function sendText(text, mode = state.mode) {
 async function resume(decision) {
   if (state.busy) return;
   if (!state.pendingInterrupt && !state.config?.session.durable) {
-    appendError(new Error("No paused run is loaded. Open a durable session ID first."));
+    appendError(new Error("No paused run is loaded for the current routing session."));
     return;
   }
   const payload =
@@ -736,32 +688,15 @@ async function resume(decision) {
   }
 }
 
-function resetConversation() {
-  setSessionId(makeSessionId());
+function clearChat() {
   state.pendingInterrupt = null;
   state.draft = null;
   state.draftText = "";
-  state.recovery = null;
-  state.recoverySessionId = "";
-  state.recoverySignature = "";
-  state.lastDurabilityAttempt = 0;
-  state.lastDurabilityHeartbeat = "";
-  state.lastRecoveryStatus = "";
-  elements.durabilityExecution.textContent = "Not started";
-  elements.durabilityExecution.title = "";
-  elements.durabilityAttempt.textContent = "—";
-  elements.durabilityOwner.textContent = "—";
-  elements.durabilityOwner.title = "";
-  elements.durabilityHeartbeat.textContent = "Not started";
-  localStorage.removeItem("mason.demo.recovery");
-  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
   elements.approvalPanel.hidden = true;
   elements.chatLog.replaceChildren(elements.emptyState);
   elements.emptyState.hidden = false;
   elements.promptInput.focus();
-  addEvent("session.new", { session_id: state.sessionId });
-  void refreshSession();
-  if (state.config?.recovery.enabled) void monitorRecovery(state.sessionId);
+  addEvent("chat.cleared", { session_id: state.sessionId });
 }
 
 async function loadConfig() {
@@ -771,6 +706,7 @@ async function loadConfig() {
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
+    setSessionId(config.session_id);
     elements.environmentBadge.textContent = config.app_control.restart_managed ? "Databricks App" : "Local runtime";
     elements.viewerValue.textContent = config.viewer;
     elements.identityValue.textContent = config.execution_identity;
@@ -792,7 +728,6 @@ async function loadConfig() {
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
     elements.askMemory.disabled = state.busy || !config.memory.enabled;
-    elements.openSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;
     elements.resumeSession.disabled = state.busy || !config.session.durable;
     elements.rejectSession.disabled = state.busy || !config.session.durable;
@@ -800,19 +735,17 @@ async function loadConfig() {
       ? `${config.memory.store} · actor ${config.memory.actor}`
       : "Deploy with --with-memory-store to expose managed entries and agent memory tools.";
     elements.sessionStoreLabel.textContent = config.session.managed
-      ? `${config.session.store} · actor ${config.session.actor} · the same ID keys transcript and checkpoint state.`
+      ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history
-        ? "Messages load from the in-process LangGraph checkpoint and remain available until the server restarts."
-        : "The ID is stored in this browser and sent in every invocation body; session history is unavailable.";
+        ? "Messages load from the in-process LangGraph checkpoint for the current routing cookie."
+        : "Session history is unavailable.";
     updateRecoveryControls();
-    elements.recoveryStatus.textContent = !config.app_control.stop_enabled
-      ? "MASON_DEMO_STOP_ENABLED is not configured."
-      : !config.session.durable
-        ? "Stop is enabled, but durability needs a managed Session Store."
-        : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
+    elements.recoveryStatus.textContent = !config.session.durable
+      ? "Stop is included, but durability needs a managed Session Store."
+      : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
     setConnection("online", "Connected");
     addEvent("runtime.config", config);
-    void refreshSession();
+    void refreshSession({ hydrateChat: true });
     if (config.recovery.enabled) {
       const recoverySessionId = state.recoverySessionId || state.sessionId;
       void monitorRecovery(recoverySessionId, { autoResume: true });
@@ -835,7 +768,7 @@ function recoveryStatusText(result) {
     );
     return restored
       ? "Recovered and completed. Earlier tool outputs were restored and skipped on this process."
-      : "All tool steps completed. Start a new session to run the demo again.";
+      : "All tool steps completed for this routing session.";
   }
   if (result.needs_resume) {
     return `Heartbeat is stale. Starting attempt ${result.attempt + 1} from the first incomplete checkpoint…`;
@@ -952,14 +885,14 @@ function scheduleRecoveryPoll(sessionId, delay = 1000) {
 }
 
 async function resumeRecoverySequence(sessionId) {
-  const response = await fetch(`/api/demo/app/${encodeURIComponent(sessionId)}/start`, {
+  const response = await fetch("/api/demo/app/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
   const result = await jsonResponse(response);
   renderRecovery(result);
-    addEvent("app.start", result);
+  addEvent("app.start", result);
   scheduleRecoveryPoll(sessionId);
   return result;
 }
@@ -968,7 +901,7 @@ async function monitorRecovery(sessionId, { autoResume = false } = {}) {
   if (!state.config?.recovery.enabled || !sessionId) return null;
   state.recoverySessionId = sessionId;
   try {
-    const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}`, {
+    const response = await fetch("/api/demo/recovery", {
       cache: "no-store",
       credentials: "same-origin",
     });
@@ -993,11 +926,10 @@ async function startApp() {
   if (state.busy || !state.config?.recovery.enabled) return;
   const sessionId = ensureSessionId();
   state.recoverySessionId = sessionId;
-  localStorage.setItem("mason.demo.recovery", sessionId);
   elements.startApp.disabled = true;
   elements.recoveryStatus.textContent = "Starting durable app work…";
   try {
-    const response = await fetch(`/api/demo/app/${encodeURIComponent(sessionId)}/start`, {
+    const response = await fetch("/api/demo/app/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
@@ -1131,11 +1063,6 @@ elements.copySession.addEventListener("click", async () => {
   setTimeout(() => { label.textContent = "Copy"; }, 1200);
 });
 
-elements.newSession.addEventListener("click", resetConversation);
-elements.openSession.addEventListener("click", openSessionById);
-elements.sessionIdInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") openSessionById();
-});
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));
 elements.refreshSession.addEventListener("click", () => refreshSession({ hydrateChat: true }));
 elements.clearEvents.addEventListener("click", () => {
@@ -1151,14 +1078,13 @@ elements.rememberButton.addEventListener("click", saveMemoryEntry);
 elements.searchMemory.addEventListener("click", searchMemoryEntries);
 elements.askMemory.addEventListener("click", async () => {
   const query = elements.memoryQuery.value.trim() || "my saved profile and preferences";
-  resetConversation();
+  clearChat();
   await sendText(`Use the recall tool to find what you remember about ${query}.`, "sync").catch(() => {});
 });
 
 elements.startApp.addEventListener("click", startApp);
 elements.stopApp.addEventListener("click", stopAndRecover);
 
-setSessionId(state.sessionId || makeSessionId());
 loadConfig().catch((error) => {
   appendError(error);
   elements.memoryHelp.textContent = "Runtime configuration is unavailable.";

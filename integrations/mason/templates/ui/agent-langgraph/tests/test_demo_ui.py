@@ -1,18 +1,26 @@
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from runtime import ui
+from runtime.runtime import build_app
 
 
 class _FakeStateClient:
-    def create_memory_entry(self, request):
-        return {"name": "memory-stores/store/entries/entry", **request.model_dump()}
+    def create_memory_entry(self, request, session_id):
+        return {
+            "name": "memory-stores/store/entries/entry",
+            "session_id": session_id,
+            **request.model_dump(),
+        }
 
     def list_memory_entries(self, path_prefix=None):
         return {"managed_memory_entries": [{"path": f"{path_prefix or ''}/profile.md"}]}
 
     def search_memory_entries(self, request):
-        return {"managed_memory_entries": [{"path": "/profile.md", "content": request.query}]}
+        return {
+            "managed_memory_entries": [
+                {"path": "/profile.md", "content": request.query}
+            ]
+        }
 
     def ensure_session(self, session_id):
         return {"session_id": session_id, "actor_id": "alice"}
@@ -25,7 +33,9 @@ class _FakeStateClient:
 
     def list_session_items(self, session_id):
         return {
-            "session_items": [{"item_id": "1", "data": {"role": "user", "content": session_id}}]
+            "session_items": [
+                {"item_id": "1", "data": {"role": "user", "content": session_id}}
+            ]
         }
 
 
@@ -90,12 +100,10 @@ async def _recovery_resume(session_id):
     return await _recovery_start(session_id)
 
 
-def _client(monkeypatch, *, configured=False, history=False, stop=False):
-    monkeypatch.delenv("MASON_DEMO_STOP_ENABLED", raising=False)
-    monkeypatch.delenv("MASON_DEMO_CRASH_ENABLED", raising=False)
+def _client(
+    monkeypatch, *, configured=False, history=False, session_id="routing-session"
+):
     monkeypatch.delenv("MASON_DEMO_TOOL_STEP_SECONDS", raising=False)
-    if stop:
-        monkeypatch.setenv("MASON_DEMO_STOP_ENABLED", "true")
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
         monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
@@ -110,41 +118,60 @@ def _client(monkeypatch, *, configured=False, history=False, stop=False):
     monkeypatch.setattr(ui.recovery, "resume", _recovery_resume)
     if history:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
-    app = FastAPI()
+
+    async def invoke_handler(request):
+        return {"output": [], "session_id": request["session_id"]}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    app = build_app(invoke_handler, stream_handler)
     ui.install_ui(app)
-    return TestClient(app)
+    client = TestClient(app)
+    client.cookies.set("__Host-databricks-app-router", session_id)
+    return client
 
 
 def test_demo_ui_routes(monkeypatch):
     client = _client(monkeypatch)
 
     assert client.get("/").status_code == 200
-    assert client.get("/ui-assets/app.js").status_code == 200
+    app_script = client.get("/ui-assets/app.js")
+    assert app_script.status_code == 200
+    assert "refreshSession({ hydrateChat: true })" in app_script.text
+    assert "session_id: ensureSessionId()" not in app_script.text
 
     config = client.get("/api/demo/config").json()
+    assert config["session_id"] == "routing-session"
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
-    assert config["app_control"]["stop_enabled"] is False
+    assert config["app_control"]["stop_enabled"] is True
     assert config["durability"]["enabled"] is False
     assert config["heartbeat"]["enabled"] is False
     assert config["recovery"]["enabled"] is False
 
-    assert client.post("/api/demo/memory/search", json={"query": "profile"}).status_code == 503
-    assert client.post("/api/demo/sessions", json={"session_id": "s1"}).status_code == 503
-    assert client.post("/api/demo/app/stop").status_code == 403
+    assert (
+        client.post("/api/demo/memory/search", json={"query": "profile"}).status_code
+        == 503
+    )
+    assert (
+        client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code
+        == 503
+    )
 
 
 def test_unmanaged_checkpoint_history_route(monkeypatch):
-    client = _client(monkeypatch, history=True)
+    client = _client(monkeypatch, history=True, session_id="local-session")
 
     config = client.get("/api/demo/config").json()
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
 
-    result = client.get("/api/demo/sessions/local-session/items")
+    result = client.get("/api/demo/session/items")
     assert result.status_code == 200
     assert [item["data"]["content"] for item in result.json()["session_items"]] == [
         "local-session",
@@ -166,12 +193,21 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
 
     class Snapshot:
         values = {"messages": [Message()]}
-        tasks = [type("Task", (), {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]})()]
+        tasks = [
+            type(
+                "Task",
+                (),
+                {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]},
+            )()
+        ]
 
     class FakeAgent:
         async def aget_state(self, config):
             assert config == {
-                "configurable": {"thread_id": "saved-session", "actor_id": "saved-session"}
+                "configurable": {
+                    "thread_id": "saved-session",
+                    "actor_id": "saved-session",
+                }
             }
             return Snapshot()
 
@@ -194,7 +230,7 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
 
 
 def test_managed_memory_and_session_routes(monkeypatch):
-    client = _client(monkeypatch, configured=True, stop=True)
+    client = _client(monkeypatch, configured=True, session_id="s1")
 
     config = client.get("/api/demo/config").json()
     assert config["memory"] == {
@@ -229,32 +265,34 @@ def test_managed_memory_and_session_routes(monkeypatch):
     )
     assert created.status_code == 200
     assert created.json()["path"] == "/profile.md"
-    assert client.get("/api/demo/memory/entries", params={"path_prefix": "/"}).status_code == 200
+    assert created.json()["session_id"] == "s1"
+    assert (
+        client.get("/api/demo/memory/entries", params={"path_prefix": "/"}).status_code
+        == 200
+    )
     search = client.post("/api/demo/memory/search", json={"query": "Databricks"})
     assert search.json()["managed_memory_entries"][0]["content"] == "Databricks"
 
-    assert client.post("/api/demo/sessions", json={"session_id": "s1"}).status_code == 200
-    assert client.get("/api/demo/sessions/s1").json()["session_id"] == "s1"
+    assert (
+        client.post("/api/demo/sessions", json={"session_id": "ignored"}).json()[
+            "session_id"
+        ]
+        == "s1"
+    )
+    assert client.get("/api/demo/session").json()["session_id"] == "s1"
     appended = client.post(
-        "/api/demo/sessions/s1/items",
+        "/api/demo/session/items",
         json={"items": [{"role": "user", "content": "hello"}]},
     )
     assert appended.json()["session_items"][0]["data"]["content"] == "hello"
     assert (
-        client.get("/api/demo/sessions/s1/items").json()["session_items"][0]["data"]["content"]
+        client.get("/api/demo/session/items").json()["session_items"][0]["data"][
+            "content"
+        ]
         == "s1"
     )
 
-    assert client.get("/api/demo/recovery/s1").json()["needs_resume"] is True
-    assert client.post("/api/demo/recovery/s1/start").json()["worker_active"] is True
-    assert client.post("/api/demo/app/s1/start").json()["worker_active"] is True
-    assert client.post("/api/demo/recovery/s1/resume").json()["worker_active"] is True
-
-
-def test_legacy_crash_env_still_enables_stop_control(monkeypatch):
-    monkeypatch.setenv("MASON_DEMO_CRASH_ENABLED", "true")
-    client = _client(monkeypatch, configured=True)
-    monkeypatch.setenv("MASON_DEMO_CRASH_ENABLED", "true")
-
-    config = client.get("/api/demo/config").json()
-    assert config["app_control"]["stop_enabled"] is True
+    assert client.get("/api/demo/recovery").json()["needs_resume"] is True
+    assert client.post("/api/demo/recovery/start").json()["worker_active"] is True
+    assert client.post("/api/demo/app/start").json()["worker_active"] is True
+    assert client.post("/api/demo/recovery/resume").json()["worker_active"] is True

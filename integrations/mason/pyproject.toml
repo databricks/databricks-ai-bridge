@@ -43,14 +43,10 @@ build-backend = "hatchling.build"
 include = [
     "src/databricks_mason/*",
     "src/databricks_mason/templates/**",
-    "templates/ui/**",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/databricks_mason"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"templates/ui" = "databricks_mason/templates/ui"
 
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]

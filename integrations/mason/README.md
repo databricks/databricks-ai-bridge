@@ -50,8 +50,8 @@ Use `--output json` for scripting.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  add
-    ui         [--refresh] [directory]
+  init         [--framework openai|langgraph] [--enable-chat-app]
+               [--profile P] [--repo URL] [--ref REF] [directory]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -109,38 +109,27 @@ arguments controlled by the model.
 same LangGraph-only behavior as `mason tools add sandbox`; its older source-editing path remains for
 legacy projects that do not yet contain `agent.toml`.
 
-## Add the demo UI
+## Initialize the chat app demo
 
-From a LangGraph scratch agent project, add the zero-build browser client:
+The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project:
 
 ```sh
+mason init --framework langgraph --enable-chat-app \
+  --profile <profile> \
+  ./my-agent
 cd ./my-agent
-mason add ui
 uv run start-server
 ```
 
-Rerun `mason add ui --refresh` to update an existing generated app from the latest Mason-managed UI
-template. Refresh intentionally overwrites the installed UI, recovery helper, and demo tests;
-`mason dev` and `mason deploy` do not mutate project source.
-
-The UI exercises streaming, sticky background polling, same-ID session resume, local checkpoint
-history, managed Memory Store entries, managed Session Store transcript items, agent memory tools,
-human approval, and runtime status. Capability dots are automatic: streaming/background reflect the
-runtime contract, Session turns green when history is available, and Memory turns green only when
-`AGENT_MEMORY_STORE` is configured. Durability and Heartbeat turn green when a managed Session Store
-and the stop/start demo are enabled. The transport selector itself is manual.
-
-The generated UI includes a demo-only endpoint that terminates the current app process. A deployed
-Databricks App restarts the HTTP process; for a local run, restart `uv run start-server` yourself.
-The tool workflow persists LangGraph checkpoints plus an append-only attempt and heartbeat log in
-Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds. Once the old
-owner is stale, the browser starts a new attempt with the same public session ID, restores completed
-outputs, and resumes at the first incomplete tool.
+`--enable-chat-app` always includes synchronous, SSE streaming, background polling, Session Store,
+Memory Store, HITL resume, Start App, Stop App, heartbeat, and recovery UI. There are no separate
+stop/crash flags. The base agent owns `agent/mason/durability.py`, `agent/mason/recovery.py`, and
+`agent/mason/long_running.py`; the framework-specific overlay only adds `ui/`, `runtime/ui.py`, the
+UI-enabled `runtime/main.py`, and UI tests.
 
 For the full deployed demo, connect both managed stores:
 
 ```sh
-mason add ui
 mason --profile <profile> deploy mason-agent-demo --source . \
   --with-session-store mason-demo-sessions \
   --with-memory-store mason-demo-memory \
@@ -148,18 +137,23 @@ mason --profile <profile> deploy mason-agent-demo --source . \
   --create-stores
 ```
 
-`mason deploy` provisions or resolves the stores and injects their identifiers plus the shared actor id.
-The UI can create, list, and search memory entries for the actor; it also creates a managed session
-and mirrors user/assistant turns into Session Store items. It can pause on the sample approval-gated
-tool, stop the app process, wait for a new process, and approve the same paused run. The durability
-card runs `tool_step_1` through `tool_step_4` in a deterministic checkpointed graph. Stop App after a
-few steps complete: after Databricks Apps restarts the process and the previous heartbeat becomes
-stale, the browser automatically starts a new attempt, restores completed outputs, skips those
-completed nodes, and continues at the first incomplete tool. A tool interrupted before its output
-checkpoint is committed can run again.
+The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
+application session id. The browser sends it automatically; API clients must reuse it as a cookie.
+Request bodies never carry `session_id`. A localhost-only `mason-local-session` cookie provides the
+same behavior outside Databricks Apps. TODO: move to `X-Routing-Key` when Apps supports it.
 
-This scaffold deliberately shows the mechanics rather than presenting Session Store as a complete
-durable-task engine. Attempt claims are append-only, last-writer-wins demo leases; they are not an
-atomic compare-and-swap across replicas. Production durability additionally needs transactional
-ownership, proactive stale-run scanning, idempotent tool side effects, and durable event replay. The
-UI reports `atomic_claim: false` so that limitation stays visible during the demo.
+The generated `README.md` documents every request the client makes: config discovery, sync and SSE
+invocations, background submission and polling, session transcript loading, HITL resume, memory
+entry operations, and stop/start recovery. Capability colors are automatic from `/api/demo/config`;
+only the sync/streaming/background transport selector is manual.
+
+Start App runs `tool_step_1` through `tool_step_4` in a checkpointed sequence. Each completed output
+is committed before the next node. Stop App schedules `os._exit(86)`; Databricks Apps restarts the
+process, the browser waits for a new instance and a stale heartbeat, and then starts a new attempt
+with the same routing cookie. Completed tools are restored and skipped; an interrupted tool whose
+output was not committed can run again.
+
+The ownership log is intentionally demo-grade: Session Store records append-only attempts and
+heartbeats, but the claim is last-writer-wins rather than atomic (`atomic_claim: false`). Production
+durability also needs transactional ownership, server-side stale scanning, idempotent side effects,
+and durable event replay.

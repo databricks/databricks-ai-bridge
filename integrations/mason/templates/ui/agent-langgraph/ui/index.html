@@ -85,23 +85,17 @@
               </div>
               <div class="button-row compact-actions">
                 <button id="refresh-session" class="text-button" type="button">Refresh</button>
-                <button id="new-session" class="text-button" type="button">New</button>
               </div>
             </div>
             <button id="copy-session" class="session-key" type="button" title="Copy session ID">
-              <code id="session-id">Creating…</code>
+              <code id="session-id">Loading…</code>
               <span>Copy</span>
             </button>
-            <label for="session-id-input">Open a session ID</label>
-            <div class="session-open-row">
-              <input id="session-id-input" autocomplete="off" spellcheck="false" />
-              <button id="open-session" class="button button-secondary" type="button">Open</button>
-            </div>
             <div class="button-row wrap">
               <button id="resume-session" class="button button-primary" type="button">Approve paused HITL</button>
               <button id="reject-session" class="button button-secondary" type="button">Reject paused HITL</button>
             </div>
-            <p id="session-store-label" class="supporting-text">The same ID is stored in this browser and sent in every invocation body.</p>
+            <p id="session-store-label" class="supporting-text">The Databricks Apps routing cookie is also the application session ID.</p>
             <div id="session-items" class="state-list compact-list" aria-live="polite">
               <div class="state-empty">Connect a Session Store to mirror transcript items.</div>
             </div>
@@ -202,7 +196,7 @@
               <div><dt>Heartbeat</dt><dd id="durability-heartbeat">Not started</dd></div>
             </dl>
             <div id="recovery-steps" class="recovery-steps" aria-live="polite">
-              <div class="state-empty">Connect a Session Store and enable stop/start durability.</div>
+              <div class="state-empty">Connect a Session Store to enable stop/start durability.</div>
             </div>
             <div class="button-row recovery-actions">
               <button id="start-app" class="button button-primary" type="button" disabled>Start App</button>

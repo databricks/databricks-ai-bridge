@@ -6,10 +6,9 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
-from unittest.mock import patch
 
 import pytest
-from agent.agent import _serialize_events, _session_id, _workspace_client
+from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from fastapi.testclient import TestClient
@@ -61,19 +60,6 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
         configure()
 
 
-def test_workspace_client_prefers_named_profile(monkeypatch):
-    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test-profile")
-    monkeypatch.setenv("DATABRICKS_HOST", "https://inherited.example.com")
-    monkeypatch.setenv("DATABRICKS_TOKEN", "inherited-token")
-
-    with patch("agent.agent.WorkspaceClient") as workspace_client:
-        _workspace_client()
-
-    workspace_client.assert_called_once_with(profile="test-profile")
-    assert "DATABRICKS_HOST" not in os.environ
-    assert "DATABRICKS_TOKEN" not in os.environ
-
-
 def test_thread_config_from_session_id():
     # actor_id rides alongside thread_id — the durable saver maps it onto the Session's actor.
     assert thread_config("abc-123") == {"configurable": {"thread_id": "abc-123", "actor_id": "abc-123"}}
@@ -114,12 +100,12 @@ def test_session_id_from_request():
     assert _session_id(request) == "abc-123"
 
 
-def test_session_id_generated_when_absent():
-    generated = _session_id({"input": [{"role": "user", "content": "hi"}]})
-    assert generated and generated != _session_id({"input": [{"role": "user", "content": "hi"}]})
+def test_session_id_is_required_from_runtime():
+    with pytest.raises(KeyError):
+        _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
-def test_runtime_passes_same_body_session_id_to_resume_request():
+def test_runtime_uses_apps_routing_cookie_for_resume_request():
     captured = {}
 
     async def invoke_handler(request):
@@ -131,10 +117,11 @@ def test_runtime_passes_same_body_session_id_to_resume_request():
             yield request
 
     client = TestClient(build_app(invoke_handler, stream_handler))
+    client.cookies.set("__Host-databricks-app-router", "same-session-id")
     response = client.post(
         "/invocations",
         json={
-            "session_id": "same-session-id",
+            "session_id": "body-value-is-ignored",
             "resume": {"decisions": [{"type": "approve"}]},
         },
     )
@@ -144,6 +131,23 @@ def test_runtime_passes_same_body_session_id_to_resume_request():
         "resume": {"decisions": [{"type": "approve"}]},
         "session_id": "same-session-id",
     }
+
+
+def test_runtime_sets_local_session_cookie_when_apps_router_is_absent():
+    async def invoke_handler(request):
+        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+
+    async def stream_handler(request):
+        if False:
+            yield request
+
+    client = TestClient(build_app(invoke_handler, stream_handler))
+    first = client.post("/invocations", json={"input": []})
+    second = client.post("/invocations", json={"input": []})
+
+    assert first.status_code == 200
+    assert first.cookies.get("mason-local-session") == first.json()["session_id"]
+    assert second.json()["session_id"] == first.json()["session_id"]
 
 
 def _has_workspace_auth() -> bool:
