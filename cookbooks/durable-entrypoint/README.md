@@ -15,6 +15,76 @@ The server validates the headers, persists their normalized values with the
 original body, and constructs `context` for each attempt. Recovery does not
 replay HTTP headers; it rebuilds `context` from the durable run record.
 
+## Background, streaming, and client impact
+
+| Capability | Developer contract | Client contract |
+| --- | --- | --- |
+| Background | Return the application's normal JSON result. The app stores status and the final result. | Keep the existing body; add `Idempotency-Key`, `Databricks-Agent-Session-Id`, and `Databricks-Background: true`. A non-streaming request returns `202`; poll `GET /invocations/{run_id}`. |
+| Durable streaming | Convert SDK events to JSON and call `await context.emit(event)`. | Add `Databricks-Stream: true`. Save SSE `id` values and reconnect through `GET /invocations/{run_id}/events?after=<id>`. |
+
+`background=true, stream=true` starts one durable run and immediately opens its
+event stream. The run ID comes back in `Databricks-Run-Id`; disconnecting does
+not cancel the run.
+
+### OpenAI Agents SDK: before and after
+
+The OpenAI Agents SDK is in-process, so a deployed client previously used
+whatever route the developer created around `Runner.run_streamed()`:
+
+```python
+payload = {"message": "hello"}
+async with http.stream("POST", "/invocations", json=payload): ...
+```
+
+The request body and route can remain unchanged. The client only adds runtime
+headers, then uses the new polling/replay routes after the POST:
+
+```python
+async with http.stream(
+    "POST",
+    "/invocations",
+    json=payload,
+    headers={
+        "Idempotency-Key": "run-1",
+        "Databricks-Agent-Session-Id": "conversation-1",
+        "Databricks-Background": "true",
+        "Databricks-Stream": "true",
+    },
+) as response:
+    run_id = response.headers["Databricks-Run-Id"]
+    async for line in response.aiter_lines():
+        last_event_id = remember_sse_id(line, last_event_id)
+
+final = (await http.get(f"/invocations/{run_id}")).json()
+```
+
+### LangGraph SDK: before and after
+
+A native LangGraph client uses several framework routes, not one invocation
+route:
+
+```python
+thread = await langgraph.threads.create()
+run = await langgraph.runs.create(
+    thread["thread_id"], "agent", input={"messages": messages}
+)
+result = await langgraph.runs.join(thread["thread_id"], run["run_id"])
+
+async for event in langgraph.runs.stream(
+    thread["thread_id"], "agent", input={"messages": messages}
+):
+    consume(event)
+```
+
+Headers preserve the body of a single existing endpoint; they do not make the
+LangGraph threads/runs protocol compatible. Without a LangGraph adapter, the
+client changes to the `httpx` invocation call above and passes `thread_id` in
+`Databricks-Agent-Session-Id`.
+
+References: [OpenAI Agents SDK streaming](https://openai.github.io/openai-agents-python/streaming/),
+[LangGraph background runs](https://docs.langchain.com/langsmith/runs), and
+[LangGraph resumable streaming](https://docs.langchain.com/langsmith/streaming).
+
 ## Durable HITL flow
 
 HITL is modeled as two durable runs. The runtime does not keep a worker alive
