@@ -88,9 +88,62 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
 
     assert result.exit_code == 0, result.output
     ws = "/Workspace/Users/me@example.com/mason_deployments/myapp"
-    assert ["sync", str(src), ws] in calls
+    # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
+    assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "myapp", "--source-code-path", ws] in calls
-    assert "AGENT_MEMORY_STORE" in (src / "app.yaml").read_text()
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    # The API returns `memory-stores/mem`, but the runtime re-adds that prefix, so the env var
+    # must carry the bare id.
+    assert env["AGENT_MEMORY_STORE"] == "mem"
+
+
+def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
+    # A brand-new app isn't RUNNING right after `apps create`; deploy must wait, or it races and
+    # fails ("not in RUNNING state"). Verify create -> wait -> sync/deploy ordering.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        deploy_mod, "_deployment_exists", lambda a, p: False
+    )  # app doesn't exist yet
+    waited = {"called": False}
+    monkeypatch.setattr(
+        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert ["apps", "create", "myapp"] in calls
+    assert waited["called"], "must wait for the new app to be running before deploying"
+    # the wait happens after create and before sync/deploy
+    create_i = calls.index(["apps", "create", "myapp"])
+    sync_i = next(i for i, a in enumerate(calls) if a[:1] == ["sync"])
+    assert create_i < sync_i
+
+
+def test_wait_for_running_returns_when_compute_active(monkeypatch):
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "ACTIVE")
+    deploy_mod._wait_for_running("app", "prof", timeout_s=1)  # returns without raising
+
+
+def test_wait_for_running_times_out(monkeypatch):
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, p: "STARTING")
+    monkeypatch.setattr(deploy_mod.time, "sleep", lambda s: None)  # don't actually wait
+    try:
+        deploy_mod._wait_for_running("app", "prof", timeout_s=0)
+        raise AssertionError("expected AgentCliError on timeout")
+    except AgentCliError:
+        pass
 
 
 def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):
@@ -124,6 +177,70 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
     env = {e["name"]: e["value"] for e in doc["env"]}
     assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
+
+
+def test_with_traces_defaults_the_experiment_per_app():
+    # --with-traces alone must still set the experiment, or the agent ships tracing half-configured
+    # (destination set, experiment missing) and silently disables it. The default is per-app, so
+    # each agent's traces are isolated instead of piling into one shared experiment.
+    env = deploy_mod.resolve_store_env(
+        _FakeClient(),
+        app="my-agent",
+        memory_store=None,
+        session_store=None,
+        traces_destination="cat.schema",
+        traces_experiment=None,
+        create_stores=False,
+    )
+    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
+    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Users/me@example.com/mason-traces/my-agent"
+
+
+def test_with_traces_explicit_experiment_wins_over_per_app():
+    env = deploy_mod.resolve_store_env(
+        _FakeClient(),
+        app="my-agent",
+        memory_store=None,
+        session_store=None,
+        traces_destination="cat.schema",
+        traces_experiment="/Shared/custom",
+        create_stores=False,
+    )
+    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/custom"
+
+
+def _run_deploy(src, monkeypatch, extra_args):
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    return CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src), *extra_args], obj=_FakeCtx()
+    )
+
+
+def test_deploy_injects_public_pypi_index_by_default(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    result = _run_deploy(src, monkeypatch, [])
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    for name in ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX"):
+        assert env[name] == "https://pypi.org/simple/"
+
+
+def test_deploy_empty_pip_index_disables_override(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    result = _run_deploy(src, monkeypatch, ["--pip-index-url", ""])
+    assert result.exit_code == 0, result.output
+    doc = yaml.safe_load((src / "app.yaml").read_text())
+    env = {e["name"]: e["value"] for e in (doc.get("env") or [])}
+    assert "PIP_INDEX_URL" not in env  # empty -> no override, use the build's default index
 
 
 class _JsonCtx:

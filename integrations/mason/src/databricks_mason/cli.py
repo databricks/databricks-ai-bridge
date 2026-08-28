@@ -13,6 +13,8 @@ import click
 from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.client import AgentApiClient
 from databricks_mason.deploy import deploy, deployments
+from databricks_mason.dev import dev
+from databricks_mason.init import init
 from databricks_mason.memory import memory
 from databricks_mason.sandbox import add_sandbox
 from databricks_mason.sessions import sessions
@@ -58,6 +60,8 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
 
 mason.add_command(login)
 mason.add_command(logout)
+mason.add_command(init)
+mason.add_command(dev)
 mason.add_command(memory)
 mason.add_command(sessions)
 mason.add_command(tracing)

@@ -71,6 +71,90 @@ def test_split_destination_invalid_raises():
             pass
 
 
+def test_ensure_experiment_creates_parent_dir_for_nested_path():
+    from unittest import mock
+
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None  # doesn't exist yet
+    mlflow.create_experiment.return_value = "eid-1"
+    client = mock.Mock()
+
+    eid = tracing_mod._ensure_experiment(mlflow, client, "/Users/me@x.com/mason-traces/demo")
+
+    assert eid == "eid-1"
+    # the intermediate workspace folder is created before the experiment (mlflow won't make it)
+    client.ensure_workspace_dir.assert_called_once_with("/Users/me@x.com/mason-traces")
+
+
+def test_ensure_experiment_reuses_existing_without_mkdir():
+    from unittest import mock
+
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2")
+    client = mock.Mock()
+
+    assert tracing_mod._ensure_experiment(mlflow, client, "/Shared/x") == "eid-2"
+    client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
+    mlflow.create_experiment.assert_not_called()
+
+
+def test_default_experiment_is_per_app_under_user_home():
+    assert (
+        tracing_mod.default_experiment("me@x.com", "my-agent")
+        == "/Users/me@x.com/mason-traces/my-agent"
+    )
+
+
+def test_default_experiment_falls_back_to_shared_without_app():
+    assert tracing_mod.default_experiment("me@x.com", None) == tracing_mod._DEFAULT_EXPERIMENT
+
+
+def test_experiment_url_builds_traces_tab_link():
+    url = tracing_mod._experiment_url("https://ws.databricks.com/", "123")
+    assert url == "https://ws.databricks.com/ml/experiments/123?compareRunsMode=TRACES"
+
+
+def test_link_trace_location_reports_already_linked_without_relink():
+    def set_location(location, experiment_id):
+        raise RuntimeError("experiment is already linked to a storage location")
+
+    try:
+        tracing_mod._link_trace_location(
+            set_location, lambda **k: None, object(), "e1", relink=False
+        )
+        raise AssertionError("expected AgentCliError")
+    except AgentCliError as exc:
+        assert "--relink" in (exc.hint or "")
+
+
+def test_link_trace_location_relinks_when_requested():
+    calls = []
+
+    def set_location(location, experiment_id):
+        calls.append("set")
+        if calls.count("set") == 1:  # first attempt fails as already-linked
+            raise RuntimeError("already linked")
+
+    def unset_location(location, experiment_id):
+        calls.append("unset")
+
+    tracing_mod._link_trace_location(set_location, unset_location, object(), "e1", relink=True)
+    assert calls == ["set", "unset", "set"]  # try, unset existing, re-link
+
+
+def test_link_trace_location_propagates_unrelated_errors():
+    def set_location(location, experiment_id):
+        raise RuntimeError("permission denied on catalog")
+
+    try:
+        tracing_mod._link_trace_location(
+            set_location, lambda **k: None, object(), "e1", relink=True
+        )
+        raise AssertionError("expected the original error")
+    except RuntimeError as exc:
+        assert "permission denied" in str(exc)  # not swallowed as an already-linked case
+
+
 def test_setup_requires_mlflow_when_absent():
     # mlflow is not on the hermetic test deptree, so setup should surface a clean CLI error
     # (non-zero exit) rather than a traceback.

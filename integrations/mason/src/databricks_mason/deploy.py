@@ -13,39 +13,73 @@ from __future__ import annotations
 
 import json
 import pathlib
-import subprocess
+import time
 from typing import Any, Optional
 
 import click
 import yaml
 
-from databricks_mason import render, timefmt
+from databricks_mason import memory_store_access, render, session_store_access, timefmt
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
-from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
+from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
+from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
+
+# TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
+# time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
+# until the proxy is reachable from the build sandbox again, then drop this default. pip reads
+# PIP_INDEX_URL; uv reads UV_INDEX_URL / UV_DEFAULT_INDEX — set all three to cover both build paths.
+_DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
+_PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 
 
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
 
-def _databricks(
-    args: list[str], profile: Optional[str], *, capture: bool = False, check: bool = True
-) -> subprocess.CompletedProcess:
-    cmd = ["databricks", *args]
-    if profile:
-        cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture)
-    if check and result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(f"`{' '.join(cmd)}` failed (exit {result.returncode})", hint=detail)
-    return result
-
-
 def _deployment_exists(name: str, profile: Optional[str]) -> bool:
     return _databricks(["apps", "get", name], profile, capture=True, check=False).returncode == 0
+
+
+def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
+    """The app's service principal client id (its Postgres role identity), or None if unavailable."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("service_principal_client_id")
+    except json.JSONDecodeError:
+        return None
+
+
+def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
+    """The app's compute state (e.g. RUNNING), or None if it can't be read."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("compute_status", {}).get("state")
+    except json.JSONDecodeError:
+        return None
+
+
+def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -> None:
+    """Block until a just-created app's compute is RUNNING (or raise on timeout).
+
+    `apps create` returns before compute is provisioned, but `apps deploy` requires RUNNING — so a
+    first deploy races without this wait.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if _app_compute_state(name, profile) == "ACTIVE":
+            return
+        time.sleep(5)
+    raise AgentCliError(
+        f"App '{name}' did not reach a running state within {timeout_s}s.",
+        hint=f"Check `mason deployments get {name}`, then re-run deploy once it's running.",
+    )
 
 
 # --- app.yaml manifest handling ---------------------------------------------
@@ -103,6 +137,88 @@ def _ensure_session_store(client, name: str) -> dict:
     return client.get_session_store(name)
 
 
+def _memory_store_database(client, memory_store: str) -> Optional[str]:
+    """Resolve the memory store's per-store Lakebase database name from its storage backend."""
+    store = client.get_memory_store(memory_store)
+    backend_id = field(field(store, "storage_backend") or {}, "backend_id")
+    return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
+
+
+def resolve_store_env(
+    client,
+    *,
+    app: Optional[str],
+    memory_store: Optional[str],
+    session_store: Optional[str],
+    traces_destination: Optional[str],
+    traces_experiment: Optional[str],
+    create_stores: bool,
+) -> dict[str, str]:
+    """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
+
+    Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
+    way. With `create_stores`, missing stores are created (idempotent); otherwise they must already
+    exist. The memory store resolves to its bare id (the runtime re-adds the `memory-stores/` prefix
+    when building the entries URL); the session store and trace destination are used verbatim.
+    """
+    env: dict[str, str] = {}
+    if memory_store:
+        store = (
+            _ensure_memory_store(client, memory_store)
+            if create_stores
+            else client.get_memory_store(memory_store)
+        )
+        store_name = field(store, "name") or memory_store
+        env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
+    if session_store:
+        if create_stores:
+            _ensure_session_store(client, session_store)
+        env[_SESSION_ENV] = session_store
+    if traces_destination:
+        env[TRACES_DEST_ENV] = traces_destination
+        # The agent enables tracing only when BOTH a destination and an experiment are set, so
+        # default the experiment to this agent's per-app path (matching `mason tracing setup --app`),
+        # otherwise --with-traces alone would ship a half-config that silently disables tracing.
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(
+            client.current_user, app
+        )
+    elif traces_experiment:
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment
+    return env
+
+
+def _grant_store_access(
+    app: str,
+    sp: str,
+    owner: str,
+    session_store: Optional[str],
+    memory_database: Optional[str],
+    profile: Optional[str],
+) -> Optional[str]:
+    """Give the app's SP access to the deployed stores (best-effort, two steps).
+
+    Binds every store's database as a `postgres` app resource in one update (the update replaces the
+    whole resource array, so they must be applied together), then GRANTs the SP read/write on each
+    store's tables. Returns None on success or a human-readable reason on the first failure.
+    """
+    backends = []
+    if session_store:
+        backends.append(session_store_access.backend(session_store))
+    if memory_database:
+        backends.append(memory_store_access.backend(memory_database))
+    if not backends:
+        return None
+
+    error = apply_postgres_resources(app, backends, profile)
+    if error:
+        return error
+    for backend in backends:
+        error = grant_tables(backend, sp, owner, profile)
+        if error:
+            return error
+    return None
+
+
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -110,9 +226,10 @@ def _ensure_session_store(client, name: str) -> dict:
 @click.argument("name")
 @click.option(
     "--source",
-    required=True,
+    default=".",
     type=click.Path(exists=True, file_okay=False),
-    help="Local source directory for the deployment (containing app.yaml).",
+    help="Local source directory for the deployment (containing app.yaml). Defaults to the "
+    "current directory.",
 )
 @click.option(
     "--with-memory-store",
@@ -144,6 +261,14 @@ def _ensure_session_store(client, name: str) -> dict:
     help="Create the referenced stores if they don't exist (idempotent).",
 )
 @click.option(
+    "--pip-index-url",
+    default=_DEFAULT_PIP_INDEX_URL,
+    show_default=True,
+    help="Package index the Apps build installs from. Defaults to public PyPI as a temporary "
+    "workaround: the Apps build environment currently can't reach the internal proxy. Pass an "
+    "empty string to use the build's default index.",
+)
+@click.option(
     "--workspace-path",
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
@@ -158,6 +283,7 @@ def deploy(
     traces_destination,
     traces_experiment,
     create_stores,
+    pip_index_url,
     workspace_path,
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
@@ -165,26 +291,26 @@ def deploy(
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.
-    env_updates: dict[str, str] = {}
+    env_updates = resolve_store_env(
+        client,
+        app=name,
+        memory_store=memory_store,
+        session_store=session_store,
+        traces_destination=traces_destination,
+        traces_experiment=traces_experiment,
+        create_stores=create_stores,
+    )
     provisioned: dict[str, Any] = {}
-    if memory_store:
-        store = (
-            _ensure_memory_store(client, memory_store)
-            if create_stores
-            else client.get_memory_store(memory_store)
-        )
-        env_updates[_MEMORY_ENV] = field(store, "name") or memory_store
+    if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
-    if session_store:
-        if create_stores:
-            _ensure_session_store(client, session_store)
-        env_updates[_SESSION_ENV] = session_store
-        provisioned["Session store"] = session_store
+    if _SESSION_ENV in env_updates:
+        provisioned["Session store"] = env_updates[_SESSION_ENV]
     if traces_destination:
-        env_updates[TRACES_DEST_ENV] = traces_destination
         provisioned["Traces"] = traces_destination
-    if traces_experiment:
-        env_updates[TRACES_EXPERIMENT_ENV] = traces_experiment
+    if pip_index_url:
+        for env in _PIP_INDEX_ENVS:
+            env_updates[env] = pip_index_url
+        provisioned["Package index"] = pip_index_url
 
     # 2. Patch the app.yaml manifest with the store identifiers.
     scaffolded = False
@@ -194,12 +320,43 @@ def deploy(
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
         _databricks(["apps", "create", name], obj.profile)
+        # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
+        # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
+        _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
-    _databricks(["sync", str(source_dir), ws_path], obj.profile)
+    # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
+    # resolved against (often an internal proxy). The Apps build must resolve against its own
+    # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
+    _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
     _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
+    # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
+    #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
+    #    both, the app runs but the durable store path fails (can't connect, or can't read tables).
+    grants_stores = bool(session_store or memory_store)
+    grant_error: Optional[str] = None
+    if grants_stores:
+        sp = _app_service_principal(name, obj.profile)
+        if sp is None:
+            grant_error = "could not resolve the app's service principal."
+        else:
+            memory_database = _memory_store_database(client, memory_store) if memory_store else None
+            grant_error = _grant_store_access(
+                name, sp, client.current_user, session_store, memory_database, obj.profile
+            )
+
     if obj.output == "json":
-        render.emit_json({"deployment": name, "workspace_path": ws_path, "env": env_updates})
+        render.emit_json(
+            {
+                "deployment": name,
+                "workspace_path": ws_path,
+                "env": env_updates,
+                "store_grant": "skipped"
+                if not grants_stores
+                else ("granted" if grant_error is None else "failed"),
+                "store_grant_error": grant_error,
+            }
+        )
         return
 
     steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
@@ -207,6 +364,15 @@ def deploy(
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
         )
+    if grants_stores and grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs read/write on its store tables; that grant couldn't "
+            "be applied automatically (it requires store ownership and psql). "
+            f"Cause: {grant_error}",
+        )
+    if grants_stores and grant_error is None:
+        provisioned["Store access"] = "granted to app service principal"
     render.success(
         f"Deployed agent '{name}'",
         fields={"Workspace path": ws_path, **provisioned},
