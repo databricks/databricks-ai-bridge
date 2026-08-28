@@ -17,7 +17,7 @@ from typing import Optional
 import click
 
 from databricks_mason import render
-from databricks_mason.client import AgentApiClient
+from databricks_mason.client import MasonClient
 from databricks_mason.errors import AgentCliError
 
 
@@ -57,7 +57,7 @@ def login(obj, profile) -> None:
             "No profile to save.",
             hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
         )
-    client = AgentApiClient(profile)
+    client = MasonClient(profile)
     user = client.current_user  # round-trips current_user.me(), so a bad profile fails here
     _save_default_profile(profile)
     if obj.output == "json":

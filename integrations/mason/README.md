@@ -44,6 +44,26 @@ underlying credentials. If Databricks SDK default authentication is already conf
 you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
 Use `--output json` for scripting.
 
+## Python SDK
+
+The same memory and session APIs are available programmatically through
+`MasonClient`, which authenticates exactly like the CLI (a `.databrickscfg` profile
+or the SDK's default resolution):
+
+```python
+from databricks_mason import MasonClient
+
+client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
+
+store = client.create_memory_store("my-store")
+client.create_memory_entry("my-store", actor_id="alice", path="notes/1.md", content="hi")
+entries = client.list_memory_entries("my-store", actor_id="alice")
+```
+
+Each method maps to one `/api/agents/v1` operation and returns the raw JSON response
+dict. API errors raise `databricks_mason.AgentCliError`. Deployment, sandbox, and
+tracing remain CLI-only.
+
 ## Commands
 
 ```text

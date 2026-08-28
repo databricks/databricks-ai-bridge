@@ -1,7 +1,9 @@
-"""Authenticated REST client for the agents/v1 memory and session APIs.
+"""Authenticated client for the agents/v1 memory and session APIs.
 
-Wraps a databricks-sdk `WorkspaceClient` so auth/host come from a `.databrickscfg`
-profile. Each method maps to one API operation.
+`MasonClient` is Mason's public Python entry point: construct it with a
+`.databrickscfg` profile (or rely on the SDK's default auth) and call one method per
+API operation. It wraps a databricks-sdk `WorkspaceClient` and returns the raw JSON
+response dicts from `/api/agents/v1`.
 Deployment is handled separately (deploy.py) since it wraps the `databricks apps` CLI.
 """
 
@@ -34,8 +36,15 @@ def memory_entry_path(store: str, entry: str) -> str:
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
-class AgentApiClient:
-    """Thin, authenticated wrapper over the agents/v1 REST surface."""
+class MasonClient:
+    """Thin, authenticated wrapper over the agents/v1 REST surface.
+
+    Example:
+        >>> from databricks_mason import MasonClient
+        >>> client = MasonClient(profile="my-workspace")
+        >>> store = client.create_memory_store("my-store")
+        >>> client.list_memory_stores()
+    """
 
     def __init__(self, profile: Optional[str] = None):
         try:
@@ -296,3 +305,7 @@ class AgentApiClient:
         return self._do(
             "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={}
         )
+
+
+# Backwards-compatible alias for the pre-1.0 internal name.
+AgentApiClient = MasonClient
