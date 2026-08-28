@@ -15,8 +15,9 @@ long-term memory; change ``_actor_id`` to scope per user (e.g. from request cont
 
 import os
 
-from databricks.sdk import WorkspaceClient
 from langchain_core.tools import BaseTool, tool
+
+from agent.mason.workspace import workspace_client
 
 _AGENTS_V1 = "/api/agents/v1"
 
@@ -31,7 +32,7 @@ def _store_path() -> str:
 
 def _api():
     # Build the client lazily (needs workspace auth) so importing this module stays cheap.
-    return WorkspaceClient().api_client
+    return workspace_client().api_client
 
 
 @tool

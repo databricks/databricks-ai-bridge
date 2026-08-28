@@ -61,6 +61,17 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
         configure()
 
 
+def test_chat_model_forwards_account_routing_header(monkeypatch):
+    from agent.agent import _RoutedChatDatabricks
+
+    monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
+    model = _RoutedChatDatabricks(endpoint="test-endpoint")
+
+    assert model._get_client_kwargs()["default_headers"] == {
+        "X-Databricks-Org-Id": "123456"
+    }
+
+
 def test_thread_config_from_session_id():
     # actor_id rides alongside thread_id — the durable saver maps it onto the Session's actor.
     assert thread_config("abc-123") == {

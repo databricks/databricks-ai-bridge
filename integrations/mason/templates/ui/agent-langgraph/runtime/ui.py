@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.mason import recovery
-from databricks.sdk import WorkspaceClient
+from agent.mason.workspace import workspace_client
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -79,7 +79,7 @@ def _session_actor() -> str:
 
 class _ManagedStateClient:
     def __init__(self) -> None:
-        self._workspace = WorkspaceClient()
+        self._workspace = workspace_client()
 
     def _do(
         self,
