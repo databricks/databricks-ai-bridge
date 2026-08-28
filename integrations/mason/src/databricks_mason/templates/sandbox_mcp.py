@@ -1,7 +1,12 @@
+from typing import Any
+
+from databricks.sdk import WorkspaceClient
+from databricks_openai.agents import McpServer  # ty: ignore[unresolved-import]
+
 # BEGIN: mason add-sandbox
 # The downscope is fixed when this file is generated. It is sent as MCP metadata,
 # outside model-controlled tool arguments, on every sandbox call.
-# __MASON_SANDBOX_DOWNSCOPE__
+_SANDBOX_DOWNSCOPE: dict[str, list[dict[str, str]]] = {}  # __MASON_SANDBOX_DOWNSCOPE__
 
 
 class _SandboxMcpServer(McpServer):
@@ -21,8 +26,7 @@ def _build_sandbox_mcp_server() -> McpServer:
     workspace_client = WorkspaceClient()
     return _SandboxMcpServer(
         url=(
-            f"{workspace_client.config.host.rstrip('/')}"
-            "/ai-gateway/mcp-services/system.ai.sandbox"
+            f"{workspace_client.config.host.rstrip('/')}/ai-gateway/mcp-services/system.ai.sandbox"
         ),
         workspace_client=workspace_client,
         timeout=120.0,

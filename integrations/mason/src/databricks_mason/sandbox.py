@@ -20,11 +20,7 @@ _BEGIN_MARKER = "# BEGIN: mason add-sandbox"
 _END_MARKER = "# END: mason add-sandbox"
 _DOWNSCOPE_PLACEHOLDER = "# __MASON_SANDBOX_DOWNSCOPE__"
 _SERVER_FACTORY_CALL = "_build_sandbox_mcp_server()"
-_TEMPLATE_NAME = "sandbox_mcp.py.tmpl"
-
-_GENERATED_TYPING_IMPORT = "from typing import Any"
-_GENERATED_MCP_IMPORT = "from databricks_openai.agents import McpServer"
-_GENERATED_WORKSPACE_CLIENT_IMPORT = "from databricks.sdk import WorkspaceClient"
+_TEMPLATE_NAME = "sandbox_mcp.py"
 
 
 def _validate_uc_name(value: str, resource_type: str) -> str:
@@ -187,8 +183,24 @@ def _append_server_to_list(source: str) -> str:
     return with_item
 
 
-def _insert_imports(source: str) -> str:
+def _read_template() -> str:
+    try:
+        return (
+            resources.files("databricks_mason")
+            .joinpath("templates")
+            .joinpath(_TEMPLATE_NAME)
+            .read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError) as exc:
+        raise AgentCliError("Could not read the packaged sandbox MCP template.") from exc
+
+
+def _insert_imports(source: str, template: str) -> str:
     tree = ast.parse(source)
+    try:
+        template_tree = ast.parse(template)
+    except SyntaxError as exc:
+        raise AgentCliError("The packaged sandbox MCP template is invalid.") from exc
     lines = source.splitlines(keepends=True)
 
     def has_from_import(module: str, name: str) -> bool:
@@ -198,6 +210,29 @@ def _insert_imports(source: str) -> str:
             and any((alias.asname or alias.name) == name for alias in node.names)
             for node in tree.body
         )
+
+    template_imports = [
+        node
+        for node in template_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    ]
+    if not template_imports or any(
+        node.level != 0 or len(node.names) != 1 or node.names[0].asname is not None
+        for node in template_imports
+    ):
+        raise AgentCliError("The packaged sandbox MCP template has invalid imports.")
+
+    missing_imports: list[tuple[str, str]] = []
+    for node in template_imports:
+        module = node.module
+        if module is None:
+            raise AgentCliError("The packaged sandbox MCP template has invalid imports.")
+        alias = node.names[0]
+        if not has_from_import(module, alias.name):
+            segment = ast.get_source_segment(template, node)
+            if segment is None:
+                raise AgentCliError("The packaged sandbox MCP template has invalid imports.")
+            missing_imports.append((module, segment))
 
     protocol_imports = [
         node
@@ -231,21 +266,17 @@ def _insert_imports(source: str) -> str:
         ):
             break
 
-    missing_imports: list[str] = []
-    if not has_from_import("databricks_openai.agents", "McpServer"):
-        missing_imports.append(_GENERATED_MCP_IMPORT)
-    if not has_from_import("databricks.sdk", "WorkspaceClient"):
-        missing_imports.append(_GENERATED_WORKSPACE_CLIENT_IMPORT)
-
     with_runtime_imports = source
-    if missing_imports:
+    runtime_imports = [segment for module, segment in missing_imports if module != "typing"]
+    if runtime_imports:
         import_end_line, import_end_column = _end_position(protocol_imports[0])
         import_end = _offset(lines, import_end_line, import_end_column)
         with_runtime_imports = (
-            source[:import_end] + "\n" + "\n".join(missing_imports) + source[import_end:]
+            source[:import_end] + "\n" + "\n".join(runtime_imports) + source[import_end:]
         )
 
-    if has_from_import("typing", "Any"):
+    typing_imports = [segment for module, segment in missing_imports if module == "typing"]
+    if not typing_imports:
         return with_runtime_imports
 
     if insert_after is not None:
@@ -255,11 +286,11 @@ def _insert_imports(source: str) -> str:
         return (
             with_runtime_imports[:insert_at]
             + "\n\n"
-            + _GENERATED_TYPING_IMPORT
+            + "\n".join(typing_imports)
             + "\n\n"
             + following
         )
-    return _GENERATED_TYPING_IMPORT + "\n\n" + with_runtime_imports.lstrip("\n")
+    return "\n".join(typing_imports) + "\n\n" + with_runtime_imports.lstrip("\n")
 
 
 def _format_policy(policy: dict[str, list[dict[str, str]]]) -> str:
@@ -483,25 +514,41 @@ def _write_text_atomic(target: pathlib.Path, content: str) -> None:
                 pass
 
 
-def _generated_block(policy: dict[str, list[dict[str, str]]]) -> str:
+def _generated_block(policy: dict[str, list[dict[str, str]]], template: str | None = None) -> str:
+    template = template if template is not None else _read_template()
     try:
-        template = (
-            resources.files("databricks_mason")
-            .joinpath("templates")
-            .joinpath(_TEMPLATE_NAME)
-            .read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError) as exc:
-        raise AgentCliError("Could not read the packaged sandbox MCP template.") from exc
-    if template.count(_DOWNSCOPE_PLACEHOLDER) != 1:
+        tree = ast.parse(template)
+    except SyntaxError as exc:
+        raise AgentCliError("The packaged sandbox MCP template is invalid.") from exc
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_SANDBOX_DOWNSCOPE"
+    ]
+    lines = template.splitlines(keepends=True)
+    if (
+        len(assignments) != 1
+        or assignments[0].lineno != assignments[0].end_lineno
+        or _DOWNSCOPE_PLACEHOLDER not in lines[assignments[0].lineno - 1]
+    ):
         raise AgentCliError("The packaged sandbox MCP template is invalid.")
-    return template.replace(_DOWNSCOPE_PLACEHOLDER, _format_policy(policy))
+    line_start = _offset(lines, assignments[0].lineno, 0)
+    line_end = line_start + len(lines[assignments[0].lineno - 1])
+    rendered = template[:line_start] + _format_policy(policy) + "\n" + template[line_end:]
+    if rendered.count(_BEGIN_MARKER) != 1 or rendered.count(_END_MARKER) != 1:
+        raise AgentCliError("The packaged sandbox MCP template has invalid markers.")
+    block_start = rendered.index(_BEGIN_MARKER)
+    block_end = rendered.index(_END_MARKER) + len(_END_MARKER)
+    return rendered[block_start:block_end] + "\n"
 
 
 def _add_sandbox_to_source(source: str, policy: dict[str, list[dict[str, str]]]) -> str:
+    template = _read_template()
     with_server = _append_server_to_list(source)
-    with_imports = _insert_imports(with_server)
-    generated = with_imports.rstrip() + "\n\n\n" + _generated_block(policy)
+    with_imports = _insert_imports(with_server, template)
+    generated = with_imports.rstrip() + "\n\n\n" + _generated_block(policy, template)
     try:
         ast.parse(generated)
     except SyntaxError as exc:

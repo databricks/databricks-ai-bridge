@@ -47,13 +47,14 @@ def _project(
     return project, mcps
 
 
-def test_generated_block_reads_packaged_template_at_render_time(
+def test_generated_block_reads_valid_python_template_at_render_time(
     tmp_path: pathlib.Path, monkeypatch
 ):
     template_dir = tmp_path / "templates"
     template_dir.mkdir()
-    (template_dir / "sandbox_mcp.py.tmpl").write_text(
+    (template_dir / "sandbox_mcp.py").write_text(
         "# BEGIN: mason add-sandbox\n"
+        "_SANDBOX_DOWNSCOPE: dict[str, list[dict[str, str]]] = {}  "
         "# __MASON_SANDBOX_DOWNSCOPE__\n"
         'TEMPLATE_SOURCE = "loaded"\n'
         "# END: mason add-sandbox\n"
@@ -78,6 +79,35 @@ def test_generated_block_reads_packaged_template_at_render_time(
     }
 
 
+def test_add_sandbox_inserts_imports_declared_by_template(tmp_path: pathlib.Path, monkeypatch):
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir()
+    (template_dir / "sandbox_mcp.py").write_text(
+        "from custom_sandbox import CustomMcpServer\n\n"
+        "# BEGIN: mason add-sandbox\n"
+        "_SANDBOX_DOWNSCOPE: dict[str, list[dict[str, str]]] = {}  "
+        "# __MASON_SANDBOX_DOWNSCOPE__\n\n"
+        "def _build_sandbox_mcp_server():\n"
+        "    return CustomMcpServer(_SANDBOX_DOWNSCOPE)\n\n"
+        "# END: mason add-sandbox\n"
+    )
+    monkeypatch.setattr(resources, "files", lambda package: tmp_path)
+
+    generated = sandbox_mod._add_sandbox_to_source(
+        _EMPTY_MCPS,
+        {
+            "volumes": [
+                {"name": "catalog.schema.volume", "permission": "read_only"},
+            ]
+        },
+    )
+
+    assert generated.index("from custom_sandbox import CustomMcpServer") < generated.index(
+        "def build_mcp_servers"
+    )
+    assert generated.count("from custom_sandbox import CustomMcpServer") == 1
+
+
 def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     project, mcps = _project(tmp_path)
 
@@ -92,7 +122,7 @@ def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     ast.parse(generated)
     assert '"name": "catalog.schema.volume"' in generated
     assert '"permission": "read_only"' in generated
-    assert '"/ai-gateway/mcp-services/system.ai.sandbox"' in generated
+    assert "/ai-gateway/mcp-services/system.ai.sandbox" in generated
     assert "from_uc_function" not in generated
     assert 'tool_filter={"allowed_tool_names": ["run_code"]}' in generated
     assert "return [\n        _build_sandbox_mcp_server(),\n    ]" in generated
