@@ -1,12 +1,17 @@
 """Authenticated REST client for the agents/v1 memory and session APIs.
 
 Wraps a databricks-sdk `WorkspaceClient` so auth/host come from a `.databrickscfg`
-profile. Each method maps to one API operation.
+profile. Each method maps to one API operation. Account-routed profiles retain their
+configured vanity host and add the resolved workspace id as a routing header, matching
+the authentication behavior of the Databricks CLI.
 Deployment is handled separately (deploy.py) since it wraps the `databricks apps` CLI.
 """
 
 from __future__ import annotations
 
+import configparser
+import os
+import pathlib
 from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
@@ -34,12 +39,42 @@ def memory_entry_path(store: str, entry: str) -> str:
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
+def _profile_host(profile: str) -> Optional[str]:
+    config_path = pathlib.Path(
+        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
+    )
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path)
+    except (OSError, configparser.Error):
+        return None
+    return parser.get(profile, "host", fallback=None)
+
+
+def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
+    client = WorkspaceClient(profile=profile)
+    if not profile or not client.config.workspace_id:
+        return client
+
+    configured_host = _profile_host(profile)
+    resolved_host = client.config.host
+    if not configured_host or configured_host.rstrip("/") == (resolved_host or "").rstrip("/"):
+        return client
+
+    workspace_id = str(client.config.workspace_id)
+    return WorkspaceClient(
+        profile=profile,
+        host=configured_host,
+        custom_headers={"X-Databricks-Org-Id": workspace_id},
+    )
+
+
 class AgentApiClient:
     """Thin, authenticated wrapper over the agents/v1 REST surface."""
 
     def __init__(self, profile: Optional[str] = None):
         try:
-            self._w = WorkspaceClient(profile=profile)
+            self._w = _workspace_client(profile)
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",

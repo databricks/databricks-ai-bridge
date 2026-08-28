@@ -34,12 +34,16 @@ def test_framework_specs_have_repo_ref_path():
     assert (
         init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
     )
+    assert (
+        init_mod._CHAT_APP_TEMPLATES["langgraph"]
+        == "integrations/mason/templates/ui/agent-langgraph"
+    )
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     dest = tmp_path / "agent-openai-basic"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
         (target / "app.yaml").write_text("command: []\n")
 
@@ -107,7 +111,7 @@ def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_c
 ):
     dest = tmp_path / "langgraph"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         (target / "agent" / "mason").mkdir(parents=True)
         (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
         (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
@@ -144,7 +148,7 @@ def test_init_openai_records_manifest_without_installing_runtime_adapter(tmp_pat
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
     dest = tmp_path / "lg"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
@@ -178,6 +182,33 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     assert f.call_args.args[1] == "wip"
 
 
+def test_init_enable_chat_app_adds_langgraph_overlay(tmp_path: pathlib.Path):
+    dest = tmp_path / "chat"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", "--enable-chat-app", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
+    assert "Chat app" in result.output
+
+
+def test_init_enable_chat_app_rejects_unsupported_framework(tmp_path: pathlib.Path):
+    with mock.patch.object(init_mod, "_fetch_template") as fetched:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", "--enable-chat-app", str(tmp_path / "chat")],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code != 0
+    assert "not available" in result.output
+    fetched.assert_not_called()
+
+
 def test_init_json_output(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
@@ -189,6 +220,7 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["framework"] == "langgraph"
     assert payload["template"] == "agent-langgraph"
     assert payload["directory"] == str(dest)
+    assert payload["chat_app_enabled"] is False
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
@@ -229,7 +261,7 @@ def test_write_env_never_clobbers_existing(tmp_path: pathlib.Path):
 def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
@@ -242,7 +274,7 @@ def test_init_profile_flag_writes_env(tmp_path: pathlib.Path):
 def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
@@ -255,7 +287,7 @@ def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
 def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
         (target / ".env.example").write_text("DATABRICKS_CONFIG_PROFILE=DEFAULT\n")
 
