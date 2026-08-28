@@ -284,6 +284,7 @@ h2 {
   color: var(--accent-deep);
   font-size: 0.75rem;
   font-weight: 750;
+  white-space: nowrap;
 }
 
 .capability-list {
@@ -1084,6 +1085,33 @@ h2 {
 @keyframes blink {
   0%, 45% { opacity: 1; }
   46%, 100% { opacity: 0; }
+}
+
+@media (min-width: 1181px) {
+  html,
+  body,
+  .app-shell {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .workspace {
+    height: calc(100vh - 110px);
+    min-height: 0;
+  }
+
+  .left-rail,
+  .right-rail {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .chat-panel {
+    height: 100%;
+    min-height: 0;
+  }
 }
 
 @media (max-width: 1180px) {

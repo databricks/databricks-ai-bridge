@@ -37,6 +37,10 @@ same actor, replaces the routing cookie, and reloads its transcript and pending 
 local in-memory mode only the current browser session can be listed because there is no shared
 session index.
 
+The session list excludes internal `mason-demo-durability` execution sessions. Transcript responses
+also include only user, assistant, tool, system, and human-decision message items; checkpoint
+fragments and durability events remain in Session Store but are never returned to the chat UI.
+
 The recovery flow is intentionally a demo, not a production lease implementation: ownership is
 last-writer-wins, the worker persists heartbeats, the browser detects a stale owner, and work resumes
 at the first node whose output was not checkpointed.

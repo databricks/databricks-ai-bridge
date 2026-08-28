@@ -37,6 +37,15 @@ class _FakeStateClient:
                     "actor_id": "alice",
                     "last_activity_time": "2026-08-27T12:00:00Z",
                 },
+                {
+                    "session_id": "durability-s1",
+                    "actor_id": "alice",
+                    "metadata": {
+                        "client": "mason-demo-durability",
+                        "public_session_id": "s1",
+                    },
+                    "last_activity_time": "2026-08-28T12:01:00Z",
+                },
             ]
         }
 
@@ -45,7 +54,24 @@ class _FakeStateClient:
 
     def list_session_items(self, session_id):
         return {
-            "session_items": [{"item_id": "1", "data": {"role": "user", "content": session_id}}]
+            "session_items": [
+                {"item_id": "1", "data": {"role": "user", "content": session_id}},
+                {
+                    "item_id": "2",
+                    "data": {"type": "assistant", "content": "saved reply"},
+                },
+                {
+                    "item_id": "3",
+                    "data": {"event_type": "checkpoint", "checkpoint_id": "checkpoint-1"},
+                },
+                {
+                    "item_id": "4",
+                    "data": {
+                        "event_type": "mason_demo_durability",
+                        "event": "heartbeat",
+                    },
+                },
+            ]
         }
 
 
@@ -154,6 +180,9 @@ def test_demo_ui_routes(monkeypatch):
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
+    styles = client.get("/ui-assets/styles.css").text
+    assert "@media (min-width: 1181px)" in styles
+    assert "scrollbar-gutter: stable" in styles
 
     config = client.get("/api/demo/config").json()
     assert config["session_id"] == "routing-session"
@@ -222,6 +251,32 @@ def test_managed_session_list_is_actor_scoped(monkeypatch):
             },
         )
     ]
+
+
+def test_chat_session_items_exclude_checkpoints_and_durability_events():
+    result = ui._chat_session_items(
+        {
+            "session_items": [
+                {"item_id": "1", "data": {"role": "user", "content": "hello"}},
+                {"item_id": "2", "data": {"type": "ai", "content": "hi"}},
+                {"item_id": "3", "data": {"event_type": "checkpoint"}},
+                {
+                    "item_id": "4",
+                    "data": {"event_type": "mason_demo_durability", "event": "heartbeat"},
+                },
+                {"item_id": "5", "data": {"content": "missing role"}},
+            ],
+            "next_page_token": "next",
+        }
+    )
+
+    assert result == {
+        "session_items": [
+            {"item_id": "1", "data": {"role": "user", "content": "hello"}},
+            {"item_id": "2", "data": {"type": "ai", "content": "hi"}},
+        ],
+        "next_page_token": "next",
+    }
 
 
 @pytest.mark.asyncio
@@ -332,6 +387,10 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert (
         client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s1"
     )
+    assert [
+        item["data"]["content"]
+        for item in client.get("/api/demo/session/items").json()["session_items"]
+    ] == ["s1", "saved reply"]
 
     opened = client.post("/api/demo/sessions/s2/open")
     assert opened.json() == {

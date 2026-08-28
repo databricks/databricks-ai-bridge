@@ -154,7 +154,8 @@ When initialized with `mason init --framework langgraph --enable-chat-app`, the 
 - `POST /api/demo/sessions/{session_id}/open` to verify an actor-scoped managed session, replace the
   routing cookie, and load that session's transcript and pending state.
 - `GET /api/demo/session/items` to load the current transcript. Without a managed Session Store it
-  reconstructs messages and pending interrupts from the in-process LangGraph checkpoint.
+  reconstructs messages and pending interrupts from the in-process LangGraph checkpoint. Managed
+  responses filter out checkpoint fragments and durability events before returning items to the UI.
 - `POST /api/demo/session/items` to mirror user, assistant, tool, and human-decision items into the
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
