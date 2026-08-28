@@ -111,7 +111,7 @@ def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_c
 ):
     dest = tmp_path / "langgraph"
 
-    def fake_fetch(repo, ref, template_path, target):
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         (target / "agent" / "mason").mkdir(parents=True)
         (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
         (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
