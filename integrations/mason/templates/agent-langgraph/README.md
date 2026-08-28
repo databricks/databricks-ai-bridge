@@ -14,6 +14,10 @@ bodies are plain dicts, no wrapper types.
 This template is API-first (no bundled UI). Call it with `curl` or from your own frontend /
 model-serving client.
 
+Local clients can use `/invocations`. For a deployed Databricks App, use the equivalent
+`/api/invocations` route with an OAuth Bearer token; Databricks Apps reserves `/api/*` for
+programmatic token authentication. Polling and health checks likewise have `/api` aliases.
+
 ## Project layout
 
 ```

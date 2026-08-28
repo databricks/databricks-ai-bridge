@@ -43,10 +43,7 @@ PROMPTS = {
     "python": (
         "You must call the matrix_marker Python tool with value 'matrix'. Return its exact result."
     ),
-    "uc_function": (
-        "You must call the configured Unity Catalog function tool with value 'matrix'. "
-        "Return its exact result."
-    ),
+    "uc_function": "",
 }
 
 EXPECTED = {
@@ -109,10 +106,21 @@ class Transcript:
 
 
 class Runner:
-    def __init__(self, profile: str, output: pathlib.Path, wheel: pathlib.Path):
+    def __init__(
+        self,
+        profile: str,
+        output: pathlib.Path,
+        wheel: pathlib.Path,
+        template_repo: str | None = None,
+        template_ref: str | None = None,
+        app_auth_profile: str | None = None,
+    ):
         self.profile = profile
         self.output = output
         self.wheel = wheel.resolve()
+        self.template_repo = template_repo
+        self.template_ref = template_ref
+        self.app_auth_profile = app_auth_profile or profile
         self.transcript = Transcript(output / "commands.log")
         self.runner_venv = output / "runner-venv"
         self.mason = self.runner_venv / "bin" / "mason"
@@ -220,12 +228,25 @@ class Runner:
         )
         self.run([str(self.mason), "tools", "--help"])
         workspace_client = WorkspaceClient(profile=self.profile)
+        app_auth_client = WorkspaceClient(profile=self.app_auth_profile)
         if not workspace_client.config.host:
             raise MatrixError(f"Could not resolve a host from profile {self.profile!r}.")
+        if not app_auth_client.config.host:
+            raise MatrixError(
+                f"Could not resolve a host from App auth profile {self.app_auth_profile!r}."
+            )
         self.host = workspace_client.config.host.rstrip("/")
-        authorization = workspace_client.config.authenticate().get("Authorization")
+        app_auth_host = app_auth_client.config.host.rstrip("/")
+        if app_auth_host != self.host:
+            raise MatrixError(
+                f"App auth profile {self.app_auth_profile!r} targets {app_auth_host}, "
+                f"not {self.host}."
+            )
+        authorization = app_auth_client.config.authenticate().get("Authorization")
         if not authorization:
-            raise MatrixError(f"Could not resolve credentials from profile {self.profile!r}.")
+            raise MatrixError(
+                f"Could not resolve credentials from App auth profile {self.app_auth_profile!r}."
+            )
         self.headers = {"Authorization": authorization}
 
     def select_warehouse(self, override: str | None) -> str:
@@ -288,9 +309,14 @@ class Runner:
         if not separator or not catalog or not schema_name or "." in schema_name:
             raise MatrixError("--uc-schema must be a two-part catalog.schema name.")
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_name}`")
-        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        function_name = f"mason_tool_matrix_{suffix}"
+        function_name = f"mason_uc_{uuid.uuid4().hex[:8]}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
+        exposed_tool_name = self.uc_function.replace(".", "__")
+        if len(exposed_tool_name) > 64:
+            raise MatrixError(
+                "The UC function's MCP tool name would exceed 64 characters: "
+                f"{exposed_tool_name!r}. Use a shorter --uc-schema."
+            )
         self.sql(
             f"CREATE OR REPLACE FUNCTION `{catalog}`.`{schema_name}`.`{function_name}`"
             "(value STRING) RETURNS STRING "
@@ -309,19 +335,24 @@ class Runner:
         for framework in FRAMEWORKS:
             for authoring in AUTHORING_PATHS:
                 project = projects_root / f"{framework}-{authoring}"
+                init_args = [
+                    str(self.mason),
+                    "--profile",
+                    self.profile,
+                    "init",
+                    "--framework",
+                    framework,
+                    "--profile",
+                    self.profile,
+                ]
+                if self.template_repo:
+                    init_args.extend(["--repo", self.template_repo])
+                if self.template_ref:
+                    init_args.extend(["--ref", self.template_ref])
+                init_args.append(str(project))
                 self.run_long(
                     f"init-{framework}-{authoring}",
-                    [
-                        str(self.mason),
-                        "--profile",
-                        self.profile,
-                        "init",
-                        "--framework",
-                        framework,
-                        "--profile",
-                        self.profile,
-                        str(project),
-                    ],
+                    init_args,
                     timeout=600,
                 )
                 if authoring == "cli":
@@ -337,7 +368,14 @@ class Runner:
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
             ["tools", "add", "mcp", "system.ai.web_search"],
-            ["tools", "add", "uc-function", self.uc_function or ""],
+            [
+                "tools",
+                "add",
+                "uc-function",
+                self.uc_function or "",
+                "--name",
+                "mason_uc_marker",
+            ],
             ["tools", "add", "python", "matrix-marker"],
         ]
         for args in commands:
@@ -507,14 +545,24 @@ class Runner:
         log_path: pathlib.Path,
         app_name: str | None = None,
     ) -> None:
+        invocation_url = f"{base_url}{'/api' if runtime == 'deploy' else ''}/invocations"
         for tool_kind in TOOL_KINDS:
             started = time.monotonic()
-            command = _curl_command(base_url, PROMPTS[tool_kind], bool(headers))
+            prompt = PROMPTS[tool_kind]
+            if tool_kind == "uc_function":
+                if self.uc_function is None:
+                    raise MatrixError("UC function was not created.")
+                exposed_tool_name = self.uc_function.replace(".", "__")
+                prompt = (
+                    f"You must call the tool named {exposed_tool_name} with value 'matrix'. "
+                    "Do not call matrix_marker. Return the called tool's exact result."
+                )
+            command = _curl_command(invocation_url, prompt, bool(headers))
             try:
                 response = self._invoke_with_retry(
                     f"{runtime}-{case.framework}-{case.authoring}-{tool_kind}",
-                    f"{base_url}/invocations",
-                    PROMPTS[tool_kind],
+                    invocation_url,
+                    prompt,
                     headers,
                 )
                 serialized = json.dumps(response, sort_keys=True, default=str)
@@ -603,6 +651,7 @@ class Runner:
         payload = {
             "schema_version": 1,
             "profile": self.profile,
+            "app_auth_profile": self.app_auth_profile,
             "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "wheel": str(self.wheel),
             "wheel_sha256": _sha256(self.wheel),
@@ -701,11 +750,11 @@ def _assert_semantics(tool_kind: str, serialized: str) -> None:
         raise MatrixError(f"Missing web-search execution/result evidence: {serialized[:2000]}")
 
 
-def _curl_command(base_url: str, prompt: str, authenticated: bool) -> str:
+def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     auth = " -H 'Authorization: Bearer <redacted>'" if authenticated else ""
     body = json.dumps({"input": [{"role": "user", "content": prompt}]})
     return (
-        f"curl -sS -X POST {shlex.quote(base_url + '/invocations')}"
+        f"curl -sS -X POST {shlex.quote(invocation_url)}"
         f" -H 'Content-Type: application/json'{auth} --data {shlex.quote(body)}"
     )
 
@@ -752,11 +801,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--warehouse-id")
     parser.add_argument("--uc-schema", default="main.mason_agent_tools_e2e")
+    parser.add_argument("--template-repo")
+    parser.add_argument("--template-ref")
+    parser.add_argument(
+        "--app-auth-profile",
+        help="OAuth profile for deployed App /api calls; defaults to --profile.",
+    )
     parser.add_argument("--keep-resources", action="store_true")
     parser.add_argument("--verify-evidence", type=pathlib.Path)
     args = parser.parse_args()
     if args.verify_evidence is None and (args.wheel is None or args.output is None):
         parser.error("--wheel and --output are required unless --verify-evidence is used")
+    if bool(args.template_repo) != bool(args.template_ref):
+        parser.error("--template-repo and --template-ref must be provided together")
     return args
 
 
@@ -764,7 +821,14 @@ def main() -> int:
     args = parse_args()
     if args.verify_evidence:
         return verify_evidence(args.verify_evidence)
-    runner = Runner(args.profile, args.output.resolve(), args.wheel.resolve())
+    runner = Runner(
+        args.profile,
+        args.output.resolve(),
+        args.wheel.resolve(),
+        args.template_repo,
+        args.template_ref,
+        args.app_auth_profile,
+    )
     succeeded = False
     try:
         runner.bootstrap()

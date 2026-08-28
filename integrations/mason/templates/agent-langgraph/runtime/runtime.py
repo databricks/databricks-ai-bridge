@@ -11,7 +11,9 @@ header, not the body; the runtime reads it and hands it to the handlers as ``ses
 
 Endpoints: ``POST /invocations`` (``stream: true`` → SSE ending with ``data: [DONE]``;
 ``background: true`` → an ``invocation_id`` to poll), ``GET /invocations/{invocation_id}`` to poll a
-background run, and ``GET /health``. Each request is wrapped in an MLflow span for tracing.
+background run, and ``GET /health``. Each route also has an ``/api`` alias because Databricks Apps
+accepts programmatic Bearer-token authentication only on paths under ``/api/``. Each request is
+wrapped in an MLflow span for tracing.
 """
 
 import asyncio
@@ -26,7 +28,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # Request keys that control transport; stripped before the request reaches the handler.
 _REQUEST_STREAM_PARAM_KEY = "stream"
 _REQUEST_BACKGROUND_PARAM_KEY = "background"
-_REQUEST_SESSION_ID_HEADER_KEY = "X-Routing-Key"  # carries the session id (generic for Apps + Agents)
+_REQUEST_SESSION_ID_HEADER_KEY = (
+    "X-Routing-Key"  # carries the session id (generic for Apps + Agents)
+)
 _TRACE_NAME_TAG = "mlflow.traceName"
 
 InvokeHandler = Callable[[dict], Awaitable[dict]]
@@ -70,6 +74,7 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
         except Exception as e:
             runs.fail(invocation_id, str(e))
 
+    @app.post("/api/invocations")
     @app.post("/invocations")
     async def invoke(request: Request):
         data = await request.json()
@@ -88,6 +93,7 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
             return StreamingResponse(_stream(data), media_type="text/event-stream")
         return JSONResponse(await _invoke(data))
 
+    @app.get("/api/invocations/{invocation_id}")
     @app.get("/invocations/{invocation_id}")
     async def retrieve(invocation_id: str):
         run = runs.get(invocation_id)
@@ -97,6 +103,7 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
             return JSONResponse({"id": invocation_id, "status": "completed", **run["output"]})
         return JSONResponse({"id": invocation_id, "status": run["status"], "error": run["error"]})
 
+    @app.get("/api/health")
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
