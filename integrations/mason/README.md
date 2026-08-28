@@ -54,51 +54,63 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 ## Python SDK
 
-Besides the CLI, Mason ships typed, importable clients for the memory and session APIs.
-They share the CLI's profile-based authentication, return bound resource handles instead
-of raw dictionaries, auto-consume collection pagination, and add convenience lookups.
+The same memory and session APIs are available programmatically through
+`MasonClient`, which authenticates exactly like the CLI (a `.databrickscfg` profile
+or the SDK's default resolution):
 
 ```python
-from databricks_mason import DatabricksAgentClient
+from databricks_mason import MasonClient
 
-client = DatabricksAgentClient(profile="my-profile")  # or default SDK auth
+client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
 
-# Memory: plural collections and explicit entry operations
-store = client.memory_stores.get_or_create(
-    display_name="coding_agent_memory",
-    description="Long-term coding-agent memory",
-)
-store.create_entry(
+store = client.create_memory_store("my-store")
+print(store.name, store.display_name)  # typed attribute access
+
+client.create_memory_entry("my-store", actor_id="alice", path="/notes/1.md", content="hi")
+for entry in client.list_memory_entries("my-store", actor_id="alice").entries:
+    print(entry.path, entry.content)
+```
+
+Each method maps to one `/api/agents/v1` operation. Responses come back as typed
+models (`MemoryStore`, `Session`, `SessionItemList`, ...) that expose attribute
+accessors (`store.name`) while remaining plain dicts underneath — so `store["name"]`,
+`json.dumps(store)`, and any new server-side fields keep working. API errors raise
+`databricks_mason.AgentCliError`. Deployment, sandbox, and tracing remain CLI-only.
+
+The same `MasonClient` also exposes resource-oriented store and session handles that
+auto-consume collection pagination and add convenience lookups:
+
+```python
+from databricks_mason import MasonClient
+
+client = MasonClient(profile="my-workspace")
+memory = client.memory_stores.get_or_create(display_name="coding-agent-memory")
+memory.create_entry(
     actor_id="alice",
-    session_id="project-sess-1",
-    path="/memories/preferences.md",
+    path="/preferences/style.md",
     content="The user prefers concise answers.",
 )
-hits = store.search_entries(actor_id="alice", query="response preferences")
-for hit in hits:
+for hit in memory.search_entries(actor_id="alice", query="response preferences"):
     print(hit.managed_memory_entry.path, hit.score)
 
-# Sessions: bound stores/sessions and durable transcript items
-sstore = client.session_stores.create(session_store_name="support-agent-sessions")
-session = sstore.create_session(actor_id="customer-123", session_id="case-456")
+sessions = client.session_stores.create(session_store_name="support-agent-sessions")
+session = sessions.create_session(actor_id="customer-123", session_id="case-456")
 session.append_items(
     [
         {"type": "message", "role": "user", "content": "I need help with my cluster."},
         {"type": "message", "role": "assistant", "content": "Let's take a look."},
     ]
 )
-page = session.list_items(page_size=100, order_by="create_time asc")
 ```
 
-`client.memory_stores.list()`, `client.session_stores.list()`, `store.list_entries()`, and
-`store.list_sessions()` consume all server pages. `list_sessions()` defaults to
-`order_by="create_time desc"` for exactly-once enumeration. `session.list_items()` returns one
+`client.memory_stores.list()`, `client.session_stores.list()`, `memory.list_entries()`, and
+`sessions.list_sessions()` consume all server pages. `session.list_items()` returns one
 `SessionItemPage`; pass its `next_page_token` for the next page. Every list/search `page_size`
 must be between 1 and 100. `session.fork(...)` creates an independent copy, optionally through a
-specific item; deleting a session always cascades to its descendants.
+specific item, and deleting a session cascades to its descendants.
 
-`store.append_entry_content(...)` is available when needed, but it is a non-atomic client-side
-read-modify-write operation. Concurrent calls can overwrite each other.
+`memory.append_entry_content(...)` is a non-atomic client-side read-modify-write operation;
+concurrent calls can overwrite each other.
 
 ## Commands
 

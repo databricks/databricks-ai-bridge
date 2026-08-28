@@ -1,10 +1,11 @@
 """Shared payload builders for typed Mason resource tests."""
 
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from unittest import mock
 
-from databricks_mason import DatabricksAgentClient
-from databricks_mason._api_client import AgentApiClient
+from databricks_mason import MasonClient
+from databricks_mason.memory_store import MemoryStoreClient
+from databricks_mason.session_store import SessionStoreClient
 
 STORE_ID = "15402663-997b-4300-b695-46913ad90c9f"
 MEM_STORE_NAME = f"memory-stores/{STORE_ID}"
@@ -97,6 +98,9 @@ def item_payload(*, item_id: str = "item-1", data: Any = None) -> dict[str, Any]
     }
 
 
-def resource_client() -> tuple[DatabricksAgentClient, mock.MagicMock]:
-    api = mock.MagicMock(spec=AgentApiClient)
-    return DatabricksAgentClient(api_client=api), api
+def resource_client() -> tuple[MasonClient, mock.MagicMock]:
+    api = mock.MagicMock(spec=MasonClient)
+    client = cast(MasonClient, api)
+    client.memory_stores = MemoryStoreClient(client)
+    client.session_stores = SessionStoreClient(client)
+    return client, api

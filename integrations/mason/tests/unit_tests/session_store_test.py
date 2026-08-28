@@ -11,7 +11,18 @@ from resource_test_fixtures import (
     session_store_payload,
 )
 
-from databricks_mason import Session, SessionItem, SessionItemPage, SessionStore
+from databricks_mason import (
+    BoundSession as Session,
+)
+from databricks_mason import (
+    BoundSessionItem as SessionItem,
+)
+from databricks_mason import (
+    BoundSessionStore as SessionStore,
+)
+from databricks_mason import (
+    SessionItemPage,
+)
 
 
 def test_bind_makes_no_api_call() -> None:

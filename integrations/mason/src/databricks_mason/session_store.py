@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
-from databricks_mason._api_client import AgentApiClient
 from databricks_mason._pagination import validate_page_size
 from databricks_mason.timefmt import parse_timestamp
+
+if TYPE_CHECKING:
+    from databricks_mason.client import MasonClient
 
 
 @dataclass(frozen=True)
@@ -141,7 +143,7 @@ class SessionStore:
 
 
 class SessionStoreClient:
-    def __init__(self, api: AgentApiClient):
+    def __init__(self, api: MasonClient):
         self._api = api
 
     def bind(self, session_store_name: str) -> SessionStore:

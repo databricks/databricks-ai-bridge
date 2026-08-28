@@ -7,7 +7,12 @@ def test_package_import() -> None:
 def test_public_surface() -> None:
     import databricks_mason
 
-    for name in ("MasonClient", "AgentCliError", "memory_store_path", "memory_entry_path"):
+    for name in (
+        "MasonClient",
+        "AgentCliError",
+        "memory_store_path",
+        "memory_entry_path",
+    ):
         assert name in databricks_mason.__all__
         assert hasattr(databricks_mason, name)
 
