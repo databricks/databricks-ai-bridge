@@ -10,17 +10,20 @@ import tempfile
 import textwrap
 from collections.abc import Sequence
 from importlib import resources
+from typing import Protocol
 
 import click
 
 from databricks_mason import render
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import load_project_metadata
 
 _BEGIN_MARKER = "# BEGIN: mason add-sandbox"
 _END_MARKER = "# END: mason add-sandbox"
 _DOWNSCOPE_PLACEHOLDER = "# __MASON_SANDBOX_DOWNSCOPE__"
 _SERVER_FACTORY_CALL = "_build_sandbox_mcp_server()"
-_TEMPLATE_NAME = "sandbox_mcp.py"
+_OPENAI_TEMPLATE_NAME = "sandbox_mcp.py"
+_LANGGRAPH_TEMPLATE_NAME = "sandbox_mcp_langgraph.py"
 
 
 def _validate_uc_name(value: str, resource_type: str) -> str:
@@ -183,19 +186,24 @@ def _append_server_to_list(source: str) -> str:
     return with_item
 
 
-def _read_template() -> str:
+def _read_template(template_name: str = _OPENAI_TEMPLATE_NAME) -> str:
     try:
         return (
             resources.files("databricks_mason")
             .joinpath("templates")
-            .joinpath(_TEMPLATE_NAME)
+            .joinpath(template_name)
             .read_text(encoding="utf-8")
         )
     except (OSError, UnicodeError) as exc:
         raise AgentCliError("Could not read the packaged sandbox MCP template.") from exc
 
 
-def _insert_imports(source: str, template: str) -> str:
+def _insert_imports(
+    source: str,
+    template: str,
+    *,
+    required_import: tuple[str, str] = ("agents.mcp", "MCPServer"),
+) -> str:
     tree = ast.parse(source)
     try:
         template_tree = ast.parse(template)
@@ -234,16 +242,18 @@ def _insert_imports(source: str, template: str) -> str:
                 raise AgentCliError("The packaged sandbox MCP template has invalid imports.")
             missing_imports.append((module, segment))
 
+    required_module, required_name = required_import
     protocol_imports = [
         node
         for node in tree.body
         if isinstance(node, ast.ImportFrom)
-        and node.module == "agents.mcp"
-        and any((alias.asname or alias.name) == "MCPServer" for alias in node.names)
+        and node.module == required_module
+        and any((alias.asname or alias.name) == required_name for alias in node.names)
     ]
     if len(protocol_imports) != 1:
         raise AgentCliError(
-            "agent/mcps.py must import MCPServer from agents.mcp before Mason can add the sandbox.",
+            f"agent/mcps.py must import {required_name} from {required_module} before Mason can "
+            "add the sandbox.",
             hint="Start from the Mason agent template, then retry.",
         )
 
@@ -267,12 +277,22 @@ def _insert_imports(source: str, template: str) -> str:
             break
 
     with_runtime_imports = source
-    runtime_imports = [segment for module, segment in missing_imports if module != "typing"]
+    runtime_imports = sorted(
+        ((module, segment) for module, segment in missing_imports if module != "typing"),
+        key=lambda item: item[0],
+    )
     if runtime_imports:
+        import_start = _offset(lines, protocol_imports[0].lineno, 0)
         import_end_line, import_end_column = _end_position(protocol_imports[0])
         import_end = _offset(lines, import_end_line, import_end_column)
+        before = [segment for module, segment in runtime_imports if module < required_module]
+        after = [segment for module, segment in runtime_imports if module > required_module]
         with_runtime_imports = (
-            source[:import_end] + "\n" + "\n".join(runtime_imports) + source[import_end:]
+            source[:import_start]
+            + ("\n".join(before) + "\n" if before else "")
+            + source[import_start:import_end]
+            + ("\n" + "\n".join(after) if after else "")
+            + source[import_end:]
         )
 
     typing_imports = [segment for module, segment in missing_imports if module == "typing"]
@@ -305,7 +325,11 @@ def _format_policy(policy: dict[str, list[dict[str, str]]]) -> str:
     return "\n".join(lines)
 
 
-def _existing_policy(source: str) -> dict[str, list[dict[str, str]]] | None:
+def _existing_policy(
+    source: str,
+    *,
+    template_name: str = _OPENAI_TEMPLATE_NAME,
+) -> dict[str, list[dict[str, str]]] | None:
     begin_count = source.count(_BEGIN_MARKER)
     end_count = source.count(_END_MARKER)
     if begin_count == 0 and end_count == 0:
@@ -328,16 +352,6 @@ def _existing_policy(source: str) -> dict[str, list[dict[str, str]]] | None:
         ) from exc
 
     _, server_list = _find_server_list(tree)
-    sandbox_classes = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "_SandboxMcpServer"
-    ]
-    factory_functions = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_sandbox_mcp_server"
-    ]
     assignments = [
         node
         for node in tree.body
@@ -406,47 +420,20 @@ def _existing_policy(source: str) -> dict[str, list[dict[str, str]]] | None:
             else:
                 _validate_uc_name(entry[expected_field], resource_type.removesuffix("s"))
 
-    begin_line = source[: source.index(_BEGIN_MARKER)].count("\n") + 1
-    end_line = source[: source.index(_END_MARKER)].count("\n") + 1
-
-    def inside_markers(node: ast.expr | ast.stmt) -> bool:
-        node_end_line, _ = _end_position(node)
-        return begin_line < node.lineno and node_end_line < end_line
-
-    if (
-        len(sandbox_classes) != 1
-        or len(factory_functions) != 1
-        or not inside_markers(assignments[0])
-        or not inside_markers(sandbox_classes[0])
-        or not inside_markers(factory_functions[0])
+    block_start = source.index(_BEGIN_MARKER)
+    block_end = source.index(_END_MARKER) + len(_END_MARKER)
+    try:
+        actual_tree = ast.parse(source[block_start:block_end] + "\n")
+        expected_tree = ast.parse(_generated_block(policy, template_name=template_name))
+    except SyntaxError as exc:
+        raise AgentCliError("The existing mason add-sandbox block is incomplete.") from exc
+    if ast.dump(actual_tree, include_attributes=False) != ast.dump(
+        expected_tree, include_attributes=False
     ):
         raise AgentCliError(
-            "The existing mason add-sandbox block is incomplete.",
+            "The existing mason add-sandbox block does not match the generated security wrapper.",
             hint="Repair or remove the generated block in agent/mcps.py, then retry.",
         )
-
-    expected_tree = ast.parse(_generated_block(policy))
-    expected_assignment = next(
-        node for node in expected_tree.body if isinstance(node, ast.AnnAssign)
-    )
-    expected_class = next(node for node in expected_tree.body if isinstance(node, ast.ClassDef))
-    expected_factory = next(
-        node
-        for node in expected_tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_sandbox_mcp_server"
-    )
-    for actual, expected in (
-        (assignments[0], expected_assignment),
-        (sandbox_classes[0], expected_class),
-        (factory_functions[0], expected_factory),
-    ):
-        if ast.dump(actual, include_attributes=False) != ast.dump(
-            expected, include_attributes=False
-        ):
-            raise AgentCliError(
-                "The existing mason add-sandbox block does not match the generated security wrapper.",
-                hint="Repair or remove the generated block in agent/mcps.py, then retry.",
-            )
 
     factory_calls = [
         element
@@ -514,8 +501,13 @@ def _write_text_atomic(target: pathlib.Path, content: str) -> None:
                 pass
 
 
-def _generated_block(policy: dict[str, list[dict[str, str]]], template: str | None = None) -> str:
-    template = template if template is not None else _read_template()
+def _generated_block(
+    policy: dict[str, list[dict[str, str]]],
+    template: str | None = None,
+    *,
+    template_name: str = _OPENAI_TEMPLATE_NAME,
+) -> str:
+    template = template if template is not None else _read_template(template_name)
     try:
         tree = ast.parse(template)
     except SyntaxError as exc:
@@ -544,10 +536,16 @@ def _generated_block(policy: dict[str, list[dict[str, str]]], template: str | No
     return rendered[block_start:block_end] + "\n"
 
 
-def _add_sandbox_to_source(source: str, policy: dict[str, list[dict[str, str]]]) -> str:
-    template = _read_template()
+def _add_sandbox_to_source(
+    source: str,
+    policy: dict[str, list[dict[str, str]]],
+    *,
+    template_name: str = _OPENAI_TEMPLATE_NAME,
+    required_import: tuple[str, str] = ("agents.mcp", "MCPServer"),
+) -> str:
+    template = _read_template(template_name)
     with_server = _append_server_to_list(source)
-    with_imports = _insert_imports(with_server, template)
+    with_imports = _insert_imports(with_server, template, required_import=required_import)
     generated = with_imports.rstrip() + "\n\n\n" + _generated_block(policy, template)
     try:
         ast.parse(generated)
@@ -556,6 +554,195 @@ def _add_sandbox_to_source(source: str, policy: dict[str, list[dict[str, str]]])
             f"Refusing to write invalid generated Python: {exc.msg} (line {exc.lineno})."
         ) from exc
     return generated
+
+
+def _read_source(target: pathlib.Path) -> str:
+    try:
+        return target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise AgentCliError(f"Could not read {target}: {exc}.") from exc
+
+
+def _effective_policy(
+    existing_policy: dict[str, list[dict[str, str]]] | None,
+    requested_policy: dict[str, list[dict[str, str]]],
+) -> dict[str, list[dict[str, str]]]:
+    if existing_policy is not None and _policy_signature(existing_policy) != _policy_signature(
+        requested_policy
+    ):
+        raise AgentCliError(
+            "system.ai.sandbox is already configured with a different downscope.",
+            hint="Edit or remove the generated add-sandbox block in agent/mcps.py before changing scopes.",
+        )
+    return existing_policy or requested_policy
+
+
+def _configure_langgraph_runtime(source: str) -> str:
+    """Pass the generated fixed-meta interceptor into the LangGraph MCP client."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise AgentCliError(
+            f"Could not parse agent/mason/mcp_runtime.py: {exc.msg} (line {exc.lineno})."
+        ) from exc
+
+    imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "agent.mcps"
+        and any(alias.name == "build_mcp_servers" for alias in node.names)
+    ]
+    if len(imports) != 1 or imports[0].lineno != imports[0].end_lineno:
+        raise AgentCliError(
+            "agent/mason/mcp_runtime.py must import build_mcp_servers from agent.mcps.",
+            hint="Start from the Mason LangGraph agent template, then retry.",
+        )
+
+    configured = any(alias.name == "_sandbox_tool_interceptor" for alias in imports[0].names)
+    with_import = source
+    if not configured:
+        lines = source.splitlines(keepends=True)
+        import_start = _offset(lines, imports[0].lineno, imports[0].col_offset)
+        import_end_line, import_end_column = _end_position(imports[0])
+        import_end = _offset(lines, import_end_line, import_end_column)
+        if any(alias.asname is not None for alias in imports[0].names):
+            raise AgentCliError(
+                "agent/mason/mcp_runtime.py must import build_mcp_servers without an alias."
+            )
+        names = sorted({alias.name for alias in imports[0].names} | {"_sandbox_tool_interceptor"})
+        replacement = f"from agent.mcps import {', '.join(names)}"
+        with_import = source[:import_start] + replacement + source[import_end:]
+
+    try:
+        updated_tree = ast.parse(with_import)
+    except SyntaxError as exc:
+        raise AgentCliError("Could not update the LangGraph MCP runtime import.") from exc
+    client_calls = [
+        node
+        for node in ast.walk(updated_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DatabricksMultiServerMCPClient"
+    ]
+    if len(client_calls) != 1:
+        raise AgentCliError(
+            "Could not find one DatabricksMultiServerMCPClient() call in "
+            "agent/mason/mcp_runtime.py.",
+            hint="Start from the Mason LangGraph agent template, then retry.",
+        )
+    client_call = client_calls[0]
+    interceptor_keywords = [
+        keyword for keyword in client_call.keywords if keyword.arg == "tool_interceptors"
+    ]
+    if interceptor_keywords:
+        value = interceptor_keywords[0].value
+        if (
+            len(interceptor_keywords) != 1
+            or not isinstance(value, ast.List)
+            or len(value.elts) != 1
+            or not isinstance(value.elts[0], ast.Name)
+            or value.elts[0].id != "_sandbox_tool_interceptor"
+        ):
+            raise AgentCliError(
+                "The LangGraph MCP runtime already has a different tool_interceptors setting."
+            )
+        return with_import
+
+    lines = with_import.splitlines(keepends=True)
+    call_end_line, call_end_column = _end_position(client_call)
+    call_end = _offset(lines, call_end_line, call_end_column)
+    if call_end == 0 or with_import[call_end - 1] != ")":
+        raise AgentCliError("Could not update DatabricksMultiServerMCPClient().")
+    configured_source = (
+        with_import[: call_end - 1]
+        + ", tool_interceptors=[_sandbox_tool_interceptor]"
+        + with_import[call_end - 1 :]
+    )
+    try:
+        ast.parse(configured_source)
+    except SyntaxError as exc:
+        raise AgentCliError("Could not update the LangGraph MCP runtime.") from exc
+    return configured_source
+
+
+class _SandboxAdapter(Protocol):
+    def apply(
+        self,
+        project: pathlib.Path,
+        policy: dict[str, list[dict[str, str]]],
+    ) -> tuple[pathlib.Path, dict[str, list[dict[str, str]]], bool]: ...
+
+
+class _OpenAISandboxAdapter:
+    def apply(
+        self,
+        project: pathlib.Path,
+        policy: dict[str, list[dict[str, str]]],
+    ) -> tuple[pathlib.Path, dict[str, list[dict[str, str]]], bool]:
+        target = project / "agent" / "mcps.py"
+        current = _read_source(target)
+        existing_policy = _existing_policy(current, template_name=_OPENAI_TEMPLATE_NAME)
+        effective_policy = _effective_policy(existing_policy, policy)
+        if existing_policy is None:
+            _write_text_atomic(
+                target,
+                _add_sandbox_to_source(
+                    current,
+                    policy,
+                    template_name=_OPENAI_TEMPLATE_NAME,
+                    required_import=("agents.mcp", "MCPServer"),
+                ),
+            )
+        return target, effective_policy, existing_policy is None
+
+
+class _LangGraphSandboxAdapter:
+    def apply(
+        self,
+        project: pathlib.Path,
+        policy: dict[str, list[dict[str, str]]],
+    ) -> tuple[pathlib.Path, dict[str, list[dict[str, str]]], bool]:
+        target = project / "agent" / "mcps.py"
+        runtime = project / "agent" / "mason" / "mcp_runtime.py"
+        if not runtime.is_file():
+            raise AgentCliError(
+                f"Could not find {runtime}.",
+                hint="Start from the Mason LangGraph agent template, then retry.",
+            )
+
+        current = _read_source(target)
+        runtime_source = _read_source(runtime)
+        existing_policy = _existing_policy(current, template_name=_LANGGRAPH_TEMPLATE_NAME)
+        effective_policy = _effective_policy(existing_policy, policy)
+        configured_runtime = _configure_langgraph_runtime(runtime_source)
+        if existing_policy is not None:
+            if configured_runtime != runtime_source:
+                raise AgentCliError(
+                    "The existing LangGraph sandbox configuration is missing its runtime adapter.",
+                    hint="Repair or remove the generated add-sandbox block, then retry.",
+                )
+            return target, effective_policy, False
+
+        generated = _add_sandbox_to_source(
+            current,
+            policy,
+            template_name=_LANGGRAPH_TEMPLATE_NAME,
+            required_import=("databricks_langchain", "DatabricksMCPServer"),
+        )
+        _write_text_atomic(target, generated)
+        try:
+            _write_text_atomic(runtime, configured_runtime)
+        except AgentCliError:
+            _write_text_atomic(target, current)
+            raise
+        return target, effective_policy, True
+
+
+_SANDBOX_ADAPTERS: dict[str, _SandboxAdapter] = {
+    "langgraph": _LangGraphSandboxAdapter(),
+    "openai": _OpenAISandboxAdapter(),
+}
 
 
 @click.command("add-sandbox")
@@ -582,36 +769,33 @@ def _add_sandbox_to_source(source: str, policy: dict[str, list[dict[str, str]]])
     show_default=True,
     help="Mason agent project containing agent/mcps.py.",
 )
+@click.option(
+    "--framework",
+    type=click.Choice(sorted(_SANDBOX_ADAPTERS)),
+    default=None,
+    help="Override framework detection for projects created before Mason metadata existed.",
+)
 @click.pass_obj
-def add_sandbox(obj, scopes: tuple[str, ...], permission: str, source: pathlib.Path) -> None:
+def add_sandbox(
+    obj,
+    scopes: tuple[str, ...],
+    permission: str,
+    source: pathlib.Path,
+    framework: str | None,
+) -> None:
     """Add the system.ai.sandbox MCP with a fixed downscope to an agent project."""
     policy = _parse_scopes(scopes, permission)
-    target = source.resolve() / "agent" / "mcps.py"
+    project = source.resolve()
+    target = project / "agent" / "mcps.py"
     if not target.is_file():
         raise AgentCliError(
             f"Could not find {target}.",
             hint="Pass --source pointing to a Mason agent project containing agent/mcps.py.",
         )
 
-    try:
-        current = target.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise AgentCliError(f"Could not read {target}: {exc}.") from exc
-
-    existing_policy = _existing_policy(current)
-    if existing_policy is not None and _policy_signature(existing_policy) != _policy_signature(
-        policy
-    ):
-        raise AgentCliError(
-            "system.ai.sandbox is already configured with a different downscope.",
-            hint="Edit or remove the generated add-sandbox block in agent/mcps.py before changing scopes.",
-        )
-
-    changed = existing_policy is None
-    if changed:
-        _write_text_atomic(target, _add_sandbox_to_source(current, policy))
-
-    effective_policy = existing_policy or policy
+    metadata = load_project_metadata(project, framework_override=framework)
+    adapter = _SANDBOX_ADAPTERS[metadata.framework]
+    target, effective_policy, changed = adapter.apply(project, policy)
     effective_scopes, effective_permission = _policy_cli_values(effective_policy)
 
     status = "added" if changed else "already_configured"

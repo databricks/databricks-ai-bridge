@@ -21,6 +21,7 @@ import click
 
 from databricks_mason import render
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
 # (The two basic templates currently live in different repos; this keeps each pointed at its own.)
@@ -154,6 +155,7 @@ def init(
     _fetch_template(repo or spec["repo"], ref or spec["ref"], template_path, dest)
 
     template_name = pathlib.PurePosixPath(template_path).name
+    write_project_metadata(dest, framework=framework, template=template_name)
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

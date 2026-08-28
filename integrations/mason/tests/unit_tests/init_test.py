@@ -10,6 +10,7 @@ import json
 import pathlib
 from unittest import mock
 
+import tomli
 from click.testing import CliRunner
 
 from databricks_mason import init as init_mod
@@ -59,6 +60,26 @@ def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     # omitting --framework scaffolds the langgraph template
     assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+
+
+def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "agent-langgraph",
+    }
 
 
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
