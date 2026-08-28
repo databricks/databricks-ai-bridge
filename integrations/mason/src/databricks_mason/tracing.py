@@ -13,6 +13,7 @@ installed and lazily import it; `instrument` (and the deploy wiring) are pure an
 from __future__ import annotations
 
 import os
+import pathlib
 from typing import Any, Optional
 
 import click
@@ -21,7 +22,22 @@ from databricks_mason import render, timefmt
 from databricks_mason.errors import AgentCliError
 
 _BREADCRUMB = "Agent Tracing"
+# Fallback experiment when there's no agent context (e.g. `tracing setup` with no --app). Prefer a
+# per-agent experiment via `default_experiment` so each agent's traces are isolated, not commingled.
 _DEFAULT_EXPERIMENT = "/Shared/mason-agent-traces"
+
+
+def default_experiment(user: str, app: Optional[str]) -> str:
+    """The per-agent experiment path for `app`, under the user's workspace home.
+
+    Keeps each agent's traces in their own experiment (and out of other users' view), instead of the
+    single shared bucket. `mason tracing setup`, `dev`, and `deploy` all derive the same path for a
+    given agent, so the experiment `setup` links is the one the agent logs to. Falls back to the
+    shared default only when no app name is available.
+    """
+    if not app:
+        return _DEFAULT_EXPERIMENT
+    return f"/Users/{user}/mason-traces/{app}"
 
 # Env vars the deployed agent reads (see deploy.py). MLFLOW_TRACING_DESTINATION is MLflow's own
 # "catalog.schema" convention; MLFLOW_EXPERIMENT_NAME is the standard MLflow experiment selector.
@@ -142,7 +158,16 @@ def tracing() -> None:
 @click.option("--catalog", required=True, help="Unity Catalog catalog to store traces in.")
 @click.option("--schema", required=True, help="Unity Catalog schema to store traces in.")
 @click.option(
-    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
+    "--app",
+    default=None,
+    help="Agent name — gives this agent its own experiment (/Users/<you>/mason-traces/<app>) so its "
+    "traces aren't commingled with other agents'. Defaults to the current directory name (matching "
+    "`mason dev`/`deploy`). Overridden by --experiment.",
+)
+@click.option(
+    "--experiment",
+    default=None,
+    help="MLflow experiment path (overrides the per-app default derived from --app).",
 )
 @click.option(
     "--warehouse-id",
@@ -155,11 +180,14 @@ def tracing() -> None:
     help="Replace an existing trace-location link on the experiment (unset, then re-link).",
 )
 @click.pass_obj
-def tracing_setup(obj, catalog, schema, experiment, warehouse_id, relink) -> None:
+def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -> None:
     """Link a UC schema to an MLflow experiment so agent traces land in Unity Catalog."""
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, warehouse_id)
-    exp_name = experiment or _DEFAULT_EXPERIMENT
+    # Default the agent name to the current directory, matching `mason dev`/`deploy`, so running
+    # setup from a project dir needs no --app and still lands in that agent's own experiment.
+    app = app or pathlib.Path.cwd().name
+    exp_name = experiment or default_experiment(obj.client().current_user, app)
     exp_id = _ensure_experiment(mlflow, exp_name)
 
     UCSchemaLocation, set_location, unset_location = _uc_trace_symbols()
@@ -183,15 +211,16 @@ def tracing_setup(obj, catalog, schema, experiment, warehouse_id, relink) -> Non
             }
         )
         return
-    # --with-traces defaults the experiment to _DEFAULT_EXPERIMENT, so only spell out
-    # --traces-experiment when the user picked a non-default one.
-    exp_flag = "" if exp_name == _DEFAULT_EXPERIMENT else f" --traces-experiment {exp_name}"
+    # dev/deploy derive this same experiment from the agent name (dev: project dir, deploy: <name>),
+    # so only spell out --traces-experiment when the experiment was set explicitly (not per-app).
+    exp_flag = "" if experiment is None else f" --traces-experiment {exp_name}"
+    deploy_name = app
     render.success(
         f"Linked traces for '{exp_name}' to {destination}",
         fields={"Experiment": exp_name, "Destination": destination, "View traces": url},
         next_steps=[
             f"mason dev --with-traces {destination}{exp_flag}",
-            f"mason deploy <name> --with-traces {destination}{exp_flag}",
+            f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
             f"mason tracing instrument --destination {destination}",
             f"mason tracing list --experiment {exp_name}",
         ],

@@ -55,6 +55,15 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai-basic" in result.output
 
 
+def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())  # no --framework
+    assert result.exit_code == 0, result.output
+    # omitting --framework scaffolds the langgraph template
+    assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+
+
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
     dest = tmp_path / "lg"
 

@@ -23,7 +23,7 @@ from databricks_mason import memory_store_access, render, session_store_access, 
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
-from databricks_mason.tracing import _DEFAULT_EXPERIMENT, TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV
+from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
@@ -147,6 +147,7 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
 def resolve_store_env(
     client,
     *,
+    app: Optional[str],
     memory_store: Optional[str],
     session_store: Optional[str],
     traces_destination: Optional[str],
@@ -175,11 +176,10 @@ def resolve_store_env(
         env[_SESSION_ENV] = session_store
     if traces_destination:
         env[TRACES_DEST_ENV] = traces_destination
-        # The agent enables tracing only when BOTH a destination and an experiment are set. The
-        # destination's experiment is bound server-side by `mason tracing setup` (which defaults to
-        # _DEFAULT_EXPERIMENT), so default the experiment here too — otherwise --with-traces alone
-        # would ship a half-config that silently leaves tracing disabled.
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment or _DEFAULT_EXPERIMENT
+        # The agent enables tracing only when BOTH a destination and an experiment are set, so
+        # default the experiment to this agent's per-app path (matching `mason tracing setup --app`),
+        # otherwise --with-traces alone would ship a half-config that silently disables tracing.
+        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(client.current_user, app)
     elif traces_experiment:
         env[TRACES_EXPERIMENT_ENV] = traces_experiment
     return env
@@ -291,6 +291,7 @@ def deploy(
     # 1. Provision / resolve stores and build the env to inject.
     env_updates = resolve_store_env(
         client,
+        app=name,
         memory_store=memory_store,
         session_store=session_store,
         traces_destination=traces_destination,

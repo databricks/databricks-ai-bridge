@@ -95,7 +95,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 @click.option(
     "--framework",
     type=click.Choice(sorted(_TEMPLATES)),
-    default="openai",
+    default="langgraph",
     show_default=True,
     help="Which basic agent template to scaffold.",
 )

@@ -71,6 +71,17 @@ def test_split_destination_invalid_raises():
             pass
 
 
+def test_default_experiment_is_per_app_under_user_home():
+    assert (
+        tracing_mod.default_experiment("me@x.com", "my-agent")
+        == "/Users/me@x.com/mason-traces/my-agent"
+    )
+
+
+def test_default_experiment_falls_back_to_shared_without_app():
+    assert tracing_mod.default_experiment("me@x.com", None) == tracing_mod._DEFAULT_EXPERIMENT
+
+
 def test_experiment_url_builds_traces_tab_link():
     url = tracing_mod._experiment_url("https://ws.databricks.com/", "123")
     assert url == "https://ws.databricks.com/ml/experiments/123?compareRunsMode=TRACES"

@@ -177,11 +177,13 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
 
 
-def test_with_traces_defaults_the_experiment():
+def test_with_traces_defaults_the_experiment_per_app():
     # --with-traces alone must still set the experiment, or the agent ships tracing half-configured
-    # (destination set, experiment missing) and silently disables it.
+    # (destination set, experiment missing) and silently disables it. The default is per-app, so
+    # each agent's traces are isolated instead of piling into one shared experiment.
     env = deploy_mod.resolve_store_env(
         _FakeClient(),
+        app="my-agent",
         memory_store=None,
         session_store=None,
         traces_destination="cat.schema",
@@ -189,7 +191,20 @@ def test_with_traces_defaults_the_experiment():
         create_stores=False,
     )
     assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
-    assert env["MLFLOW_EXPERIMENT_NAME"] == deploy_mod._DEFAULT_EXPERIMENT
+    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Users/me@example.com/mason-traces/my-agent"
+
+
+def test_with_traces_explicit_experiment_wins_over_per_app():
+    env = deploy_mod.resolve_store_env(
+        _FakeClient(),
+        app="my-agent",
+        memory_store=None,
+        session_store=None,
+        traces_destination="cat.schema",
+        traces_experiment="/Shared/custom",
+        create_stores=False,
+    )
+    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/custom"
 
 
 def _run_deploy(src, monkeypatch, extra_args):

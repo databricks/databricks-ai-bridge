@@ -102,8 +102,11 @@ def dev(
 
     # Wire any requested stores/traces into app.yaml first, so run-local reads the updated env.
     if memory_store or session_store or traces_destination or traces_experiment:
+        # The agent name defaults to the project dir name, so a per-app trace experiment here matches
+        # what `mason deploy <that-name>` derives.
         env_updates = resolve_store_env(
             obj.client(),
+            app=source_dir.resolve().name,
             memory_store=memory_store,
             session_store=session_store,
             traces_destination=traces_destination,
