@@ -42,6 +42,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = [
     "src/databricks_mason/*",
+    "src/databricks_mason/py.typed",
     "src/databricks_mason/templates/**",
 ]
 

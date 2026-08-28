@@ -1,11 +1,11 @@
-"""Unit tests for AgentApiClient paths, verbs, bodies, and error mapping."""
+"""Unit tests for MasonClient paths, verbs, bodies, and error mapping."""
 
 from __future__ import annotations
 
 from unittest import mock
 
 from databricks_mason.client import (
-    AgentApiClient,
+    MasonClient,
     _workspace_client,
     memory_entry_path,
     memory_store_path,
@@ -17,7 +17,7 @@ def _client(workspace_client):
     inst = workspace_client.return_value
     inst.config.host = "https://ws.example.com"
     inst.api_client.do.return_value = {}
-    return AgentApiClient(profile="p"), inst.api_client.do
+    return MasonClient(profile="p"), inst.api_client.do
 
 
 @mock.patch("databricks_mason.client.WorkspaceClient")
