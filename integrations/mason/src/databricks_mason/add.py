@@ -18,21 +18,23 @@ _REQUIRED_PROJECT_FILES = (
     "runtime/main.py",
     "runtime/runtime.py",
 )
+_SOURCE_UI_TEMPLATE_ROOT = pathlib.Path(__file__).resolve().parents[2] / "templates" / "ui"
 _UI_FILES = {
-    "agent/mason/durability.py": "ui_template/agent/mason/durability.py",
-    "agent/mason/recovery.py": "ui_template/agent/mason/recovery.py",
-    "agent/tools/long_running.py": "ui_template/agent/tools/long_running.py",
-    "runtime/ui.py": "ui_template/runtime/ui.py",
-    "ui/index.html": "ui_template/ui/index.html",
-    "ui/styles.css": "ui_template/ui/styles.css",
-    "ui/app.js": "ui_template/ui/app.js",
-    "tests/test_demo_ui.py": "ui_template/tests/test_demo_ui.py",
-    "tests/test_durability.py": "ui_template/tests/test_durability.py",
-    "tests/test_recovery.py": "ui_template/tests/test_recovery.py",
+    "agent/mason/durability.py": "agent/mason/durability.py",
+    "agent/mason/recovery.py": "agent/mason/recovery.py",
+    "agent/tools/long_running.py": "agent/tools/long_running.py",
+    "runtime/ui.py": "runtime/ui.py",
+    "ui/index.html": "ui/index.html",
+    "ui/styles.css": "ui/styles.css",
+    "ui/app.js": "ui/app.js",
+    "tests/test_demo_ui.py": "tests/test_demo_ui.py",
+    "tests/test_durability.py": "tests/test_durability.py",
+    "tests/test_recovery.py": "tests/test_recovery.py",
 }
 _RUNTIME_IMPORT = "from runtime.runtime import build_app"
 _UI_IMPORT = "from runtime.ui import install_ui"
-_UI_CALL = "install_ui(app, session_history=agent.agent.session_history)"
+_UI_CALL = "install_ui(app)"
+_LEGACY_UI_CALL = "install_ui(app, session_history=agent.agent.session_history)"
 _APP_BUILD_PATTERN = re.compile(r"^app = build_app\(.+\)$", re.MULTILINE)
 _STOP_ENV = "MASON_DEMO_STOP_ENABLED"
 
@@ -53,6 +55,8 @@ def _is_installed(main_text: str) -> bool:
 def _patched_runtime_main(main_path: pathlib.Path) -> str | None:
     text = main_path.read_text()
     if _is_installed(text):
+        if _LEGACY_UI_CALL in text:
+            return text.replace(_LEGACY_UI_CALL, _UI_CALL, 1)
         return None
     if _RUNTIME_IMPORT not in text:
         raise AgentCliError(
@@ -71,7 +75,13 @@ def _patched_runtime_main(main_path: pathlib.Path) -> str | None:
 
 
 def _resource_text(resource_name: str) -> str:
-    return resources.files("databricks_mason").joinpath(resource_name).read_text(encoding="utf-8")
+    source_path = _SOURCE_UI_TEMPLATE_ROOT / resource_name
+    if source_path.is_file():
+        return source_path.read_text(encoding="utf-8")
+    packaged = resources.files("databricks_mason").joinpath("templates").joinpath("ui")
+    for part in pathlib.PurePosixPath(resource_name).parts:
+        packaged = packaged.joinpath(part)
+    return packaged.read_text(encoding="utf-8")
 
 
 def _install_files(project: pathlib.Path, *, overwrite: bool = False) -> list[str]:
@@ -94,9 +104,9 @@ def _document_stop_setting(project: pathlib.Path) -> None:
     if _STOP_ENV in text:
         return
     suffix = (
-        "\n# --- Optional: Mason demo stop/start durability control ---\n"
+        "\n# --- Mason demo stop/start durability control ---\n"
         "# Demo-only. Lets the UI stop the process so a supervisor or Databricks Apps can restart it.\n"
-        f"# {_STOP_ENV}=true\n"
+        f"{_STOP_ENV}=true\n"
         "# MASON_DEMO_HEARTBEAT_SECONDS=3\n"
         "# MASON_DEMO_STALE_SECONDS=10\n"
     )
@@ -174,31 +184,17 @@ def add() -> None:
 @add.command(name="ui")
 @click.argument("directory", required=False, default=".")
 @click.option(
-    "--enable-stop",
+    "--refresh",
     is_flag=True,
-    help="Enable the demo-only endpoint that stops the app process for durability testing.",
-)
-@click.option(
-    "--enable-crash",
-    "legacy_enable_crash",
-    is_flag=True,
-    hidden=True,
-)
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite Mason-managed UI files to refresh an existing installation.",
+    help="Refresh an existing installation from Mason's UI template.",
 )
 @click.pass_obj
 def add_ui(
     obj,
     directory: str,
-    enable_stop: bool,
-    legacy_enable_crash: bool,
-    force: bool,
+    refresh: bool,
 ) -> None:
     """Add a zero-build chat and runtime demo UI to DIRECTORY."""
-    enable_stop = enable_stop or legacy_enable_crash
     project = pathlib.Path(directory).expanduser().resolve()
     _validate_project(project)
 
@@ -206,28 +202,27 @@ def add_ui(
     installed = _is_installed(main_path.read_text())
     if installed:
         missing_ui = [name for name in _UI_FILES if not (project / name).is_file()]
-        if missing_ui and not force:
+        if missing_ui and not refresh:
             raise AgentCliError(
                 "The Mason UI installation is incomplete.",
                 hint=(
                     f"Missing: {', '.join(missing_ui)}. Restore them, remove the UI wiring, "
-                    "or rerun with --force."
+                    "or rerun with --refresh."
                 ),
             )
     patched_main = _patched_runtime_main(main_path)
-    files = _install_files(project, overwrite=force) if force or not installed else []
+    files = _install_files(project, overwrite=refresh) if refresh or not installed else []
     if patched_main is not None:
         main_path.write_text(patched_main)
     _document_stop_setting(project)
-    if enable_stop:
-        _set_dotenv(project)
-        _set_app_yaml_env(project)
+    _set_dotenv(project)
+    _set_app_yaml_env(project)
 
     payload = {
         "directory": str(project),
         "installed": bool(files or patched_main),
-        "updated": bool(installed and force),
-        "stop_enabled": enable_stop,
+        "updated": bool(installed and (refresh or patched_main)),
+        "stop_enabled": True,
         "files": files,
     }
     if getattr(obj, "output", "text") == "json":
@@ -238,22 +233,19 @@ def add_ui(
         f"cd {project}",
         "uv run start-server",
         "Open http://localhost:8000",
+        "Deploy with --with-session-store to verify recovery across restarts",
     ]
-    if not enable_stop:
-        next_steps.append("mason add ui --enable-stop .   # opt in to the stop/start demo")
-    else:
-        next_steps.append("Deploy with --with-session-store to verify recovery across restarts")
     render.success(
         (
             "Updated agent demo UI"
-            if installed and force
+            if installed and (refresh or patched_main)
             else "Added agent demo UI"
             if files or patched_main
             else "Agent demo UI already installed"
         ),
         fields={
             "Directory": str(project),
-            "Stop control": "enabled" if enable_stop else "disabled",
+            "Stop control": "enabled",
         },
         next_steps=next_steps,
     )

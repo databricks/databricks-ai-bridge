@@ -119,43 +119,6 @@ def test_session_id_generated_when_absent():
     assert generated and generated != _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
-@pytest.mark.asyncio
-async def test_session_history_reads_messages_and_interrupts(monkeypatch):
-    import agent.agent as agent_module
-
-    class Message:
-        id = "message-1"
-
-        def model_dump(self):
-            return {"type": "human", "content": "saved message"}
-
-    class Snapshot:
-        values = {"messages": [Message()]}
-        tasks = [type("Task", (), {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]})()]
-
-    class FakeAgent:
-        async def aget_state(self, config):
-            assert config == thread_config("saved-session")
-            return Snapshot()
-
-    async def fake_create_agent_graph():
-        return FakeAgent()
-
-    monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
-    result = await agent_module.session_history("saved-session")
-
-    assert result == {
-        "session_id": "saved-session",
-        "session_items": [
-            {
-                "item_id": "message-1",
-                "data": {"type": "human", "content": "saved message"},
-            }
-        ],
-        "interrupts": [{"id": "int-1", "value": {"approval": True}}],
-    }
-
-
 def test_runtime_passes_same_body_session_id_to_resume_request():
     captured = {}
 

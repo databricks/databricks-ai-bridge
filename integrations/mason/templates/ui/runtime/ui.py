@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,9 +25,6 @@ _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _PROFILE_CONFLICT_ENV = ("DATABRICKS_CONFIG_PROFILE", "DATABRICKS_HOST", "DATABRICKS_TOKEN")
 _AGENTS_API = "/api/agents/v1"
-
-SessionHistoryHandler = Callable[[str], Awaitable[dict[str, Any]]]
-
 
 class MemoryEntryRequest(BaseModel):
     path: str = Field(min_length=1, pattern=r"^/")
@@ -68,8 +64,7 @@ def _execution_identity() -> str:
 
 
 def _memory_store() -> str:
-    store = os.getenv(_MEMORY_STORE_ENV, "").strip().strip("/")
-    return store.removeprefix("memory-stores/")
+    return os.getenv(_MEMORY_STORE_ENV, "").strip().strip("/")
 
 
 def _memory_actor() -> str:
@@ -223,7 +218,7 @@ def _require_recovery() -> None:
     if not _stop_enabled():
         raise HTTPException(
             status_code=503,
-            detail=f"Run `mason add ui --enable-stop` or set {_STOP_ENV}=true.",
+            detail=f"Set {_STOP_ENV}=true to enable stop/start recovery.",
         )
     _require_session()
 
@@ -235,7 +230,31 @@ async def _recovery_call(handler, session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
-def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = None) -> None:
+async def _checkpoint_history(session_id: str) -> dict[str, Any]:
+    from agent.agent import create_agent_graph
+    from agent.mason.session_store import thread_config
+
+    graph = await create_agent_graph()
+    snapshot = await graph.aget_state(thread_config(session_id))
+    values = snapshot.values if isinstance(snapshot.values, dict) else {}
+    items = []
+    for index, message in enumerate(values.get("messages", [])):
+        data = message.model_dump() if hasattr(message, "model_dump") else message
+        items.append(
+            {
+                "item_id": str(getattr(message, "id", None) or index),
+                "data": data if isinstance(data, dict) else {"content": str(data)},
+            }
+        )
+    interrupts = [
+        {"id": interrupt.id, "value": interrupt.value}
+        for task in getattr(snapshot, "tasks", ())
+        for interrupt in getattr(task, "interrupts", ())
+    ]
+    return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
+
+
+def install_ui(app: FastAPI) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
 
@@ -262,7 +281,7 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
-                "history": bool(session_store or session_history),
+                "history": True,
                 "mode": "Managed Session Store" if session_store else "In-process checkpointer",
                 "store": session_store or None,
                 "actor": _session_actor(),
@@ -333,9 +352,7 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
     async def list_session_items(session_id: str) -> dict:
         if _session_store():
             return await _managed_call(_state_client().list_session_items, session_id)
-        if session_history is None:
-            raise HTTPException(status_code=503, detail="Session history is not available.")
-        return await session_history(session_id)
+        return await _checkpoint_history(session_id)
 
     @app.get("/api/demo/recovery/{session_id}", include_in_schema=False)
     async def recovery_status(session_id: str) -> dict:

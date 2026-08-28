@@ -9,8 +9,8 @@ model never sees them when memory is unconfigured. ``create_agent_graph`` compos
 tool list. This is a stand-in for a future ``databricks-langchain`` memory helper — when the SDK
 provides one, swap the import in ``agent.py`` and delete this file.
 
-Memory entries are per-actor. This uses the store name as the actor id, giving the agent one shared
-long-term memory; change ``_actor_id`` to scope per user (e.g. from request context) if needed.
+Memory entries are per-actor. ``AGENT_MEMORY_ACTOR_ID`` defaults to ``agent`` for one shared
+long-term memory; set it from request context to scope memory per user.
 """
 
 import os
@@ -29,7 +29,6 @@ def _actor_id() -> str:
 
 def _store_path() -> str:
     store = os.environ["AGENT_MEMORY_STORE"].strip().strip("/")
-    store = store.removeprefix("memory-stores/")
     return f"{_AGENTS_V1}/memory-stores/{store}"
 
 

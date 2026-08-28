@@ -53,14 +53,8 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert "tool_step_1" in (project / "agent/tools/long_running.py").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
-    assert "install_ui(app, session_history=agent.agent.session_history)" in main
+    assert "install_ui(app)" in main
     assert "MASON_DEMO_STOP_ENABLED" in (project / ".env.example").read_text()
-
-
-def test_add_ui_enables_stop_locally_and_when_deployed(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-    result = CliRunner().invoke(add, ["ui", "--enable-stop", str(project)], obj=_Ctx())
-    assert result.exit_code == 0, result.output
     env = (project / ".env").read_text()
     assert "DATABRICKS_CONFIG_PROFILE=DEFAULT" in env
     assert "MASON_DEMO_STOP_ENABLED=true" in env
@@ -69,32 +63,14 @@ def test_add_ui_enables_stop_locally_and_when_deployed(tmp_path: pathlib.Path):
     assert 'value: "true"' in app_yaml
 
 
-def test_add_ui_can_enable_stop_after_install(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-    first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
-    second = CliRunner().invoke(add, ["ui", "--enable-stop", str(project)], obj=_Ctx())
-    assert first.exit_code == 0, first.output
-    assert second.exit_code == 0, second.output
-    assert "already installed" in second.output
-    assert "MASON_DEMO_STOP_ENABLED=true" in (project / ".env").read_text()
-
-
-def test_add_ui_keeps_enable_crash_as_hidden_compatibility_alias(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-    result = CliRunner().invoke(add, ["ui", "--enable-crash", str(project)], obj=_Ctx())
-
-    assert result.exit_code == 0, result.output
-    assert "MASON_DEMO_STOP_ENABLED=true" in (project / ".env").read_text()
-
-
-def test_add_ui_force_refreshes_existing_install(tmp_path: pathlib.Path):
+def test_add_ui_refreshes_existing_install(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
     assert first.exit_code == 0, first.output
     (project / "ui/app.js").write_text("old UI")
     (project / "agent/mason/recovery.py").unlink()
 
-    refreshed = CliRunner().invoke(add, ["ui", "--force", str(project)], obj=_Ctx())
+    refreshed = CliRunner().invoke(add, ["ui", "--refresh", str(project)], obj=_Ctx())
 
     assert refreshed.exit_code == 0, refreshed.output
     assert "Updated agent demo UI" in refreshed.output
@@ -112,7 +88,26 @@ def test_add_ui_reports_incomplete_installation(tmp_path: pathlib.Path):
     assert second.exit_code != 0
     assert "installation is incomplete" in second.output
     assert "ui/app.js" in second.output
-    assert "--force" in second.output
+    assert "--refresh" in second.output
+
+
+def test_add_ui_migrates_legacy_history_callback(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
+    assert first.exit_code == 0, first.output
+    main_path = project / "runtime/main.py"
+    main_path.write_text(
+        main_path.read_text().replace(
+            "install_ui(app)", "install_ui(app, session_history=agent.agent.session_history)"
+        )
+    )
+
+    migrated = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
+
+    assert migrated.exit_code == 0, migrated.output
+    main = main_path.read_text()
+    assert "install_ui(app)" in main
+    assert "session_history" not in main
 
 
 def test_add_ui_refuses_existing_unmanaged_files(tmp_path: pathlib.Path):
@@ -138,4 +133,4 @@ def test_add_ui_json_output(tmp_path: pathlib.Path):
     payload = json.loads(result.output)
     assert payload["directory"] == str(project.resolve())
     assert payload["installed"] is True
-    assert payload["stop_enabled"] is False
+    assert payload["stop_enabled"] is True

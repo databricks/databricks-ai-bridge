@@ -12,9 +12,9 @@ command: ["uv", "run", "start-server"]
 #     value: "databricks"
 #   - name: MLFLOW_EXPERIMENT_ID
 #     value: "<experiment-id>"
-#   # Long-term memory tools: a managed memory store name (registers remember/recall).
+#   # Long-term memory tools: a managed memory store ID (registers remember/recall).
 #   - name: AGENT_MEMORY_STORE
-#     value: "<memory-store-name>"
+#     value: "<memory-store-id>"
 #   - name: AGENT_MEMORY_ACTOR_ID
 #     value: "alice"
 #   # Durable state: a managed Session Store name → checkpoints persisted via its REST API

@@ -51,7 +51,7 @@ mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   add
-    ui         [--enable-stop] [--force] [directory]
+    ui         [--refresh] [directory]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -119,8 +119,9 @@ mason add ui
 uv run start-server
 ```
 
-Rerun `mason add ui --force` to refresh an existing generated app with the latest Mason-managed UI
-files. The flag intentionally overwrites the installed UI, recovery helper, and demo tests.
+Rerun `mason add ui --refresh` to update an existing generated app from the latest Mason-managed UI
+template. Refresh intentionally overwrites the installed UI, recovery helper, and demo tests;
+`mason dev` and `mason deploy` do not mutate project source.
 
 The UI exercises streaming, sticky background polling, same-ID session resume, local checkpoint
 history, managed Memory Store entries, managed Session Store transcript items, agent memory tools,
@@ -129,17 +130,17 @@ runtime contract, Session turns green when history is available, and Memory turn
 `AGENT_MEMORY_STORE` is configured. Durability and Heartbeat turn green when a managed Session Store
 and the stop/start demo are enabled. The transport selector itself is manual.
 
-`mason add ui --enable-stop` enables a demo-only endpoint that terminates the current app process. A
-deployed Databricks App restarts the HTTP process; for a local run, restart `uv run start-server`
-yourself. The tool workflow persists LangGraph checkpoints plus an append-only attempt and heartbeat
-log in Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds. Once
-the old owner is stale, the browser starts a new attempt with the same public session ID, restores
-completed outputs, and resumes at the first incomplete tool.
+The generated UI includes a demo-only endpoint that terminates the current app process. A deployed
+Databricks App restarts the HTTP process; for a local run, restart `uv run start-server` yourself.
+The tool workflow persists LangGraph checkpoints plus an append-only attempt and heartbeat log in
+Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds. Once the old
+owner is stale, the browser starts a new attempt with the same public session ID, restores completed
+outputs, and resumes at the first incomplete tool.
 
 For the full deployed demo, connect both managed stores:
 
 ```sh
-mason add ui --enable-stop
+mason add ui
 mason --profile <profile> deploy mason-agent-demo --source . \
   --with-session-store mason-demo-sessions \
   --with-memory-store mason-demo-memory \
@@ -147,7 +148,7 @@ mason --profile <profile> deploy mason-agent-demo --source . \
   --create-stores
 ```
 
-`mason deploy` provisions or resolves the stores and injects their names plus the shared actor id.
+`mason deploy` provisions or resolves the stores and injects their identifiers plus the shared actor id.
 The UI can create, list, and search memory entries for the actor; it also creates a managed session
 and mirrors user/assistant turns into Session Store items. It can pause on the sample approval-gated
 tool, stop the app process, wait for a new process, and approve the same paused run. The durability

@@ -10,6 +10,9 @@ The session id (used for multi-turn and to resume a paused run) travels in the J
 ``session_id``. Databricks Apps replica affinity is handled separately by the
 ``__Host-databricks-app-router`` cookie.
 
+TODO: Prefer ``X-Routing-Key`` for API clients once Databricks Apps supports it; until then, use the
+documented router cookie for sticky routing.
+
 Endpoints: ``POST /invocations`` (``stream: true`` → SSE ending with ``data: [DONE]``;
 ``background: true`` → an ``invocation_id`` to poll), ``GET /invocations/{invocation_id}`` to poll a
 background run, and ``GET /health``. Each route also has an ``/api`` alias because Databricks Apps

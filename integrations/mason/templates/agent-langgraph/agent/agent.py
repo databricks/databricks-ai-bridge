@@ -82,28 +82,6 @@ async def create_agent_graph():
     )
 
 
-async def session_history(session_id: str) -> dict:
-    """Return the messages and pending interrupts stored on a LangGraph session thread."""
-    graph = await create_agent_graph()
-    snapshot = await graph.aget_state(thread_config(session_id))
-    values = snapshot.values if isinstance(snapshot.values, dict) else {}
-    items = []
-    for index, message in enumerate(values.get("messages", [])):
-        data = message.model_dump() if hasattr(message, "model_dump") else message
-        items.append(
-            {
-                "item_id": str(getattr(message, "id", None) or index),
-                "data": data if isinstance(data, dict) else {"content": str(data)},
-            }
-        )
-    interrupts = [
-        {"id": interrupt.id, "value": interrupt.value}
-        for task in getattr(snapshot, "tasks", ())
-        for interrupt in getattr(task, "interrupts", ())
-    ]
-    return {"session_id": session_id, "session_items": items, "interrupts": interrupts}
-
-
 def _session_id(request: dict) -> str:
     """The request's session id (for multi-turn / resume), or a fresh one for a new conversation.
 

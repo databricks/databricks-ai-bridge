@@ -98,8 +98,6 @@ a file to `agent/tools/`.
 
 - Default: `agent/mason/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
-- The optional UI reads messages from that checkpoint when no managed Session Store is configured,
-  so opening a local session repopulates the chat until the process restarts.
 - The session id is the request body's `session_id`. Databricks Apps replica affinity is the separate
   `__Host-databricks-app-router` cookie, which browsers receive automatically and API clients send.
 - For durable state, set `AGENT_SESSION_STORE` to a managed Session Store name: `checkpointer()`
@@ -108,17 +106,9 @@ a file to `agent/tools/`.
   survives restarts/replicas. Adapted from the first-party `databricks_agent_client.langgraph`
   prototype over a vendored REST client (`session_store_client.py`); swap both for the published
   package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`);
-  `AGENT_SESSION_ACTOR_ID` keeps the saver and optional UI on the same actor.
-- The optional UI uses the managed Session API too: it creates the same-ID session and mirrors
-  user/assistant messages into transcript items.
-- When `AGENT_MEMORY_STORE` is set, the optional UI creates/lists/searches entries directly using
-  `AGENT_MEMORY_ACTOR_ID` (default `agent`), in addition to exposing the agent's memory tools.
+  `AGENT_SESSION_ACTOR_ID` selects the saver actor partition.
 - Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
-- `mason add ui` installs `agent/mason/recovery.py` and `agent/tools/long_running.py`. The recovery
-  graph runs `tool_step_1` through `tool_step_4` sequentially on a separate derived checkpoint thread.
-  The UI keeps the public session id, resumes automatically after restart, skips completed nodes, and
-  retries only the node whose output was not checkpointed before the crash.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
   `resume` with the same session id — no runtime change; it rides `/invocations` through the handlers.

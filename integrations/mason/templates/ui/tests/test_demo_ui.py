@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from runtime import ui
@@ -26,6 +27,12 @@ class _FakeStateClient:
         return {
             "session_items": [{"item_id": "1", "data": {"role": "user", "content": session_id}}]
         }
+
+
+class _FakeInterrupt:
+    def __init__(self, value, id):
+        self.value = value
+        self.id = id
 
 
 async def _session_history(session_id):
@@ -90,7 +97,7 @@ def _client(monkeypatch, *, configured=False, history=False, stop=False):
     if stop:
         monkeypatch.setenv("MASON_DEMO_STOP_ENABLED", "true")
     if configured:
-        monkeypatch.setenv("AGENT_MEMORY_STORE", "memory-stores/store")
+        monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
         monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
         monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
         monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
@@ -101,8 +108,10 @@ def _client(monkeypatch, *, configured=False, history=False, stop=False):
     monkeypatch.setattr(ui.recovery, "status", _recovery_status)
     monkeypatch.setattr(ui.recovery, "start", _recovery_start)
     monkeypatch.setattr(ui.recovery, "resume", _recovery_resume)
+    if history:
+        monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
     app = FastAPI()
-    ui.install_ui(app, session_history=_session_history if history else None)
+    ui.install_ui(app)
     return TestClient(app)
 
 
@@ -117,7 +126,7 @@ def test_demo_ui_routes(monkeypatch):
     assert config["background"]["enabled"] is True
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
-    assert config["session"]["history"] is False
+    assert config["session"]["history"] is True
     assert config["app_control"]["stop_enabled"] is False
     assert config["durability"]["enabled"] is False
     assert config["heartbeat"]["enabled"] is False
@@ -141,6 +150,47 @@ def test_unmanaged_checkpoint_history_route(monkeypatch):
         "local-session",
         "checkpoint reply",
     ]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
+    import agent.agent as agent_module
+
+    monkeypatch.delenv("AGENT_SESSION_ACTOR_ID", raising=False)
+
+    class Message:
+        id = "message-1"
+
+        def model_dump(self):
+            return {"type": "human", "content": "saved message"}
+
+    class Snapshot:
+        values = {"messages": [Message()]}
+        tasks = [type("Task", (), {"interrupts": [_FakeInterrupt({"approval": True}, "int-1")]})()]
+
+    class FakeAgent:
+        async def aget_state(self, config):
+            assert config == {
+                "configurable": {"thread_id": "saved-session", "actor_id": "saved-session"}
+            }
+            return Snapshot()
+
+    async def fake_create_agent_graph():
+        return FakeAgent()
+
+    monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
+    result = await ui._checkpoint_history("saved-session")
+
+    assert result == {
+        "session_id": "saved-session",
+        "session_items": [
+            {
+                "item_id": "message-1",
+                "data": {"type": "human", "content": "saved message"},
+            }
+        ],
+        "interrupts": [{"id": "int-1", "value": {"approval": True}}],
+    }
 
 
 def test_managed_memory_and_session_routes(monkeypatch):

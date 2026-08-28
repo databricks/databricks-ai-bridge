@@ -806,7 +806,7 @@ async function loadConfig() {
         : "The ID is stored in this browser and sent in every invocation body; session history is unavailable.";
     updateRecoveryControls();
     elements.recoveryStatus.textContent = !config.app_control.stop_enabled
-      ? "Run mason add ui --enable-stop to opt in."
+      ? "MASON_DEMO_STOP_ENABLED is not configured."
       : !config.session.durable
         ? "Stop is enabled, but durability needs a managed Session Store."
         : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
