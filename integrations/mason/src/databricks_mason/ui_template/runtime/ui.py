@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import uuid
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from agent.mason import recovery
 from databricks.sdk import WorkspaceClient
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
-_INSTANCE_ID = uuid.uuid4().hex[:12]
+_INSTANCE_ID = recovery.process_id()
 _CRASH_ENV = "MASON_DEMO_CRASH_ENABLED"
 _MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 _MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
@@ -214,6 +214,22 @@ def _require_session() -> None:
         )
 
 
+def _require_recovery() -> None:
+    if not _enabled(_CRASH_ENV):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Run `mason add ui --enable-crash` or set {_CRASH_ENV}=true.",
+        )
+    _require_session()
+
+
+async def _recovery_call(handler, session_id: str) -> dict[str, Any]:
+    try:
+        return await handler(session_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = None) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
@@ -254,6 +270,12 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
                 "enabled": _enabled(_CRASH_ENV),
                 "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
             },
+            "recovery": {
+                "enabled": bool(session_store and _enabled(_CRASH_ENV)),
+                "automatic_resume": True,
+                "steps": recovery.step_names(),
+                "step_seconds": recovery.step_seconds(),
+            },
         }
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
@@ -293,6 +315,21 @@ def install_ui(app: FastAPI, session_history: SessionHistoryHandler | None = Non
         if session_history is None:
             raise HTTPException(status_code=503, detail="Session history is not available.")
         return await session_history(session_id)
+
+    @app.get("/api/demo/recovery/{session_id}", include_in_schema=False)
+    async def recovery_status(session_id: str) -> dict:
+        _require_recovery()
+        return await _recovery_call(recovery.status, session_id)
+
+    @app.post("/api/demo/recovery/{session_id}/start", include_in_schema=False)
+    async def start_recovery(session_id: str) -> dict:
+        _require_recovery()
+        return await _recovery_call(recovery.start, session_id)
+
+    @app.post("/api/demo/recovery/{session_id}/resume", include_in_schema=False)
+    async def resume_recovery(session_id: str) -> dict:
+        _require_recovery()
+        return await _recovery_call(recovery.resume, session_id)
 
     @app.post("/api/demo/crash", include_in_schema=False)
     async def crash() -> dict:

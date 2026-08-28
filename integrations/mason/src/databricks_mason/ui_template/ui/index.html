@@ -184,10 +184,15 @@
               <span class="control-number">02</span>
               <div><p class="eyebrow">Durability</p><h2>Crash &amp; recover</h2></div>
             </div>
-            <label for="recovery-code">Conversation marker</label>
-            <input id="recovery-code" placeholder="Generated automatically" />
-            <button id="crash-button" class="button button-danger" type="button" disabled>Crash app and verify resume</button>
-            <p id="recovery-status" class="supporting-text">Enable the crash control to run this demo. Paused approvals can resume after restart too.</p>
+            <p class="supporting-text recovery-intro">Run four checkpointed tools in order. After a few finish, crash the process; the restarted app automatically resumes at the first incomplete step.</p>
+            <div id="recovery-steps" class="recovery-steps" aria-live="polite">
+              <div class="state-empty">Connect a Session Store and enable crash recovery.</div>
+            </div>
+            <div class="button-row recovery-actions">
+              <button id="start-recovery" class="button button-primary" type="button" disabled>Start tool sequence</button>
+              <button id="crash-button" class="button button-danger" type="button" disabled>Crash app now</button>
+            </div>
+            <p id="recovery-status" class="supporting-text">Completed tool outputs are restored from the Session Store checkpoint after restart.</p>
           </section>
 
           <section class="control-card event-card">

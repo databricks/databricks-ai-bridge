@@ -51,7 +51,7 @@ mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
   add
-    ui         [--enable-crash] [directory]
+    ui         [--enable-crash] [--force] [directory]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -119,9 +119,14 @@ mason add ui
 uv run start-server
 ```
 
+Rerun `mason add ui --force` to refresh an existing generated app with the latest Mason-managed UI
+files. The flag intentionally overwrites the installed UI, recovery helper, and demo tests.
+
 The UI exercises streaming, sticky background polling, same-ID session resume, local checkpoint
 history, managed Memory Store entries, managed Session Store transcript items, agent memory tools,
-human approval, and runtime status.
+human approval, and runtime status. Capability dots are automatic: streaming/background reflect the
+runtime contract, Session turns green when history is available, and Memory turns green only when
+`AGENT_MEMORY_STORE` is configured. The transport selector itself is manual.
 `mason add ui --enable-crash` also enables a demo-only endpoint that terminates the process so an
 auto-restarting dev server or deployed Databricks App can prove that the durable checkpointer resumes
 the same conversation after restart.
@@ -140,4 +145,8 @@ mason --profile <profile> deploy mason-agent-demo --source . \
 `mason deploy` provisions or resolves the stores and injects their names plus the shared actor id.
 The UI can create, list, and search memory entries for the actor; it also creates a managed session
 and mirrors user/assistant turns into Session Store items. It can pause on the sample approval-gated
-tool, crash the app, wait for a new process, and approve the same paused run.
+tool, crash the app, wait for a new process, and approve the same paused run. The crash card also
+runs `tool_step_1` through `tool_step_4` in a deterministic checkpointed graph. Crash after a few
+steps complete: after Databricks Apps restarts the process, the browser automatically resumes the
+same session, restores completed outputs, skips those completed nodes, and continues at the first
+incomplete tool. A tool interrupted before its output checkpoint is committed can run again.

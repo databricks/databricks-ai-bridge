@@ -115,6 +115,10 @@ a file to `agent/tools/`.
   `AGENT_MEMORY_ACTOR_ID` (default `agent`), in addition to exposing the agent's memory tools.
 - Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
+- `mason add ui` installs `agent/mason/recovery.py` and `agent/tools/long_running.py`. The recovery
+  graph runs `tool_step_1` through `tool_step_4` sequentially on a separate derived checkpoint thread.
+  The UI keeps the public session id, resumes automatically after restart, skips completed nodes, and
+  retries only the node whose output was not checkpointed before the crash.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
   `resume` with the same session id — no runtime change; it rides `/invocations` through the handlers.

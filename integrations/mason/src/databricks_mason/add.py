@@ -19,11 +19,14 @@ _REQUIRED_PROJECT_FILES = (
     "runtime/runtime.py",
 )
 _UI_FILES = {
+    "agent/mason/recovery.py": "ui_template/agent/mason/recovery.py",
+    "agent/tools/long_running.py": "ui_template/agent/tools/long_running.py",
     "runtime/ui.py": "ui_template/runtime/ui.py",
     "ui/index.html": "ui_template/ui/index.html",
     "ui/styles.css": "ui_template/ui/styles.css",
     "ui/app.js": "ui_template/ui/app.js",
     "tests/test_demo_ui.py": "ui_template/tests/test_demo_ui.py",
+    "tests/test_recovery.py": "ui_template/tests/test_recovery.py",
 }
 _RUNTIME_IMPORT = "from runtime.runtime import build_app"
 _UI_IMPORT = "from runtime.ui import install_ui"
@@ -69,9 +72,9 @@ def _resource_text(resource_name: str) -> str:
     return resources.files("databricks_mason").joinpath(resource_name).read_text(encoding="utf-8")
 
 
-def _install_files(project: pathlib.Path) -> list[str]:
+def _install_files(project: pathlib.Path, *, overwrite: bool = False) -> list[str]:
     collisions = [name for name in _UI_FILES if (project / name).exists()]
-    if collisions:
+    if collisions and not overwrite:
         raise AgentCliError(
             "Refusing to overwrite existing UI files.",
             hint=f"Existing: {', '.join(collisions)}. Move them aside or integrate manually.",
@@ -171,8 +174,13 @@ def add() -> None:
     is_flag=True,
     help="Enable the demo-only endpoint that terminates the app for restart/recovery testing.",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite Mason-managed UI files to refresh an existing installation.",
+)
 @click.pass_obj
-def add_ui(obj, directory: str, enable_crash: bool) -> None:
+def add_ui(obj, directory: str, enable_crash: bool, force: bool) -> None:
     """Add a zero-build chat and runtime demo UI to DIRECTORY."""
     project = pathlib.Path(directory).expanduser().resolve()
     _validate_project(project)
@@ -181,13 +189,16 @@ def add_ui(obj, directory: str, enable_crash: bool) -> None:
     installed = _is_installed(main_path.read_text())
     if installed:
         missing_ui = [name for name in _UI_FILES if not (project / name).is_file()]
-        if missing_ui:
+        if missing_ui and not force:
             raise AgentCliError(
                 "The Mason UI installation is incomplete.",
-                hint=f"Missing: {', '.join(missing_ui)}. Restore them or remove the UI wiring.",
+                hint=(
+                    f"Missing: {', '.join(missing_ui)}. Restore them, remove the UI wiring, "
+                    "or rerun with --force."
+                ),
             )
     patched_main = _patched_runtime_main(main_path)
-    files = [] if installed else _install_files(project)
+    files = _install_files(project, overwrite=force) if force or not installed else []
     if patched_main is not None:
         main_path.write_text(patched_main)
     _document_crash_setting(project)
@@ -198,6 +209,7 @@ def add_ui(obj, directory: str, enable_crash: bool) -> None:
     payload = {
         "directory": str(project),
         "installed": bool(files or patched_main),
+        "updated": bool(installed and force),
         "crash_enabled": enable_crash,
         "files": files,
     }
@@ -215,7 +227,13 @@ def add_ui(obj, directory: str, enable_crash: bool) -> None:
     else:
         next_steps.append("Deploy with --with-session-store to verify recovery across restarts")
     render.success(
-        "Added agent demo UI" if files or patched_main else "Agent demo UI already installed",
+        (
+            "Updated agent demo UI"
+            if installed and force
+            else "Added agent demo UI"
+            if files or patched_main
+            else "Agent demo UI already installed"
+        ),
         fields={
             "Directory": str(project),
             "Crash control": "enabled" if enable_crash else "disabled",

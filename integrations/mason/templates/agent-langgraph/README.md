@@ -19,8 +19,10 @@ mason add ui
 ```
 
 The UI exercises sync and SSE streaming calls, background polling, session routing, long-term
-memory tools, human approval, and an opt-in crash/recovery flow. Run `mason add ui --enable-crash`
-when a supervisor or deployed Databricks App will restart the process.
+memory tools, human approval, and an opt-in crash/recovery flow. Its green/red capability dots are
+computed automatically from `/api/demo/config`; only the sync/streaming/background transport choice
+is manual. Run `mason add ui --enable-crash` when a supervisor or deployed Databricks App will restart
+the process.
 
 Local clients can use `/invocations`. For a deployed Databricks App, use the equivalent
 `/api/invocations` route with an OAuth Bearer token; Databricks Apps reserves `/api/*` for
@@ -34,6 +36,7 @@ agent/                 # the agent (reasoning plane) — this is what you edit
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
+    long_running.py    #     tool_step_1..4 — installed by `mason add ui` for crash recovery
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
   mason/               #   plumbing that will move into Databricks SDKs later — rarely edited
     session_store.py   #     LangGraph checkpointer: in-memory by default; DatabricksSessionStoreSaver when AGENT_SESSION_STORE is set
@@ -42,6 +45,7 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
     mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
     background.py      #     BackgroundRuns: in-memory store for background runs; swap for a durable one
+    recovery.py        #     deterministic checkpointed tool sequence installed by `mason add ui`
 runtime/               # the HTTP surface — SDK-agnostic; rarely edited
   runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
   main.py              #   entry point: loads config, builds the app, runs uvicorn
@@ -134,6 +138,19 @@ curl http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
 > durable: they do not survive a restart and are not shared across replicas. For production
 > durability (crash recovery, cross-pod resume, surviving the ~120s Apps proxy timeout), back it with
 > a durable store.
+
+### Checkpointed crash/recovery demo
+
+`mason add ui` installs four deterministic tools, `tool_step_1` through `tool_step_4`, plus a small
+LangGraph that always runs them in that order. With `AGENT_SESSION_STORE` configured, each completed
+node and its output is checkpointed through the same Session Store saver used by the chat agent.
+
+Start the sequence from the UI, wait until two or more outputs appear, then click **Crash app now**.
+Databricks Apps restarts the process. The browser keeps the same public `session_id`, detects the
+durable incomplete graph, and automatically calls its resume endpoint. Completed nodes are restored
+from the checkpoint and skipped; execution continues at the first incomplete node. Recovery is
+at-least-once at the node boundary: a tool that was running when the process died can retry because
+its output was not committed yet.
 
 ### Human-in-the-loop (tool approval)
 
@@ -280,6 +297,7 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 | `AGENT_MEMORY_ACTOR_ID` | `agent` | Actor partition used by memory tools and the optional UI |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
 | `AGENT_SESSION_ACTOR_ID` | session id | Actor used by the durable saver and optional UI managed session |
+| `MASON_DEMO_TOOL_STEP_SECONDS` | `6` | Duration of each optional UI crash-demo tool step |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |

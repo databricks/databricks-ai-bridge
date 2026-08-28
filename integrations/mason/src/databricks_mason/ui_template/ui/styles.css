@@ -807,11 +807,90 @@ h2 {
 }
 
 .button-danger {
-  width: 100%;
-  margin-top: 12px;
   border: 1px solid var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.recovery-intro {
+  margin-top: 0;
+}
+
+.recovery-steps {
+  margin-top: 13px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
+.recovery-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.recovery-step:last-child {
+  border-bottom: 0;
+}
+
+.recovery-step-index {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-soft);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.recovery-step strong,
+.recovery-step small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.recovery-step strong {
+  font-size: 0.7rem;
+}
+
+.recovery-step small {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.recovery-step.completed .recovery-step-index {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.recovery-step.current .recovery-step-index {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.recovery-step.restored strong::after {
+  content: "restored";
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 0.52rem;
+  text-transform: uppercase;
+}
+
+.recovery-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
 }
 
 .state-list {

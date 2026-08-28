@@ -34,13 +34,19 @@ def test_add_ui_installs_files_and_patches_runtime(tmp_path: pathlib.Path):
     assert (project / "ui/index.html").is_file()
     assert (project / "runtime/ui.py").is_file()
     assert (project / "tests/test_demo_ui.py").is_file()
+    assert (project / "tests/test_recovery.py").is_file()
+    assert (project / "agent/mason/recovery.py").is_file()
+    assert (project / "agent/tools/long_running.py").is_file()
     ui_script = (project / "ui/app.js").read_text()
     assert "/api/demo/memory/search" in ui_script
     assert "/api/demo/sessions/" in ui_script
     assert 'credentials: "same-origin"' in ui_script
     assert "renderSessionTranscript(items)" in ui_script
     assert "refreshSession({ hydrateChat: true })" in ui_script
+    assert "/api/demo/recovery/" in ui_script
+    assert "startRecoverySequence" in ui_script
     assert "Approve paused HITL" in (project / "ui/index.html").read_text()
+    assert "tool_step_1" in (project / "agent/tools/long_running.py").read_text()
     main = (project / "runtime/main.py").read_text()
     assert "from runtime.ui import install_ui" in main
     assert "install_ui(app, session_history=agent.agent.session_history)" in main
@@ -69,6 +75,21 @@ def test_add_ui_can_enable_crash_after_install(tmp_path: pathlib.Path):
     assert "MASON_DEMO_CRASH_ENABLED=true" in (project / ".env").read_text()
 
 
+def test_add_ui_force_refreshes_existing_install(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
+    assert first.exit_code == 0, first.output
+    (project / "ui/app.js").write_text("old UI")
+    (project / "agent/mason/recovery.py").unlink()
+
+    refreshed = CliRunner().invoke(add, ["ui", "--force", str(project)], obj=_Ctx())
+
+    assert refreshed.exit_code == 0, refreshed.output
+    assert "Updated agent demo UI" in refreshed.output
+    assert "startRecoverySequence" in (project / "ui/app.js").read_text()
+    assert (project / "agent/mason/recovery.py").is_file()
+
+
 def test_add_ui_reports_incomplete_installation(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     first = CliRunner().invoke(add, ["ui", str(project)], obj=_Ctx())
@@ -78,6 +99,7 @@ def test_add_ui_reports_incomplete_installation(tmp_path: pathlib.Path):
     assert second.exit_code != 0
     assert "installation is incomplete" in second.output
     assert "ui/app.js" in second.output
+    assert "--force" in second.output
 
 
 def test_add_ui_refuses_existing_unmanaged_files(tmp_path: pathlib.Path):

@@ -27,7 +27,7 @@ const elements = {
   promptInput: document.querySelector("#prompt-input"),
   askMemory: document.querySelector("#ask-memory"),
   searchMemory: document.querySelector("#search-memory"),
-  recoveryCode: document.querySelector("#recovery-code"),
+  recoverySteps: document.querySelector("#recovery-steps"),
   recoveryStatus: document.querySelector("#recovery-status"),
   refreshConfig: document.querySelector("#refresh-config"),
   refreshSession: document.querySelector("#refresh-session"),
@@ -43,6 +43,7 @@ const elements = {
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
   sessionStoreLabel: document.querySelector("#session-store-label"),
+  startRecovery: document.querySelector("#start-recovery"),
   streamingMode: document.querySelector("#streaming-mode-value"),
   streamingStatus: document.querySelector("#streaming-status"),
   viewerValue: document.querySelector("#viewer-value"),
@@ -59,6 +60,10 @@ const state = {
   managedSessionId: "",
   mode: "streaming",
   pendingInterrupt: null,
+  recovery: null,
+  recoveryPollTimer: null,
+  recoverySessionId: localStorage.getItem("mason.demo.recovery") || "",
+  recoverySignature: "",
   sessionId: localStorage.getItem("mason.demo.session") || "",
 };
 
@@ -105,7 +110,7 @@ function setBusy(busy, label = "Working") {
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
-  elements.crashButton.disabled = busy || !state.config?.crash.enabled;
+  updateRecoveryControls();
   if (busy) setStatus(label, "busy");
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
@@ -113,6 +118,19 @@ function setBusy(busy, label = "Working") {
 function setCapability(element, enabled) {
   element.classList.toggle("enabled", Boolean(enabled));
   element.classList.toggle("disabled", !enabled);
+}
+
+function recoveryInProgress() {
+  return Boolean(state.recovery?.worker_active || state.recovery?.needs_resume);
+}
+
+function updateRecoveryControls() {
+  const canStart = state.config?.recovery.enabled && (!state.recovery || state.recovery.status === "not_started");
+  const checkpointedSteps = state.recovery?.outputs?.length || 0;
+  const canCrash = state.config?.crash.enabled
+    && (state.pendingInterrupt || (state.recovery?.worker_active && checkpointedSteps >= 2));
+  elements.startRecovery.disabled = state.busy || !canStart;
+  elements.crashButton.disabled = state.busy || !canCrash;
 }
 
 function formatJson(value) {
@@ -459,6 +477,7 @@ async function openSessionById() {
       addEvent("session.open", { session_id: sessionId, managed: false });
     }
     await refreshSession({ hydrateChat: true });
+    await monitorRecovery(sessionId, { autoResume: true });
   } catch (error) {
     stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
     addEvent("session.error", { message: String(error) });
@@ -706,12 +725,18 @@ function resetConversation() {
   state.pendingInterrupt = null;
   state.draft = null;
   state.draftText = "";
+  state.recovery = null;
+  state.recoverySessionId = "";
+  state.recoverySignature = "";
+  localStorage.removeItem("mason.demo.recovery");
+  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
   elements.approvalPanel.hidden = true;
   elements.chatLog.replaceChildren(elements.emptyState);
   elements.emptyState.hidden = false;
   elements.promptInput.focus();
   addEvent("session.new", { session_id: state.sessionId });
   void refreshSession();
+  if (state.config?.recovery.enabled) void monitorRecovery(state.sessionId);
 }
 
 async function loadConfig() {
@@ -748,15 +773,19 @@ async function loadConfig() {
       : config.session.history
         ? "Messages load from the in-process LangGraph checkpoint and remain available until the server restarts."
         : "The ID is stored in this browser and sent in every invocation body; session history is unavailable.";
-    elements.crashButton.disabled = state.busy || !config.crash.enabled;
+    updateRecoveryControls();
     elements.recoveryStatus.textContent = !config.crash.enabled
       ? "Run mason add ui --enable-crash to opt in."
-      : config.session.durable
-        ? "Ready: the app will restart and query the same durable session."
-        : "Crash is enabled, but this in-process session will reset after restart.";
+      : !config.session.durable
+        ? "Crash is enabled, but the tool sequence needs a managed Session Store."
+        : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
     setConnection("online", "Connected");
     addEvent("runtime.config", config);
     void refreshSession();
+    if (config.recovery.enabled) {
+      const recoverySessionId = state.recoverySessionId || state.sessionId;
+      void monitorRecovery(recoverySessionId, { autoResume: true });
+    }
     if (config.memory.enabled) void listMemoryEntries();
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
@@ -767,10 +796,144 @@ async function loadConfig() {
   }
 }
 
-function randomRecoveryCode() {
-  const words = ["amber", "cedar", "delta", "ember", "indigo", "lunar", "quartz", "river"];
-  const pick = () => words[Math.floor(Math.random() * words.length)];
-  return `${pick()}-${pick()}-${Math.floor(100 + Math.random() * 900)}`;
+function recoveryStatusText(result) {
+  if (result.status === "failed") return `Sequence failed: ${result.error || "unknown error"}`;
+  if (result.status === "completed") {
+    const restored = result.outputs.some(
+      (output) => output.instance_id && output.instance_id !== result.instance_id,
+    );
+    return restored
+      ? "Recovered and completed. Earlier tool outputs were restored and skipped on this process."
+      : "All tool steps completed. Start a new session to run the demo again.";
+  }
+  if (result.needs_resume) return "Checkpoint found. Automatically resuming the first incomplete step…";
+  if (result.worker_active && result.outputs.length >= 2) {
+    return `${result.outputs.length} steps are checkpointed. Crash now to test recovery.`;
+  }
+  if (result.worker_active) return `Running ${result.current_step || "the next tool"}…`;
+  return "Start the sequence, wait for a few completed outputs, then crash the app.";
+}
+
+function renderRecovery(result) {
+  state.recovery = result;
+  const outputs = new Map((result.outputs || []).map((output) => [output.tool, output]));
+  elements.recoverySteps.replaceChildren();
+  for (const [index, name] of (result.steps || []).entries()) {
+    const output = outputs.get(name);
+    const row = document.createElement("div");
+    const restored = Boolean(output?.instance_id && output.instance_id !== result.instance_id);
+    row.className = [
+      "recovery-step",
+      output ? "completed" : "pending",
+      result.current_step === name ? "current" : "",
+      restored ? "restored" : "",
+    ].filter(Boolean).join(" ");
+
+    const number = document.createElement("span");
+    number.className = "recovery-step-index";
+    number.textContent = output ? "✓" : String(index + 1);
+
+    const body = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = name;
+    const detail = document.createElement("small");
+    if (output) {
+      const process = output.instance_id ? ` · process ${output.instance_id}` : "";
+      detail.textContent = `${output.output || "Completed"}${process}`;
+    } else if (result.current_step === name) {
+      detail.textContent = result.worker_active
+        ? `Running on process ${result.instance_id}`
+        : "Will resume from this checkpoint";
+    } else {
+      detail.textContent = "Waiting";
+    }
+    body.append(title, detail);
+    row.append(number, body);
+    elements.recoverySteps.append(row);
+  }
+
+  elements.recoveryStatus.textContent = recoveryStatusText(result);
+  const signature = JSON.stringify([
+    result.status,
+    result.current_step,
+    result.worker_active,
+    result.needs_resume,
+    result.outputs,
+  ]);
+  if (signature !== state.recoverySignature) {
+    state.recoverySignature = signature;
+    addEvent("recovery.status", result);
+  }
+  updateRecoveryControls();
+}
+
+function scheduleRecoveryPoll(sessionId, delay = 1000) {
+  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
+  state.recoveryPollTimer = setTimeout(() => {
+    monitorRecovery(sessionId, { autoResume: true }).catch(() => {});
+  }, delay);
+}
+
+async function resumeRecoverySequence(sessionId) {
+  const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const result = await jsonResponse(response);
+  renderRecovery(result);
+  addEvent("recovery.resume", result);
+  scheduleRecoveryPoll(sessionId);
+  return result;
+}
+
+async function monitorRecovery(sessionId, { autoResume = false } = {}) {
+  if (!state.config?.recovery.enabled || !sessionId) return null;
+  state.recoverySessionId = sessionId;
+  try {
+    const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    const result = await jsonResponse(response);
+    renderRecovery(result);
+    setConnection("online", "Connected");
+    if (result.needs_resume && autoResume) return resumeRecoverySequence(sessionId);
+    if (result.worker_active || result.needs_resume) scheduleRecoveryPoll(sessionId);
+    return result;
+  } catch (error) {
+    if (recoveryInProgress()) {
+      setConnection("offline", "Process stopped");
+      elements.recoveryStatus.textContent = "Waiting for the app process to restart…";
+      scheduleRecoveryPoll(sessionId, 1500);
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function startRecoverySequence() {
+  if (state.busy || !state.config?.recovery.enabled) return;
+  const sessionId = ensureSessionId();
+  state.recoverySessionId = sessionId;
+  localStorage.setItem("mason.demo.recovery", sessionId);
+  elements.startRecovery.disabled = true;
+  elements.recoveryStatus.textContent = "Starting checkpointed tool sequence…";
+  try {
+    const response = await fetch(`/api/demo/recovery/${encodeURIComponent(sessionId)}/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const result = await jsonResponse(response);
+    renderRecovery(result);
+    addEvent("recovery.start", result);
+    scheduleRecoveryPoll(sessionId);
+  } catch (error) {
+    elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
+    appendError(error);
+    updateRecoveryControls();
+  }
 }
 
 async function waitForRestart(previousInstanceId) {
@@ -829,24 +992,15 @@ async function crashAndRecover() {
     }
     return;
   }
-  const code = elements.recoveryCode.value.trim() || randomRecoveryCode();
-  elements.recoveryCode.value = code;
-  elements.recoveryStatus.textContent = "Writing a marker into this conversation…";
+  if (!state.recovery?.worker_active || !state.recoverySessionId) {
+    appendError(new Error("Start the checkpointed tool sequence before crashing the app."));
+    return;
+  }
+  const sessionId = state.recoverySessionId;
   try {
-    await sendText(
-      `Keep the recovery code ${code} in this conversation only. Do not use the remember tool. Reply exactly READY.`,
-      "sync",
-    );
     await restartRuntime();
-    elements.recoveryStatus.textContent = "Process restarted. Verifying the same durable session…";
-    const answer = await sendText(
-      "The app just restarted. What recovery code did I ask you to keep in this conversation? Reply with only the code.",
-      "sync",
-    );
-    const recovered = answer.toLowerCase().includes(code.toLowerCase());
-    elements.recoveryStatus.textContent = recovered
-      ? `Recovered ${code} from the same session.`
-      : `The process restarted, but the response did not contain ${code}. Check the Session Store.`;
+    elements.recoveryStatus.textContent = "Process restarted. Loading the durable checkpoint…";
+    await monitorRecovery(sessionId, { autoResume: true });
   } catch (error) {
     elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
     if (!String(error).includes("Failed to fetch")) appendError(error);
@@ -924,6 +1078,7 @@ elements.askMemory.addEventListener("click", async () => {
   await sendText(`Use the recall tool to find what you remember about ${query}.`, "sync").catch(() => {});
 });
 
+elements.startRecovery.addEventListener("click", startRecoverySequence);
 elements.crashButton.addEventListener("click", crashAndRecover);
 
 setSessionId(state.sessionId || makeSessionId());
