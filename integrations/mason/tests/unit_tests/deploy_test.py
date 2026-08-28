@@ -208,6 +208,7 @@ def test_resolve_memory_store_pages_at_100_and_matches_display_name():
 
     client = _PagingClient()
     store = deploy_mod._resolve_memory_store(client, "wanted")
+    assert store is not None
     assert store["name"] == "memory-stores/b"  # found on page 2
     assert all(ps == 100 for ps, _ in client.calls)  # never exceeds the API cap
     assert [pt for _, pt in client.calls] == [None, "p2"]  # followed the page token
