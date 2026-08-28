@@ -97,8 +97,6 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
             "add",
             "uc-function",
             "main.tools.lookup_ticket",
-            "--auth",
-            "obo",
             "--source",
             str(project),
         ],
@@ -108,9 +106,9 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
     assert mcp.exit_code == 0, mcp.output
     assert uc.exit_code == 0, uc.output
     loaded = AgentProject.load(project)
-    assert [(tool.id, tool.source.kind, tool.auth) for tool in loaded.tools] == [
-        ("web", "mcp", "app"),
-        ("lookup_ticket", "uc_function", "obo"),
+    assert [(tool.id, tool.source.kind) for tool in loaded.tools] == [
+        ("web", "mcp"),
+        ("lookup_ticket", "uc_function"),
     ]
 
 
@@ -207,6 +205,5 @@ def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
             "id": "web_search",
             "kind": "mcp",
             "source": "system.ai.web_search",
-            "auth": "app",
         }
     ]

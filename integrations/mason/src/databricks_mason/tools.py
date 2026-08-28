@@ -42,7 +42,6 @@ def _tool_record(spec: ToolSpec) -> dict[str, str]:
         "id": spec.id,
         "kind": spec.source.kind,
         "source": _source_value(spec),
-        "auth": spec.auth,
     }
 
 
@@ -199,35 +198,31 @@ def add_sandbox(
 @add.command("mcp")
 @click.argument("service")
 @click.option("--name", "tool_id", default=None)
-@click.option("--auth", type=click.Choice(["app", "obo"]), default="app", show_default=True)
 @_source_option
 @click.pass_obj
 def add_mcp(
     obj: Any,
     service: str,
     tool_id: str | None,
-    auth: str,
     source: pathlib.Path,
 ) -> None:
     """Bind a Databricks managed MCP SERVICE."""
     _add_spec(
         obj,
         source.resolve(),
-        ToolSpec.mcp(tool_id or _default_id(service), service=service, auth=auth),
+        ToolSpec.mcp(tool_id or _default_id(service), service=service),
     )
 
 
 @add.command("uc-function")
 @click.argument("function_name")
 @click.option("--name", "tool_id", default=None)
-@click.option("--auth", type=click.Choice(["app", "obo"]), default="app", show_default=True)
 @_source_option
 @click.pass_obj
 def add_uc_function(
     obj: Any,
     function_name: str,
     tool_id: str | None,
-    auth: str,
     source: pathlib.Path,
 ) -> None:
     """Bind an existing three-part Unity Catalog function."""
@@ -237,7 +232,6 @@ def add_uc_function(
         ToolSpec.uc_function(
             tool_id or _default_id(function_name),
             function=function_name,
-            auth=auth,
         ),
     )
 
@@ -301,6 +295,6 @@ def list_tools(obj: Any, source: pathlib.Path) -> None:
         return
     render.resource_table(
         "Agent tools",
-        [("ID", "left"), ("KIND", "left"), ("SOURCE", "left"), ("AUTH", "left")],
-        [(row["id"], row["kind"], row["source"], row["auth"]) for row in rows],
+        [("ID", "left"), ("KIND", "left"), ("SOURCE", "left")],
+        [(row["id"], row["kind"], row["source"]) for row in rows],
     )

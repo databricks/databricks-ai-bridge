@@ -17,7 +17,6 @@ from databricks_mason.errors import AgentCliError
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
-_SUPPORTED_AUTH = {"app", "obo"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -117,14 +116,11 @@ class ToolSpec:
 
     id: str
     source: ToolSource
-    auth: str = "app"
     policy: ToolPolicy = field(default_factory=ToolPolicy)
 
     def __post_init__(self) -> None:
         if not _TOOL_ID.fullmatch(self.id):
             raise AgentCliError(f"Invalid tool id {self.id!r}.")
-        if self.auth not in _SUPPORTED_AUTH:
-            raise AgentCliError(f"Unsupported tool auth mode {self.auth!r}.")
         kind = self.source.kind
         if kind == "sandbox":
             if self.source.service != "system.ai.sandbox":
@@ -162,33 +158,29 @@ class ToolSpec:
         tool_id: str,
         *,
         scopes: Sequence[Scope],
-        auth: str = "app",
     ) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="sandbox", service="system.ai.sandbox"),
-            auth=auth,
             policy=ToolPolicy(tuple(scopes)),
         )
 
     @classmethod
-    def mcp(cls, tool_id: str, *, service: str, auth: str = "app") -> "ToolSpec":
-        return cls(id=tool_id, source=ToolSource(kind="mcp", service=service), auth=auth)
+    def mcp(cls, tool_id: str, *, service: str) -> "ToolSpec":
+        return cls(id=tool_id, source=ToolSource(kind="mcp", service=service))
 
     @classmethod
-    def uc_function(cls, tool_id: str, *, function: str, auth: str = "app") -> "ToolSpec":
+    def uc_function(cls, tool_id: str, *, function: str) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="uc_function", function=function),
-            auth=auth,
         )
 
     @classmethod
-    def python(cls, tool_id: str, *, entrypoint: str, auth: str = "app") -> "ToolSpec":
+    def python(cls, tool_id: str, *, entrypoint: str) -> "ToolSpec":
         return cls(
             id=tool_id,
             source=ToolSource(kind="python", entrypoint=entrypoint),
-            auth=auth,
         )
 
 
@@ -237,7 +229,6 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             if isinstance(source.get("entrypoint"), str)
             else None,
         ),
-        auth=_required_string(value.get("auth", "app"), "an auth mode"),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
 
@@ -252,7 +243,6 @@ def _inline_table(values: Mapping[str, str]) -> Any:
 def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
-    table.add("auth", spec.auth)
     source_values = {"kind": spec.source.kind}
     for key in ("service", "function", "entrypoint"):
         value = getattr(spec.source, key)
