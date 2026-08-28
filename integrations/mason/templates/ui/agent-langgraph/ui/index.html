@@ -80,10 +80,11 @@
           <section class="rail-section session-card">
             <div class="section-heading compact">
               <div>
-                <p class="eyebrow">Managed transcript</p>
-                <h2>Session Store</h2>
+                <p class="eyebrow">Conversation history</p>
+                <h2>Sessions</h2>
               </div>
               <div class="button-row compact-actions">
+                <button id="new-session" class="text-button" type="button">New session</button>
                 <button id="refresh-session" class="text-button" type="button">Refresh</button>
               </div>
             </div>
@@ -96,6 +97,11 @@
               <button id="reject-session" class="button button-secondary" type="button">Reject paused HITL</button>
             </div>
             <p id="session-store-label" class="supporting-text">The Databricks Apps routing cookie is also the application session ID.</p>
+            <label>Recent sessions</label>
+            <div id="session-list" class="state-list compact-list" aria-live="polite">
+              <div class="state-empty">Loading sessions…</div>
+            </div>
+            <label>Current transcript</label>
             <div id="session-items" class="state-list compact-list" aria-live="polite">
               <div class="state-empty">Connect a Session Store to mirror transcript items.</div>
             </div>
