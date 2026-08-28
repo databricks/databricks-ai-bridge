@@ -57,6 +57,14 @@ class _FakeClient:
     def get_memory_store(self, name):
         return {"name": f"memory-stores/{name}"}
 
+    def list_memory_stores(self, page_size=None, page_token=None):
+        # One page; the store's resource name is an id distinct from its display name (as the real
+        # API returns), so resolution must match on display_name, not id.
+        return {
+            "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}],
+            "next_page_token": "",
+        }
+
 
 class _FakeCtx:
     profile = "prof"
@@ -92,9 +100,9 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "myapp", "--source-code-path", ws] in calls
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    # The API returns `memory-stores/mem`, but the runtime re-adds that prefix, so the env var
-    # must carry the bare id.
-    assert env["AGENT_MEMORY_STORE"] == "mem"
+    # Display name "mem" resolves to store id memory-stores/mem-id-123; the runtime re-adds the
+    # `memory-stores/` prefix, so the env var must carry the bare id.
+    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
 def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):
@@ -177,6 +185,62 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
     env = {e["name"]: e["value"] for e in doc["env"]}
     assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
+
+
+def test_resolve_memory_store_pages_at_100_and_matches_display_name():
+    # The list API caps page_size at 100, so resolution must page (not request 1000) and match the
+    # display name across pages.
+    class _PagingClient:
+        def __init__(self):
+            self.calls = []
+
+        def list_memory_stores(self, page_size=None, page_token=None):
+            self.calls.append((page_size, page_token))
+            if page_token is None:
+                return {
+                    "managed_memory_stores": [{"name": "memory-stores/a", "display_name": "other"}],
+                    "next_page_token": "p2",
+                }
+            return {
+                "managed_memory_stores": [{"name": "memory-stores/b", "display_name": "wanted"}],
+                "next_page_token": "",
+            }
+
+    client = _PagingClient()
+    store = deploy_mod._resolve_memory_store(client, "wanted")
+    assert store["name"] == "memory-stores/b"  # found on page 2
+    assert all(ps == 100 for ps, _ in client.calls)  # never exceeds the API cap
+    assert [pt for _, pt in client.calls] == [None, "p2"]  # followed the page token
+
+
+def test_resolve_memory_store_returns_none_when_absent():
+    class _EmptyClient:
+        def list_memory_stores(self, page_size=None, page_token=None):
+            return {"managed_memory_stores": [], "next_page_token": ""}
+
+    assert deploy_mod._resolve_memory_store(_EmptyClient(), "nope") is None
+
+
+def test_deploy_without_create_resolves_memory_by_display_name(tmp_path: pathlib.Path, monkeypatch):
+    # Non-create path must resolve by display name (list+match), not get_memory_store (by id).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--with-memory-store", "mem"],
+        obj=_FakeCtx(),
+    )
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"  # resolved by display name, bare id
 
 
 def test_with_traces_defaults_the_experiment_per_app():

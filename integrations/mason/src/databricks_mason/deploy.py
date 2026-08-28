@@ -115,17 +115,39 @@ def _upsert_manifest_env(source: pathlib.Path, updates: dict[str, str]) -> bool:
 # --- store provisioning -----------------------------------------------------
 
 
+_MEMORY_STORE_PAGE_SIZE = 100  # the memory-stores list API caps page_size at 100
+
+
+def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
+    """Find a memory store by display name, paging through the list, or None if none matches.
+
+    `get_memory_store` looks up by resource id (`memory-stores/<uuid>`), not the display name users
+    pass, so resolving a name means listing and matching on `display_name`. The list API caps
+    `page_size` at 100, so page through with the `next_page_token` rather than requesting all at once.
+    """
+    page_token: Optional[str] = None
+    while True:
+        listing = client.list_memory_stores(
+            page_size=_MEMORY_STORE_PAGE_SIZE, page_token=page_token
+        )
+        for store in field(listing, "managed_memory_stores") or []:
+            if field(store, "display_name") == display_name:
+                return store
+        page_token = field(listing, "next_page_token")
+        if not page_token:
+            return None
+
+
 def _ensure_memory_store(client, display_name: str) -> dict:
     try:
         return client.create_memory_store(display_name)
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    listing = client.list_memory_stores(page_size=1000)
-    for store in field(listing, "managed_memory_stores") or []:
-        if field(store, "display_name") == display_name:
-            return store
-    raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
+    store = _resolve_memory_store(client, display_name)
+    if store is None:
+        raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
+    return store
 
 
 def _ensure_session_store(client, name: str) -> dict:
@@ -163,11 +185,16 @@ def resolve_store_env(
     """
     env: dict[str, str] = {}
     if memory_store:
-        store = (
-            _ensure_memory_store(client, memory_store)
-            if create_stores
-            else client.get_memory_store(memory_store)
-        )
+        # Resolve by display name (what users pass) in both cases: get_memory_store looks up by
+        # resource id, so it can't resolve a display name on the non-create path.
+        if create_stores:
+            store = _ensure_memory_store(client, memory_store)
+        else:
+            store = _resolve_memory_store(client, memory_store)
+            if store is None:
+                raise AgentCliError(
+                    f"Memory store '{memory_store}' does not exist (create it with --create-stores)."
+                )
         store_name = field(store, "name") or memory_store
         env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
     if session_store:
