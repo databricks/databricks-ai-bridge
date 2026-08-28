@@ -6,10 +6,12 @@ framework -> template dir, refuses an existing destination, and reports the scaf
 
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 from unittest import mock
 
+import tomli
 from click.testing import CliRunner
 
 from databricks_mason import init as init_mod
@@ -59,6 +61,84 @@ def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     # omitting --framework scaffolds the langgraph template
     assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+
+
+def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "agent-langgraph",
+    }
+
+
+def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": "openai"},
+    }
+
+
+def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_code(
+    tmp_path: pathlib.Path,
+):
+    dest = tmp_path / "langgraph"
+
+    def fake_fetch(repo, ref, template_path, target):
+        (target / "agent" / "mason").mkdir(parents=True)
+        (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
+        (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert (dest / "agent" / "agent.py").read_text() == "USER_AGENT = True\n"
+    ast.parse((dest / "agent" / "mason" / "tool_manifest.py").read_text())
+    runtime = (dest / "agent" / "mason" / "mcp_runtime.py").read_text()
+    ast.parse(runtime)
+    assert 'load_tools(expected_framework="langgraph")' in runtime
+
+
+def test_init_openai_records_manifest_without_installing_runtime_adapter(tmp_path: pathlib.Path):
+    dest = tmp_path / "openai"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "agent" / "mason").exists()
 
 
 def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):

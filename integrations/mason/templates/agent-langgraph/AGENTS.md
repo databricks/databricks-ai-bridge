@@ -22,6 +22,9 @@ No database needed — conversation state uses an in-process LangGraph checkpoin
 where `output` is LangChain messages (native shape). The session id travels in the `X-Routing-Key`
 header — omit it for a new conversation, send it back to continue one.
 
+The examples below use local `/invocations` routes. Deployed Databricks Apps also expose the same
+handlers under `/api/invocations` so OAuth Bearer-token calls pass through the Apps API gateway.
+
 ```bash
 # Sync — run a turn to completion
 curl -sX POST http://localhost:8000/invocations \

@@ -15,12 +15,15 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+from importlib import resources
 from typing import Optional
 
 import click
 
 from databricks_mason import render
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
 # (The two basic templates currently live in different repos; this keeps each pointed at its own.)
@@ -37,6 +40,30 @@ _TEMPLATES = {
         "path": "integrations/mason/templates/agent-langgraph",
     },
 }
+
+
+def _runtime_template(name: str) -> str:
+    try:
+        return (
+            resources.files("databricks_mason")
+            .joinpath("templates")
+            .joinpath(name)
+            .read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError) as exc:
+        raise AgentCliError(f"Could not read packaged runtime template {name!r}.") from exc
+
+
+def _install_runtime_plumbing(project: pathlib.Path) -> None:
+    """Install template-owned runtime seams without modifying user agent code."""
+    mason = project / "agent" / "mason"
+    mason.mkdir(parents=True, exist_ok=True)
+    (mason / "tool_manifest.py").write_text(
+        _runtime_template("tool_manifest_runtime.py"), encoding="utf-8"
+    )
+    (mason / "mcp_runtime.py").write_text(
+        _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
+    )
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
@@ -154,6 +181,10 @@ def init(
     _fetch_template(repo or spec["repo"], ref or spec["ref"], template_path, dest)
 
     template_name = pathlib.PurePosixPath(template_path).name
+    write_project_metadata(dest, framework=framework, template=template_name)
+    AgentProject.create(dest, framework=framework).write()
+    if framework == "langgraph":
+        _install_runtime_plumbing(dest)
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

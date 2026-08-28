@@ -27,6 +27,28 @@ def build_mcp_servers() -> list[MCPServer]:
     return []
 '''
 
+_LANGGRAPH_MCPS = '''"""MCP servers to offer the agent."""
+
+from databricks_langchain import DatabricksMCPServer
+
+
+def build_mcp_servers() -> list[DatabricksMCPServer]:
+    """Return the configured MCP servers."""
+    return []
+'''
+
+_LANGGRAPH_RUNTIME = """from databricks_langchain import DatabricksMultiServerMCPClient
+
+from agent.mcps import build_mcp_servers
+
+
+async def mcp_tools() -> list:
+    servers = build_mcp_servers()
+    if not servers:
+        return []
+    return await DatabricksMultiServerMCPClient(servers).get_tools()
+"""
+
 
 class _TextCtx:
     output = "text"
@@ -37,14 +59,205 @@ class _JsonCtx:
 
 
 def _project(
-    tmp_path: pathlib.Path, content: str = _EMPTY_MCPS
+    tmp_path: pathlib.Path,
+    content: str = _EMPTY_MCPS,
+    *,
+    framework: str | None = "openai",
+    template: str | None = None,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     project = tmp_path / "agent-project"
     agent = project / "agent"
     agent.mkdir(parents=True)
     mcps = agent / "mcps.py"
     mcps.write_text(content)
+    if framework is not None:
+        metadata = project / ".mason" / "project.toml"
+        metadata.parent.mkdir()
+        metadata.write_text(
+            "schema_version = 1\n"
+            f'framework = "{framework}"\n'
+            f'template = "{template or f"agent-{framework}"}"\n'
+        )
     return project, mcps
+
+
+def _langgraph_project(
+    tmp_path: pathlib.Path,
+    *,
+    framework: str | None = "langgraph",
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    project, mcps = _project(
+        tmp_path,
+        _LANGGRAPH_MCPS,
+        framework=framework,
+        template="agent-langgraph",
+    )
+    runtime = project / "agent" / "mason" / "mcp_runtime.py"
+    runtime.parent.mkdir()
+    runtime.write_text(_LANGGRAPH_RUNTIME)
+    return project, mcps, runtime
+
+
+def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+):
+    project, mcps, runtime = _langgraph_project(tmp_path)
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    generated = mcps.read_text()
+    ast.parse(generated)
+    ast.parse(runtime.read_text())
+    assert "from databricks_langchain import DatabricksMCPServer" in generated
+    assert "from langchain_mcp_adapters.sessions import create_session" in generated
+    assert generated.index("from databricks.sdk import WorkspaceClient") < generated.index(
+        "from databricks_langchain import DatabricksMCPServer"
+    )
+    assert generated.index(
+        "from databricks_langchain import DatabricksMCPServer"
+    ) < generated.index("from langchain_mcp_adapters.sessions import create_session")
+    assert "_sandbox_tool_interceptor" in generated
+    assert 'meta={"downscope": _SANDBOX_DOWNSCOPE}' in generated
+    assert "tool_interceptors=[_sandbox_tool_interceptor]" in runtime.read_text()
+    assert (
+        "from agent.mcps import _sandbox_tool_interceptor, build_mcp_servers" in runtime.read_text()
+    )
+
+    class FakeWorkspaceClient:
+        def __init__(self):
+            self.config = types.SimpleNamespace(host="https://df1.example.com")
+
+    class FakeDatabricksMCPServer:
+        def __init__(self, **kwargs):
+            self.connection = kwargs
+
+        def to_connection_dict(self):
+            return {"transport": "streamable_http", **self.connection}
+
+    class FakeSession:
+        initialized = False
+        call = None
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def call_tool(self, name, arguments, **kwargs):
+            self.call = (name, arguments, kwargs)
+            return self.call
+
+    session = FakeSession()
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *args):
+            return False
+
+    def fake_create_session(connection):
+        assert connection["url"] == (
+            "https://df1.example.com/ai-gateway/mcp-services/system.ai.sandbox"
+        )
+        return FakeSessionContext()
+
+    databricks_sdk = types.ModuleType("databricks.sdk")
+    databricks_sdk.__dict__["WorkspaceClient"] = FakeWorkspaceClient
+    databricks_langchain = types.ModuleType("databricks_langchain")
+    databricks_langchain.__dict__["DatabricksMCPServer"] = FakeDatabricksMCPServer
+    adapters = types.ModuleType("langchain_mcp_adapters")
+    sessions = types.ModuleType("langchain_mcp_adapters.sessions")
+    sessions.__dict__["create_session"] = fake_create_session
+    monkeypatch.setitem(sys.modules, "databricks.sdk", databricks_sdk)
+    monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", adapters)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.sessions", sessions)
+
+    namespace: dict[str, Any] = {}
+    exec(compile(generated, str(mcps), "exec"), namespace)
+    request = types.SimpleNamespace(
+        server_name="system.ai.sandbox",
+        name="sandbox",
+        args={"code": 'print("hello")'},
+    )
+
+    async def unexpected_handler(request):
+        raise AssertionError("sandbox calls must use the fixed-meta session")
+
+    call = asyncio.run(namespace["_sandbox_tool_interceptor"](request, unexpected_handler))
+    assert session.initialized is True
+    assert call == (
+        "sandbox",
+        {"code": 'print("hello")'},
+        {
+            "meta": {
+                "downscope": {
+                    "tables": [
+                        {
+                            "name": "samples.nyctaxi.trips",
+                            "permission": "read_only",
+                        }
+                    ]
+                }
+            }
+        },
+    )
+
+
+def test_add_sandbox_infers_legacy_langgraph_project_from_dependencies(tmp_path: pathlib.Path):
+    project, mcps, runtime = _langgraph_project(tmp_path, framework=None)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "legacy"\ndependencies = ["databricks-langchain>=0.9"]\n'
+    )
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "_sandbox_tool_interceptor" in mcps.read_text()
+    assert "tool_interceptors=[_sandbox_tool_interceptor]" in runtime.read_text()
+
+
+def test_add_sandbox_rejects_ambiguous_legacy_project_without_writes(tmp_path: pathlib.Path):
+    project, mcps = _project(tmp_path, framework=None)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "ambiguous"\n'
+        'dependencies = ["databricks-openai", "databricks-langchain"]\n'
+    )
+    original = mcps.read_text()
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "catalog.schema.volume"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "framework" in result.output.lower()
+    assert mcps.read_text() == original
+
+
+def test_add_sandbox_rejects_unsupported_framework_without_writes(tmp_path: pathlib.Path):
+    project, mcps = _project(tmp_path, framework="custom")
+    original = mcps.read_text()
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "catalog.schema.volume"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Unsupported Mason framework 'custom'" in result.output
+    assert mcps.read_text() == original
 
 
 def test_generated_block_reads_valid_python_template_at_render_time(

@@ -151,3 +151,18 @@ def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
     assert result.exit_code != 0
     assert "app.yaml" in result.output
     db.assert_not_called()
+
+
+def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
+    tmp_path: pathlib.Path,
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    manifest = tmp_path / "agent.toml"
+    manifest.write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert db.call_args.kwargs["cwd"] == str(tmp_path)
+    assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
