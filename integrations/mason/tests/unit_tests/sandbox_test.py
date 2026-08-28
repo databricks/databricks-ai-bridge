@@ -124,7 +124,7 @@ def test_add_sandbox_generates_fixed_volume_downscope(tmp_path: pathlib.Path):
     assert '"permission": "read_only"' in generated
     assert "/ai-gateway/mcp-services/system.ai.sandbox" in generated
     assert "from_uc_function" not in generated
-    assert 'tool_filter={"allowed_tool_names": ["run_code"]}' in generated
+    assert 'tool_filter={"allowed_tool_names": ["sandbox", "run_code"]}' in generated
     assert "return [\n        _build_sandbox_mcp_server(),\n    ]" in generated
     assert 'meta["downscope"] = _SANDBOX_DOWNSCOPE' in generated
     assert "super().call_tool(tool_name, arguments, meta=meta, **kwargs)" in generated
@@ -195,7 +195,7 @@ def test_generated_server_overrides_caller_downscope_without_changing_arguments(
     )
     assert isinstance(server.connection["workspace_client"], FakeWorkspaceClient)
     assert server.connection["timeout"] == 120.0
-    assert server.connection["tool_filter"] == {"allowed_tool_names": ["run_code"]}
+    assert server.connection["tool_filter"] == {"allowed_tool_names": ["sandbox", "run_code"]}
 
 
 def test_add_sandbox_supports_workspace_table_and_read_write_scopes(tmp_path: pathlib.Path):
