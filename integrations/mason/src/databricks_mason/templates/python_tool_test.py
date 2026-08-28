@@ -1,7 +1,9 @@
 """Starter test for the Mason-scaffolded Python tool."""
 
 import pytest
-from agent.tools.__MASON_TOOL_MODULE__ import __MASON_TOOL_FUNCTION__
+from agent.tools.__MASON_TOOL_MODULE__ import (  # ty: ignore[unresolved-import]
+    __MASON_TOOL_FUNCTION__,
+)
 
 pytestmark = pytest.mark.skip(reason="Implement __MASON_TOOL_FUNCTION__ and enable this test.")
 

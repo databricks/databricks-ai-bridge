@@ -181,7 +181,7 @@ class Runner:
                 if elapsed >= next_tick:
                     last = _last_nonempty_line(log_path)
                     self.transcript.write(
-                        f"tick {dt.datetime.now(dt.UTC):%H:%M} | {label} | running | {last}"
+                        f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | running | {last}"
                     )
                     next_tick += 60.0
                 time.sleep(2)
@@ -189,7 +189,7 @@ class Runner:
         self.transcript.write(output)
         if process.returncode != 0:
             raise MatrixError(f"{label} failed ({process.returncode}); log: {log_path}")
-        self.transcript.write(f"tick {dt.datetime.now(dt.UTC):%H:%M} | {label} | success")
+        self.transcript.write(f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | success")
         return output
 
     def databricks(self, args: Sequence[str], *, timeout: float = 300) -> dict[str, Any]:
@@ -294,7 +294,7 @@ class Runner:
         if not separator or not catalog or not schema_name or "." in schema_name:
             raise MatrixError("--uc-schema must be a two-part catalog.schema name.")
         self.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema_name}`")
-        suffix = dt.datetime.now(dt.UTC).strftime("%Y%m%d_%H%M%S")
+        suffix = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
         function_name = f"mason_tool_matrix_{suffix}"
         self.uc_function = f"{catalog}.{schema_name}.{function_name}"
         self.sql(
@@ -418,7 +418,9 @@ class Runner:
                     process.wait(timeout=20)
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
-            self.transcript.write(f"tick {dt.datetime.now(dt.UTC):%H:%M} | {label} | stopped")
+            self.transcript.write(
+                f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | stopped"
+            )
 
     def _wait_for_local(
         self,
@@ -447,7 +449,7 @@ class Runner:
                 raise MatrixError(f"{label} did not become reachable: {_last_lines(log_path, 30)}")
             if elapsed >= next_tick:
                 self.transcript.write(
-                    f"tick {dt.datetime.now(dt.UTC):%H:%M} | {label} | starting | "
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | starting | "
                     f"{_last_nonempty_line(log_path)}"
                 )
                 next_tick += 60
@@ -492,7 +494,7 @@ class Runner:
             elapsed = time.monotonic() - started
             if elapsed >= next_tick:
                 self.transcript.write(
-                    f"tick {dt.datetime.now(dt.UTC):%H:%M} | app-{name} | {state or 'UNKNOWN'}"
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | app-{name} | {state or 'UNKNOWN'}"
                 )
                 next_tick += 60
             time.sleep(15)
@@ -616,7 +618,7 @@ class Runner:
         payload = {
             "schema_version": 1,
             "profile": self.profile,
-            "generated_at": dt.datetime.now(dt.UTC).isoformat(),
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "wheel": str(self.wheel),
             "wheel_sha256": _sha256(self.wheel),
             "uc_function": self.uc_function,
@@ -674,7 +676,7 @@ def _monitored(
             except concurrent.futures.TimeoutError:
                 elapsed = time.monotonic() - started
                 transcript.write(
-                    f"tick {dt.datetime.now(dt.UTC):%H:%M} | {label} | running | {elapsed:.0f}s"
+                    f"tick {dt.datetime.now(dt.timezone.utc):%H:%M} | {label} | running | {elapsed:.0f}s"
                 )
                 if elapsed >= timeout:
                     raise MatrixError(f"{label} timed out after {timeout:.0f}s") from None

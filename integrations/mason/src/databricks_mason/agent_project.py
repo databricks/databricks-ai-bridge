@@ -8,10 +8,11 @@ import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import tomlkit
 from tomlkit import TOMLDocument
+from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
 
@@ -193,6 +194,7 @@ def _required_string(value: object, description: str) -> str:
 def _scope_from_manifest(value: object) -> Scope:
     if not isinstance(value, Mapping):
         raise AgentCliError("Sandbox downscope entries must be TOML tables.")
+    value = cast(Mapping[str, Any], value)
     resource = _required_string(value.get("resource"), "a downscope resource")
     permission = value.get("permission", "read_only")
     if not isinstance(permission, str):
@@ -209,13 +211,16 @@ def _scope_from_manifest(value: object) -> Scope:
 def _tool_from_manifest(value: object) -> ToolSpec:
     if not isinstance(value, Mapping):
         raise AgentCliError("Each agent.toml tool must be a TOML table.")
+    value = cast(Mapping[str, Any], value)
     source = value.get("source")
     if not isinstance(source, Mapping):
         raise AgentCliError("Each agent.toml tool must declare a source table.")
+    source = cast(Mapping[str, Any], source)
     kind = _required_string(source.get("kind"), "a source kind")
     policy_value = value.get("policy", {})
     if not isinstance(policy_value, Mapping):
         raise AgentCliError("Tool policy must be a TOML table.")
+    policy_value = cast(Mapping[str, Any], policy_value)
     downscope_value = policy_value.get("downscope", [])
     if not isinstance(downscope_value, list):
         raise AgentCliError("Tool policy downscope must be an array.")
@@ -288,7 +293,7 @@ class AgentProject:
                 f"Could not find agent.toml in {project_root}.",
                 hint="Run `mason init` or use a legacy compatibility command.",
             ) from exc
-        except (OSError, tomlkit.exceptions.ParseError) as exc:
+        except (OSError, ParseError) as exc:
             raise AgentCliError(f"Could not read agent manifest at {path}: {exc}.") from exc
         if document.get("schema_version") != _SCHEMA_VERSION:
             raise AgentCliError(

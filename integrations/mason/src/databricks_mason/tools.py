@@ -97,7 +97,8 @@ def _read_template(name: str) -> str:
     try:
         return (
             resources.files("databricks_mason")
-            .joinpath("templates", name)
+            .joinpath("templates")
+            .joinpath(name)
             .read_text(encoding="utf-8")
         )
     except (OSError, UnicodeError) as exc:

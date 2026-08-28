@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-import tomllib
+import tomllib  # ty: ignore[unresolved-import]
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,7 @@ def _required_string(value: object, description: str) -> str:
 def _scope(value: object) -> ScopeRecord:
     if not isinstance(value, dict):
         raise RuntimeError("agent.toml downscope entries must be tables.")
+    value = cast(dict[str, Any], value)
     resource = _required_string(value.get("resource"), "a downscope resource")
     kind, separator, resource_value = resource.partition(":")
     if not separator or kind not in {"table", "volume", "workspace"} or not resource_value:
@@ -64,12 +65,15 @@ def _scope(value: object) -> ScopeRecord:
 def _tool(value: object) -> ToolRecord:
     if not isinstance(value, dict):
         raise RuntimeError("agent.toml tools must be tables.")
+    value = cast(dict[str, Any], value)
     source = value.get("source")
     if not isinstance(source, dict):
         raise RuntimeError("Each agent.toml tool must declare a source table.")
+    source = cast(dict[str, Any], source)
     policy = value.get("policy", {})
     if not isinstance(policy, dict):
         raise RuntimeError("agent.toml tool policy must be a table.")
+    policy = cast(dict[str, Any], policy)
     raw_downscope = policy.get("downscope", [])
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")

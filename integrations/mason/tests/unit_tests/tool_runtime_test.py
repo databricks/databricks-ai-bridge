@@ -117,14 +117,14 @@ def test_openai_runtime_loads_direct_manifest_and_protects_sandbox_meta(
 
     agents = types.ModuleType("agents")
     agents_mcp = types.ModuleType("agents.mcp")
-    agents_mcp.MCPServer = object
-    agents_mcp.MCPServerManager = FakeManager
+    agents_mcp.__dict__["MCPServer"] = object
+    agents_mcp.__dict__["MCPServerManager"] = FakeManager
     databricks = types.ModuleType("databricks")
     databricks_sdk = types.ModuleType("databricks.sdk")
-    databricks_sdk.WorkspaceClient = _FakeWorkspaceClient
+    databricks_sdk.__dict__["WorkspaceClient"] = _FakeWorkspaceClient
     databricks_openai = types.ModuleType("databricks_openai")
     databricks_openai_agents = types.ModuleType("databricks_openai.agents")
-    databricks_openai_agents.McpServer = FakeMcpServer
+    databricks_openai_agents.__dict__["McpServer"] = FakeMcpServer
     monkeypatch.setitem(sys.modules, "agents", agents)
     monkeypatch.setitem(sys.modules, "agents.mcp", agents_mcp)
     monkeypatch.setitem(sys.modules, "databricks", databricks)
@@ -212,13 +212,13 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
 
     databricks = types.ModuleType("databricks")
     databricks_sdk = types.ModuleType("databricks.sdk")
-    databricks_sdk.WorkspaceClient = _FakeWorkspaceClient
+    databricks_sdk.__dict__["WorkspaceClient"] = _FakeWorkspaceClient
     databricks_langchain = types.ModuleType("databricks_langchain")
-    databricks_langchain.DatabricksMCPServer = FakeDatabricksMCPServer
-    databricks_langchain.DatabricksMultiServerMCPClient = FakeMultiServerClient
+    databricks_langchain.__dict__["DatabricksMCPServer"] = FakeDatabricksMCPServer
+    databricks_langchain.__dict__["DatabricksMultiServerMCPClient"] = FakeMultiServerClient
     adapters = types.ModuleType("langchain_mcp_adapters")
     sessions = types.ModuleType("langchain_mcp_adapters.sessions")
-    sessions.create_session = lambda connection: FakeSessionContext()
+    sessions.__dict__["create_session"] = lambda connection: FakeSessionContext()
     monkeypatch.setitem(sys.modules, "databricks", databricks)
     monkeypatch.setitem(sys.modules, "databricks.sdk", databricks_sdk)
     monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
