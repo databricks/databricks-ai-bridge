@@ -221,6 +221,27 @@ def test_resolve_memory_store_returns_none_when_absent():
     assert deploy_mod._resolve_memory_store(_EmptyClient(), "nope") is None
 
 
+def test_memory_store_database_resolves_by_display_name():
+    # The grant step derives the Lakebase db from the store; it must resolve by display name
+    # (list+match), not get_memory_store (by id), or it 404s on the deploy flag's value.
+    class _Client:
+        def list_memory_stores(self, page_size=None, page_token=None):
+            return {
+                "managed_memory_stores": [
+                    {
+                        "name": "memory-stores/uuid-x",
+                        "display_name": "mem",
+                        "storage_backend": {
+                            "backend_id": "projects/p/branches/production/databases/memory-uuidx"
+                        },
+                    }
+                ],
+                "next_page_token": "",
+            }
+
+    assert deploy_mod._memory_store_database(_Client(), "mem") == "memory-uuidx"
+
+
 def test_deploy_without_create_resolves_memory_by_display_name(tmp_path: pathlib.Path, monkeypatch):
     # Non-create path must resolve by display name (list+match), not get_memory_store (by id).
     src = tmp_path / "app"

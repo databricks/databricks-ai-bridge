@@ -160,8 +160,13 @@ def _ensure_session_store(client, name: str) -> dict:
 
 
 def _memory_store_database(client, memory_store: str) -> Optional[str]:
-    """Resolve the memory store's per-store Lakebase database name from its storage backend."""
-    store = client.get_memory_store(memory_store)
+    """Resolve the memory store's per-store Lakebase database name from its storage backend.
+
+    Resolves by display name (what the deploy flag carries), not get_memory_store (which is by id).
+    """
+    store = _resolve_memory_store(client, memory_store)
+    if store is None:
+        return None
     backend_id = field(field(store, "storage_backend") or {}, "backend_id")
     return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
 
