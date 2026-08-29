@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import pathlib
 import re
+import signal
+import subprocess
 import tempfile
-from importlib import resources
-from typing import Any
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, NoReturn, cast
 
 import click
 
@@ -15,8 +21,123 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.errors import AgentCliError
 
-_PYTHON_TOOL_TEMPLATE = "python_tool_langgraph.py"
-_PYTHON_TEST_TEMPLATE = "python_tool_test.py"
+_RUNTIME_TIMEOUT_SECONDS = 60.0
+_RUNTIME_LOG_LIMIT_BYTES = 64 * 1024
+_PIPE_READ_BYTES = 8 * 1024
+
+
+@dataclass(frozen=True)
+class _BoundedProcessResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+
+
+class _BoundedCapture:
+    def __init__(self, limit_bytes: int) -> None:
+        self._limit = max(1, limit_bytes)
+        self._head_limit = (self._limit + 1) // 2
+        self._tail_limit = self._limit - self._head_limit
+        self._head = bytearray()
+        self._tail = bytearray()
+        self._total = 0
+
+    def add(self, chunk: bytes) -> None:
+        self._total += len(chunk)
+        head_room = self._head_limit - len(self._head)
+        if head_room > 0:
+            self._head.extend(chunk[:head_room])
+            chunk = chunk[head_room:]
+        if chunk and self._tail_limit:
+            self._tail.extend(chunk)
+            if len(self._tail) > self._tail_limit:
+                del self._tail[: len(self._tail) - self._tail_limit]
+
+    def text(self) -> str:
+        captured = len(self._head) + len(self._tail)
+        if self._total <= captured:
+            data = bytes(self._head + self._tail)
+            return data.decode("utf-8", errors="replace")
+        dropped = self._total - captured
+        head = bytes(self._head).decode("utf-8", errors="replace")
+        tail = bytes(self._tail).decode("utf-8", errors="replace")
+        return f"{head}\n... [{dropped} bytes truncated] ...\n{tail}"
+
+
+def _drain_pipe(stream: Any, capture: _BoundedCapture) -> None:
+    try:
+        while chunk := stream.read(_PIPE_READ_BYTES):
+            capture.add(chunk)
+    except OSError:
+        pass
+    finally:
+        stream.close()
+
+
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        if process.poll() is None:
+            process.kill()
+
+
+def _run_bounded_process(
+    command: list[str],
+    *,
+    cwd: pathlib.Path,
+    env: dict[str, str],
+    timeout_seconds: float,
+    log_limit_bytes: int,
+) -> _BoundedProcessResult:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout = _BoundedCapture(log_limit_bytes)
+    stderr = _BoundedCapture(log_limit_bytes)
+    readers = [
+        threading.Thread(target=_drain_pipe, args=(process.stdout, stdout), daemon=True),
+        threading.Thread(target=_drain_pipe, args=(process.stderr, stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    else:
+        for reader in readers:
+            reader.join(timeout=max(0.0, deadline - time.monotonic()))
+        timed_out = any(reader.is_alive() for reader in readers)
+
+    if timed_out:
+        _kill_process_group(process)
+        if process.poll() is None:
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        for reader in readers:
+            reader.join(timeout=1)
+
+    return _BoundedProcessResult(
+        returncode=process.returncode,
+        stdout=stdout.text(),
+        stderr=stderr.text(),
+        timed_out=timed_out,
+    )
 
 
 def _identifier(value: str) -> str:
@@ -98,64 +219,247 @@ def add_sandbox_to_manifest(
     _add_spec(obj, source, ToolSpec.sandbox(tool_id, scopes=parsed))
 
 
-def _read_template(name: str) -> str:
-    try:
-        return (
-            resources.files("databricks_mason")
-            .joinpath("templates")
-            .joinpath(name)
-            .read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError) as exc:
-        raise AgentCliError(f"Could not read packaged Python tool template {name!r}.") from exc
-
-
-def _render_python_template(name: str, *, module: str, function: str) -> str:
+def _literal_tool_decorator(decorator: ast.expr) -> bool:
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(target, ast.Name):
+        return target.id == "tool"
     return (
-        _read_template(name)
-        .replace("__MASON_TOOL_MODULE__", module)
-        .replace("__MASON_TOOL_FUNCTION__", function)
+        isinstance(target, ast.Attribute)
+        and target.attr == "tool"
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "mason"
     )
 
 
-def _write_new_files(files: dict[pathlib.Path, str]) -> list[pathlib.Path]:
-    for path in files:
-        if path.exists():
-            raise AgentCliError(f"Refusing to overwrite user-owned file {path}; it already exists.")
+def _module_name(project: AgentProject, path: pathlib.Path) -> str:
+    parts = list(path.relative_to(project.root).with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
 
-    temporary: dict[pathlib.Path, pathlib.Path] = {}
-    created: list[pathlib.Path] = []
+
+def _discover_python_tools(
+    project: AgentProject,
+) -> tuple[tuple[str, ...], list[dict[str, str]]]:
+    discovery_root = project.root / "agent" / "tools"
+    if not discovery_root.is_dir():
+        return (), []
+    project_root = project.root.resolve()
+    candidates: list[str] = []
+    warnings: list[dict[str, str]] = []
+    for path in sorted(discovery_root.rglob("*.py")):
+        try:
+            resolved = path.resolve()
+            if not resolved.is_relative_to(project_root):
+                continue
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            relative_path = path.relative_to(project.root).as_posix()
+            warnings.append(
+                {
+                    "code": "MASON002",
+                    "path": relative_path,
+                    "message": (
+                        f"{relative_path} could not be scanned for Python tools: "
+                        f"{exc.msg} (line {exc.lineno})."
+                    ),
+                }
+            )
+            continue
+        except (OSError, UnicodeError) as exc:
+            relative_path = path.relative_to(project.root).as_posix()
+            warnings.append(
+                {
+                    "code": "MASON002",
+                    "path": relative_path,
+                    "message": f"{relative_path} could not be scanned for Python tools: {exc}.",
+                }
+            )
+            continue
+        module = _module_name(project, path)
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(_literal_tool_decorator(decorator) for decorator in node.decorator_list):
+                candidates.append(f"{module}:{node.name}")
+    return tuple(sorted(set(candidates))), warnings
+
+
+def discover_python_tool_candidates(project: AgentProject) -> tuple[str, ...]:
+    """Find likely undeclared Python tools without importing project modules."""
+    candidates, _ = _discover_python_tools(project)
+    declared = {
+        spec.source.entrypoint
+        for spec in project.python_tools()
+        if spec.source.entrypoint is not None
+    }
+    return tuple(candidate for candidate in candidates if candidate not in declared)
+
+
+def _discovery_warnings(project: AgentProject) -> list[dict[str, str]]:
+    candidates, warnings = _discover_python_tools(project)
+    declared = {
+        spec.source.entrypoint
+        for spec in project.python_tools()
+        if spec.source.entrypoint is not None
+    }
+    warnings.extend(
+        {
+            "code": "MASON001",
+            "entrypoint": entrypoint,
+            "message": (
+                f"{entrypoint} appears to be a decorated Python tool but is not active in agent.toml."
+            ),
+        }
+        for entrypoint in candidates
+        if entrypoint not in declared
+    )
+    return warnings
+
+
+def _runtime_command(project: AgentProject, arguments: list[str]) -> dict[str, object]:
+    result_path: pathlib.Path | None = None
     try:
-        for path, content in files.items():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as output:
-                output.write(content)
-                output.flush()
-                os.fsync(output.fileno())
-                temporary[path] = pathlib.Path(output.name)
-        for target, staged in temporary.items():
-            os.replace(staged, target)
-            created.append(target)
-        return created
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="mason-python-tool-",
+            suffix=".json",
+            delete=False,
+        ) as result_file:
+            result_path = pathlib.Path(result_file.name)
+        command = [
+            "uv",
+            "run",
+            "--project",
+            str(project.root),
+            "python",
+            "-m",
+            "agent.mason.python_runtime",
+            *arguments,
+            "--result-path",
+            str(result_path),
+        ]
+        child_env = os.environ.copy()
+        child_env["MASON_PROJECT_ROOT"] = str(project.root)
+        completed = _run_bounded_process(
+            command,
+            cwd=project.root,
+            env=child_env,
+            timeout_seconds=_RUNTIME_TIMEOUT_SECONDS,
+            log_limit_bytes=_RUNTIME_LOG_LIMIT_BYTES,
+        )
+        payload: dict[str, object]
+        if completed.timed_out:
+            payload = {
+                "schema_version": 1,
+                "ok": False,
+                "error": (
+                    "Python tool runtime timed out after "
+                    f"{_RUNTIME_TIMEOUT_SECONDS:g} seconds and was terminated."
+                ),
+            }
+        else:
+            try:
+                decoded: object = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                payload = {
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": f"Python tool runtime did not write valid control JSON: {exc}.",
+                }
+            else:
+                payload = (
+                    cast(dict[str, object], decoded)
+                    if isinstance(decoded, dict)
+                    else {
+                        "schema_version": 1,
+                        "ok": False,
+                        "error": "Python tool runtime control result must be a JSON object.",
+                    }
+                )
+        if payload.get("schema_version") != 1:
+            payload = {
+                "schema_version": 1,
+                "ok": False,
+                "error": "Python tool runtime returned an unsupported control schema.",
+            }
+        if completed.returncode != 0 and payload.get("ok") is not False:
+            payload = {
+                "schema_version": 1,
+                "ok": False,
+                "error": f"Python tool runtime exited with status {completed.returncode}.",
+            }
+        logs: dict[str, str] = {}
+        if completed.stdout:
+            logs["stdout"] = completed.stdout
+        if completed.stderr:
+            logs["stderr"] = completed.stderr
+        payload["logs"] = logs
+        return payload
     except OSError as exc:
-        for path in created:
-            path.unlink(missing_ok=True)
-        raise AgentCliError(f"Could not create Python tool scaffold: {exc}.") from exc
+        return {
+            "schema_version": 1,
+            "ok": False,
+            "error": f"Could not start the Python tool runtime: {exc}.",
+            "logs": {},
+        }
     finally:
-        for staged in temporary.values():
-            staged.unlink(missing_ok=True)
+        if result_path is not None:
+            result_path.unlink(missing_ok=True)
+
+
+def _parent_error_payload(message: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "ok": False,
+        "error": message,
+        "logs": {},
+    }
+
+
+def check_python_tools(
+    source: pathlib.Path | str, *, tool_id: str | None = None
+) -> dict[str, object]:
+    """Validate manifest-declared Python tools and report best-effort discovery warnings."""
+    try:
+        project = AgentProject.load(source)
+        warnings = _discovery_warnings(project)
+        python_tools = project.python_tools()
+        if tool_id is not None:
+            python_tools = tuple(spec for spec in python_tools if spec.id == tool_id)
+            if not python_tools:
+                return {
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": f"Python tool {tool_id!r} is not declared in agent.toml.",
+                    "tools": [],
+                    "warnings": warnings,
+                    "logs": {},
+                }
+        if not python_tools:
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "tools": [],
+                "warnings": warnings,
+                "logs": {},
+            }
+        _require_runtime_adapter(project)
+        arguments = ["check"]
+        if tool_id is not None:
+            arguments.append(tool_id)
+        payload = _runtime_command(project, arguments)
+        payload["warnings"] = warnings
+        return payload
+    except AgentCliError as exc:
+        return _parent_error_payload(exc.message)
 
 
 @click.group()
 def tools() -> None:
-    """Add, inspect, and test agent tools declared in agent.toml."""
+    """Attach, inspect, validate, and run tools declared in agent.toml."""
 
 
 @tools.group("add")
@@ -242,54 +546,6 @@ def add_uc_function(
     )
 
 
-@add.command("python")
-@click.argument("name")
-@_source_option
-@click.pass_obj
-def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
-    """Scaffold a framework-native local Python tool and starter test."""
-    project = AgentProject.load(source)
-    _require_runtime_adapter(project)
-    function = _identifier(name)
-    spec = ToolSpec.python(
-        name,
-        entrypoint=f"agent.tools.{function}:{function}",
-    )
-    existing = next((tool for tool in project.tools if tool.id == spec.id), None)
-    source_path = project.root / "agent" / "tools" / f"{function}.py"
-    test_path = project.root / "tests" / "tools" / f"test_{function}.py"
-    if existing == spec:
-        _emit_change(obj, project, spec, [])
-        return
-    if source_path.exists() or test_path.exists():
-        existing_path = source_path if source_path.exists() else test_path
-        raise AgentCliError(
-            f"Refusing to overwrite user-owned file {existing_path}; it already exists."
-        )
-
-    project.add_tool(spec)
-    files = {
-        source_path: _render_python_template(
-            _PYTHON_TOOL_TEMPLATE,
-            module=function,
-            function=function,
-        ),
-        test_path: _render_python_template(
-            _PYTHON_TEST_TEMPLATE,
-            module=function,
-            function=function,
-        ),
-    }
-    created = _write_new_files(files)
-    try:
-        project.write()
-    except AgentCliError:
-        for path in created:
-            path.unlink(missing_ok=True)
-        raise
-    _emit_change(obj, project, spec, [project.path, *created])
-
-
 @tools.command("list")
 @_source_option
 @click.pass_obj
@@ -305,3 +561,97 @@ def list_tools(obj: Any, source: pathlib.Path) -> None:
         [("ID", "left"), ("KIND", "left"), ("SOURCE", "left")],
         [(row["id"], row["kind"], row["source"]) for row in rows],
     )
+
+
+def _emit_logs(payload: dict[str, object]) -> None:
+    logs = payload.get("logs")
+    if not isinstance(logs, dict):
+        return
+    typed_logs = cast(dict[str, object], logs)
+    for stream in ("stdout", "stderr"):
+        value = typed_logs.get(stream)
+        if isinstance(value, str) and value:
+            click.echo(f"{stream}:\n{value}", nl=not value.endswith("\n"))
+
+
+def _emit_warnings(payload: dict[str, object]) -> None:
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        return
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        typed_warning = cast(dict[str, object], warning)
+        click.echo(
+            f"Warning [{typed_warning.get('code', 'MASON')}]: {typed_warning.get('message', '')}"
+        )
+
+
+def render_python_tool_diagnostics(payload: dict[str, object]) -> None:
+    """Render child logs and non-blocking warnings, then fail only on hard validation errors."""
+    _emit_logs(payload)
+    _emit_warnings(payload)
+    if payload.get("ok") is not True:
+        raise AgentCliError(str(payload.get("error") or "Python tool validation failed."))
+
+
+def _emit_result(obj: Any, payload: dict[str, object], *, success_message: str) -> None:
+    if getattr(obj, "output", "text") == "json":
+        render.emit_json(payload)
+        if payload.get("ok") is not True:
+            raise click.exceptions.Exit(1)
+        return
+    render_python_tool_diagnostics(payload)
+    click.echo(success_message)
+
+
+def _fail_parent_validation(obj: Any, message: str) -> NoReturn:
+    if getattr(obj, "output", "text") == "json":
+        render.emit_json(_parent_error_payload(message))
+        raise click.exceptions.Exit(1)
+    raise AgentCliError(message)
+
+
+@tools.command("check")
+@click.argument("name", required=False)
+@_source_option
+@click.pass_obj
+def check_tools(obj: Any, name: str | None, source: pathlib.Path) -> None:
+    """Validate declared Python tools without contacting a model or MCP endpoint."""
+    payload = check_python_tools(source, tool_id=name)
+    tool_rows = payload.get("tools")
+    count = len(tool_rows) if isinstance(tool_rows, list) else 0
+    _emit_result(obj, payload, success_message=f"Checked {count} Python tool(s).")
+
+
+@tools.command("run")
+@click.argument("name")
+@click.option("--input", "input_json", required=True, help="Tool arguments as one JSON object.")
+@_source_option
+@click.pass_obj
+def run_tool(obj: Any, name: str, input_json: str, source: pathlib.Path) -> None:
+    """Invoke one manifest-declared Python tool directly."""
+    try:
+        arguments = json.loads(input_json)
+    except json.JSONDecodeError as exc:
+        _fail_parent_validation(obj, f"--input must be valid JSON: {exc}.")
+    if not isinstance(arguments, dict):
+        _fail_parent_validation(obj, "--input must be a JSON object.")
+    try:
+        project = AgentProject.load(source)
+        _require_runtime_adapter(project)
+    except AgentCliError as exc:
+        _fail_parent_validation(obj, exc.message)
+    if not any(spec.id == name for spec in project.python_tools()):
+        _fail_parent_validation(obj, f"Python tool {name!r} is not declared in agent.toml.")
+    payload = _runtime_command(
+        project,
+        ["run", name, "--input", json.dumps(arguments, separators=(",", ":"))],
+    )
+    if getattr(obj, "output", "text") == "json":
+        _emit_result(obj, payload, success_message="")
+        return
+    _emit_logs(payload)
+    if payload.get("ok") is not True:
+        raise AgentCliError(str(payload.get("error") or "Python tool invocation failed."))
+    click.echo(json.dumps(payload.get("result"), ensure_ascii=False))

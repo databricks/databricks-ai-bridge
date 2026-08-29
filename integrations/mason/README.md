@@ -93,8 +93,9 @@ mason [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
-    add python       NAME [--source PATH]
     list             [--source PATH]
+    check            [NAME] [--source PATH]
+    run              NAME --input JSON [--source PATH]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
@@ -108,15 +109,60 @@ mason [-p <profile>] [-o text|json]
 `agent-langgraph` template; `mason tools add` fails explicitly for other frameworks until they
 provide an adapter at the same runtime seam.
 
-Remote tools update only `agent.toml`; they do not generate framework source. The LangGraph runtime
-loads the manifest and materializes its native MCP tools when the agent runs, so a direct manifest
-edit and a CLI edit have the same behavior:
+There are two first-class authoring lanes: write a local Python function and activate it explicitly,
+or attach an existing external service with the CLI. Both become exact `agent.toml` records consumed
+by the same LangGraph runtime.
+
+### Write and activate a local Python tool
+
+Write normal typed Python directly. For example, create `agent/tools/lookup_ticket.py`:
+
+```python
+from langchain_core.tools import tool
+
+
+@tool
+def lookup_ticket(ticket_id: str) -> str:
+    """Return a support-ticket summary by ticket ID."""
+    return f"Summary for {ticket_id}"
+```
+
+Then add the exact activation record to `agent.toml`:
+
+```toml
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+```
+
+Validate the derived contract and invoke the function directly before starting the agent:
+
+```sh
+mason tools check lookup-ticket
+mason tools run lookup-ticket --input '{"ticket_id":"INC-123"}'
+mason dev --source .
+mason deploy my-agent --source .
+```
+
+An undeclared decorated function is inactive. As an editing aid, `mason tools check` performs a
+best-effort scan of literal top-level decorators under `agent/tools/` and emits `MASON001` when one
+looks undeclared; the manifest remains the sole activation source. Dynamic decorators and code
+outside that directory may not be discovered by the warning scan.
+
+Tests remain ordinary pytest files (for example, `tests/tools/test_lookup_ticket.py`), and project
+dependencies remain in the single `pyproject.toml`/lockfile. If a tool needs dependencies that
+conflict with the agent environment or requires process isolation, run it behind MCP and attach that
+service instead.
+
+### Attach an external tool
+
+The CLI is the supported editor for sandbox, managed MCP, and Unity Catalog function attachments;
+these commands update only `agent.toml` and do not generate framework source:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
-mason tools add python lookup-ticket
 mason tools list
 ```
 
@@ -130,9 +176,9 @@ mason mcp list
 mason mcp list --schema main.tools
 ```
 
-The Python command additionally creates user-owned `agent/tools/<name>.py` and
-`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. `mason dev` and
-`mason deploy` preserve `agent.toml`; they do not generate or patch agent source.
+For an arbitrary pre-existing MCP endpoint, configure a `DatabricksMCPServer` in the template's
+`agent/mcps.py`; Mason does not copy or host that service. `mason dev` and `mason deploy` preserve
+`agent.toml` and user code; they do not generate or patch agent source.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the

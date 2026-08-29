@@ -1,7 +1,7 @@
-"""Sample tool. A working example — add your own tools as new files in this package.
+"""Sample manifest-activated tool.
 
-Decorate a function with ``@tool`` (LangChain) and it becomes an agent tool; the package
-auto-collects it via ``all_tools()``, which ``create_agent_graph`` uses.
+Decorated Python is executable tool code, but it is offered to the agent only when ``agent.toml``
+declares its exact ``module:attribute`` entry point. Mason initializes this sample's declaration.
 """
 
 from datetime import datetime

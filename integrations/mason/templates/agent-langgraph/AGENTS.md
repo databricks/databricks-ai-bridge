@@ -74,9 +74,10 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | You want to… | Edit |
 | --- | --- |
 | Change model / instructions | `agent/agent.py` (`create_agent_graph`) |
-| Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
+| Add a function tool | write a typed `@tool` function, then declare its exact entry point in `agent.toml` |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
-| Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
+| Attach managed MCP | `mason tools add mcp <service>` |
+| Attach arbitrary MCP | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
 | Change the session checkpointer | `agent/mason/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
@@ -91,12 +92,36 @@ behind those handlers in `agent/agent.py`, so the serving layer is the same rega
 durability log, and recovery workflow) slated to move into Databricks SDKs — grouped so that
 migration is localized.
 
-## How tools register
+## How Python tools activate
 
-`agent/tools/all_tools()` auto-imports every module in the package and collects every
-`@tool`-decorated `BaseTool` it finds. So a tool registers just by existing in a file there —
-`create_agent_graph()` calls `all_tools()`. **Do not** edit `agent/agent.py` to add a tool — just add
-a file to `agent/tools/`.
+Write typed Python directly, for example in `agent/tools/lookup_ticket.py`:
+
+```python
+from langchain_core.tools import tool
+
+
+@tool
+def lookup_ticket(ticket_id: str) -> str:
+    """Return a support-ticket summary by ticket ID."""
+    return f"Summary for {ticket_id}"
+```
+
+Then explicitly activate the exact callable in `agent.toml`:
+
+```toml
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+```
+
+Run `mason tools check lookup-ticket` and
+`mason tools run lookup-ticket --input '{"ticket_id":"INC-123"}'` before `mason dev` or deploy.
+Undeclared decorated code is inactive. The `MASON001` warning is only a best-effort scan of literal
+top-level decorators under `agent/tools/`, not an alternative activation path.
+
+Tests stay in ordinary pytest files under `tests/`; dependencies stay in this project's
+`pyproject.toml` and lockfile. All in-process tools share that environment, so dependency conflicts
+require an MCP boundary. Existing MCP services remain a first-class alternative to local code.
 
 ## Sessions & durability
 

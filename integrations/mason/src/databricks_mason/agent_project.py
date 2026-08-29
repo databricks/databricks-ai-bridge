@@ -143,7 +143,8 @@ class ToolSpec:
         elif kind == "python":
             entrypoint = self.source.entrypoint or ""
             module, separator, callable_name = entrypoint.partition(":")
-            if not separator or not module or not callable_name.isidentifier():
+            valid_module = bool(module) and all(part.isidentifier() for part in module.split("."))
+            if not separator or not valid_module or not callable_name.isidentifier():
                 raise AgentCliError(
                     f"Invalid Python tool entrypoint {entrypoint!r}.",
                     hint="Use module.path:callable_name.",
@@ -344,6 +345,10 @@ class AgentProject:
         raw_tools.append(_tool_table(spec))
         self.tools.append(spec)
         return True
+
+    def python_tools(self) -> tuple[ToolSpec, ...]:
+        """Return manifest-declared Python tools in declaration order."""
+        return tuple(tool for tool in self.tools if tool.source.kind == "python")
 
     def remove_tool(self, tool_id: str) -> bool:
         index = next((index for index, tool in enumerate(self.tools) if tool.id == tool_id), None)

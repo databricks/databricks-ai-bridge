@@ -53,6 +53,15 @@ EXPECTED = {
     "mcp": "a web-search tool call and a non-empty https result",
 }
 
+PYTHON_TOOL_ID = "matrix-marker"
+PYTHON_TOOL_ENTRYPOINT = "agent.tools.matrix_marker:matrix_marker"
+VALIDATION_CHECKS = (
+    "undeclared_warning",
+    "broken_entrypoint_rejection",
+    "valid_contract_check",
+    "direct_custom_tool_run",
+)
+
 
 class MatrixError(RuntimeError):
     """A reproducible setup or execution failure."""
@@ -76,11 +85,50 @@ class EvidenceRow:
 
 
 @dataclasses.dataclass
+class ValidationCheck:
+    framework: str
+    authoring: str
+    check: str
+    status: str
+    command: str
+    return_code: int
+    stdout: str
+    stderr: str
+    expected: str
+    error: str | None = None
+
+
+@dataclasses.dataclass
+class CleanupCheck:
+    resource_kind: str
+    resource: str
+    status: str
+    command: str
+    return_code: int
+    stdout: str
+    stderr: str
+    error: str | None = None
+
+
+@dataclasses.dataclass
 class ProjectCase:
     framework: str
     authoring: str
     path: pathlib.Path
     app_name: str
+
+
+def append_python_activation(
+    manifest: pathlib.Path, entrypoint: str = PYTHON_TOOL_ENTRYPOINT
+) -> None:
+    """Append the literal Python-tool activation used by the code-first CLI lane."""
+    existing = manifest.read_text(encoding="utf-8")
+    prefix = "" if not existing or existing.endswith("\n") else "\n"
+    with manifest.open("a", encoding="utf-8") as output:
+        output.write(
+            f'{prefix}\n[[tools]]\nid = "{PYTHON_TOOL_ID}"\n'
+            f'source = {{ kind = "python", entrypoint = "{entrypoint}" }}\n'
+        )
 
 
 class Transcript:
@@ -125,6 +173,8 @@ class Runner:
         self.runner_venv = output / "runner-venv"
         self.mason = self.runner_venv / "bin" / "mason"
         self.rows: list[EvidenceRow] = []
+        self.validation_checks: list[ValidationCheck] = []
+        self.cleanup_checks: list[CleanupCheck] = []
         self.apps: list[str] = []
         self.uc_function: str | None = None
         self.warehouse_id: str | None = None
@@ -363,9 +413,18 @@ class Runner:
                 )
                 if authoring == "cli":
                     self._author_cli(project)
+                    self._write_python_marker(project)
+                    self._validate_undeclared_warning(project, framework, authoring)
+                    self._validate_broken_entrypoint(project, framework, authoring)
+                    manifest = project / "agent.toml"
+                    self.transcript.file_step(
+                        manifest, "activate matrix-marker with a literal Python manifest entry"
+                    )
+                    append_python_activation(manifest)
+                    self._validate_active_python_tool(project, framework, authoring)
                 else:
+                    self._write_python_marker(project)
                     self._author_direct(project, framework)
-                self._write_python_marker(project)
                 app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
@@ -382,7 +441,6 @@ class Runner:
                 "--name",
                 "mason_uc_marker",
             ],
-            ["tools", "add", "python", "matrix-marker"],
         ]
         for args in commands:
             self.run([str(self.mason), *args, "--source", str(project)])
@@ -410,6 +468,189 @@ class Runner:
         target.parent.mkdir(parents=True, exist_ok=True)
         self.transcript.file_step(target, "user-owned deterministic MASON_PYTHON_OK implementation")
         target.write_text(body, encoding="utf-8")
+
+    def _run_validation(
+        self,
+        framework: str,
+        authoring: str,
+        check_name: str,
+        argv: Sequence[str],
+        expected: str,
+        validate: Callable[[subprocess.CompletedProcess[str]], None],
+    ) -> subprocess.CompletedProcess[str]:
+        result: subprocess.CompletedProcess[str] | None = None
+        error: str | None = None
+        try:
+            result = self.run(argv, check=False)
+            validate(result)
+        except Exception as exc:
+            error = str(exc)
+        self.validation_checks.append(
+            ValidationCheck(
+                framework=framework,
+                authoring=authoring,
+                check=check_name,
+                status="pass" if error is None else "fail",
+                command=shlex.join(list(argv)),
+                return_code=result.returncode if result is not None else -1,
+                stdout=result.stdout if result is not None else "",
+                stderr=result.stderr if result is not None else "",
+                expected=expected,
+                error=error,
+            )
+        )
+        self._write_evidence()
+        if error is not None:
+            raise MatrixError(f"Validation {check_name} failed: {error}")
+        if result is None:
+            raise MatrixError(f"Validation {check_name} did not produce a command result.")
+        return result
+
+    def _validate_undeclared_warning(
+        self, project: pathlib.Path, framework: str, authoring: str
+    ) -> None:
+        argv = [
+            str(self.mason),
+            "--output",
+            "json",
+            "tools",
+            "check",
+            "--source",
+            str(project),
+        ]
+
+        def validate(result: subprocess.CompletedProcess[str]) -> None:
+            payload = _json_command_output(result)
+            warnings = payload.get("warnings")
+            found = isinstance(warnings, list) and any(
+                isinstance(warning, dict)
+                and warning.get("code") == "MASON001"
+                and warning.get("entrypoint") == PYTHON_TOOL_ENTRYPOINT
+                for warning in warnings
+            )
+            if result.returncode != 0 or payload.get("ok") is not True or not found:
+                raise MatrixError(
+                    f"Expected successful MASON001 warning for {PYTHON_TOOL_ENTRYPOINT}: {payload}"
+                )
+
+        self._run_validation(
+            framework,
+            authoring,
+            "undeclared_warning",
+            argv,
+            f"exit 0 with MASON001 for {PYTHON_TOOL_ENTRYPOINT}",
+            validate,
+        )
+
+    def _validate_broken_entrypoint(
+        self, project: pathlib.Path, framework: str, authoring: str
+    ) -> None:
+        manifest = project / "agent.toml"
+        original = manifest.read_text(encoding="utf-8")
+        broken_entrypoint = "agent.tools.missing_matrix_marker:matrix_marker"
+        self.transcript.file_step(manifest, "temporarily activate a missing Python module")
+        append_python_activation(manifest, broken_entrypoint)
+        argv = [
+            str(self.mason),
+            "--output",
+            "json",
+            "tools",
+            "check",
+            PYTHON_TOOL_ID,
+            "--source",
+            str(project),
+        ]
+
+        def validate(result: subprocess.CompletedProcess[str]) -> None:
+            payload = _json_command_output(result)
+            error = payload.get("error")
+            if (
+                result.returncode == 0
+                or payload.get("ok") is not False
+                or not isinstance(error, str)
+                or "agent.tools.missing_matrix_marker" not in error
+            ):
+                raise MatrixError(f"Expected a hard missing-entrypoint failure: {payload}")
+
+        try:
+            self._run_validation(
+                framework,
+                authoring,
+                "broken_entrypoint_rejection",
+                argv,
+                "non-zero exit and structured error for the missing module",
+                validate,
+            )
+        finally:
+            self.transcript.file_step(manifest, "restore the manifest after the failure probe")
+            manifest.write_text(original, encoding="utf-8")
+
+    def _validate_active_python_tool(
+        self, project: pathlib.Path, framework: str, authoring: str
+    ) -> None:
+        check_argv = [
+            str(self.mason),
+            "--output",
+            "json",
+            "tools",
+            "check",
+            PYTHON_TOOL_ID,
+            "--source",
+            str(project),
+        ]
+
+        def validate_check(result: subprocess.CompletedProcess[str]) -> None:
+            payload = _json_command_output(result)
+            tools = payload.get("tools")
+            found = isinstance(tools, list) and any(
+                isinstance(tool, dict)
+                and tool.get("id") == PYTHON_TOOL_ID
+                and tool.get("entrypoint") == PYTHON_TOOL_ENTRYPOINT
+                for tool in tools
+            )
+            if result.returncode != 0 or payload.get("ok") is not True or not found:
+                raise MatrixError(f"Expected a valid matrix-marker contract: {payload}")
+
+        self._run_validation(
+            framework,
+            authoring,
+            "valid_contract_check",
+            check_argv,
+            f"exit 0 with the contract for {PYTHON_TOOL_ENTRYPOINT}",
+            validate_check,
+        )
+
+        run_argv = [
+            str(self.mason),
+            "--output",
+            "json",
+            "tools",
+            "run",
+            PYTHON_TOOL_ID,
+            "--input",
+            '{"value":"matrix"}',
+            "--source",
+            str(project),
+        ]
+
+        def validate_run(result: subprocess.CompletedProcess[str]) -> None:
+            payload = _json_command_output(result)
+            if (
+                result.returncode != 0
+                or payload.get("ok") is not True
+                or payload.get("tool") != PYTHON_TOOL_ID
+                or payload.get("result") != EXPECTED["python"]
+            ):
+                raise MatrixError(f"Expected direct MASON_PYTHON_OK invocation: {payload}")
+
+        self._run_validation(
+            framework,
+            authoring,
+            "direct_custom_tool_run",
+            run_argv,
+            f"exit 0 with result {EXPECTED['python']}",
+            validate_run,
+        )
 
     def run_dev(self, case: ProjectCase, port: int) -> None:
         label = f"dev-{case.framework}-{case.authoring}"
@@ -487,6 +728,8 @@ class Runner:
     def deploy(self, case: ProjectCase) -> None:
         label = f"deploy-{case.framework}-{case.authoring}"
         log_path = self.output / "logs" / f"{label}.log"
+        if case.app_name not in self.apps:
+            self.apps.append(case.app_name)
         try:
             self.run_long(
                 label,
@@ -501,7 +744,6 @@ class Runner:
                 ],
                 timeout=2400,
             )
-            self.apps.append(case.app_name)
             app = self._wait_for_app(case.app_name)
             self._grant_function(app)
             url = str(app.get("url") or "").rstrip("/")
@@ -663,26 +905,62 @@ class Runner:
             "wheel_sha256": _sha256(self.wheel),
             "uc_function": self.uc_function,
             "warehouse_id": self.warehouse_id,
+            "validation_checks": [dataclasses.asdict(check) for check in self.validation_checks],
             "rows": [dataclasses.asdict(row) for row in self.rows],
+            "cleanup": [dataclasses.asdict(check) for check in self.cleanup_checks],
         }
         target = self.output / "evidence.json"
         temporary = target.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(temporary, target)
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> bool:
         for app in self.apps:
-            self.run(
-                ["databricks", "apps", "delete", app, "--profile", self.profile],
-                timeout=600,
-                check=False,
+            argv = ["databricks", "apps", "delete", app, "--profile", self.profile]
+            result: subprocess.CompletedProcess[str] | None = None
+            error: str | None = None
+            try:
+                result = self.run(argv, timeout=600, check=False)
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "no command output").strip()
+                    error = f"App delete exited {result.returncode}: {detail}"
+            except Exception as exc:
+                error = str(exc)
+            self.cleanup_checks.append(
+                CleanupCheck(
+                    resource_kind="app",
+                    resource=app,
+                    status="pass" if error is None else "fail",
+                    command=shlex.join(argv),
+                    return_code=result.returncode if result is not None else -1,
+                    stdout=result.stdout if result is not None else "",
+                    stderr=result.stderr if result is not None else "",
+                    error=error,
+                )
             )
+            self._write_evidence()
         if self.uc_function:
             catalog, schema, function_name = self.uc_function.split(".")
+            statement = f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`"
+            error = None
             try:
-                self.sql(f"DROP FUNCTION IF EXISTS `{catalog}`.`{schema}`.`{function_name}`")
+                self.sql(statement)
             except Exception as exc:
-                self.transcript.write(f"cleanup warning | UC function | {exc}")
+                error = str(exc)
+            self.cleanup_checks.append(
+                CleanupCheck(
+                    resource_kind="uc_function",
+                    resource=self.uc_function,
+                    status="pass" if error is None else "fail",
+                    command=statement,
+                    return_code=0 if error is None else 1,
+                    stdout="",
+                    stderr="",
+                    error=error,
+                )
+            )
+            self._write_evidence()
+        return all(check.status == "pass" for check in self.cleanup_checks)
 
 
 def _last_lines(path: pathlib.Path, count: int) -> str:
@@ -696,6 +974,16 @@ def _last_nonempty_line(path: pathlib.Path) -> str:
         if line.strip():
             return line.strip()[:300]
     return "no output yet"
+
+
+def _json_command_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise MatrixError(f"Command returned invalid JSON: {result.stdout[:2000]}") from exc
+    if not isinstance(payload, dict):
+        raise MatrixError(f"Command returned {type(payload).__name__}, expected a JSON object.")
+    return payload
 
 
 def _monitored(
@@ -773,6 +1061,35 @@ def _sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def _execution_evidence_succeeded(document: dict[str, Any]) -> bool:
+    rows = document.get("rows", [])
+    expected = {
+        (framework, authoring, runtime, tool)
+        for framework in FRAMEWORKS
+        for authoring in AUTHORING_PATHS
+        for runtime in RUNTIMES
+        for tool in TOOL_KINDS
+    }
+    actual = {
+        (row["framework"], row["authoring"], row["runtime"], row["tool_kind"]) for row in rows
+    }
+    validation_checks = document.get("validation_checks", [])
+    expected_validations = {
+        (framework, "cli", check) for framework in FRAMEWORKS for check in VALIDATION_CHECKS
+    }
+    actual_validations = {
+        (check["framework"], check["authoring"], check["check"]) for check in validation_checks
+    }
+    return (
+        actual == expected
+        and len(rows) == len(actual)
+        and all(row.get("status") == "pass" for row in rows)
+        and actual_validations == expected_validations
+        and len(validation_checks) == len(actual_validations)
+        and all(check.get("status") == "pass" for check in validation_checks)
+    )
+
+
 def verify_evidence(path: pathlib.Path) -> int:
     document = json.loads(path.read_text(encoding="utf-8"))
     rows = document.get("rows", [])
@@ -791,11 +1108,78 @@ def verify_evidence(path: pathlib.Path) -> int:
     failed = sum(row.get("status") == "fail" for row in rows)
     skipped = len(expected - actual)
     sys.stdout.write(f"{passed} passed, {failed} failed, {skipped} skipped\n")
-    if actual != expected or duplicates or passed != len(expected):
+    validation_checks = document.get("validation_checks", [])
+    expected_validations = {
+        (framework, "cli", check) for framework in FRAMEWORKS for check in VALIDATION_CHECKS
+    }
+    actual_validations = {
+        (check["framework"], check["authoring"], check["check"]) for check in validation_checks
+    }
+    validation_duplicates = len(validation_checks) - len(actual_validations)
+    validation_passed = sum(check.get("status") == "pass" for check in validation_checks)
+    validation_failed = sum(check.get("status") == "fail" for check in validation_checks)
+    validation_skipped = len(expected_validations - actual_validations)
+    sys.stdout.write(
+        "validation: "
+        f"{validation_passed} passed, {validation_failed} failed, "
+        f"{validation_skipped} skipped\n"
+    )
+    rows_ok = actual == expected and not duplicates and passed == len(expected)
+    validations_ok = (
+        actual_validations == expected_validations
+        and not validation_duplicates
+        and validation_passed == len(expected_validations)
+    )
+    cleanup = document.get("cleanup", [])
+    expected_apps = {
+        row["app_name"]
+        for row in rows
+        if row.get("runtime") == "deploy" and isinstance(row.get("app_name"), str)
+    }
+    app_identities_ok = len(expected_apps) == len(FRAMEWORKS) * len(AUTHORING_PATHS)
+    expected_cleanup = {("app", app) for app in expected_apps}
+    uc_function = document.get("uc_function")
+    uc_identity_ok = isinstance(uc_function, str) and bool(uc_function)
+    if uc_identity_ok:
+        expected_cleanup.add(("uc_function", uc_function))
+    actual_cleanup = {(check["resource_kind"], check["resource"]) for check in cleanup}
+    cleanup_duplicates = len(cleanup) - len(actual_cleanup)
+    cleanup_passed = sum(
+        check.get("status") == "pass" and check.get("return_code") == 0 for check in cleanup
+    )
+    cleanup_failed = len(cleanup) - cleanup_passed
+    cleanup_skipped = len(expected_cleanup - actual_cleanup)
+    sys.stdout.write(
+        f"cleanup: {cleanup_passed} passed, {cleanup_failed} failed, {cleanup_skipped} skipped\n"
+    )
+    cleanup_ok = (
+        app_identities_ok
+        and uc_identity_ok
+        and actual_cleanup == expected_cleanup
+        and not cleanup_duplicates
+        and cleanup_passed == len(expected_cleanup)
+    )
+    if not rows_ok or not validations_ok or not cleanup_ok:
         if expected - actual:
             sys.stdout.write(f"missing cells: {sorted(expected - actual)}\n")
         if duplicates:
             sys.stdout.write(f"duplicate rows: {duplicates}\n")
+        if expected_validations - actual_validations:
+            sys.stdout.write(
+                f"missing validation checks: {sorted(expected_validations - actual_validations)}\n"
+            )
+        if validation_duplicates:
+            sys.stdout.write(f"duplicate validation checks: {validation_duplicates}\n")
+        if expected_cleanup - actual_cleanup:
+            sys.stdout.write(
+                f"missing cleanup checks: {sorted(expected_cleanup - actual_cleanup)}\n"
+            )
+        if cleanup_duplicates:
+            sys.stdout.write(f"duplicate cleanup checks: {cleanup_duplicates}\n")
+        if not app_identities_ok:
+            sys.stdout.write("cleanup evidence must identify one App per deploy authoring lane\n")
+        if not uc_identity_ok:
+            sys.stdout.write("cleanup evidence must identify the created UC function\n")
         return 1
     return 0
 
@@ -835,7 +1219,6 @@ def main() -> int:
         args.template_ref,
         args.app_auth_profile,
     )
-    succeeded = False
     try:
         runner.bootstrap()
         runner.select_warehouse(args.warehouse_id)
@@ -846,15 +1229,31 @@ def main() -> int:
         for case in cases:
             runner.deploy(case)
         runner._write_evidence()
-        succeeded = verify_evidence(runner.output / "evidence.json") == 0
-        return 0 if succeeded else 1
-    finally:
-        if not args.keep_resources and succeeded:
-            runner.cleanup()
-        elif not succeeded:
-            runner.transcript.write(
-                "Resources retained after failure for diagnosis; rerun cleanup after fixing."
-            )
+    except Exception:
+        runner.transcript.write(
+            "cleanup retained | run failed before complete evidence; preserving Apps and UC function"
+        )
+        runner._write_evidence()
+        raise
+
+    evidence_path = runner.output / "evidence.json"
+    document = json.loads(evidence_path.read_text(encoding="utf-8"))
+    if not _execution_evidence_succeeded(document):
+        runner.transcript.write(
+            "cleanup retained | semantic or validation checks failed; preserving Apps and UC function"
+        )
+        verify_evidence(evidence_path)
+        return 1
+    if args.keep_resources:
+        runner.transcript.write(
+            "cleanup retained | --keep-resources requested; cleanup proof is intentionally absent"
+        )
+        verify_evidence(evidence_path)
+        return 1
+
+    runner.cleanup()
+    runner._write_evidence()
+    return verify_evidence(evidence_path)
 
 
 if __name__ == "__main__":

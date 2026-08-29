@@ -15,9 +15,11 @@ from typing import Optional
 import click
 import yaml
 
+from databricks_mason import render
 from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
+from databricks_mason.tools import check_python_tools, render_python_tool_diagnostics
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -99,6 +101,24 @@ def dev(
             f"No app.yaml in '{source_dir}'.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
+
+    # Validate exact manifest-declared Python entry points before client creation, config mutation,
+    # environment preparation, or the external run-local command. Legacy Apps projects without an
+    # agent.toml have no Mason tool manifest to validate.
+    if (source_dir / "agent.toml").exists():
+        validation = check_python_tools(source_dir)
+        if getattr(obj, "output", "text") == "json":
+            render.emit_json(
+                {
+                    "schema_version": 1,
+                    "event": "tool_validation",
+                    "tool_validation": validation,
+                }
+            )
+            if validation.get("ok") is not True:
+                raise click.exceptions.Exit(1)
+        else:
+            render_python_tool_diagnostics(validation)
 
     # Wire any requested stores/traces into app.yaml first, so run-local reads the updated env.
     if memory_store or session_store or traces_destination or traces_experiment:

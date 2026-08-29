@@ -23,7 +23,7 @@ from typing import Optional
 import click
 
 from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
@@ -98,6 +98,9 @@ def _install_runtime_plumbing(project: pathlib.Path) -> None:
     )
     (mason / "mcp_runtime.py").write_text(
         _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
+    )
+    (mason / "python_runtime.py").write_text(
+        _runtime_template("python_runtime_langgraph.py"), encoding="utf-8"
     )
 
 
@@ -245,7 +248,21 @@ def init(
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
-    AgentProject.create(dest, framework=framework).write()
+    project = AgentProject.create(dest, framework=framework)
+    if framework == "langgraph":
+        project.add_tool(
+            ToolSpec.python(
+                "get_current_time",
+                entrypoint="agent.tools.sample_tool:get_current_time",
+            )
+        )
+        project.add_tool(
+            ToolSpec.python(
+                "send_message",
+                entrypoint="agent.tools.send_message:send_message",
+            )
+        )
+    project.write()
     if framework == "langgraph":
         _install_runtime_plumbing(dest)
     env_profile = profile or obj.profile

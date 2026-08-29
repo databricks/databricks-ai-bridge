@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 from unittest import mock
 
+import pytest
 from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
@@ -166,3 +168,178 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
     assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+
+
+def test_dev_validates_before_run_local_and_renders_non_blocking_warnings(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    events: list[str] = []
+    warning = {
+        "code": "MASON001",
+        "entrypoint": "agent.tools.tickets:lookup_ticket",
+        "message": (
+            "agent.tools.tickets:lookup_ticket appears to be a decorated Python tool but is not "
+            "active in agent.toml."
+        ),
+    }
+
+    def validate(source):
+        events.append("validate")
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "tools": [],
+            "warnings": [warning],
+            "logs": {},
+        }
+
+    monkeypatch.setattr(dev_mod, "check_python_tools", validate, raising=False)
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *args, **kwargs: events.append("run-local"),
+    )
+
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert events == ["validate", "run-local"]
+    assert "MASON001" in result.output
+    assert "agent.tools.tickets:lookup_ticket" in result.output
+
+
+def test_dev_validation_failure_prevents_client_mutation_and_external_commands(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    app_yaml = tmp_path / "app.yaml"
+    app_yaml.write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    original = app_yaml.read_bytes()
+
+    class FailingCtx(_Ctx):
+        def client(self):
+            raise AssertionError("validation must happen before client creation")
+
+    monkeypatch.setattr(
+        dev_mod,
+        "check_python_tools",
+        lambda source: {
+            "schema_version": 1,
+            "ok": False,
+            "error": "broken Python entrypoint",
+            "tools": [],
+            "warnings": [],
+            "logs": {},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("validation failure must prevent run-local")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        dev_mod.dev,
+        ["--source", str(tmp_path), "--with-session-store", "sessions"],
+        obj=FailingCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "broken Python entrypoint" in result.output
+    assert app_yaml.read_bytes() == original
+
+
+def test_dev_json_emits_tool_validation_event_before_run_local(tmp_path: pathlib.Path, monkeypatch):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    events: list[str] = []
+    validation = {
+        "schema_version": 1,
+        "ok": True,
+        "tools": [],
+        "warnings": [
+            {
+                "code": "MASON001",
+                "entrypoint": "agent.tools.tickets:lookup_ticket",
+                "message": (
+                    "agent.tools.tickets:lookup_ticket appears to be a decorated Python tool but "
+                    "is not active in agent.toml."
+                ),
+            }
+        ],
+        "logs": {"stdout": "import log\n", "stderr": "debug log\n"},
+    }
+    monkeypatch.setattr(
+        dev_mod,
+        "check_python_tools",
+        lambda source: events.append("validate") or validation,
+    )
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *args, **kwargs: events.append("run-local"),
+    )
+
+    result = CliRunner().invoke(
+        dev_mod.dev,
+        ["--source", str(tmp_path)],
+        obj=_Ctx(output="json"),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events == ["validate", "run-local"]
+    assert json.loads(result.output) == {
+        "schema_version": 1,
+        "event": "tool_validation",
+        "tool_validation": validation,
+    }
+
+
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    [
+        ("schema_version = [\n", "Could not read agent manifest"),
+        (
+            """schema_version = 1
+
+[agent]
+framework = "openai"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup:lookup_ticket" }
+""",
+            "supports only the 'langgraph' framework",
+        ),
+    ],
+)
+def test_dev_preflight_project_errors_are_schema_v1_json(
+    tmp_path: pathlib.Path, monkeypatch, manifest: str, expected: str
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(manifest, encoding="utf-8")
+    monkeypatch.setattr(
+        dev_mod,
+        "_databricks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid preflight must prevent run-local")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        dev_mod.dev,
+        ["--source", str(tmp_path)],
+        obj=_Ctx(output="json"),
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == 1
+    assert payload["event"] == "tool_validation"
+    assert payload["tool_validation"]["ok"] is False
+    assert expected in payload["tool_validation"]["error"]

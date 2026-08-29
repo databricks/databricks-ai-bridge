@@ -14,7 +14,7 @@ from agent.mason.memory import memory_tools
 from agent.mason.session_store import checkpointer, thread_config
 from agent.mason.workspace import workspace_client, workspace_headers
 
-# Importing the tools package auto-registers every tool module.
+# all_tools resolves only the exact Python entry points activated in agent.toml.
 from agent.tools import all_tools
 
 logger = logging.getLogger(__name__)

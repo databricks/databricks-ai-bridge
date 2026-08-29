@@ -22,7 +22,7 @@ programmatic token authentication. Polling and health checks likewise have `/api
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
   agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
-  tools/               #   function tools — drop a *.py file here to add one (auto-collected)
+  tools/               #   function tools — activated by exact entry points in agent.toml
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
@@ -47,9 +47,9 @@ You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; everything in `a
 plumbing (session checkpointer, tracing, MCP tool loading, background store) that's slated to move
 into Databricks SDKs, grouped so that migration is a localized change. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
-endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
-package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
-`mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. Python tools execute only
+when `agent.toml` names their exact decorated entry point. `mcps.py` exposes
+`build_mcp_servers()` (empty by default — add arbitrary pre-existing MCP servers there).
 
 ## Run locally
 
@@ -234,12 +234,53 @@ and durable event replay.
 
 ## Customize the agent
 
+### Add an in-process Python tool
+
+Write a normal typed function directly. For example, create `agent/tools/lookup_ticket.py`:
+
+```python
+from langchain_core.tools import tool
+
+
+@tool
+def lookup_ticket(ticket_id: str) -> str:
+    """Return a support-ticket summary by ticket ID."""
+    return f"Summary for {ticket_id}"
+```
+
+Activate only that callable by adding this exact record to `agent.toml`:
+
+```toml
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+```
+
+Then validate and directly invoke it before starting or deploying the agent:
+
+```bash
+mason tools check lookup-ticket
+mason tools run lookup-ticket --input '{"ticket_id":"INC-123"}'
+mason dev --source .
+mason deploy my-agent --source .
+```
+
+Decorated code that is not declared in `agent.toml` is inactive. `mason tools check` also performs a
+best-effort scan for literal top-level decorators under `agent/tools/` and reports `MASON001` for
+likely undeclared tools; dynamic decorators and other directories are outside that warning's
+guarantees.
+
+Keep tool tests as ordinary pytest tests under `tests/`, and add dependencies to the project's
+ordinary `pyproject.toml` and lockfile. All in-process tools share that one environment. Put a tool
+behind MCP when its dependencies conflict with the agent or it needs an isolated execution boundary.
+
+Existing services are a peer authoring lane. Attach a Databricks-managed MCP service with
+`mason tools add mcp system.ai.web_search`, or add an arbitrary pre-existing endpoint to
+`build_mcp_servers()` in `agent/mcps.py`; the service is not copied into this project.
+
 - **Model / instructions:** `create_agent_graph()` in `agent/agent.py`.
-- **Add a tool:** drop a new file in `agent/tools/` with a `@tool`-decorated function; it's
-  collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
   human-in-the-loop section above); empty the dict to disable gating.
-- **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
 - **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
   checkpointer lives in `agent/mason/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`

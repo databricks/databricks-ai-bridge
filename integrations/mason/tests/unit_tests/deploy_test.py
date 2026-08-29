@@ -7,6 +7,7 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -394,6 +395,183 @@ def test_deploy_empty_pip_index_disables_override(tmp_path: pathlib.Path, monkey
     doc = yaml.safe_load((src / "app.yaml").read_text())
     env = {e["name"]: e["value"] for e in (doc.get("env") or [])}
     assert "PIP_INDEX_URL" not in env  # empty -> no override, use the build's default index
+
+
+def test_deploy_validates_before_client_and_renders_non_blocking_warnings(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    events: list[str] = []
+
+    class OrderedCtx(_FakeCtx):
+        def client(self):
+            events.append("client")
+            return _FakeClient()
+
+    monkeypatch.setattr(
+        deploy_mod,
+        "check_python_tools",
+        lambda source: events.append("validate")
+        or {
+            "schema_version": 1,
+            "ok": True,
+            "tools": [],
+            "warnings": [
+                {
+                    "code": "MASON001",
+                    "entrypoint": "agent.tools.tickets:lookup_ticket",
+                    "message": (
+                        "agent.tools.tickets:lookup_ticket appears to be a decorated Python tool "
+                        "but is not active in agent.toml."
+                    ),
+                }
+            ],
+            "logs": {},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: events.append("databricks")
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src)], obj=OrderedCtx()
+    )
+
+    assert result.exit_code == 0, result.output
+    assert events[0:2] == ["validate", "client"]
+    assert "MASON001" in result.output
+    assert "agent.tools.tickets:lookup_ticket" in result.output
+
+
+def test_deploy_validation_failure_prevents_every_side_effect(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    app_yaml = src / "app.yaml"
+    app_yaml.write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    original = app_yaml.read_bytes()
+    events: list[str] = []
+
+    class GuardedCtx(_FakeCtx):
+        def client(self):
+            events.append("client")
+            raise AssertionError("validation must happen before client creation")
+
+    monkeypatch.setattr(
+        deploy_mod,
+        "check_python_tools",
+        lambda source: events.append("validate")
+        or {
+            "schema_version": 1,
+            "ok": False,
+            "error": "broken Python entrypoint",
+            "tools": [],
+            "warnings": [],
+            "logs": {},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("validation failure must prevent Databricks commands")
+        ),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_upsert_manifest_env",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("validation failure must prevent manifest mutation")
+        ),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src)], obj=GuardedCtx()
+    )
+
+    assert result.exit_code != 0
+    assert "broken Python entrypoint" in result.output
+    assert events == ["validate"]
+    assert app_yaml.read_bytes() == original
+
+
+def test_deploy_mcp_only_manifest_passes_python_preflight(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "web"
+source = { kind = "mcp", service = "system.ai.web_search" }
+"""
+    )
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    [
+        ("schema_version = [\n", "Could not read agent manifest"),
+        (
+            """schema_version = 1
+
+[agent]
+framework = "openai"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup:lookup_ticket" }
+""",
+            "supports only the 'langgraph' framework",
+        ),
+    ],
+)
+def test_deploy_preflight_project_errors_are_schema_v1_json(
+    tmp_path: pathlib.Path, monkeypatch, manifest: str, expected: str
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(manifest, encoding="utf-8")
+
+    class GuardedJsonCtx(_JsonCtx):
+        def client(self):
+            raise AssertionError("invalid preflight must prevent client creation")
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=GuardedJsonCtx(),
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert expected in payload["error"]
 
 
 class _JsonCtx:

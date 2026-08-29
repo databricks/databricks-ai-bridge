@@ -60,6 +60,56 @@ def test_add_conflicting_tool_id_fails_without_writing(tmp_path: pathlib.Path):
     assert path.read_text(encoding="utf-8") == before
 
 
+def test_python_tool_round_trips_exact_entrypoint(tmp_path: pathlib.Path):
+    path = _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+
+    project.add_tool(
+        ToolSpec.python(
+            "lookup-ticket",
+            entrypoint="agent.tools.lookup_ticket:lookup_ticket",
+        )
+    )
+    project.write()
+
+    assert (
+        'source = {kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket"}'
+    ) in path.read_text(encoding="utf-8")
+    assert AgentProject.load(tmp_path).tools == [
+        ToolSpec.python(
+            "lookup-ticket",
+            entrypoint="agent.tools.lookup_ticket:lookup_ticket",
+        )
+    ]
+
+
+def test_python_tools_selects_only_python_tools_in_declaration_order(tmp_path: pathlib.Path):
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    first = ToolSpec.python("first", entrypoint="agent.tools.first:first")
+    second = ToolSpec.python("second", entrypoint="agent.tools.second:second")
+    project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
+    project.add_tool(first)
+    project.add_tool(ToolSpec.uc_function("lookup", function="main.tools.lookup"))
+    project.add_tool(second)
+
+    assert project.python_tools() == (first, second)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "agent.tools.lookup_ticket",
+        "agent..lookup_ticket:lookup_ticket",
+        "agent.tools.lookup-ticket:lookup_ticket",
+        "agent.tools.lookup_ticket:lookup-ticket",
+    ],
+)
+def test_python_tool_spec_rejects_invalid_entrypoint(entrypoint: str):
+    with pytest.raises(AgentCliError, match="Python tool entrypoint"):
+        ToolSpec.python("lookup-ticket", entrypoint=entrypoint)
+
+
 @pytest.mark.parametrize(
     ("factory", "message"),
     [

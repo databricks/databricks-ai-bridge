@@ -23,6 +23,7 @@ from databricks_mason import memory_store_access, render, session_store_access, 
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
+from databricks_mason.tools import check_python_tools, render_python_tool_diagnostics
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
@@ -329,6 +330,23 @@ def deploy(
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
     source_dir = pathlib.Path(source)
+    validation: dict[str, object] = {
+        "schema_version": 1,
+        "ok": True,
+        "tools": [],
+        "warnings": [],
+        "logs": {},
+    }
+    # Local validation is the first lifecycle operation. It cannot contact workspace services, run
+    # project tests, or mutate configuration; hard failures stop before client/CLI creation.
+    if (source_dir / "agent.toml").exists():
+        validation = check_python_tools(source_dir)
+        if getattr(obj, "output", "text") == "json":
+            if validation.get("ok") is not True:
+                render.emit_json(validation)
+                raise click.exceptions.Exit(1)
+        else:
+            render_python_tool_diagnostics(validation)
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.
@@ -398,6 +416,8 @@ def deploy(
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
                 "store_grant_error": grant_error,
+                "warnings": validation.get("warnings", []),
+                "logs": validation.get("logs", {}),
             }
         )
         return

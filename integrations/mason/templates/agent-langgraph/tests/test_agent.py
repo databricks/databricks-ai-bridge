@@ -5,7 +5,10 @@ Databricks auth needed, so they run anywhere. The live test builds the full agen
 model; it is skipped unless a workspace profile is configured.
 """
 
+import inspect
 import os
+import pathlib
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -13,18 +16,57 @@ from agent.agent import _serialize_events, _session_id
 from agent.mason.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from fastapi.testclient import TestClient
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from runtime.runtime import build_app
 
 
-def test_tools_autoregister():
+@pytest.fixture
+def built_in_tool_manifest(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    (tmp_path / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "get_current_time"
+source = { kind = "python", entrypoint = "agent.tools.sample_tool:get_current_time" }
+
+[[tools]]
+id = "send_message"
+source = { kind = "python", entrypoint = "agent.tools.send_message:send_message" }
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+
+
+def test_tools_activate_exact_manifest_entries(built_in_tool_manifest):
     tools = all_tools()
-    assert tools, "expected the sample tool to auto-register"
     assert all(isinstance(t, BaseTool) for t in tools)
-    assert {"get_current_time", "send_message"} <= {t.name for t in tools}
+    assert [t.name for t in tools] == ["get_current_time", "send_message"]
 
 
-def test_gated_tool_is_in_require_approval():
+def test_direct_runtime_invokes_real_async_only_tool(monkeypatch: pytest.MonkeyPatch):
+    from agent.mason import python_runtime
+
+    @tool
+    async def async_marker(value: str) -> dict[str, str]:
+        """Return a marker from an async-only tool."""
+        return {"value": value}
+
+    resolved = python_runtime.ResolvedPythonTool(
+        record=SimpleNamespace(id="async-marker", entrypoint="test:async_marker"),
+        tool=async_marker,
+        schema=async_marker.get_input_schema().model_json_schema(),
+        fingerprint="test",
+    )
+    monkeypatch.setattr(python_runtime, "_declared_tool", lambda tool_id: resolved)
+
+    assert python_runtime.invoke_python_tool("async-marker", {"value": "ok"}) == {"value": "ok"}
+
+
+def test_gated_tool_is_in_require_approval(built_in_tool_manifest):
     # The gated demo tool must exist and be listed for approval, or the HITL demo does nothing.
     from agent.agent import REQUIRE_APPROVAL
 
@@ -67,9 +109,7 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
-    assert model._get_client_kwargs()["default_headers"] == {
-        "X-Databricks-Org-Id": "123456"
-    }
+    assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
 
 
 def test_thread_config_from_session_id():
@@ -230,12 +270,16 @@ def _has_workspace_auth() -> bool:
     )
 
 
+def test_live_model_test_loads_built_in_manifest():
+    assert "built_in_tool_manifest" in inspect.signature(test_agent_responds_end_to_end).parameters
+
+
 @pytest.mark.skipif(
     not _has_workspace_auth(),
     reason="no Databricks profile configured; skipping live model call",
 )
 @pytest.mark.asyncio
-async def test_agent_responds_end_to_end():
+async def test_agent_responds_end_to_end(built_in_tool_manifest):
     from agent.agent import configure, create_agent_graph
 
     configure()
