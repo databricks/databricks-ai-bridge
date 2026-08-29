@@ -14,7 +14,7 @@ def test_sessions_verbs_are_flat_no_redundant_subgroup():
     assert {"stores", "items"} <= names
 
 
-def test_root_registers_login_and_logout():
+def test_root_registers_supported_commands():
     names = set(cli.mason.commands)
     assert {
         "login",
@@ -24,6 +24,7 @@ def test_root_registers_login_and_logout():
         "tracing",
         "deploy",
         "deployments",
-        "add-sandbox",
+        "mcp",
         "tools",
     } <= names
+    assert "add-sandbox" not in names

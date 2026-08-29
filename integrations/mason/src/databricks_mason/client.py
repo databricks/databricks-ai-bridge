@@ -22,6 +22,7 @@ from databricks_mason import models
 from databricks_mason.errors import AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
+_MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -121,6 +122,18 @@ class MasonClient:
             return self._w.api_client.do(method, path, query=query, body=body)
         except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
             raise wrap_api_error(exc) from exc
+
+    # --- Unity Catalog MCP Services -----------------------------------------
+
+    def list_mcp_services(
+        self, schema: str = "system.ai", page_token: Optional[str] = None
+    ) -> dict:
+        """List MCP Services visible to the user in a Unity Catalog schema."""
+        return self._do(
+            "GET",
+            _MCP_SERVICES_PATH,
+            query=_query(parent=f"schemas/{schema}", page_token=page_token),
+        )
 
     # --- memory stores -------------------------------------------------------
 

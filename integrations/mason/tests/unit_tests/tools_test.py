@@ -11,7 +11,6 @@ from click.testing import CliRunner
 
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.project_config import write_project_metadata
-from databricks_mason.sandbox import add_sandbox as legacy_add_sandbox
 from databricks_mason.tools import tools
 
 
@@ -43,20 +42,6 @@ def test_add_sandbox_only_updates_manifest(tmp_path: pathlib.Path):
     loaded = AgentProject.load(project)
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope[0].resource == "table:samples.nyctaxi.trips"
-    assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
-
-
-def test_top_level_add_sandbox_alias_delegates_for_manifest_projects(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-
-    result = CliRunner().invoke(
-        legacy_add_sandbox,
-        ["--scope", "table:samples.nyctaxi.trips", "--source", str(project)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert AgentProject.load(project).tools[0].source.kind == "sandbox"
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
 
 

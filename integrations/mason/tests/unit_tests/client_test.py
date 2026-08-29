@@ -42,6 +42,20 @@ def test_list_memory_stores_query(workspace_client):
 
 
 @mock.patch("databricks_mason.client.WorkspaceClient")
+def test_list_mcp_services_query(workspace_client):
+    c, do = _client(workspace_client)
+
+    c.list_mcp_services("system.ai", page_token="next")
+
+    do.assert_called_once_with(
+        "GET",
+        "/api/2.1/unity-catalog/mcp-services",
+        query={"parent": "schemas/system.ai", "page_token": "next"},
+        body=None,
+    )
+
+
+@mock.patch("databricks_mason.client.WorkspaceClient")
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")
