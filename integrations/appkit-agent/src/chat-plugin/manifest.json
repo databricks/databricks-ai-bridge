@@ -1,0 +1,9 @@
+{
+  "name": "chat",
+  "displayName": "Chat Plugin",
+  "description": "Full-stack chat server with streaming, history, session, and optional persistence",
+  "resources": {
+    "required": [],
+    "optional": []
+  }
+}
