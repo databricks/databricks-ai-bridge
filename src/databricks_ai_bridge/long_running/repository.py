@@ -8,7 +8,12 @@ from sqlalchemy import select, update
 from sqlalchemy.sql import bindparam, text
 
 from databricks_ai_bridge.long_running.db import session_scope
-from databricks_ai_bridge.long_running.models import AGENT_DB_SCHEMA, Message, Response
+from databricks_ai_bridge.long_running.models import (
+    AGENT_DB_SCHEMA,
+    ConversationAlias,
+    Message,
+    Response,
+)
 
 
 async def create_response(
@@ -250,3 +255,44 @@ async def get_response(response_id: str) -> ResponseInfo | None:
                 json.loads(row.original_request) if row.original_request else None,
             )
         return None
+
+
+async def resolve_conversation_alias(base_conversation_id: str) -> str:
+    """Return the current rotated form of a conversation id, or the input unchanged.
+
+    Called on the request hot path, so it must be cheap. Misses (no row) are
+    expected on first contact for a new conversation; those return the input.
+    """
+    async with session_scope() as session:
+        result = await session.execute(
+            select(ConversationAlias.current_conversation_id).where(
+                ConversationAlias.base_conversation_id == base_conversation_id
+            )
+        )
+        current = result.scalar_one_or_none()
+        return current if current is not None else base_conversation_id
+
+
+async def upsert_conversation_alias(
+    base_conversation_id: str, current_conversation_id: str
+) -> None:
+    """Record (or update) the mapping ``base -> current``.
+
+    Postgres upsert keeps the table size at one row per logical conversation
+    regardless of how many times that conversation has been rotated.
+    """
+    stmt = text(
+        f"""
+        INSERT INTO {AGENT_DB_SCHEMA}.conversation_aliases
+            (base_conversation_id, current_conversation_id, updated_at)
+        VALUES (:base, :current, now())
+        ON CONFLICT (base_conversation_id) DO UPDATE
+            SET current_conversation_id = EXCLUDED.current_conversation_id,
+                updated_at = EXCLUDED.updated_at
+        """
+    )
+    async with session_scope() as session:
+        await session.execute(
+            stmt, {"base": base_conversation_id, "current": current_conversation_id}
+        )
+        await session.commit()
