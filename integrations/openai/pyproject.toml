@@ -11,12 +11,13 @@ requires-python = ">=3.10"
 dependencies = [
     "databricks-ai-search>=0.73",
     "databricks-ai-bridge>=0.21.0",
-    "openai>=1.99.9",
+    # OpenAI 3 and openai-agents 0.21 use httpx2; this integration provides httpx clients.
+    "openai>=1.99.9,<3",
     "pydantic>2.10.0",
     "mlflow>=3.10.1",
     "unitycatalog-openai[databricks]>=0.2.0",
     "databricks-mcp>=0.4.0",
-    "openai-agents>=0.5.0",
+    "openai-agents>=0.5.0,<0.21",
     # direct import in databricks_openai.agents.mcp_server; mcp 2.0.0 removed
     # GetSessionIdCallback / rewrote the streamable-http transport
     "mcp>=1.19,<2"
