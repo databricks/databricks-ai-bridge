@@ -48,7 +48,8 @@ plumbing (session checkpointer, tracing, MCP tool loading, background store) tha
 into Databricks SDKs, grouped so that migration is a localized change. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. Python tools execute only
-when `agent.toml` names their exact decorated entry point. `mcps.py` exposes
+when `agent.toml` names their exact decorated entry point; resolution and invocation come from the
+`databricks_mason.python_runtime` SDK module. `mcps.py` exposes
 `build_mcp_servers()` (empty by default — add arbitrary pre-existing MCP servers there).
 
 ## Run locally

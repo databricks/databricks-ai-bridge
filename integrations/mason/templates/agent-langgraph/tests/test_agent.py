@@ -48,7 +48,7 @@ def test_tools_activate_exact_manifest_entries(built_in_tool_manifest):
 
 
 def test_direct_runtime_invokes_real_async_only_tool(monkeypatch: pytest.MonkeyPatch):
-    from agent.mason import python_runtime
+    from databricks_mason import python_runtime
 
     @tool
     async def async_marker(value: str) -> dict[str, str]:
@@ -56,7 +56,10 @@ def test_direct_runtime_invokes_real_async_only_tool(monkeypatch: pytest.MonkeyP
         return {"value": value}
 
     resolved = python_runtime.ResolvedPythonTool(
-        record=SimpleNamespace(id="async-marker", entrypoint="test:async_marker"),
+        record=SimpleNamespace(
+            id="async-marker",
+            source=SimpleNamespace(entrypoint="test:async_marker"),
+        ),
         tool=async_marker,
         schema=async_marker.get_input_schema().model_json_schema(),
         fingerprint="test",

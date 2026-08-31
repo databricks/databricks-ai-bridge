@@ -105,9 +105,10 @@ mason [-p <profile>] [-o text|json]
 ## Agent tools
 
 `mason init` writes portable tool intent to `agent.toml` and template provenance to
-`.mason/project.toml`. The manifest runtime is currently implemented only by the in-repository
-`agent-langgraph` template; `mason tools add` fails explicitly for other frameworks until they
-provide an adapter at the same runtime seam.
+`.mason/project.toml`. The LangGraph Python-tool runtime is provided by the
+`databricks_mason.python_runtime` SDK module. The in-repository `agent-langgraph` template supplies
+the remaining manifest and MCP adapters; `mason tools add` fails explicitly for other frameworks
+until they provide an adapter at the same runtime seam.
 
 There are two first-class authoring lanes: write a local Python function and activate it explicitly,
 or attach an existing external service with the CLI. Both become exact `agent.toml` records consumed

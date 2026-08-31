@@ -336,7 +336,7 @@ def _runtime_command(project: AgentProject, arguments: list[str]) -> dict[str, o
             str(project.root),
             "python",
             "-m",
-            "agent.mason.python_runtime",
+            "databricks_mason.python_runtime",
             *arguments,
             "--result-path",
             str(result_path),

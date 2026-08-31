@@ -1,4 +1,4 @@
-"""Behavior tests for the manifest-driven MCP and Python tool runtimes."""
+"""Behavior tests for Mason's manifest-driven MCP and Python-tool runtimes."""
 
 from __future__ import annotations
 
@@ -17,9 +17,7 @@ from typing import Any
 import pytest
 
 _MASON_ROOT = pathlib.Path(__file__).parents[2]
-_RUNTIME_TEMPLATE = (
-    _MASON_ROOT / "src" / "databricks_mason" / "templates" / "python_runtime_langgraph.py"
-)
+_RUNTIME_MODULE = _MASON_ROOT / "src" / "databricks_mason" / "python_runtime.py"
 
 
 class _Schema:
@@ -68,14 +66,17 @@ def _tool(function):
 
 
 def _record(tool_id: str, entrypoint: str) -> SimpleNamespace:
-    return SimpleNamespace(id=tool_id, kind="python", entrypoint=entrypoint)
+    return SimpleNamespace(
+        id=tool_id,
+        source=SimpleNamespace(kind="python", entrypoint=entrypoint),
+    )
 
 
 def _load_runtime(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    records: tuple[SimpleNamespace, ...],
+    records: tuple[SimpleNamespace, ...] | None,
     modules: dict[str, str],
 ):
     for name in tuple(sys.modules):
@@ -108,17 +109,41 @@ def _load_runtime(
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.import_module("agent.mason")
 
-    manifest = types.ModuleType("agent.mason.tool_manifest")
-    manifest.__dict__["ToolRecord"] = SimpleNamespace
-    manifest.__dict__["load_tools"] = lambda *, expected_framework: records
-    monkeypatch.setitem(sys.modules, "agent.mason.tool_manifest", manifest)
-
-    spec = importlib.util.spec_from_file_location("agent.mason.python_runtime", _RUNTIME_TEMPLATE)
+    spec = importlib.util.spec_from_file_location(
+        "databricks_mason.python_runtime", _RUNTIME_MODULE
+    )
     assert spec is not None and spec.loader is not None
     runtime = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, runtime)
     spec.loader.exec_module(runtime)
+    if records is not None:
+        monkeypatch.setattr(runtime, "_python_records", lambda: records)
     return runtime
+
+
+def test_python_records_loads_the_configured_project_manifest(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    runtime = _load_runtime(tmp_path, monkeypatch, records=None, modules={})
+    (tmp_path / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup:lookup_ticket" }
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+
+    records = runtime._python_records()
+
+    assert len(records) == 1
+    assert records[0].id == "lookup-ticket"
+    assert records[0].source.entrypoint == "agent.tools.lookup:lookup_ticket"
 
 
 def test_python_tools_resolves_only_exact_manifest_entrypoints(

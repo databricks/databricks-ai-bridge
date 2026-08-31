@@ -99,9 +99,6 @@ def _install_runtime_plumbing(project: pathlib.Path) -> None:
     (mason / "mcp_runtime.py").write_text(
         _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
     )
-    (mason / "python_runtime.py").write_text(
-        _runtime_template("python_runtime_langgraph.py"), encoding="utf-8"
-    )
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:

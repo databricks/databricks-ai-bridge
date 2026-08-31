@@ -1,6 +1,6 @@
 """Agent tools explicitly activated by the project's ``agent.toml``."""
 
-from agent.mason.python_runtime import python_tools
+from databricks_mason.python_runtime import python_tools
 
 
 def all_tools():

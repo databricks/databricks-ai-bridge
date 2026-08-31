@@ -29,6 +29,9 @@ workspace profile uses a PAT, pass an OAuth profile for the same workspace with
 `--app-auth-profile`.
 The template repo/ref flags make `mason init` read the exact checkout under test and avoid remote
 clone throttling; provide both or omit both to test the default upstream template.
+The driver also bundles the supplied Mason wheel into each generated project's `.mason/sdk/`
+directory and adds a local uv source, so both local dev and the uploaded App exercise the exact SDK
+build under test rather than a separately published version.
 
 Both lanes write the user-owned `agent/tools/matrix_marker.py` directly. Before `mason dev` or
 deploy, the CLI-authoring lane proves that undeclared code produces the non-blocking `MASON001`

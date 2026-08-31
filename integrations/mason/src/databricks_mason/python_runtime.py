@@ -8,22 +8,21 @@ import hashlib
 import importlib
 import inspect
 import json
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import Any
 
-from agent.mason.tool_manifest import (  # ty: ignore[unresolved-import]
-    ToolRecord,
-    load_tools,
-)
 from langchain_core.tools import BaseTool  # ty: ignore[unresolved-import]
+
+from databricks_mason.agent_project import AgentProject, ToolSpec
 
 
 @dataclass(frozen=True)
 class ResolvedPythonTool:
     """One validated Python tool and its stable model-facing contract."""
 
-    record: ToolRecord
+    record: ToolSpec
     tool: BaseTool
     schema: dict[str, Any]
     fingerprint: str
@@ -43,8 +42,8 @@ def _implementation_source(tool: BaseTool) -> str:
         return ""
 
 
-def _resolve(record: ToolRecord) -> ResolvedPythonTool:
-    entrypoint = record.entrypoint
+def _resolve(record: ToolSpec) -> ResolvedPythonTool:
+    entrypoint = record.source.entrypoint
     if not entrypoint:
         raise RuntimeError(f"Python tool {record.id!r} has no entry point.")
     module_name, _, attribute_name = entrypoint.partition(":")
@@ -106,10 +105,26 @@ def _resolve(record: ToolRecord) -> ResolvedPythonTool:
     )
 
 
-def _python_records() -> tuple[ToolRecord, ...]:
-    return tuple(
-        record for record in load_tools(expected_framework="langgraph") if record.kind == "python"
-    )
+def _project_root() -> pathlib.Path:
+    configured = os.getenv("MASON_PROJECT_ROOT")
+    if configured:
+        root = pathlib.Path(configured).expanduser().resolve()
+        if (root / "agent.toml").is_file():
+            return root
+        raise RuntimeError(f"MASON_PROJECT_ROOT has no agent.toml: {root}")
+    for candidate in (pathlib.Path.cwd(), *pathlib.Path.cwd().parents):
+        if (candidate / "agent.toml").is_file():
+            return candidate
+    raise RuntimeError("Could not locate agent.toml; set MASON_PROJECT_ROOT to the project root.")
+
+
+def _python_records() -> tuple[ToolSpec, ...]:
+    project = AgentProject.load(_project_root())
+    if project.framework != "langgraph":
+        raise RuntimeError(
+            f"agent.toml framework {project.framework!r} does not match runtime 'langgraph'."
+        )
+    return project.python_tools()
 
 
 def resolve_python_tools() -> tuple[ResolvedPythonTool, ...]:
@@ -136,7 +151,7 @@ def _declared_tool(tool_id: str) -> ResolvedPythonTool:
 def _tool_contract(item: ResolvedPythonTool) -> dict[str, object]:
     return {
         "id": item.record.id,
-        "entrypoint": item.record.entrypoint,
+        "entrypoint": item.record.source.entrypoint,
         "description": item.tool.description.strip(),
         "input_schema": item.schema,
         "fingerprint": item.fingerprint,

@@ -180,6 +180,28 @@ def test_deploy_tracks_app_for_cleanup_before_deploy_command(
     assert runner.apps == ["new-app"]
 
 
+def test_e2e_bundles_the_sdk_wheel_for_generated_dev_and_deploy_projects(
+    tmp_path: pathlib.Path, tool_matrix: ModuleType
+):
+    wheel = tmp_path / "databricks_mason-0.1.0.dev0-py3-none-any.whl"
+    wheel.write_bytes(b"wheel")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "agent"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
+    runner = tool_matrix.Runner("profile", tmp_path / "output", wheel)
+
+    runner._install_sdk_wheel(project)
+
+    bundled = project / ".mason" / "sdk" / wheel.name
+    assert bundled.read_bytes() == b"wheel"
+    document = tomli.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
+    assert document["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "path": f".mason/sdk/{wheel.name}"
+    }
+
+
 def test_cleanup_records_app_delete_failure_as_observable_evidence(
     tmp_path: pathlib.Path, tool_matrix: ModuleType, monkeypatch: pytest.MonkeyPatch
 ):

@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+langgraph = [
+    "langchain-core>=1.0.0",
+]
 tracing = [
     "mlflow[databricks]>=3.9.0",
 ]

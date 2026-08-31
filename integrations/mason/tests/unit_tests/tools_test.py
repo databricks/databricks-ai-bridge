@@ -284,7 +284,7 @@ def test_tools_check_uses_result_file_and_attaches_child_logs(
             str(project.resolve()),
             "python",
             "-m",
-            "agent.mason.python_runtime",
+            "databricks_mason.python_runtime",
             "check",
             "lookup-ticket",
             "--result-path",

@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -411,6 +412,7 @@ class Runner:
                     init_args,
                     timeout=600,
                 )
+                self._install_sdk_wheel(project)
                 if authoring == "cli":
                     self._author_cli(project)
                     self._write_python_marker(project)
@@ -428,6 +430,25 @@ class Runner:
                 app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
+
+    def _install_sdk_wheel(self, project: pathlib.Path) -> None:
+        """Pin the checkout-under-test SDK into generated dev and deploy environments."""
+        wheel_dir = project / ".mason" / "sdk"
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        target = wheel_dir / self.wheel.name
+        shutil.copy2(self.wheel, target)
+        relative = target.relative_to(project).as_posix()
+        pyproject = project / "pyproject.toml"
+        existing = pyproject.read_text(encoding="utf-8")
+        prefix = "" if existing.endswith("\n") else "\n"
+        self.transcript.file_step(
+            target,
+            "bundle the Mason SDK wheel under test for both local and deployed resolution",
+        )
+        with pyproject.open("a", encoding="utf-8") as output:
+            output.write(
+                f'{prefix}\n[tool.uv.sources]\ndatabricks-mason = {{ path = "{relative}" }}\n'
+            )
 
     def _author_cli(self, project: pathlib.Path) -> None:
         commands = [

@@ -90,7 +90,8 @@ behind those handlers in `agent/agent.py`, so the serving layer is the same rega
 
 `agent/mason/` holds plumbing (session checkpointer, tracing, MCP tool loading, background store,
 durability log, and recovery workflow) slated to move into Databricks SDKs — grouped so that
-migration is localized.
+migration is localized. Python-tool resolution and invocation already live in
+`databricks_mason.python_runtime`.
 
 ## How Python tools activate
 
