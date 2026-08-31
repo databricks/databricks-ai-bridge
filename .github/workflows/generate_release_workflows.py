@@ -8,15 +8,16 @@ from pathlib import Path
 @dataclass
 class Package:
     name: str
+    release_enabled: bool
     working_dir: str | None = None  # None means root level
 
 
 PACKAGES = [
-    Package("databricks-ai-bridge"),
-    Package("databricks-langchain", "integrations/langchain"),
-    Package("databricks-mason", "integrations/mason"),
-    Package("databricks-mcp", "databricks_mcp"),
-    Package("databricks-openai", "integrations/openai"),
+    Package("databricks-ai-bridge", release_enabled=False),
+    Package("databricks-langchain", release_enabled=False, working_dir="integrations/langchain"),
+    Package("databricks-mason", release_enabled=True, working_dir="integrations/mason"),
+    Package("databricks-mcp", release_enabled=False, working_dir="databricks_mcp"),
+    Package("databricks-openai", release_enabled=False, working_dir="integrations/openai"),
 ]
 
 
@@ -24,6 +25,11 @@ def generate_workflow(pkg: Package) -> str:
     """Generate a release workflow YAML for a package."""
     is_root = pkg.working_dir is None
     dist_path = "dist/" if is_root else f"{pkg.working_dir}/dist/"
+    disabled_guard = (
+        ""
+        if pkg.release_enabled
+        else "    if: false  # TEMPORARILY DISABLED - remove this line to re-enable\n"
+    )
 
     # Build the defaults section for non-root packages
     defaults_section = ""
@@ -62,8 +68,7 @@ on:
 
 jobs:
   release:
-    if: false  # TEMPORARILY DISABLED - remove this line to re-enable
-    runs-on:
+{disabled_guard}    runs-on:
       group: databricks-protected-runner-group
       labels: linux-ubuntu-latest
 
