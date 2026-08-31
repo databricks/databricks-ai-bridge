@@ -13,7 +13,7 @@ uv build --wheel --out-dir /tmp/mason-tooling-dist
 uv run python tests/e2e/tool_matrix.py \
   --profile df1 \
   --app-auth-profile df1-oauth-mcp \
-  --wheel /tmp/mason-tooling-dist/databricks_mason-0.1.0.dev0-py3-none-any.whl \
+  --wheel /tmp/mason-tooling-dist/databricks_mason-0.1.1.dev0-py3-none-any.whl \
   --output /tmp/mason-tool-matrix-df1 \
   --uc-schema aifx_benchmarks.mason_agent_tools_e2e \
   --template-repo /absolute/path/to/databricks-ai-bridge \
