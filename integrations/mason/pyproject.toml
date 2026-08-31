@@ -21,6 +21,20 @@ dependencies = [
 tracing = [
     "mlflow[databricks]>=3.9.0",
 ]
+# The agent-side runtime helpers (databricks_mason.runtime) that a deployed agent imports. Kept as
+# an extra so a plain `pip install databricks-mason` (the CLI) stays light; the template depends on
+# `databricks-mason[runtime]`.
+runtime = [
+    "databricks-langchain>=0.17.0",
+    "langgraph>=1.1.0",
+    "langchain>=1.0.0",
+    "langchain-mcp-adapters>=0.2.1",
+    "fastapi>=0.129.0",
+    "mlflow>=3.10.1",
+    "uuid-utils>=0.10.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "databricks-agents>=1.9.3",
+]
 
 [project.scripts]
 mason = "databricks_mason.cli:main"
