@@ -43,9 +43,9 @@ tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; everything in `agent/mason/` is
-plumbing (session checkpointer, tracing, MCP tool loading, background store) that's slated to move
-into Databricks SDKs, grouped so that migration is a localized change. `runtime/runtime.py` is the
+You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session checkpointer,
+tracing, MCP tool loading, background store) lives in the `databricks-mason` package under
+`databricks_mason.runtime`, so the template ships only your agent code. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
 package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
@@ -218,7 +218,7 @@ With `AGENT_SESSION_STORE` configured:
 
 1. `POST /api/demo/app/start` starts `tool_step_1` through `tool_step_4` in a sequential LangGraph.
 2. Each completed tool output is checkpointed before the next node begins.
-3. `agent/mason/durability.py` appends attempt, owner, heartbeat, completion, and failure events to
+3. `databricks_mason/runtime/durability.py` appends attempt, owner, heartbeat, completion, and failure events to
    Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds.
 4. `POST /api/demo/app/stop` schedules `os._exit(86)`. Databricks Apps restarts the process; locally
    restart `uv run start-server` with a supervisor or manually.
@@ -241,12 +241,12 @@ and durable event replay.
   human-in-the-loop section above); empty the dict to disable gating.
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
 - **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
-  checkpointer lives in `agent/mason/session_store.py`.
+  checkpointer lives in `databricks_mason/runtime/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
-  then includes the `remember`/`recall` tools from `agent/mason/memory.py` (persist/search facts across
+  then includes the `remember`/`recall` tools from `databricks_mason/runtime/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
-  store itself is `agent/mason/background.py`).
+  store itself is `databricks_mason/runtime/background.py`).
 
 ## Test
 
@@ -299,14 +299,14 @@ By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`)
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
 Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
-`agent/mason/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
+`databricks_mason/runtime/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
 `BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
 through the managed Session Store **REST API** — no database the app connects to directly. Full graph
 state — including paused HITL runs (pending writes + interrupts) — is durable across restarts and
 replicas, over RPCs only. No agent code changes; the checkpointer swap is the only difference.
 
 > The saver is adapted from the first-party `databricks_agent_client.langgraph` prototype, over a
-> small vendored REST client (`agent/mason/session_store_client.py`) so the template needs no
+> small vendored REST client (`databricks_mason/runtime/session_store_client.py`) so the template needs no
 > unpublished dependency. Swap both for the published package when it lands. The store must already
 > exist; access uses the caller's normal Databricks auth (the deployed app's service principal, or
 > your profile locally — whichever the Session Store grants).
@@ -332,5 +332,5 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
   turns LangGraph's native `astream` events into JSON dicts without reshaping them into another
   contract. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
   `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`agent/mason/background.py`, wired in `runtime/runtime.py`) —
+- **Background mode is in-memory** (`databricks_mason/runtime/background.py`, wired in `runtime/runtime.py`) —
   non-durable, single-process; see the note under the client contract.

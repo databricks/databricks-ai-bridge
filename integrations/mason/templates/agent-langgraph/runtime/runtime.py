@@ -26,7 +26,7 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import mlflow
-from agent.mason.background import BackgroundRuns
+from databricks_mason.runtime.background import BackgroundRuns
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from uuid_utils import uuid7

@@ -11,8 +11,8 @@ the base `agent-langgraph` template. It is intentionally not a post-generation m
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
 The durability backend is part of the base agent template, not this UI overlay:
-`agent/mason/durability.py`, `agent/mason/recovery.py`, and
-`agent/mason/long_running.py`.
+`databricks_mason/runtime/durability.py`, `databricks_mason/runtime/recovery.py`, and
+`databricks_mason/runtime/long_running.py`.
 
 ## Behavior
 

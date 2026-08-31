@@ -9,8 +9,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from agent.mason import recovery
-from agent.mason.workspace import workspace_client
+from databricks_mason import workspace_client
+from databricks_mason.langgraph import recovery
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -224,7 +224,7 @@ async def _recovery_call(handler, session_id: str) -> dict[str, Any]:
 
 async def _checkpoint_history(session_id: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
-    from agent.mason.session_store import thread_config
+    from databricks_mason.langgraph.session_store import thread_config
 
     graph = await create_agent_graph()
     snapshot = await graph.aget_state(thread_config(session_id))

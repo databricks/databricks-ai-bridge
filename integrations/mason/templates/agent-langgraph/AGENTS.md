@@ -78,18 +78,18 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
-| Change the session checkpointer | `agent/mason/session_store.py` |
+| Change the session checkpointer | `databricks_mason/runtime/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
-| Change the background-run store (make it durable) | `agent/mason/background.py` |
+| Change the background-run store (make it durable) | `databricks_mason/runtime/background.py` |
 | Add a test | `tests/` (hermetic; gate model calls on a workspace profile — see `test_agent.py`) |
 
 `runtime/runtime.py` is **SDK-agnostic** — it wires two generic handlers (`invoke_handler`/`stream_handler`,
 plain `dict -> dict` / `dict -> AsyncGenerator[dict]`) to the endpoints. The agent SDK lives entirely
 behind those handlers in `agent/agent.py`, so the serving layer is the same regardless of SDK.
 
-`agent/mason/` holds plumbing (session checkpointer, tracing, MCP tool loading, background store,
-durability log, and recovery workflow) slated to move into Databricks SDKs — grouped so that
-migration is localized.
+`databricks_mason.runtime` (from the `databricks-mason` package) holds plumbing (session
+checkpointer, tracing, MCP tool loading, background store, durability log, and recovery workflow),
+so the template ships only your agent code.
 
 ## How tools register
 
@@ -100,7 +100,7 @@ a file to `agent/tools/`.
 
 ## Sessions & durability
 
-- Default: `agent/mason/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
+- Default: `databricks_mason/runtime/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
 - The `__Host-databricks-app-router` cookie is both the Apps routing key and the session id. The
   runtime injects it into the internal handler request; body `session_id` values are ignored.
@@ -112,7 +112,7 @@ a file to `agent/tools/`.
   prototype over a vendored REST client (`session_store_client.py`); swap both for the published
   package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`);
   `AGENT_SESSION_ACTOR_ID` selects the saver actor partition.
-- Background mode is in-memory / single-process — non-durable. The store is `agent/mason/background.py`
+- Background mode is in-memory / single-process — non-durable. The store is `databricks_mason/runtime/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
