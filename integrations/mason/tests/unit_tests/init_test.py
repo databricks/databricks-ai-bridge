@@ -11,6 +11,7 @@ import json
 import pathlib
 from unittest import mock
 
+import pytest
 import tomli
 from click.testing import CliRunner
 
@@ -38,6 +39,31 @@ def test_framework_specs_have_repo_ref_path():
         init_mod._CHAT_APP_TEMPLATES["langgraph"]
         == "integrations/mason/templates/ui/agent-langgraph"
     )
+
+
+def test_template_ref_pins_versioned_template_to_release_tag(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(init_mod, "_installed_version", lambda _: "0.3.0")
+    # A released CLI fetches the template tagged for its own version.
+    assert init_mod._template_ref("langgraph") == "databricks-mason-v0.3.0"
+    # An unversioned framework (different repo, not tagged in lockstep) keeps its default ref.
+    assert init_mod._template_ref("openai") == "main"
+
+
+@pytest.mark.parametrize("installed", ["0.1.0.dev0", "0.2.0+local"])
+def test_template_ref_falls_back_to_main_for_unreleased_builds(
+    installed: str, monkeypatch: pytest.MonkeyPatch
+):
+    # Dev/editable/local-version builds have no matching release tag, so fetch `main`.
+    monkeypatch.setattr(init_mod, "_installed_version", lambda _: installed)
+    assert init_mod._template_ref("langgraph") == "main"
+
+
+def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.MonkeyPatch):
+    def _raise(_):
+        raise init_mod.PackageNotFoundError("databricks-mason")
+
+    monkeypatch.setattr(init_mod, "_installed_version", _raise)
+    assert init_mod._template_ref("langgraph") == "main"
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
