@@ -31,7 +31,12 @@ class ToolRecord:
 
 
 def project_root() -> pathlib.Path:
-    """Resolve the project containing ``agent.toml`` without writing it."""
+    """Resolve the agent project containing ``agent.toml``.
+
+    This module ships in the databricks-mason package, not inside the agent project, so locate the
+    project relative to where the agent runs (the current working directory) — not this file's
+    location. ``MASON_PROJECT_ROOT`` overrides for cases where the process starts elsewhere.
+    """
     configured = os.getenv("MASON_PROJECT_ROOT")
     if configured:
         root = pathlib.Path(configured).expanduser().resolve()
@@ -39,7 +44,8 @@ def project_root() -> pathlib.Path:
             return root
         raise RuntimeError(f"MASON_PROJECT_ROOT has no agent.toml: {root}")
 
-    for candidate in pathlib.Path(__file__).resolve().parents:
+    cwd = pathlib.Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
         if (candidate / "agent.toml").is_file():
             return candidate
     raise RuntimeError("Could not locate agent.toml; set MASON_PROJECT_ROOT to the project root.")
