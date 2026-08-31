@@ -1,6 +1,6 @@
 """Unit tests for `mason login` / `logout` and the saved-profile helpers.
 
-`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `MasonClient`
+`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `AgentApiClient`
 is stubbed so login never touches the network.
 """
 
@@ -27,7 +27,7 @@ def _stub_client(monkeypatch, user="me@example.com", host="https://ws"):
     fake = mock.Mock()
     fake.current_user = user
     fake.host = host
-    monkeypatch.setattr(auth, "MasonClient", lambda profile: fake)
+    monkeypatch.setattr(auth, "AgentApiClient", lambda profile: fake)
 
 
 def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):

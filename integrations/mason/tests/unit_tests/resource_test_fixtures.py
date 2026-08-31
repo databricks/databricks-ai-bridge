@@ -1,23 +1,22 @@
 """Shared payload builders for typed Mason resource tests."""
 
-from typing import Any, Optional, cast
+from typing import Any, Optional
 from unittest import mock
 
 from databricks_mason import MasonClient
-from databricks_mason.memory_store import MemoryStoreClient
-from databricks_mason.session_store import SessionStoreClient
+from databricks_mason._api_client import AgentApiClient
 
 STORE_ID = "15402663-997b-4300-b695-46913ad90c9f"
-MEM_STORE_NAME = f"memory-stores/{STORE_ID}"
-ENTRY_ID = "absc-2edddvd"
-ENTRY_NAME = f"{MEM_STORE_NAME}/entries/{ENTRY_ID}"
+MEMORY_STORE_NAME = f"memory-stores/{STORE_ID}"
+MEMORY_ID = "absc-2edddvd"
+MEMORY_NAME = f"{MEMORY_STORE_NAME}/entries/{MEMORY_ID}"
 SESSION_STORE = "support-agent-sessions"
 SESSION_ID = "case-456"
 
 
 def mem_store_payload(
     *,
-    name: str = MEM_STORE_NAME,
+    name: str = MEMORY_STORE_NAME,
     display_name: str = "coding_agent_memory",
     description: str = "d",
 ) -> dict[str, Any]:
@@ -32,9 +31,9 @@ def mem_store_payload(
     }
 
 
-def entry_payload(
+def memory_payload(
     *,
-    name: str = ENTRY_NAME,
+    name: str = MEMORY_NAME,
     actor_id: str = "alice",
     session_id: Optional[str] = "s1",
     path: str = "/m/p.md",
@@ -99,8 +98,7 @@ def item_payload(*, item_id: str = "item-1", data: Any = None) -> dict[str, Any]
 
 
 def resource_client() -> tuple[MasonClient, mock.MagicMock]:
-    api = mock.MagicMock(spec=MasonClient)
-    client = cast(MasonClient, api)
-    client.memory_stores = MemoryStoreClient(client)
-    client.session_stores = SessionStoreClient(client)
+    api = mock.MagicMock(spec=AgentApiClient)
+    with mock.patch("databricks_mason.client.AgentApiClient", return_value=api):
+        client = MasonClient()
     return client, api

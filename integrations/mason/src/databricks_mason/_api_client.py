@@ -1,0 +1,453 @@
+"""Private transport for the agents/v1 memory and session APIs.
+
+The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
+This module temporarily owns the one-method-per-endpoint transport used by that
+wrapper and the CLI. It can be replaced by the generated ``WorkspaceClient.mason``
+service without changing the public resource surface.
+"""
+
+from __future__ import annotations
+
+import configparser
+import os
+import pathlib
+from typing import Any, Optional
+
+from databricks.sdk import WorkspaceClient
+
+from databricks_mason import models
+from databricks_mason.errors import AgentCliError, wrap_api_error
+
+_BASE = "/api/agents/v1"
+_MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
+
+
+def _query(**kwargs: Any) -> dict[str, Any]:
+    """Build a query dict, dropping None and empty values."""
+    return {k: v for k, v in kwargs.items() if v is not None and v != ""}
+
+
+def _body(**kwargs: Any) -> dict[str, Any]:
+    """Build a request body while retaining meaningful empty values."""
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def _as(cls: type, resp: Any) -> Any:
+    """Wrap a JSON response in a typed model, passing non-dicts through unchanged."""
+    return cls(resp) if isinstance(resp, dict) else resp
+
+
+def memory_store_path(name: str) -> str:
+    """Normalize a store id or name into the `memory-stores/{id}` resource segment."""
+    name = name.strip().strip("/")
+    return name if name.startswith("memory-stores/") else f"memory-stores/{name}"
+
+
+def memory_entry_path(store: str, entry: str) -> str:
+    entry = entry.strip().strip("/")
+    if entry.startswith("memory-stores/"):
+        return entry
+    return f"{memory_store_path(store)}/entries/{entry}"
+
+
+def _profile_host(profile: str) -> Optional[str]:
+    config_path = pathlib.Path(
+        os.getenv("DATABRICKS_CONFIG_FILE", pathlib.Path.home() / ".databrickscfg")
+    )
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path)
+    except (OSError, configparser.Error):
+        return None
+    return parser.get(profile, "host", fallback=None)
+
+
+def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
+    client = WorkspaceClient(profile=profile)
+    if not profile or not client.config.workspace_id:
+        return client
+
+    configured_host = _profile_host(profile)
+    resolved_host = client.config.host
+    if not configured_host or configured_host.rstrip("/") == (resolved_host or "").rstrip("/"):
+        return client
+
+    workspace_id = str(client.config.workspace_id)
+    return WorkspaceClient(
+        profile=profile,
+        host=configured_host,
+        custom_headers={"X-Databricks-Org-Id": workspace_id},
+    )
+
+
+class AgentApiClient:
+    """Private transport for the agents/v1 API until the generated SDK is available."""
+
+    def __init__(
+        self,
+        profile: Optional[str] = None,
+        *,
+        workspace_client: Optional[WorkspaceClient] = None,
+    ) -> None:
+        if profile is not None and workspace_client is not None:
+            raise ValueError("profile and workspace_client are mutually exclusive")
+        try:
+            self._w = workspace_client or _workspace_client(profile)
+        except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
+            raise AgentCliError(
+                f"Could not initialize Databricks auth: {exc}",
+                hint="Check your profile (`databricks auth login --profile <name>`) "
+                "or pass --profile.",
+            ) from exc
+
+    @property
+    def host(self) -> str:
+        return self._w.config.host or "unknown"
+
+    @property
+    def current_user(self) -> str:
+        """The authenticated user's name (used to derive the app source workspace path)."""
+        return str(self._w.current_user.me().user_name or "unknown")
+
+    def ensure_workspace_dir(self, path: str) -> None:
+        """Create a workspace directory (and parents), idempotently.
+
+        MLflow's create_experiment won't create the intermediate folder for a nested experiment
+        path, so callers make the parent dir first.
+        """
+        self._w.workspace.mkdirs(path)
+
+    def _do(
+        self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
+    ) -> Any:
+        try:
+            return self._w.api_client.do(method, path, query=query, body=body)
+        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+            raise wrap_api_error(exc) from exc
+
+    # --- Unity Catalog MCP Services -----------------------------------------
+
+    def list_mcp_services(
+        self, schema: str = "system.ai", page_token: Optional[str] = None
+    ) -> dict:
+        """List MCP Services visible to the user in a Unity Catalog schema."""
+        return self._do(
+            "GET",
+            _MCP_SERVICES_PATH,
+            query=_query(parent=f"schemas/{schema}", page_token=page_token),
+        )
+
+    # --- memory stores -------------------------------------------------------
+
+    def create_memory_store(
+        self, display_name: str, description: Optional[str] = None
+    ) -> models.MemoryStore:
+        body = _body(display_name=display_name, description=description)
+        return _as(models.MemoryStore, self._do("POST", f"{_BASE}/memory-stores", body=body))
+
+    def get_memory_store(self, name: str) -> models.MemoryStore:
+        return _as(models.MemoryStore, self._do("GET", f"{_BASE}/{memory_store_path(name)}"))
+
+    def list_memory_stores(
+        self, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> models.MemoryStoreList:
+        return _as(
+            models.MemoryStoreList,
+            self._do(
+                "GET",
+                f"{_BASE}/memory-stores",
+                query=_query(page_size=page_size, page_token=page_token),
+            ),
+        )
+
+    def update_memory_store(
+        self, name: str, display_name: Optional[str] = None, description: Optional[str] = None
+    ) -> models.MemoryStore:
+        body = _body(display_name=display_name, description=description)
+        mask = ",".join(body.keys())
+        return _as(
+            models.MemoryStore,
+            self._do(
+                "PATCH",
+                f"{_BASE}/{memory_store_path(name)}",
+                query=_query(update_mask=mask),
+                body=body,
+            ),
+        )
+
+    def delete_memory_store(self, name: str) -> dict:
+        return self._do("DELETE", f"{_BASE}/{memory_store_path(name)}")
+
+    # --- memory entries ------------------------------------------------------
+
+    def create_memory_entry(
+        self,
+        store: str,
+        actor_id: str,
+        path: str,
+        content: Optional[str] = None,
+        description: Optional[str] = None,
+        session_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+    ) -> models.MemoryEntry:
+        body = _body(
+            actor_id=actor_id,
+            path=path,
+            content=content,
+            description=description,
+            session_id=session_id,
+            source_type=source_type,
+        )
+        return _as(
+            models.MemoryEntry,
+            self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries", body=body),
+        )
+
+    def get_memory_entry(
+        self, store: str, entry: str, read_mask: Optional[str] = None
+    ) -> models.MemoryEntry:
+        return _as(
+            models.MemoryEntry,
+            self._do(
+                "GET",
+                f"{_BASE}/{memory_entry_path(store, entry)}",
+                query=_query(read_mask=read_mask),
+            ),
+        )
+
+    def list_memory_entries(
+        self,
+        store: str,
+        actor_id: str,
+        path_prefix: Optional[str] = None,
+        session_id: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+        read_mask: Optional[str] = None,
+    ) -> models.MemoryEntryList:
+        return _as(
+            models.MemoryEntryList,
+            self._do(
+                "GET",
+                f"{_BASE}/{memory_store_path(store)}/entries",
+                query=_query(
+                    actor_id=actor_id,
+                    path_prefix=path_prefix,
+                    session_id=session_id,
+                    page_size=page_size,
+                    page_token=page_token,
+                    read_mask=read_mask,
+                ),
+            ),
+        )
+
+    def search_memory_entries(
+        self,
+        store: str,
+        actor_id: str,
+        query: str,
+        limit: Optional[int] = None,
+        page_size: Optional[int] = None,
+        path_prefix: Optional[str] = None,
+        session_id: Optional[str] = None,
+        read_mask: Optional[str] = None,
+    ) -> models.MemorySearchResult:
+        body = _body(
+            actor_id=actor_id,
+            query=query,
+            limit=limit,
+            page_size=page_size,
+            path_prefix=path_prefix,
+            session_id=session_id,
+            read_mask=read_mask,
+        )
+        return _as(
+            models.MemorySearchResult,
+            self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries:search", body=body),
+        )
+
+    def update_memory_entry(
+        self,
+        store: str,
+        entry: str,
+        content: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> models.MemoryEntry:
+        body = _body(content=content, description=description)
+        return _as(
+            models.MemoryEntry,
+            self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
+        )
+
+    def delete_memory_entry(self, store: str, entry: str) -> dict:
+        return self._do("DELETE", f"{_BASE}/{memory_entry_path(store, entry)}")
+
+    # --- session stores ------------------------------------------------------
+
+    def create_session_store(
+        self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
+    ) -> models.SessionStore:
+        body = _body(description=description, metadata=metadata)
+        return _as(
+            models.SessionStore,
+            self._do(
+                "POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body
+            ),
+        )
+
+    def get_session_store(self, name: str) -> models.SessionStore:
+        return _as(models.SessionStore, self._do("GET", f"{_BASE}/session-stores/{name}"))
+
+    def list_session_stores(
+        self, page_size: Optional[int] = None, page_token: Optional[str] = None
+    ) -> models.SessionStoreList:
+        return _as(
+            models.SessionStoreList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores",
+                query=_query(page_size=page_size, page_token=page_token),
+            ),
+        )
+
+    def update_session_store(
+        self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
+    ) -> models.SessionStore:
+        body = _body(description=description, metadata=metadata)
+        mask = ",".join(body.keys())
+        return _as(
+            models.SessionStore,
+            self._do(
+                "PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body
+            ),
+        )
+
+    def delete_session_store(self, name: str) -> dict:
+        return self._do("DELETE", f"{_BASE}/session-stores/{name}")
+
+    # --- sessions ------------------------------------------------------------
+
+    def create_session(
+        self,
+        store: str,
+        actor_id: str,
+        session_id: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> models.Session:
+        body = _body(actor_id=actor_id, parent_session_id=parent_session_id, metadata=metadata)
+        return _as(
+            models.Session,
+            self._do(
+                "POST",
+                f"{_BASE}/session-stores/{store}/sessions",
+                query=_query(session_id=session_id),
+                body=body,
+            ),
+        )
+
+    def list_sessions(
+        self,
+        store: str,
+        filter: Optional[str] = None,
+        order_by: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> models.SessionList:
+        return _as(
+            models.SessionList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores/{store}/sessions",
+                query=_query(
+                    filter=filter, order_by=order_by, page_size=page_size, page_token=page_token
+                ),
+            ),
+        )
+
+    def get_session(self, session_id: str, store: Optional[str] = None) -> models.Session:
+        if store:
+            path = f"{_BASE}/session-stores/{store}/sessions/{session_id}"
+        else:
+            path = f"{_BASE}/sessions/{session_id}"
+        return _as(models.Session, self._do("GET", path))
+
+    def update_session(self, store: str, session_id: str, metadata: dict) -> models.Session:
+        return _as(
+            models.Session,
+            self._do(
+                "PATCH",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}",
+                query={"update_mask": "metadata"},
+                body=_body(metadata=metadata),
+            ),
+        )
+
+    def delete_session(self, store: str, session_id: str) -> dict:
+        return self._do("DELETE", f"{_BASE}/session-stores/{store}/sessions/{session_id}")
+
+    def fork_session(
+        self,
+        store: str,
+        source_session_id: str,
+        actor_id: str,
+        up_to_item_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> models.Session:
+        body = _body(
+            source_session_id=source_session_id,
+            actor_id=actor_id,
+            up_to_item_id=up_to_item_id,
+            session_id=session_id,
+            metadata=metadata,
+        )
+        return _as(
+            models.Session,
+            self._do("POST", f"{_BASE}/session-stores/{store}/sessions:fork", body=body),
+        )
+
+    # --- session items -------------------------------------------------------
+
+    def list_session_items(
+        self,
+        store: str,
+        session_id: str,
+        order_by: Optional[str] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> models.SessionItemList:
+        return _as(
+            models.SessionItemList,
+            self._do(
+                "GET",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/items",
+                query=_query(order_by=order_by, page_size=page_size, page_token=page_token),
+            ),
+        )
+
+    def append_session_items(
+        self, store: str, session_id: str, items: list[dict]
+    ) -> models.SessionItemList:
+        body = {"items": [{"data": item} for item in items]}
+        return _as(
+            models.SessionItemList,
+            self._do(
+                "POST",
+                f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:append",
+                body=body,
+            ),
+        )
+
+    def pop_session_item(self, store: str, session_id: str) -> models.PoppedSessionItem:
+        return _as(
+            models.PoppedSessionItem,
+            self._do(
+                "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:pop", body={}
+            ),
+        )
+
+    def clear_session_items(self, store: str, session_id: str) -> dict:
+        return self._do(
+            "POST", f"{_BASE}/session-stores/{store}/sessions/{session_id}/items:clear", body={}
+        )

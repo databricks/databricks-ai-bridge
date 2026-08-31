@@ -54,63 +54,58 @@ You can also pass the global `--profile/-p` option before an individual command,
 
 ## Python SDK
 
-The same memory and session APIs are available programmatically through
-`MasonClient`, which authenticates exactly like the CLI (a `.databrickscfg` profile
-or the SDK's default resolution):
+`MasonClient` adds a small resource-oriented layer over the Mason API. Pass it an
+authenticated Databricks `WorkspaceClient`, or omit the argument to use the
+Databricks SDK's default authentication resolution:
 
 ```python
+from databricks.sdk import WorkspaceClient
 from databricks_mason import MasonClient
 
-client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
+mason = MasonClient(WorkspaceClient(profile="my-workspace"))
 
-store = client.create_memory_store("my-store")
-print(store.name, store.display_name)  # typed attribute access
-
-client.create_memory_entry("my-store", actor_id="alice", path="/notes/1.md", content="hi")
-for entry in client.list_memory_entries("my-store", actor_id="alice").entries:
-    print(entry.path, entry.content)
-```
-
-Each method maps to one `/api/agents/v1` operation. Responses come back as typed
-models (`MemoryStore`, `Session`, `SessionItemList`, ...) that expose attribute
-accessors (`store.name`) while remaining plain dicts underneath — so `store["name"]`,
-`json.dumps(store)`, and any new server-side fields keep working. API errors raise
-`databricks_mason.AgentCliError`. Deployment, sandbox, and tracing remain CLI-only.
-
-The same `MasonClient` also exposes resource-oriented store and session handles that
-auto-consume collection pagination and add convenience lookups:
-
-```python
-from databricks_mason import MasonClient
-
-client = MasonClient(profile="my-workspace")
-memory = client.memory_stores.get_or_create(display_name="coding-agent-memory")
-memory.create_entry(
-    actor_id="alice",
-    path="/preferences/style.md",
-    content="The user prefers concise answers.",
-)
-for hit in memory.search_entries(actor_id="alice", query="response preferences"):
-    print(hit.managed_memory_entry.path, hit.score)
-
-sessions = client.session_stores.create(session_store_name="support-agent-sessions")
-session = sessions.create_session(actor_id="customer-123", session_id="case-456")
+session_store = mason.session_stores.create("support-agent-sessions")
+session = session_store.create_session(actor_id="customer-123", session_id="case-456")
 session.append_items(
     [
         {"type": "message", "role": "user", "content": "I need help with my cluster."},
         {"type": "message", "role": "assistant", "content": "Let's take a look."},
     ]
 )
+
+memory_store = mason.memory_stores.get_or_create("coding-agent-memory")
+memory = memory_store.create_memory(
+    actor_id="alice",
+    path="/preferences/style.md",
+    content="The user prefers concise answers.",
+)
+results = memory_store.search_memories(
+    actor_id="alice",
+    query="response preferences",
+    limit=10,
+)
+memory.update(content="The user prefers very concise answers.")
+memory.delete()
 ```
 
-`client.memory_stores.list()`, `client.session_stores.list()`, `memory.list_entries()`, and
-`sessions.list_sessions()` consume all server pages. `session.list_items()` returns one
-`SessionItemPage`; pass its `next_page_token` for the next page. Every list/search `page_size`
-must be between 1 and 100. `session.fork(...)` creates an independent copy, optionally through a
-specific item, and deleting a session cascades to its descendants.
+The root collections manage stores: `mason.memory_stores.create/get/list/get_or_create`
+and `mason.session_stores.create/get/list`. A returned store owns operations on its
+contents, such as `memory_store.create_memory()`, `memory_store.list_memories()`,
+`session_store.create_session()`, and `session_store.list_sessions()`. Returned
+memories, sessions, and stores own their `update()` and `delete()` operations.
 
-`memory.append_entry_content(...)` is a non-atomic client-side read-modify-write operation;
-concurrent calls can overwrite each other.
+All `list()` methods return iterators that automatically consume server pages. List
+`page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
+also auto-pages. `session.fork(...)` creates an independent copy, optionally through
+a specific item, and deleting a session cascades to its descendants.
+
+`memory_store.append_memory(...)` is a non-atomic client-side read-modify-write
+operation; concurrent calls can overwrite each other.
+
+The resource layer intentionally does not mirror every API method. Its private
+transport will be replaced by the generated `WorkspaceClient.mason` service when that
+is released, without changing this public surface. Deployment, sandbox, tracing, and
+the existing CLI commands remain separate.
 
 ## Commands
 

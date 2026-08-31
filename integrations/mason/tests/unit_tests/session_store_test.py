@@ -11,39 +11,10 @@ from resource_test_fixtures import (
     session_store_payload,
 )
 
-from databricks_mason import (
-    BoundSession as Session,
-)
-from databricks_mason import (
-    BoundSessionItem as SessionItem,
-)
-from databricks_mason import (
-    BoundSessionStore as SessionStore,
-)
-from databricks_mason import (
-    SessionItemPage,
-)
+from databricks_mason import Session, SessionItem, SessionStore
 
 
-def test_bind_makes_no_api_call() -> None:
-    client, api = resource_client()
-
-    store = client.session_stores.bind(SESSION_STORE)
-
-    assert isinstance(store, SessionStore)
-    assert store.session_store_name == SESSION_STORE
-    assert store.session_store_id is None
-    api.get_session_store.assert_not_called()
-
-
-def test_bind_requires_name() -> None:
-    client, _ = resource_client()
-
-    with pytest.raises(ValueError, match="session_store_name"):
-        client.session_stores.bind("")
-
-
-def test_create_list_and_get() -> None:
+def test_create_list_and_get_stores() -> None:
     client, api = resource_client()
     api.create_session_store.return_value = session_store_payload()
     api.list_session_stores.side_effect = [
@@ -53,27 +24,33 @@ def test_create_list_and_get() -> None:
     api.get_session_store.return_value = session_store_payload()
 
     created = client.session_stores.create(
-        session_store_name=SESSION_STORE,
+        SESSION_STORE,
         description="Support history",
         metadata={"environment": "poc"},
     )
-    stores = client.session_stores.list(page_size=1)
-    fetched = client.session_stores.get(session_store_name=SESSION_STORE)
+    stores = list(client.session_stores.list(page_size=1))
+    fetched = client.session_stores.get(SESSION_STORE)
 
     assert isinstance(created, SessionStore)
     assert created.session_store_id == STORE_ID
-    assert [store.session_store_name for store in stores] == ["other", SESSION_STORE]
-    assert fetched.session_store_name == SESSION_STORE
+    assert [store.name for store in stores] == ["other", SESSION_STORE]
+    assert fetched.name == SESSION_STORE
     api.create_session_store.assert_called_once_with(
         SESSION_STORE,
         "Support history",
         {"environment": "poc"},
     )
+    assert api.list_session_stores.call_args_list[1].kwargs == {
+        "page_size": 1,
+        "page_token": "p2",
+    }
+    api.get_session_store.assert_called_once_with(SESSION_STORE)
 
 
 def test_update_requires_a_field() -> None:
-    client, _ = resource_client()
-    store = client.session_stores.bind(SESSION_STORE)
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    store = client.session_stores.get(SESSION_STORE)
 
     with pytest.raises(ValueError, match="at least one"):
         store.update()
@@ -81,8 +58,9 @@ def test_update_requires_a_field() -> None:
 
 def test_update_and_delete_store() -> None:
     client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
     api.update_session_store.return_value = session_store_payload(metadata={"environment": "prod"})
-    store = client.session_stores.bind(SESSION_STORE)
+    store = client.session_stores.get(SESSION_STORE)
 
     updated = store.update(metadata={"environment": "prod"})
     updated.delete()
@@ -96,31 +74,25 @@ def test_update_and_delete_store() -> None:
     api.delete_session_store.assert_called_once_with(SESSION_STORE)
 
 
-def test_direct_operations_require_one_store_scope() -> None:
-    client, _ = resource_client()
-    store = client.session_stores.bind(SESSION_STORE)
-
-    with pytest.raises(ValueError, match="session_store_name"):
-        client.session_stores.get_session(session_id=SESSION_ID)
-    with pytest.raises(ValueError, match="conflicts"):
-        client.session_stores.get_session(
-            store,
-            session_store_name="other",
-            session_id=SESSION_ID,
-        )
-
-
-def test_create_session_and_list_defaults_create_time_desc() -> None:
+def test_create_get_and_list_sessions() -> None:
     client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
     api.create_session.return_value = session_payload()
-    api.list_sessions.return_value = {"sessions": [session_payload()]}
-    store = client.session_stores.bind(SESSION_STORE)
+    api.list_sessions.side_effect = [
+        {"sessions": [session_payload()], "next_page_token": "p2"},
+        {"sessions": [session_payload(session_id="case-789")]},
+    ]
+    api.get_session.return_value = session_payload()
+    store = client.session_stores.get(SESSION_STORE)
 
     created = store.create_session(actor_id="customer-123", session_id=SESSION_ID)
-    sessions = store.list_sessions()
+    sessions = list(store.list_sessions(page_size=10))
+    fetched = store.get_session(session_id=SESSION_ID)
 
     assert isinstance(created, Session)
-    assert [session.session_id for session in sessions] == [SESSION_ID]
+    assert created.store_name == SESSION_STORE
+    assert [session.session_id for session in sessions] == [SESSION_ID, "case-789"]
+    assert fetched.session_id == SESSION_ID
     api.create_session.assert_called_once_with(
         SESSION_STORE,
         "customer-123",
@@ -128,19 +100,22 @@ def test_create_session_and_list_defaults_create_time_desc() -> None:
         parent_session_id=None,
         metadata=None,
     )
-    api.list_sessions.assert_called_once_with(
-        SESSION_STORE,
-        filter=None,
-        order_by="create_time desc",
-        page_size=None,
-        page_token=None,
-    )
+    assert api.list_sessions.call_args_list[0].kwargs == {
+        "filter": None,
+        "order_by": "create_time desc",
+        "page_size": 10,
+        "page_token": None,
+    }
+    assert api.list_sessions.call_args_list[1].kwargs["page_token"] == "p2"
+    api.get_session.assert_called_once_with(SESSION_ID, SESSION_STORE)
 
 
-def test_update_and_delete_session_without_removed_force_parameter() -> None:
+def test_update_and_delete_session() -> None:
     client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
     api.update_session.return_value = session_payload(metadata={"status": "resolved"})
-    session = client.session_stores._session_from_response(session_payload(), SESSION_STORE)
+    session = client.session_stores.get(SESSION_STORE).get_session(session_id=SESSION_ID)
 
     updated = session.update(metadata={"status": "resolved"})
     updated.delete()
@@ -156,10 +131,12 @@ def test_update_and_delete_session_without_removed_force_parameter() -> None:
 
 def test_fork_unwraps_session_field() -> None:
     client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
     api.fork_session.return_value = {
         "session": session_payload(session_id="fork-1", actor_id="agent")
     }
-    session = client.session_stores._session_from_response(session_payload(), SESSION_STORE)
+    session = client.session_stores.get(SESSION_STORE).get_session(session_id=SESSION_ID)
 
     forked = session.fork(actor_id="agent", up_to_item_id="item-1", session_id="fork-1")
 
@@ -174,27 +151,29 @@ def test_fork_unwraps_session_field() -> None:
     )
 
 
-def test_item_operations() -> None:
+def test_item_operations_and_pagination() -> None:
     client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
     api.append_session_items.return_value = {"session_items": [item_payload()]}
-    api.list_session_items.return_value = {
-        "session_items": [item_payload()],
-        "next_page_token": "p2",
-    }
+    api.list_session_items.side_effect = [
+        {"session_items": [item_payload()], "next_page_token": "p2"},
+        {"session_items": [item_payload(item_id="item-2")]},
+    ]
     api.pop_session_item.side_effect = [{"item": item_payload(item_id="item-2")}, {}]
-    session = client.session_stores._session_from_response(session_payload(), SESSION_STORE)
+    session = client.session_stores.get(SESSION_STORE).get_session(session_id=SESSION_ID)
     user_data = {"type": "message", "role": "user", "content": "Help"}
 
     appended = session.append_items([user_data])
-    page = session.list_items(page_size=2, order_by="create_time asc")
+    items = list(session.list_items(page_size=2, order_by="create_time asc"))
     popped = session.pop_item()
     empty = session.pop_item()
     session.clear_items()
 
     assert isinstance(appended[0], SessionItem)
     assert appended[0].data == item_payload()["data"]
-    assert isinstance(page, SessionItemPage)
-    assert page.next_page_token == "p2"
+    assert [item.item_id for item in items] == ["item-1", "item-2"]
+    assert api.list_session_items.call_args_list[1].kwargs["page_token"] == "p2"
     assert popped is not None
     assert popped.item_id == "item-2"
     assert empty is None
@@ -203,8 +182,10 @@ def test_item_operations() -> None:
 
 
 def test_append_items_requires_an_item() -> None:
-    client, _ = resource_client()
-    session = client.session_stores._session_from_response(session_payload(), SESSION_STORE)
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    session = client.session_stores.get(SESSION_STORE).get_session(session_id=SESSION_ID)
 
     with pytest.raises(ValueError, match="at least one item"):
         session.append_items([])
@@ -213,8 +194,10 @@ def test_append_items_requires_an_item() -> None:
 @pytest.mark.parametrize("page_size", [0, -1, 101])
 def test_list_items_rejects_out_of_range_page_size(page_size: int) -> None:
     client, api = resource_client()
-    session = client.session_stores._session_from_response(session_payload(), SESSION_STORE)
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    session = client.session_stores.get(SESSION_STORE).get_session(session_id=SESSION_ID)
 
     with pytest.raises(ValueError, match="page_size"):
-        session.list_items(page_size=page_size)
+        list(session.list_items(page_size=page_size))
     api.list_session_items.assert_not_called()

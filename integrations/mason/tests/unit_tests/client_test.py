@@ -1,11 +1,12 @@
-"""Unit tests for MasonClient paths, verbs, bodies, and error mapping."""
+"""Unit tests for the public Mason client and private API transport."""
 
 from __future__ import annotations
 
 from unittest import mock
 
-from databricks_mason.client import (
-    MasonClient,
+from databricks_mason import MasonClient
+from databricks_mason._api_client import (
+    AgentApiClient,
     _workspace_client,
     memory_entry_path,
     memory_store_path,
@@ -17,18 +18,21 @@ def _client(workspace_client):
     inst = workspace_client.return_value
     inst.config.host = "https://ws.example.com"
     inst.api_client.do.return_value = {}
-    return MasonClient(profile="p"), inst.api_client.do
+    return AgentApiClient(profile="p"), inst.api_client.do
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
-def test_resource_clients_share_mason_client(workspace_client):
-    client, _ = _client(workspace_client)
+@mock.patch("databricks_mason.client.AgentApiClient")
+def test_mason_client_wraps_workspace_client(api_client):
+    workspace_client = mock.Mock()
 
-    assert client.memory_stores._api is client
-    assert client.session_stores._api is client
+    client = MasonClient(workspace_client)
+
+    api_client.assert_called_once_with(workspace_client=workspace_client)
+    assert client.memory_stores._api is api_client.return_value
+    assert client.session_stores._api is api_client.return_value
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_create_memory_store(workspace_client):
     c, do = _client(workspace_client)
     c.create_memory_store("acme", "desc")
@@ -40,7 +44,7 @@ def test_create_memory_store(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)
@@ -49,7 +53,7 @@ def test_list_memory_stores_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_list_mcp_services_query(workspace_client):
     c, do = _client(workspace_client)
 
@@ -63,14 +67,14 @@ def test_list_mcp_services_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")
     do.assert_called_once_with("GET", "/api/agents/v1/memory-stores/abc123", query=None, body=None)
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_update_memory_store_retains_empty_description(workspace_client):
     client, do = _client(workspace_client)
 
@@ -84,7 +88,7 @@ def test_update_memory_store_retains_empty_description(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_get_memory_entry_passes_read_mask(workspace_client):
     client, do = _client(workspace_client)
 
@@ -98,7 +102,7 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_search_memory_entries(workspace_client):
     c, do = _client(workspace_client)
     c.search_memory_entries("s1", "alice", "style", limit=5)
@@ -110,7 +114,7 @@ def test_search_memory_entries(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_search_memory_entries_with_resource_filters(workspace_client):
     client, do = _client(workspace_client)
 
@@ -139,7 +143,7 @@ def test_search_memory_entries_with_resource_filters(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_create_session_puts_session_id_in_query(workspace_client):
     c, do = _client(workspace_client)
     c.create_session("store1", "alice", session_id="sid")
@@ -151,7 +155,7 @@ def test_create_session_puts_session_id_in_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_get_session_scoped_vs_unscoped(workspace_client):
     c, do = _client(workspace_client)
     c.get_session("sid", store="store1")
@@ -160,7 +164,7 @@ def test_get_session_scoped_vs_unscoped(workspace_client):
     assert do.call_args_list[1].args[1] == "/api/agents/v1/sessions/sid"
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_append_wraps_items_in_data(workspace_client):
     c, do = _client(workspace_client)
     c.append_session_items("store1", "sid", [{"role": "user", "content": "hi"}])
@@ -172,7 +176,7 @@ def test_append_wraps_items_in_data(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_delete_session_always_cascades(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid")
@@ -184,7 +188,7 @@ def test_delete_session_always_cascades(workspace_client):
     )
 
 
-@mock.patch("databricks_mason.client.WorkspaceClient")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_preview_error_is_mapped_with_hint(workspace_client):
     c, do = _client(workspace_client)
 
@@ -208,9 +212,11 @@ def test_account_routed_profile_uses_configured_host_and_workspace_header():
     routed = mock.Mock()
 
     with (
-        mock.patch("databricks_mason.client.WorkspaceClient", side_effect=[resolved, routed]) as wc,
         mock.patch(
-            "databricks_mason.client._profile_host",
+            "databricks_mason._api_client.WorkspaceClient", side_effect=[resolved, routed]
+        ) as wc,
+        mock.patch(
+            "databricks_mason._api_client._profile_host",
             return_value="https://account.example.com",
         ),
     ):
