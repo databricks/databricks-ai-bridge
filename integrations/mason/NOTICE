@@ -1,0 +1,39 @@
+Copyright (c) 2026 Databricks, Inc. All rights reserved.
+
+This Software is the property of Databricks, Inc. ("Databricks") and no license, right, or authorization to install, use, copy, modify, or distribute this Software is granted except pursuant to Databricks' prior written authorization. Any use of this Software without such written authorization from Databricks is strictly prohibited.
+
+# MIT License
+
+This Software contains code from the following open source projects, licensed under the MIT license (https://opensource.org/licenses/MIT).
+
+Package: PyYAML
+Project URL: https://github.com/yaml/pyyaml
+Copyright: 2017-2021 Ingy döt Net, 2006-2016 Kirill Simonov
+
+Package: rich
+Project URL: https://github.com/Textualize/rich
+Copyright: 2020 Will McGugan
+
+Package: tomli
+Project URL: https://github.com/hukkin/tomli
+Copyright: 2021 Taneli Hukkinen
+
+Package: tomlkit
+Project URL: https://github.com/python-poetry/tomlkit
+Copyright: 2018 Sébastien Eustace
+
+# Apache License 2.0
+
+This Software contains code from the following open source projects, licensed under the Apache License 2.0 license (https://www.apache.org/licenses/LICENSE-2.0).
+
+Package: databricks-sdk
+Project URL: https://github.com/databricks/databricks-sdk-py
+Copyright: 2023 Databricks, Inc.
+
+# BSD 3-Clause License
+
+This Software contains code from the following open source projects, licensed under the BSD 3-Clause License (https://opensource.org/license/bsd-3-clause).
+
+Package: click
+Project URL: https://github.com/pallets/click
+Copyright: 2014 Pallets
