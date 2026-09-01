@@ -4,7 +4,8 @@ A managed store (session or memory) is backed by a per-store Lakebase database i
 service-managed project. The store's tables are owned by whoever created the store (the deploying
 user), so giving the deployed app's service principal access takes TWO steps:
   1. a `postgres` app resource so the SP gets a Lakebase role and CONNECT on the database, and
-  2. a table GRANT (issued over psql as the store owner) so the SP can read/write the tables.
+  2. a table GRANT (issued over a Postgres connection as the store owner) so the SP can read/write
+     the tables.
 With only (1) the SP connects but hits "permission denied" on the tables; with only (2) it can't
 connect at all. Both are best-effort — deploy proceeds and reports if either step can't be applied.
 
@@ -15,11 +16,11 @@ supply the per-store project/schema/table specifics.
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
+
+import psycopg
 
 from databricks_mason.errors import AgentCliError
 
@@ -131,13 +132,13 @@ def _mint_token(backend: LakebaseBackend, profile: Optional[str]) -> Optional[st
 def grant_tables(
     backend: LakebaseBackend, sp_client_id: str, owner: str, profile: Optional[str]
 ) -> Optional[str]:
-    """Grant the app's SP read/write on the backend's tables (owner-issued, over psql).
+    """Grant the app's SP read/write on the backend's tables (owner-issued, over a pg connection).
 
-    Returns None on success, or a human-readable reason if the grant couldn't be applied. Deploy
-    proceeds regardless — the app runs, but the store's durable path fails until the SP has access.
+    Uses psycopg (a bundled dependency) rather than the psql binary so no system Postgres client is
+    required. Returns None on success, or a human-readable reason if the grant couldn't be applied.
+    Deploy proceeds regardless — the app runs, but the store's durable path fails until the SP has
+    access.
     """
-    if shutil.which("psql") is None:
-        return "psql not found on PATH (needed to grant the app SP access to the store)."
     host = _resolve_pg_host(backend, profile)
     if not host:
         return "could not resolve the store's Lakebase endpoint."
@@ -155,13 +156,20 @@ def grant_tables(
         f" ALTER DEFAULT PRIVILEGES IN SCHEMA {backend.schema}"
         f' GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sp_client_id}";'
     )
-    conn = f"host={host} port=5432 dbname={backend.database} user={owner} sslmode=require"
-    result = subprocess.run(
-        ["psql", conn, "-v", "ON_ERROR_STOP=1", "-c", grants],
-        env={**os.environ, "PGPASSWORD": token},
-        text=True,
-        capture_output=True,
-    )
-    if result.returncode == 0:
-        return None
-    return (result.stderr or result.stdout or "").strip() or "unknown error"
+    try:
+        # The password token is scoped to this endpoint; the SP's role name is its client id.
+        with psycopg.connect(
+            host=host,
+            port=5432,
+            dbname=backend.database,
+            user=owner,
+            password=token,
+            sslmode="require",
+            autocommit=True,
+        ) as conn:
+            # Encode to bytes: the GRANT is composed at runtime (not a LiteralString), which the
+            # str overload of execute() rejects; the bytes overload takes a composed query as-is.
+            conn.execute(grants.encode())
+    except psycopg.Error as exc:
+        return str(exc).strip() or "unknown error"
+    return None

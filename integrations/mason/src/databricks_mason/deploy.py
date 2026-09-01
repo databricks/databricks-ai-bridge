@@ -411,7 +411,7 @@ def deploy(
         steps.insert(
             0,
             "The app's service principal needs read/write on its store tables; that grant couldn't "
-            "be applied automatically (it requires store ownership and psql). "
+            "be applied automatically (it requires store ownership). "
             f"Cause: {grant_error}",
         )
     if grants_stores and grant_error is None:
