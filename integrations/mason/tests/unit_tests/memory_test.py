@@ -33,8 +33,12 @@ class _Ctx:
 
 def test_store_created_updated_read_current_and_legacy_fields():
     # Current API field.
-    assert memory_mod._store_created({"create_time": "2026-08-15T01:29:00Z"}) == "2026-08-15T01:29:00Z"
-    assert memory_mod._store_updated({"update_time": "2026-08-16T01:29:00Z"}) == "2026-08-16T01:29:00Z"
+    assert (
+        memory_mod._store_created({"create_time": "2026-08-15T01:29:00Z"}) == "2026-08-15T01:29:00Z"
+    )
+    assert (
+        memory_mod._store_updated({"update_time": "2026-08-16T01:29:00Z"}) == "2026-08-16T01:29:00Z"
+    )
     # Legacy epoch-millis fallback.
     assert memory_mod._store_created({"created_at": 1_755_100_000_000}) == 1_755_100_000_000
     assert memory_mod._store_updated({"updated_at": 1_755_100_000_000}) == 1_755_100_000_000
