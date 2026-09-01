@@ -164,6 +164,47 @@ def test_setup_requires_mlflow_when_absent():
     assert result.exit_code != 0
 
 
+def test_list_resolves_experiment_name_to_id_for_search():
+    # search_traces selects by experiment_ids, not names, so list must resolve the name first.
+    from unittest import mock
+
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-9")
+    mlflow.search_traces.return_value = []
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--experiment", "/Shared/x", "--limit", "7"], obj=_Ctx()
+        )
+
+    assert result.exit_code == 0, result.output
+    mlflow.get_experiment_by_name.assert_called_once_with("/Shared/x")
+    _, kwargs = mlflow.search_traces.call_args
+    assert kwargs["experiment_ids"] == ["eid-9"]
+    assert kwargs["max_results"] == 7
+
+
+def test_list_returns_empty_when_experiment_absent():
+    # A not-yet-created experiment has no traces; list should show none, not error.
+    from unittest import mock
+
+    mlflow = mock.Mock()
+    mlflow.get_experiment_by_name.return_value = None
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--experiment", "/Shared/missing"], obj=_Ctx(output="json")
+        )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+    mlflow.search_traces.assert_not_called()
+
+
 def test_status_str_handles_enum_like_and_none():
     class _EnumLike:
         name = "OK"
