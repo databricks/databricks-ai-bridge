@@ -1,11 +1,10 @@
-"""Behavior tests for the static LangGraph manifest runtime."""
+"""Behavior tests for the manifest-driven MCP runtime (databricks_mason.langgraph.mcp)."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
 import pathlib
-import shutil
 import sys
 import types
 from types import SimpleNamespace
@@ -15,23 +14,23 @@ import pytest
 
 def _write_direct_manifest(project: pathlib.Path) -> None:
     (project / "agent.toml").write_text(
-        f"""schema_version = 1
+        """schema_version = 1
 
 [agent]
 framework = "langgraph"
 
 [[tools]]
 id = "sandbox"
-source = {{ kind = "sandbox", service = "system.ai.sandbox" }}
-policy = {{ downscope = [{{ resource = "table:samples.nyctaxi.trips", permission = "read_only" }}] }}
+source = { kind = "sandbox", service = "system.ai.sandbox" }
+policy = { downscope = [{ resource = "table:samples.nyctaxi.trips", permission = "read_only" }] }
 
 [[tools]]
 id = "web"
-source = {{ kind = "mcp", service = "system.ai.web_search" }}
+source = { kind = "mcp", service = "system.ai.web_search" }
 
 [[tools]]
 id = "lookup"
-source = {{ kind = "uc_function", function = "main.tools.lookup" }}
+source = { kind = "uc_function", function = "main.tools.lookup" }
 """,
         encoding="utf-8",
     )
@@ -39,39 +38,21 @@ source = {{ kind = "uc_function", function = "main.tools.lookup" }}
 
 def _project(tmp_path: pathlib.Path) -> pathlib.Path:
     project = tmp_path / "langgraph"
-    mason = project / "agent" / "mason"
-    mason.mkdir(parents=True)
-    (project / "agent" / "__init__.py").write_text("", encoding="utf-8")
-    (mason / "__init__.py").write_text("", encoding="utf-8")
-    (project / "agent" / "mcps.py").write_text(
-        "def build_mcp_servers():\n    return []\n", encoding="utf-8"
-    )
+    project.mkdir(parents=True)
     _write_direct_manifest(project)
-    template_mason = (
-        pathlib.Path(__file__).parents[2] / "templates" / "agent-langgraph" / "agent" / "mason"
-    )
-    shutil.copyfile(template_mason / "tool_manifest.py", mason / "tool_manifest.py")
-    shutil.copyfile(template_mason / "mcp_runtime.py", mason / "mcp_runtime.py")
-    shutil.copyfile(template_mason / "workspace.py", mason / "workspace.py")
     return project
-
-
-def _clear_agent_modules() -> None:
-    for name in tuple(sys.modules):
-        if name == "agent" or name.startswith("agent."):
-            del sys.modules[name]
-
-
-def _load_runtime(project: pathlib.Path, monkeypatch):
-    _clear_agent_modules()
-    monkeypatch.syspath_prepend(str(project))
-    monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
-    return importlib.import_module("agent.mason.mcp_runtime")
 
 
 class _FakeWorkspaceClient:
     def __init__(self):
         self.config = SimpleNamespace(host="https://df1.example.com")
+
+
+def _reload_mcp():
+    # The runtime modules read env at call time, but re-import so patched sys.modules take effect.
+    for name in ("databricks_mason.langgraph.mcp", "databricks_mason.runtime.tool_manifest"):
+        sys.modules.pop(name, None)
+    return importlib.import_module("databricks_mason.langgraph.mcp")
 
 
 def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
@@ -142,18 +123,27 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
     monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", adapters)
     monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.sessions", sessions)
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
 
-    runtime = _load_runtime(project, monkeypatch)
-    assert asyncio.run(runtime.mcp_tools()) == ["sandbox", "web", "lookup"]
-    client = FakeMultiServerClient.last
-    assert client is not None
-    assert [server.url for server in client.servers] == [
+    mcp = _reload_mcp()
+
+    # _declared_servers() builds one server per manifest tool, with the right URLs.
+    servers = mcp._declared_servers()
+    assert [s.url for s in servers] == [
         "https://df1.example.com/ai-gateway/mcp-services/system.ai.sandbox",
         "https://df1.example.com/ai-gateway/mcp-services/system.ai.web_search",
         "https://df1.example.com/api/2.0/mcp/functions/main/tools/lookup",
     ]
-    assert client.kwargs["tool_interceptors"] == [runtime._sandbox_tool_interceptor]
 
+    # mcp_tools() includes the manifest servers and fetches from a client that carries the sandbox
+    # interceptor (the manifest declares a sandbox tool).
+    assert asyncio.run(mcp.mcp_tools()) == ["sandbox", "web", "lookup"]
+    client = FakeMultiServerClient.last
+    assert client is not None
+    assert len(client.kwargs["tool_interceptors"]) == 1
+
+    # the interceptor downscopes sandbox calls with the fixed meta from the manifest policy.
+    interceptor = client.kwargs["tool_interceptors"][0]
     request = SimpleNamespace(
         server_name="sandbox",
         name="sandbox",
@@ -163,9 +153,7 @@ def test_langgraph_runtime_loads_direct_manifest_and_protects_sandbox_meta(
     async def unexpected_handler(request):
         raise AssertionError("sandbox calls must use the fixed-meta session")
 
-    name, arguments, kwargs = asyncio.run(
-        runtime._sandbox_tool_interceptor(request, unexpected_handler)
-    )
+    name, arguments, kwargs = asyncio.run(interceptor(request, unexpected_handler))
     assert name == "sandbox"
     assert arguments == {"code": 'print("ok")'}
     assert kwargs["meta"] == {
@@ -178,10 +166,9 @@ def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeyp
     (project / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\n', encoding="utf-8"
     )
-    _clear_agent_modules()
-    monkeypatch.syspath_prepend(str(project))
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
-    manifest = importlib.import_module("agent.mason.tool_manifest")
+    sys.modules.pop("databricks_mason.runtime.tool_manifest", None)
+    manifest = importlib.import_module("databricks_mason.runtime.tool_manifest")
 
     with pytest.raises(RuntimeError, match="framework"):
         manifest.load_tools(expected_framework="langgraph")
