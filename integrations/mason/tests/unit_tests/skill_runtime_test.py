@@ -48,6 +48,7 @@ def test_load_skills_preserves_exact_uc_binding(monkeypatch, tmp_path: pathlib.P
         '{ kind = "local", path = "skills/review" }',
         '{ kind = "uc", name = "main.finance" }',
         '{ kind = "uc", name = "main.finance.review", path = "skills/review" }',
+        '{ kind = "uc", name = "main.finance.review", version = "v1" }',
     ],
 )
 def test_load_skills_rejects_non_uc_or_malformed_sources(
@@ -70,6 +71,19 @@ def test_load_skills_rejects_duplicate_ids(monkeypatch, tmp_path: pathlib.Path):
     manifest = importlib.import_module("databricks_mason.runtime.skill_manifest")
 
     with pytest.raises(RuntimeError, match="skill ids must be unique"):
+        manifest.load_skills(expected_framework="langgraph")
+
+
+def test_load_skills_rejects_unsupported_version_field(monkeypatch, tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        '[[skills]]\nid = "review"\n'
+        'source = { kind = "uc", name = "main.finance.review" }\nversion = "v1"\n',
+    )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
+    manifest = importlib.import_module("databricks_mason.runtime.skill_manifest")
+
+    with pytest.raises(RuntimeError, match="Unsupported skill fields.*version"):
         manifest.load_skills(expected_framework="langgraph")
 
 
@@ -216,6 +230,18 @@ def test_uc_skill_rejects_missing_dynamic_tool(monkeypatch, tmp_path: pathlib.Pa
 
     with pytest.raises(RuntimeError, match="quarter-close.*not found.*UC Skills endpoint"):
         asyncio.run(runtime.build_skill_context())
+
+
+def test_uc_skill_rejects_content_over_one_mibibyte():
+    runtime = importlib.import_module("databricks_mason.langgraph.skills")
+    content = "é" * (1024 * 1024 // 2) + "a"
+    result = SimpleNamespace(
+        isError=False,
+        content=[SimpleNamespace(type="text", text=content)],
+    )
+
+    with pytest.raises(RuntimeError, match="quarter-close.*1 MiB"):
+        runtime._result_text(result, "quarter-close")
 
 
 @pytest.mark.parametrize("path", ["../secret.md", "/tmp/secret.md", r"C:\\secret.md"])

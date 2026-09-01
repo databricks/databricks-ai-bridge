@@ -14,6 +14,8 @@ from langchain_mcp_adapters.sessions import create_session
 from databricks_mason.runtime.skill_manifest import SkillRecord, load_skills
 from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
+_MAX_CONTENT_BYTES = 1024 * 1024
+
 
 @dataclass(frozen=True)
 class SkillDescriptor:
@@ -64,7 +66,14 @@ def _result_text(result: Any, skill_id: str) -> str:
             f"Declared skill {skill_id!r} did not return a valid MCP result with a text block "
             "from the UC Skills endpoint."
         )
-    return "\n".join(texts)
+    content = "\n".join(texts)
+    try:
+        size = len(content.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(f"UC skill content for {skill_id!r} must be UTF-8.") from exc
+    if size > _MAX_CONTENT_BYTES:
+        raise RuntimeError(f"UC skill content for {skill_id!r} exceeds the 1 MiB limit.")
+    return content
 
 
 class _UCProvider:

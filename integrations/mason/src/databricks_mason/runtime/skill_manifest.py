@@ -43,6 +43,9 @@ def _skill(value: object) -> SkillRecord:
     if not isinstance(value, dict):
         raise RuntimeError("agent.toml skills must be tables.")
     value = cast(dict[str, Any], value)
+    unsupported_fields = set(value) - {"id", "source"}
+    if unsupported_fields:
+        raise RuntimeError(f"Unsupported skill fields: {', '.join(sorted(unsupported_fields))}.")
     skill_id = _required_string(value.get("id"), "a skill id")
     if not _SKILL_ID.fullmatch(skill_id):
         raise RuntimeError(f"Invalid skill id {skill_id!r}.")
@@ -50,11 +53,14 @@ def _skill(value: object) -> SkillRecord:
     if not isinstance(source, dict):
         raise RuntimeError("Each agent.toml skill must declare a source table.")
     source = cast(dict[str, Any], source)
+    unsupported_fields = set(source) - {"kind", "name"}
+    if unsupported_fields:
+        raise RuntimeError(
+            f"Unsupported skill source fields: {', '.join(sorted(unsupported_fields))}."
+        )
     kind = _required_string(source.get("kind"), "a skill source kind")
     if kind != "uc":
         raise RuntimeError(f"Unsupported agent.toml skill kind: {kind!r}; only 'uc' is supported.")
-    if source.get("path") is not None:
-        raise RuntimeError("UC skill bindings do not accept source.path.")
     name = _three_part_name(_required_string(source.get("name"), "a UC skill source.name"))
     return SkillRecord(id=skill_id, kind=kind, name=name)
 

@@ -272,6 +272,9 @@ def _skill_from_manifest(value: object) -> SkillSpec:
     if not isinstance(value, Mapping):
         raise AgentCliError("Each agent.toml skill must be a TOML table.")
     value = cast(Mapping[str, Any], value)
+    unsupported_fields = set(value) - {"id", "source"}
+    if unsupported_fields:
+        raise AgentCliError(f"Unsupported skill fields: {', '.join(sorted(unsupported_fields))}.")
     skill_id = value.get("id")
     if not isinstance(skill_id, str) or not skill_id:
         raise AgentCliError("Skill manifest must declare an id.")

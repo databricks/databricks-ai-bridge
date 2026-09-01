@@ -173,6 +173,7 @@ source = { kind = "uc", name = "main.ai.other-review" }
             'id = "review"\n'
             'source = { kind = "uc", name = "main.ai.review", path = "skills/review" }'
         ),
+        'id = "review"\nsource = { kind = "uc", name = "main.ai.review" }\nversion = "v1"',
     ],
 )
 def test_load_rejects_malformed_or_non_uc_skill_sources(tmp_path: pathlib.Path, skill_entry: str):
