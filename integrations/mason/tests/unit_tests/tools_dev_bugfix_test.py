@@ -31,9 +31,7 @@ def _project(tmp_path: pathlib.Path, framework: str = "langgraph") -> pathlib.Pa
 
 def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
     project = _project(tmp_path)
-    result = CliRunner().invoke(
-        tools, ["add", "mcp", "", "--source", str(project)], obj=_Ctx()
-    )
+    result = CliRunner().invoke(tools, ["add", "mcp", "", "--source", str(project)], obj=_Ctx())
     assert result.exit_code != 0
     assert "managed MCP service name" in result.output and "is required" in result.output
     # Not the cryptic identifier error.
@@ -42,9 +40,7 @@ def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
 
 def test_add_python_empty_name_is_rejected_clearly(tmp_path):
     project = _project(tmp_path)
-    result = CliRunner().invoke(
-        tools, ["add", "python", "", "--source", str(project)], obj=_Ctx()
-    )
+    result = CliRunner().invoke(tools, ["add", "python", "", "--source", str(project)], obj=_Ctx())
     assert result.exit_code != 0
     assert "tool name is required" in result.output
 
