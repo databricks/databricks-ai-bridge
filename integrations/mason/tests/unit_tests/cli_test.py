@@ -78,6 +78,28 @@ def test_tools_add_help_explains_types_and_project_targeting():
         assert example in result.output
 
 
+def test_help_examples_recommend_the_default_happy_path():
+    runner = CliRunner()
+    expected_examples = {
+        (): (
+            "mason login --profile my-workspace",
+            "mason init my-agent",
+            "cd my-agent",
+            "mason dev",
+            "mason deploy my-agent",
+        ),
+        ("init",): ("mason init my-agent",),
+        ("dev",): ("mason dev",),
+        ("deploy",): ("mason deploy my-agent",),
+    }
+
+    for path, examples in expected_examples.items():
+        result = runner.invoke(cli.mason, [*path, "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        for example in examples:
+            assert example in result.output, (path, example)
+
+
 def test_every_command_has_an_example_in_option_help():
     runner = CliRunner()
 

@@ -118,9 +118,10 @@ For the shortest path from a blank directory to a running and deployed agent:
 
 ```sh
 mason login --profile my-workspace
-mason init --framework langgraph --profile my-workspace ./my-agent
-mason dev --source ./my-agent
-mason deploy my-agent --source ./my-agent
+mason init my-agent
+cd my-agent
+mason dev
+mason deploy my-agent
 ```
 
 ## Agent tools
