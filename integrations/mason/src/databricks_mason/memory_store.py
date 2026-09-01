@@ -11,7 +11,7 @@ from databricks_mason._pagination import validate_limit, validate_page_size
 from databricks_mason.timefmt import parse_timestamp
 
 if TYPE_CHECKING:
-    from databricks_mason._api_client import AgentApiClient
+    from databricks_mason._api_client import _MasonApiClient
 
 
 def _resource_id(name: str) -> str:
@@ -158,7 +158,7 @@ class MemoryStore:
 
 
 class MemoryStores:
-    def __init__(self, api: AgentApiClient):
+    def __init__(self, api: _MasonApiClient):
         self._api = api
 
     def create(

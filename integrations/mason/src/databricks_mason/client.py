@@ -6,7 +6,7 @@ from typing import Optional
 
 from databricks.sdk import WorkspaceClient
 
-from databricks_mason._api_client import AgentApiClient
+from databricks_mason._api_client import _MasonApiClient
 from databricks_mason.memory_store import MemoryStores
 from databricks_mason.session_store import SessionStores
 
@@ -23,6 +23,6 @@ class MasonClient:
     """
 
     def __init__(self, workspace_client: Optional[WorkspaceClient] = None) -> None:
-        api = AgentApiClient(workspace_client=workspace_client)
+        api = _MasonApiClient(workspace_client=workspace_client)
         self.memory_stores = MemoryStores(api)
         self.session_stores = SessionStores(api)

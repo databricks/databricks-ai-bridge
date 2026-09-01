@@ -80,7 +80,7 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
     )
 
 
-class AgentApiClient:
+class _MasonApiClient:
     """Private transport for the agents/v1 API until the generated SDK is available."""
 
     def __init__(

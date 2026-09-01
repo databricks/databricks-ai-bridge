@@ -6,7 +6,7 @@ from unittest import mock
 
 from databricks_mason import MasonClient
 from databricks_mason._api_client import (
-    AgentApiClient,
+    _MasonApiClient,
     _workspace_client,
     memory_entry_path,
     memory_store_path,
@@ -18,10 +18,10 @@ def _client(workspace_client):
     inst = workspace_client.return_value
     inst.config.host = "https://ws.example.com"
     inst.api_client.do.return_value = {}
-    return AgentApiClient(profile="p"), inst.api_client.do
+    return _MasonApiClient(profile="p"), inst.api_client.do
 
 
-@mock.patch("databricks_mason.client.AgentApiClient")
+@mock.patch("databricks_mason.client._MasonApiClient")
 def test_mason_client_wraps_workspace_client(api_client):
     workspace_client = mock.Mock()
 

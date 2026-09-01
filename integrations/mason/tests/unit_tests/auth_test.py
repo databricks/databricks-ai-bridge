@@ -1,6 +1,6 @@
 """Unit tests for `mason login` / `logout` and the saved-profile helpers.
 
-`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `AgentApiClient`
+`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `_MasonApiClient`
 is stubbed so login never touches the network.
 """
 
@@ -27,7 +27,7 @@ def _stub_client(monkeypatch, user="me@example.com", host="https://ws"):
     fake = mock.Mock()
     fake.current_user = user
     fake.host = host
-    monkeypatch.setattr(auth, "AgentApiClient", lambda profile: fake)
+    monkeypatch.setattr(auth, "_MasonApiClient", lambda profile: fake)
 
 
 def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
@@ -78,7 +78,7 @@ def test_login_configures_invalid_profile_then_revalidates(tmp_path, monkeypatch
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     validated = mock.Mock(current_user="me@example.com", host="https://ws")
     mason_client = mock.Mock(side_effect=[auth.AgentCliError("no credentials"), validated])
-    monkeypatch.setattr(auth, "MasonClient", mason_client)
+    monkeypatch.setattr(auth, "_MasonApiClient", mason_client)
     monkeypatch.setattr(auth, "_is_interactive", lambda: True)
     databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
     monkeypatch.setattr(auth.subprocess, "run", databricks_login)
@@ -148,7 +148,7 @@ def test_login_does_not_reauthenticate_non_auth_validation_error(tmp_path, monke
 def test_login_does_not_launch_browser_when_noninteractive(tmp_path, monkeypatch):
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr(
-        auth, "MasonClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
+        auth, "_MasonApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
     )
     monkeypatch.setattr(auth, "_is_interactive", lambda: False)
     databricks_login = mock.Mock()
@@ -165,7 +165,7 @@ def test_login_does_not_launch_browser_when_noninteractive(tmp_path, monkeypatch
 def test_login_reports_when_databricks_cli_is_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr(
-        auth, "MasonClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
+        auth, "_MasonApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
     )
     monkeypatch.setattr(auth, "_is_interactive", lambda: True)
     monkeypatch.setattr(auth.subprocess, "run", mock.Mock(side_effect=FileNotFoundError))

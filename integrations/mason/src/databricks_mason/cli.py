@@ -11,7 +11,7 @@ from typing import Optional
 import click
 
 from databricks_mason import errors
-from databricks_mason._api_client import AgentApiClient
+from databricks_mason._api_client import _MasonApiClient
 from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.deploy import deploy, deployments
 from databricks_mason.dev import dev
@@ -30,11 +30,11 @@ class CliContext:
     def __init__(self, profile: Optional[str], output: str):
         self.profile = profile
         self.output = output
-        self._client: Optional[AgentApiClient] = None
+        self._client: Optional[_MasonApiClient] = None
 
-    def client(self) -> AgentApiClient:
+    def client(self) -> _MasonApiClient:
         if self._client is None:
-            self._client = AgentApiClient(self.profile)
+            self._client = _MasonApiClient(self.profile)
         return self._client
 
 

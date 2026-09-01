@@ -21,7 +21,7 @@ import click
 from databricks.sdk.errors import Unauthenticated
 
 from databricks_mason import render
-from databricks_mason._api_client import AgentApiClient
+from databricks_mason._api_client import _MasonApiClient
 from databricks_mason.errors import AgentCliError
 
 
@@ -45,8 +45,8 @@ def _save_default_profile(profile: str) -> None:
     path.write_text(json.dumps({"profile": profile}, indent=2) + "\n")
 
 
-def _validate_profile(profile: str) -> tuple[AgentApiClient, str]:
-    client = AgentApiClient(profile)
+def _validate_profile(profile: str) -> tuple[_MasonApiClient, str]:
+    client = _MasonApiClient(profile)
     return client, client.current_user
 
 
@@ -70,7 +70,7 @@ def _run_databricks_login(profile: str) -> None:
         )
 
 
-def _authenticate_profile(profile: str) -> tuple[AgentApiClient, str]:
+def _authenticate_profile(profile: str) -> tuple[_MasonApiClient, str]:
     try:
         return _validate_profile(profile)
     except (AgentCliError, Unauthenticated) as initial_error:
