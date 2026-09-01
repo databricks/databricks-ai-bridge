@@ -266,7 +266,9 @@ def entries_create(
 
 
 @entries.command("get")
-@click.option("--store", default=None, help="Store id/name (optional if ENTRY is a full resource name).")
+@click.option(
+    "--store", default=None, help="Store id/name (optional if ENTRY is a full resource name)."
+)
 @click.argument("entry")
 @click.pass_obj
 def entries_get(obj, store, entry) -> None:
@@ -350,7 +352,9 @@ def entries_search(obj, store, actor_id, query, limit) -> None:
 
 
 @entries.command("update")
-@click.option("--store", default=None, help="Store id/name (optional if ENTRY is a full resource name).")
+@click.option(
+    "--store", default=None, help="Store id/name (optional if ENTRY is a full resource name)."
+)
 @click.argument("entry")
 @click.option("--content", default=None, help="New entry content.")
 @click.option("--description", default=None, help="New description.")
@@ -366,7 +370,9 @@ def entries_update(obj, store, entry, content, description) -> None:
 
 
 @entries.command("delete")
-@click.option("--store", default=None, help="Store id/name (optional if ENTRY is a full resource name).")
+@click.option(
+    "--store", default=None, help="Store id/name (optional if ENTRY is a full resource name)."
+)
 @click.argument("entry")
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj

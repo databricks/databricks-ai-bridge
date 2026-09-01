@@ -64,9 +64,7 @@ def test_source_type_normalization():
 
 def test_entries_get_accepts_full_resource_name_without_store():
     client = _MemClient()
-    result = CliRunner().invoke(
-        entries, ["get", "memory-stores/S/entries/E"], obj=_Ctx(client)
-    )
+    result = CliRunner().invoke(entries, ["get", "memory-stores/S/entries/E"], obj=_Ctx(client))
     assert result.exit_code == 0, result.output
     assert ("get_entry", None, "memory-stores/S/entries/E") in client.calls
 
@@ -166,7 +164,9 @@ def test_fork_still_accepts_flag():
 
 def test_fork_missing_source_errors():
     client = _SessClient()
-    result = CliRunner().invoke(sessions, ["fork", "--store", "s", "--actor-id", "a"], obj=_Ctx(client))
+    result = CliRunner().invoke(
+        sessions, ["fork", "--store", "s", "--actor-id", "a"], obj=_Ctx(client)
+    )
     assert result.exit_code != 0
     assert client.calls == []
 
