@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from databricks_mason._pagination import validate_limit, validate_page_size
-from databricks_mason.errors import AgentCliError
 from databricks_mason.timefmt import parse_timestamp
 
 if TYPE_CHECKING:
@@ -131,8 +130,8 @@ class MemoryStore:
 
     def get_memory(
         self,
-        *,
         memory_id: str,
+        *,
         read_mask: Optional[str] = None,
     ) -> Memory:
         return self._client._get_memory(self, memory_id=memory_id, read_mask=read_mask)
@@ -155,27 +154,6 @@ class MemoryStore:
             path_prefix=path_prefix,
             session_id=session_id,
             read_mask=read_mask,
-        )
-
-    def append_memory(
-        self,
-        *,
-        actor_id: str,
-        path: str,
-        content: str,
-        session_id: Optional[str] = None,
-        description: Optional[str] = None,
-        source_type: Optional[str] = None,
-    ) -> Memory:
-        """Append through a non-atomic client-side read-modify-write operation."""
-        return self._client._append_memory(
-            self,
-            actor_id=actor_id,
-            path=path,
-            content=content,
-            session_id=session_id,
-            description=description,
-            source_type=source_type,
         )
 
 
@@ -208,28 +186,6 @@ class MemoryStores:
 
     def get(self, store_id: str) -> MemoryStore:
         return self._store_from_response(self._api.get_memory_store(store_id))
-
-    def get_or_create(
-        self,
-        display_name: str,
-        *,
-        description: Optional[str] = None,
-    ) -> MemoryStore:
-        existing = self._find_by_display_name(display_name)
-        if existing is not None:
-            return existing
-        try:
-            return self.create(display_name, description=description)
-        except AgentCliError as error:
-            if error.error_code != "ALREADY_EXISTS":
-                raise
-            existing = self._find_by_display_name(display_name)
-            if existing is None:
-                raise
-            return existing
-
-    def _find_by_display_name(self, display_name: str) -> Optional[MemoryStore]:
-        return next((store for store in self.list() if store.display_name == display_name), None)
 
     def _update_store(
         self,
@@ -370,53 +326,6 @@ class MemoryStores:
 
     def _delete_memory(self, store: MemoryStore, *, memory_id: str) -> None:
         self._api.delete_memory_entry(store.id, memory_id)
-
-    def _append_memory(
-        self,
-        store: MemoryStore,
-        *,
-        actor_id: str,
-        path: str,
-        content: str,
-        session_id: Optional[str] = None,
-        description: Optional[str] = None,
-        source_type: Optional[str] = None,
-    ) -> Memory:
-        matches = self._list_memories(
-            store,
-            actor_id=actor_id,
-            session_id=session_id,
-            path_prefix=path,
-        )
-        exact_match = next(
-            (
-                entry
-                for entry in matches
-                if entry.actor_id == actor_id
-                and entry.session_id == session_id
-                and entry.path == path
-            ),
-            None,
-        )
-        if exact_match is None:
-            return self._create_memory(
-                store,
-                actor_id=actor_id,
-                path=path,
-                content=content,
-                session_id=session_id,
-                description=description,
-                source_type=source_type,
-            )
-
-        current = self._get_memory(store, memory_id=exact_match.id)
-        updated_description = current.description if description is None else description
-        return self._update_memory(
-            store,
-            memory_id=current.id,
-            content=(current.content or "") + content,
-            description=updated_description,
-        )
 
     def _store_from_response(self, response: dict[str, Any]) -> MemoryStore:
         return MemoryStore(

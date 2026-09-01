@@ -73,7 +73,7 @@ session.append_items(
     ]
 )
 
-memory_store = mason.memory_stores.get_or_create("coding-agent-memory")
+memory_store = mason.memory_stores.create("coding-agent-memory")
 memory = memory_store.create_memory(
     actor_id="alice",
     path="/preferences/style.md",
@@ -84,23 +84,22 @@ results = memory_store.search_memories(
     query="response preferences",
     limit=10,
 )
-memory.update(content="The user prefers very concise answers.")
+memory = memory.update(content="The user prefers very concise answers.")
 memory.delete()
 ```
 
-The root collections manage stores: `mason.memory_stores.create/get/list/get_or_create`
-and `mason.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.create_memory()`, `memory_store.list_memories()`,
-`session_store.create_session()`, and `session_store.list_sessions()`. Returned
-memories, sessions, and stores own their `update()` and `delete()` operations.
+The root collections manage stores: `mason.memory_stores.create/get/list` and
+`mason.session_stores.create/get/list`. A returned store owns operations on its
+contents, such as `memory_store.create_memory()`,
+`memory_store.get_memory("memory-id")`, `memory_store.list_memories()`,
+`session_store.create_session()`, `session_store.get_session("session-id")`, and
+`session_store.list_sessions()`. Returned memories, sessions, and stores own their
+`update()` and `delete()` operations.
 
 All `list()` methods return iterators that automatically consume server pages. List
 `page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
 also auto-pages. `session.fork(...)` creates an independent copy, optionally through
 a specific item, and deleting a session cascades to its descendants.
-
-`memory_store.append_memory(...)` is a non-atomic client-side read-modify-write
-operation; concurrent calls can overwrite each other.
 
 The resource layer intentionally does not mirror every API method. Its private
 transport will be replaced by the generated `WorkspaceClient.mason` service when that

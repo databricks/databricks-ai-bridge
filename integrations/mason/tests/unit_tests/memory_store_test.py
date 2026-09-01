@@ -57,36 +57,6 @@ def test_get_by_id() -> None:
     api.get_memory_store.assert_called_once_with(STORE_ID)
 
 
-def test_get_or_create_finds_existing_store_across_pages() -> None:
-    client, api = resource_client()
-    api.list_memory_stores.side_effect = [
-        {
-            "managed_memory_stores": [mem_store_payload(display_name="other")],
-            "next_page_token": "p2",
-        },
-        {"managed_memory_stores": [mem_store_payload()]},
-    ]
-
-    store = client.memory_stores.get_or_create("coding_agent_memory")
-
-    assert store.id == STORE_ID
-    assert api.list_memory_stores.call_count == 2
-
-
-def test_get_or_create_creates_when_absent() -> None:
-    client, api = resource_client()
-    api.list_memory_stores.return_value = {"managed_memory_stores": []}
-    api.create_memory_store.return_value = mem_store_payload(description="new")
-
-    store = client.memory_stores.get_or_create(
-        "coding_agent_memory",
-        description="new",
-    )
-
-    assert store.description == "new"
-    api.create_memory_store.assert_called_once_with("coding_agent_memory", "new")
-
-
 def test_bound_store_update_and_delete() -> None:
     client, api = resource_client()
     api.get_memory_store.return_value = mem_store_payload()
@@ -153,7 +123,7 @@ def test_get_update_and_delete_memory() -> None:
     api.update_memory_entry.return_value = memory_payload(content="updated")
     store = client.memory_stores.get(STORE_ID)
 
-    memory = store.get_memory(memory_id=MEMORY_ID, read_mask="name,content")
+    memory = store.get_memory(MEMORY_ID, read_mask="name,content")
     updated = memory.update(content="updated")
     updated.delete()
 
@@ -215,47 +185,3 @@ def test_search_rejects_out_of_range_limit(limit: int) -> None:
 
     with pytest.raises(ValueError, match="limit"):
         store.search_memories(actor_id="alice", query="q", limit=limit)
-
-
-def test_append_memory_creates_when_absent() -> None:
-    client, api = resource_client()
-    api.get_memory_store.return_value = mem_store_payload()
-    api.list_memory_entries.return_value = {"managed_memory_entries": []}
-    api.create_memory_entry.return_value = memory_payload(content="first")
-    store = client.memory_stores.get(STORE_ID)
-
-    memory = store.append_memory(
-        actor_id="alice",
-        session_id="s1",
-        path="/m/p.md",
-        content="first",
-    )
-
-    assert memory.content == "first"
-    api.create_memory_entry.assert_called_once()
-
-
-def test_append_memory_read_modify_writes_existing() -> None:
-    client, api = resource_client()
-    api.get_memory_store.return_value = mem_store_payload()
-    summary = memory_payload()
-    summary.pop("content")
-    api.list_memory_entries.return_value = {"managed_memory_entries": [summary]}
-    api.get_memory_entry.return_value = memory_payload(content="first", session_id="s1")
-    api.update_memory_entry.return_value = memory_payload(content="first\nsecond")
-    store = client.memory_stores.get(STORE_ID)
-
-    memory = store.append_memory(
-        actor_id="alice",
-        session_id="s1",
-        path="/m/p.md",
-        content="\nsecond",
-    )
-
-    assert memory.content == "first\nsecond"
-    api.update_memory_entry.assert_called_once_with(
-        STORE_ID,
-        MEMORY_ID,
-        content="first\nsecond",
-        description="desc",
-    )

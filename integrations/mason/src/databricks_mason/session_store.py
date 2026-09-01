@@ -134,7 +134,7 @@ class SessionStore:
             order_by=order_by,
         )
 
-    def get_session(self, *, session_id: str) -> Session:
+    def get_session(self, session_id: str) -> Session:
         return self._client._get_session(self, session_id=session_id)
 
 
