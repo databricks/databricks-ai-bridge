@@ -37,8 +37,8 @@ class Session:
     def update(self, *, metadata: dict[str, str]) -> Session:
         return self._client._update_session(self, metadata=metadata)
 
-    def delete(self) -> None:
-        self._client._delete_session(self)
+    def delete(self, *, force: bool = False) -> None:
+        self._client._delete_session(self, force=force)
 
     def fork(
         self,
@@ -253,8 +253,8 @@ class SessionStores:
         )
         return self._session_from_response(response, session.store_name)
 
-    def _delete_session(self, session: Session) -> None:
-        self._api.delete_session(session.store_name, session.session_id)
+    def _delete_session(self, session: Session, *, force: bool = False) -> None:
+        self._api.delete_session(session.store_name, session.session_id, force=force)
 
     def _fork_session(
         self,

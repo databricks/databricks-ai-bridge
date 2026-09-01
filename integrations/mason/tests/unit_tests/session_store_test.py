@@ -126,7 +126,18 @@ def test_update_and_delete_session() -> None:
         SESSION_ID,
         {"status": "resolved"},
     )
-    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID)
+    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID, force=False)
+
+
+def test_delete_session_with_force() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    api.get_session.return_value = session_payload()
+    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+
+    session.delete(force=True)
+
+    api.delete_session.assert_called_once_with(SESSION_STORE, SESSION_ID, force=True)
 
 
 def test_fork_unwraps_session_field() -> None:

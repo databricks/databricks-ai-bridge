@@ -383,8 +383,12 @@ class _MasonApiClient:
             ),
         )
 
-    def delete_session(self, store: str, session_id: str) -> dict:
-        return self._do("DELETE", f"{_BASE}/session-stores/{store}/sessions/{session_id}")
+    def delete_session(self, store: str, session_id: str, force: bool = False) -> dict:
+        return self._do(
+            "DELETE",
+            f"{_BASE}/session-stores/{store}/sessions/{session_id}",
+            query={"force": True} if force else None,
+        )
 
     def fork_session(
         self,

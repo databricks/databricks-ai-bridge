@@ -177,13 +177,25 @@ def test_append_wraps_items_in_data(workspace_client):
 
 
 @mock.patch("databricks_mason._api_client.WorkspaceClient")
-def test_delete_session_always_cascades(workspace_client):
+def test_delete_session_without_force(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid")
     do.assert_called_once_with(
         "DELETE",
         "/api/agents/v1/session-stores/store1/sessions/sid",
         query=None,
+        body=None,
+    )
+
+
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_delete_session_with_force(workspace_client):
+    c, do = _client(workspace_client)
+    c.delete_session("store1", "sid", force=True)
+    do.assert_called_once_with(
+        "DELETE",
+        "/api/agents/v1/session-stores/store1/sessions/sid",
+        query={"force": True},
         body=None,
     )
 

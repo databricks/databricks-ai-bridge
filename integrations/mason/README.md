@@ -99,7 +99,8 @@ contents, such as `memory_store.create_memory()`,
 All `list()` methods return iterators that automatically consume server pages. List
 `page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
 also auto-pages. `session.fork(...)` creates an independent copy, optionally through
-a specific item, and deleting a session cascades to its descendants.
+a specific item. Deleting a session with descendants requires
+`session.delete(force=True)` to cascade the deletion.
 
 The resource layer intentionally does not mirror every API method. Its private
 transport will be replaced by the generated `WorkspaceClient.mason` service when that

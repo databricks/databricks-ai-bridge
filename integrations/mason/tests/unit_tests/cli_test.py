@@ -181,7 +181,7 @@ def test_memory_search_uses_canonical_page_size_option():
     assert "limit" not in parameter_names
 
 
-def test_session_delete_has_no_removed_force_option():
+def test_session_delete_has_force_option():
     delete = cli.sessions.commands["delete"]
 
-    assert "force" not in {parameter.name for parameter in delete.params}
+    assert "force" in {parameter.name for parameter in delete.params}
