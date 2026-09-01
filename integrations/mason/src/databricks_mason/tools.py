@@ -155,12 +155,17 @@ def _write_new_files(files: dict[pathlib.Path, str]) -> list[pathlib.Path]:
 
 @click.group()
 def tools() -> None:
-    """Add, inspect, and test agent tools declared in agent.toml."""
+    """Manage tools configured in an agent project's agent.toml."""
 
 
 @tools.group("add")
 def add() -> None:
-    """Add a tool binding to agent.toml."""
+    """Add a sandbox, MCP service, UC function, or Python tool.
+
+    Subcommands target the current directory by default.
+
+    Pass --source PATH to target another project.
+    """
 
 
 def _source_option(function):
@@ -294,7 +299,7 @@ def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
 @_source_option
 @click.pass_obj
 def list_tools(obj: Any, source: pathlib.Path) -> None:
-    """List tools declared in agent.toml."""
+    """List tools configured for this agent."""
     project = AgentProject.load(source)
     rows = [_tool_record(spec) for spec in project.tools]
     if getattr(obj, "output", "text") == "json":

@@ -77,6 +77,9 @@ mason [-p <profile>] [-o text|json]
   logout
   init         [--framework openai|langgraph] [--enable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
+  dev          [--source PATH] [--prepare-environment] [--app-port PORT]
+               [--with-memory-store N] [--with-session-store N]
+               [--with-traces C.S] [--create-stores]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -88,7 +91,6 @@ mason [-p <profile>] [-o text|json]
     list | get | instrument
   mcp
     list             [--schema CATALOG.SCHEMA]
-  init          [--framework openai|langgraph] [--profile P] [DIRECTORY]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
@@ -99,6 +101,27 @@ mason [-p <profile>] [-o text|json]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
+```
+
+## Command help
+
+Use the conventional help flag at any command level. Every command's help includes runnable
+examples:
+
+```sh
+mason --help
+mason deploy --help
+mason sessions items append --help
+```
+
+For the shortest path from a blank directory to a running and deployed agent:
+
+```sh
+mason login --profile my-workspace
+mason init my-agent
+cd my-agent
+mason dev
+mason deploy my-agent
 ```
 
 ## Agent tools
