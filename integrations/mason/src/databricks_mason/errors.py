@@ -27,6 +27,7 @@ def set_output_mode(mode: str) -> None:
     global _OUTPUT_MODE
     _OUTPUT_MODE = mode
 
+
 _PREVIEW_HINT = (
     "These agents/v1 APIs are in preview and gated per workspace. This handler is "
     "not enabled on the target workspace yet — try a different --profile or contact "

@@ -223,6 +223,4 @@ def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_clie
 def test_delete_session_store_normalizes_path(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session_store("session-stores/s1")
-    do.assert_called_once_with(
-        "DELETE", "/api/agents/v1/session-stores/s1", query=None, body=None
-    )
+    do.assert_called_once_with("DELETE", "/api/agents/v1/session-stores/s1", query=None, body=None)

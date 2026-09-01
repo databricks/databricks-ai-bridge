@@ -187,9 +187,7 @@ class MasonClient:
     ) -> models.MemoryStore:
         body = _query(display_name=display_name, description=description)
         if not body:
-            raise AgentCliError(
-                "No fields to update. Provide a display name and/or description."
-            )
+            raise AgentCliError("No fields to update. Provide a display name and/or description.")
         mask = ",".join(body.keys())
         return _as(
             models.MemoryStore,
@@ -318,9 +316,7 @@ class MasonClient:
     ) -> models.SessionStore:
         body = _query(description=description, metadata=metadata)
         if not body:
-            raise AgentCliError(
-                "No fields to update. Provide a description and/or metadata."
-            )
+            raise AgentCliError("No fields to update. Provide a description and/or metadata.")
         mask = ",".join(body.keys())
         return _as(
             models.SessionStore,
