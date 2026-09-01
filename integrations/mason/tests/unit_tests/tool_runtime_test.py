@@ -50,7 +50,11 @@ class _FakeWorkspaceClient:
 
 def _reload_mcp():
     # The runtime modules read env at call time, but re-import so patched sys.modules take effect.
-    for name in ("databricks_mason.langgraph.mcp", "databricks_mason.runtime.tool_manifest"):
+    for name in (
+        "databricks_mason.langgraph.mcp",
+        "databricks_mason.runtime.tool_manifest",
+        "databricks_mason.runtime.workspace",
+    ):
         sys.modules.pop(name, None)
     return importlib.import_module("databricks_mason.langgraph.mcp")
 

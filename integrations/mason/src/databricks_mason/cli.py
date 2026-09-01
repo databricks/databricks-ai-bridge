@@ -19,6 +19,7 @@ from databricks_mason.init import init
 from databricks_mason.mcp import mcp
 from databricks_mason.memory import memory
 from databricks_mason.sessions import sessions
+from databricks_mason.skills import skills
 from databricks_mason.tools import tools
 from databricks_mason.tracing import tracing
 
@@ -70,6 +71,7 @@ mason.add_command(sessions)
 mason.add_command(tracing)
 mason.add_command(deploy)
 mason.add_command(deployments)
+mason.add_command(skills)
 mason.add_command(tools)
 configure_help(mason)
 

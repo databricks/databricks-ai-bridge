@@ -45,6 +45,13 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     ("memory", "entries", "delete"): ("mason memory entries delete --store <store> <entry>",),
     ("mcp",): ("mason mcp list", "mason mcp list --schema main.tools"),
     ("mcp", "list"): ("mason mcp list", "mason mcp list --schema main.tools"),
+    ("skills",): (
+        "mason skills list --schema catalog.schema",
+        "mason skills add uc catalog.schema.skill --source .",
+    ),
+    ("skills", "list"): ("mason skills list --schema catalog.schema",),
+    ("skills", "add"): ("mason skills add uc catalog.schema.skill --source .",),
+    ("skills", "add", "uc"): ("mason skills add uc catalog.schema.skill --source .",),
     ("sessions",): ("mason sessions stores list", "mason sessions list --help"),
     ("sessions", "stores"): ("mason sessions stores list",),
     ("sessions", "stores", "create"): ("mason sessions stores create --name agent-sessions",),

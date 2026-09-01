@@ -5,16 +5,18 @@ Databricks auth needed, so they run anywhere. The live test builds the full agen
 model; it is skipped unless a workspace profile is configured.
 """
 
+import asyncio
 import os
 from uuid import UUID
 
 import pytest
 from agent.agent import _serialize_events, _session_id
-from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from fastapi.testclient import TestClient
 from langchain_core.tools import BaseTool
 from runtime.runtime import build_app
+
+from databricks_mason.langgraph.session_store import checkpointer, thread_config
 
 
 def test_tools_autoregister():
@@ -30,6 +32,74 @@ def test_gated_tool_is_in_require_approval():
 
     assert REQUIRE_APPROVAL.get("send_message")
     assert "send_message" in {t.name for t in all_tools()}
+
+
+def test_create_agent_graph_appends_skill_tools_and_metadata_prompt(monkeypatch):
+    import agent.agent as agent_module
+
+    captured = {}
+    local_tools = [object()]
+    memory = [object()]
+    mcp = [object()]
+    skill_tools = [object(), object()]
+
+    async def mcp_tools(extra_servers):
+        assert extra_servers == ["custom-server"]
+        return mcp
+
+    async def build_skill_context():
+        return "Available skills:\n- [review] (uc:main.ai.review) Review safely.", skill_tools
+
+    monkeypatch.setattr(agent_module, "REQUIRE_APPROVAL", {})
+    monkeypatch.setattr(agent_module, "all_tools", lambda: local_tools)
+    monkeypatch.setattr(agent_module, "memory_tools", lambda: memory)
+    monkeypatch.setattr(agent_module, "mcp_tools", mcp_tools)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: ["custom-server"])
+    monkeypatch.setattr(agent_module, "build_skill_context", build_skill_context, raising=False)
+    monkeypatch.setattr(agent_module, "_RoutedChatDatabricks", lambda **kwargs: "model")
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: "workspace")
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: "checkpointer")
+    monkeypatch.setattr(
+        agent_module,
+        "create_agent",
+        lambda **kwargs: captured.update(kwargs) or "graph",
+    )
+
+    assert asyncio.run(agent_module.create_agent_graph()) == "graph"
+    assert captured["tools"] == [*local_tools, *memory, *mcp, *skill_tools]
+    assert captured["system_prompt"] == (
+        "Available skills:\n- [review] (uc:main.ai.review) Review safely."
+    )
+
+
+def test_create_agent_graph_omits_empty_skill_prompt(monkeypatch):
+    import agent.agent as agent_module
+
+    captured = {}
+
+    async def empty_tools(*args):
+        return []
+
+    async def empty_skill_context():
+        return "", []
+
+    monkeypatch.setattr(agent_module, "REQUIRE_APPROVAL", {})
+    monkeypatch.setattr(agent_module, "all_tools", lambda: [])
+    monkeypatch.setattr(agent_module, "memory_tools", lambda: [])
+    monkeypatch.setattr(agent_module, "mcp_tools", empty_tools)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(agent_module, "build_skill_context", empty_skill_context, raising=False)
+    monkeypatch.setattr(agent_module, "_RoutedChatDatabricks", lambda **kwargs: "model")
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: "workspace")
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: "checkpointer")
+    monkeypatch.setattr(
+        agent_module,
+        "create_agent",
+        lambda **kwargs: captured.update(kwargs) or "graph",
+    )
+
+    assert asyncio.run(agent_module.create_agent_graph()) == "graph"
+    assert captured["system_prompt"] is None
 
 
 class _FakeInterrupt:
@@ -67,9 +137,7 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
-    assert model._get_client_kwargs()["default_headers"] == {
-        "X-Databricks-Org-Id": "123456"
-    }
+    assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
 
 
 def test_thread_config_from_session_id():

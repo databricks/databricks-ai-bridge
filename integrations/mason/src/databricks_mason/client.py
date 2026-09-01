@@ -23,6 +23,7 @@ from databricks_mason.errors import AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
+_SKILLS_PATH = "/api/2.1/unity-catalog/skills"
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -133,6 +134,25 @@ class MasonClient:
             "GET",
             _MCP_SERVICES_PATH,
             query=_query(parent=f"schemas/{schema}", page_token=page_token),
+        )
+
+    # --- Unity Catalog Skills -----------------------------------------------
+
+    def list_uc_skills(
+        self,
+        schema: str,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+    ) -> dict:
+        """List skills visible to the user in a Unity Catalog schema."""
+        return self._do(
+            "GET",
+            _SKILLS_PATH,
+            query=_query(
+                parent=f"schemas/{schema}",
+                page_size=page_size,
+                page_token=page_token,
+            ),
         )
 
     # --- memory stores -------------------------------------------------------

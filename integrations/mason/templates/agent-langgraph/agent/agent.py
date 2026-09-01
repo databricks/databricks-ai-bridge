@@ -9,18 +9,23 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
+from agent.mcps import build_mcp_servers
+
+# Importing the tools package auto-registers every tool module.
+from agent.tools import all_tools
 from databricks_mason import (
     configure_tracing,
     tag_session,
     workspace_client,
     workspace_headers,
 )
-from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
-
-from agent.mcps import build_mcp_servers
-
-# Importing the tools package auto-registers every tool module.
-from agent.tools import all_tools
+from databricks_mason.langgraph import (
+    build_skill_context,
+    checkpointer,
+    mcp_tools,
+    memory_tools,
+    thread_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,17 +79,19 @@ def _check_databricks_auth() -> None:
 
 
 async def create_agent_graph():
-    """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
+    """Build the agent with local, memory, MCP, and lazily loaded UC skill tools."""
     # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones (mcps.py),
     # then fetch their tools. Edit build_mcp_servers in agent/mcps.py to add servers.
     mcp = await mcp_tools(build_mcp_servers())
-    tools = [*all_tools(), *memory_tools(), *mcp]
+    skill_prompt, skill_tools = await build_skill_context()
+    tools = [*all_tools(), *memory_tools(), *mcp, *skill_tools]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
     return create_agent(
         model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
         tools=tools,
+        system_prompt=skill_prompt or None,
         middleware=middleware,
         checkpointer=checkpointer(),
     )
