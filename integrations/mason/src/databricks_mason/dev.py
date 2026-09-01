@@ -96,7 +96,7 @@ def dev(
     app_yaml = source_dir / "app.yaml"
     if not app_yaml.exists():
         raise AgentCliError(
-            f"No app.yaml in '{source_dir}'.",
+            f"No app.yaml found at {app_yaml}.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
@@ -156,5 +156,8 @@ def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
         return None  # no index override present — run-local can use app.yaml directly
     doc["env"] = filtered
     dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
-    dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    try:
+        dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    except OSError as exc:
+        raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml
