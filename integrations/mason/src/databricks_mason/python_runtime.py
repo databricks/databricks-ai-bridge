@@ -13,7 +13,7 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.tools import BaseTool  # ty: ignore[unresolved-import]
+from langchain_core.tools import BaseTool
 
 from databricks_mason.agent_project import AgentProject, ToolSpec
 
