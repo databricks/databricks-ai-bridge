@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 
 import click
 
 from databricks_mason import render, timefmt
+from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 
 _BREADCRUMB = "Agent Memory"
@@ -207,7 +209,14 @@ def _render_entry_detail(entry: dict) -> None:
 @click.option("--store", required=True, help="Store id or resource name.")
 @click.option("--actor-id", required=True)
 @click.option("--path", required=True, help="Absolute path, e.g. /preferences/style.md.")
-@click.option("--content", default=None)
+@click.option("--content", default=None, help="Entry content (inline). Use --content-file for large content.")
+@click.option(
+    "--content-file",
+    "content_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Read entry content from a file (avoids shell arg-length limits on large content).",
+)
 @click.option("--description", default=None)
 @click.option("--session-id", default=None)
 @click.option(
@@ -219,9 +228,13 @@ def _render_entry_detail(entry: dict) -> None:
 )
 @click.pass_obj
 def entries_create(
-    obj, store, actor_id, path, content, description, session_id, source_type
+    obj, store, actor_id, path, content, content_file, description, session_id, source_type
 ) -> None:
     """Create a memory entry."""
+    if content is not None and content_file is not None:
+        raise AgentCliError("Pass either --content or --content-file, not both.")
+    if content_file is not None:
+        content = pathlib.Path(content_file).read_text()
     data = obj.client().create_memory_entry(
         store, actor_id, path, content, description, session_id, source_type
     )
