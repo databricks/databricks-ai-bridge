@@ -9,10 +9,15 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
-from agent.mason import mcp_runtime, tracing
-from agent.mason.memory import memory_tools
-from agent.mason.session_store import checkpointer, thread_config
-from agent.mason.workspace import workspace_client, workspace_headers
+from databricks_mason import (
+    configure_tracing,
+    tag_session,
+    workspace_client,
+    workspace_headers,
+)
+from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
+
+from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
@@ -41,7 +46,7 @@ class _RoutedChatDatabricks(ChatDatabricks):
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
     _check_databricks_auth()
-    tracing.configure()
+    configure_tracing()
 
 
 def _check_databricks_auth() -> None:
@@ -70,7 +75,10 @@ def _check_databricks_auth() -> None:
 
 async def create_agent_graph():
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
-    tools = [*all_tools(), *memory_tools(), *await mcp_runtime.mcp_tools()]
+    # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones (mcps.py),
+    # then fetch their tools. Edit build_mcp_servers in agent/mcps.py to add servers.
+    mcp = await mcp_tools(build_mcp_servers())
+    tools = [*all_tools(), *memory_tools(), *mcp]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
@@ -117,7 +125,7 @@ async def invoke_handler(request: dict) -> dict:
 async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
     session_id = _session_id(request)
-    tracing.tag_session(session_id)
+    tag_session(session_id)
 
     agent = await create_agent_graph()
     # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from

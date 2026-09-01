@@ -6,7 +6,6 @@ framework -> template dir, refuses an existing destination, and reports the scaf
 
 from __future__ import annotations
 
-import ast
 import json
 import pathlib
 from unittest import mock
@@ -132,15 +131,14 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     }
 
 
-def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_code(
-    tmp_path: pathlib.Path,
-):
+def test_init_langgraph_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):
+    # Runtime plumbing now lives in the databricks_mason.runtime package (imported, not vendored),
+    # so init must not write an agent/mason/ dir into the scaffold.
     dest = tmp_path / "langgraph"
 
     def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
-        (target / "agent" / "mason").mkdir(parents=True)
+        (target / "agent").mkdir(parents=True)
         (target / "agent" / "agent.py").write_text("USER_AGENT = True\n")
-        (target / "agent" / "mason" / "mcp_runtime.py").write_text("OLD = True\n")
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
         result = CliRunner().invoke(
@@ -151,13 +149,10 @@ def test_init_installs_static_manifest_runtime_without_editing_langgraph_agent_c
 
     assert result.exit_code == 0, result.output
     assert (dest / "agent" / "agent.py").read_text() == "USER_AGENT = True\n"
-    ast.parse((dest / "agent" / "mason" / "tool_manifest.py").read_text())
-    runtime = (dest / "agent" / "mason" / "mcp_runtime.py").read_text()
-    ast.parse(runtime)
-    assert 'load_tools(expected_framework="langgraph")' in runtime
+    assert not (dest / "agent" / "mason").exists()
 
 
-def test_init_openai_records_manifest_without_installing_runtime_adapter(tmp_path: pathlib.Path):
+def test_init_openai_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):
     dest = tmp_path / "openai"
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):

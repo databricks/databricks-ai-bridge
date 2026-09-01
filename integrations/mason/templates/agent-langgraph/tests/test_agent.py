@@ -10,7 +10,7 @@ from uuid import UUID
 
 import pytest
 from agent.agent import _serialize_events, _session_id
-from agent.mason.session_store import checkpointer, thread_config
+from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from fastapi.testclient import TestClient
 from langchain_core.tools import BaseTool
@@ -88,7 +88,7 @@ def test_thread_config_uses_configured_actor(monkeypatch):
 
 def test_checkpointer_is_shared(monkeypatch):
     # In-memory by default (no AGENT_SESSION_STORE); built once and shared so multi-turn works.
-    import agent.mason.session_store as ss
+    import databricks_mason.langgraph.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)  # reset the process-wide saver
     assert checkpointer() is checkpointer()
@@ -97,7 +97,7 @@ def test_checkpointer_is_shared(monkeypatch):
 def test_session_store_selects_durable_saver(monkeypatch):
     # AGENT_SESSION_STORE must route to the durable Session Store saver, not stay in-memory. Stub the
     # REST client so it stays hermetic (no network); the saver builds without touching the API.
-    import agent.mason.session_store as ss
+    import databricks_mason.langgraph.session_store as ss
 
     monkeypatch.setattr(ss, "_saver", None)
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")

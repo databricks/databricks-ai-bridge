@@ -15,7 +15,6 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
-from importlib import resources
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 from typing import Optional
@@ -75,30 +74,6 @@ def _template_ref(framework: str) -> str:
     if "dev" in installed or "+" in installed:
         return default_ref
     return f"{_RELEASE_TAG_PREFIX}{installed}"
-
-
-def _runtime_template(name: str) -> str:
-    try:
-        return (
-            resources.files("databricks_mason")
-            .joinpath("templates")
-            .joinpath(name)
-            .read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError) as exc:
-        raise AgentCliError(f"Could not read packaged runtime template {name!r}.") from exc
-
-
-def _install_runtime_plumbing(project: pathlib.Path) -> None:
-    """Install template-owned runtime seams without modifying user agent code."""
-    mason = project / "agent" / "mason"
-    mason.mkdir(parents=True, exist_ok=True)
-    (mason / "tool_manifest.py").write_text(
-        _runtime_template("tool_manifest_runtime.py"), encoding="utf-8"
-    )
-    (mason / "mcp_runtime.py").write_text(
-        _runtime_template("mcp_runtime_langgraph.py"), encoding="utf-8"
-    )
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
@@ -246,8 +221,6 @@ def init(
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
     AgentProject.create(dest, framework=framework).write()
-    if framework == "langgraph":
-        _install_runtime_plumbing(dest)
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 
