@@ -26,16 +26,6 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
-  mason/               #   plumbing that will move into Databricks SDKs later — rarely edited
-    session_store.py   #     LangGraph checkpointer: in-memory by default; DatabricksSessionStoreSaver when AGENT_SESSION_STORE is set
-    session_store_client.py #  vendored REST client for the managed Session Store (used by the durable saver)
-    memory.py          #     remember / recall — memory_tools() returns them when AGENT_MEMORY_STORE is set
-    tracing.py         #     MLflow tracing setup (on only when a destination + an experiment are set)
-    mcp_runtime.py     #     loads tools from the servers in mcps.build_mcp_servers()
-    background.py      #     BackgroundRuns: in-memory store for background runs; swap for a durable one
-    durability.py      #     attempt, heartbeat, and ownership event log for the stop/start demo
-    recovery.py        #     checkpointed tool sequence that resumes after a process restart
-    long_running.py    #     deterministic tool_step_1 through tool_step_4 demo tools
 runtime/               # the HTTP surface — SDK-agnostic; rarely edited
   runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
   main.py              #   entry point: loads config, builds the app, runs uvicorn
@@ -44,8 +34,9 @@ tests/
 ```
 
 You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session checkpointer,
-tracing, MCP tool loading, background store) lives in the `databricks-mason` package under
-`databricks_mason.runtime`, so the template ships only your agent code. `runtime/runtime.py` is the
+tracing, MCP tool loading, background store) lives in the `databricks-mason` package —
+framework-neutral pieces under `databricks_mason.runtime`, LangGraph-specific ones under
+`databricks_mason.langgraph` — so the template ships only your agent code. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
 package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
@@ -241,9 +232,9 @@ and durable event replay.
   human-in-the-loop section above); empty the dict to disable gating.
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
 - **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
-  checkpointer lives in `databricks_mason/runtime/session_store.py`.
+  checkpointer lives in `databricks_mason/langgraph/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
-  then includes the `remember`/`recall` tools from `databricks_mason/runtime/memory.py` (persist/search facts across
+  then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
@@ -299,7 +290,7 @@ By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`)
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
 Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
-`databricks_mason/runtime/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
+`databricks_mason/langgraph/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
 `BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
 through the managed Session Store **REST API** — no database the app connects to directly. Full graph
 state — including paused HITL runs (pending writes + interrupts) — is durable across restarts and

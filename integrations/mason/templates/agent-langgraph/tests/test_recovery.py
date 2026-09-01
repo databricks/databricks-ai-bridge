@@ -2,8 +2,8 @@ import asyncio
 from contextlib import suppress
 
 import pytest
-from databricks_mason.runtime.long_running import process_id
-from databricks_mason.runtime.recovery import build_recovery_graph, recovery_config
+from databricks_mason.langgraph.long_running import process_id
+from databricks_mason.langgraph.recovery import build_recovery_graph, recovery_config
 from langgraph.checkpoint.memory import InMemorySaver  # ty: ignore[unresolved-import]
 
 

@@ -78,7 +78,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
-| Change the session checkpointer | `databricks_mason/runtime/session_store.py` |
+| Change the session checkpointer | `databricks_mason/langgraph/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
 | Change the background-run store (make it durable) | `databricks_mason/runtime/background.py` |
 | Add a test | `tests/` (hermetic; gate model calls on a workspace profile — see `test_agent.py`) |
@@ -100,7 +100,7 @@ a file to `agent/tools/`.
 
 ## Sessions & durability
 
-- Default: `databricks_mason/runtime/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
+- Default: `databricks_mason/langgraph/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.
 - The `__Host-databricks-app-router` cookie is both the Apps routing key and the session id. The
   runtime injects it into the internal handler request; body `session_id` values are ignored.
