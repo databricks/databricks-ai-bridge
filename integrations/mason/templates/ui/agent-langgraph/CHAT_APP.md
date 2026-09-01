@@ -1,7 +1,8 @@
 # Mason LangGraph Chat App Overlay
 
-`mason init --framework langgraph --enable-chat-app` copies this framework-specific overlay after
-the base `agent-langgraph` template. It is intentionally not a post-generation mutation command.
+`mason init --framework langgraph` copies this framework-specific overlay after the base
+`agent-langgraph` template (it is included by default; `--disable-chat-app` opts out). It is
+intentionally not a post-generation mutation command.
 
 ## Installed files
 

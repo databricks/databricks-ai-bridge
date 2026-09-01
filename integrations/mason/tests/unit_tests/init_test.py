@@ -203,7 +203,36 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     assert f.call_args.args[1] == "wip"
 
 
-def test_init_enable_chat_app_adds_langgraph_overlay(tmp_path: pathlib.Path):
+def test_init_langgraph_includes_chat_app_by_default(tmp_path: pathlib.Path):
+    dest = tmp_path / "chat"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
+    assert "Chat app" in result.output
+
+
+def test_init_disable_chat_app_omits_langgraph_overlay(tmp_path: pathlib.Path):
+    dest = tmp_path / "api-only"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", "--disable-chat-app", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[4] == ()  # no chat-app overlay
+    assert "Chat app" not in result.output
+
+
+def test_init_enable_chat_app_flag_is_accepted_no_op(tmp_path: pathlib.Path):
+    # Deprecated flag: kept so existing invocations don't break; chat app is on by default anyway.
     dest = tmp_path / "chat"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
@@ -214,20 +243,17 @@ def test_init_enable_chat_app_adds_langgraph_overlay(tmp_path: pathlib.Path):
 
     assert result.exit_code == 0, result.output
     assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
-    assert "Chat app" in result.output
 
 
-def test_init_enable_chat_app_rejects_unsupported_framework(tmp_path: pathlib.Path):
-    with mock.patch.object(init_mod, "_fetch_template") as fetched:
+def test_init_openai_has_no_chat_app(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
-            init_mod.init,
-            ["--framework", "openai", "--enable-chat-app", str(tmp_path / "chat")],
-            obj=_Ctx(),
+            init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx(output="json")
         )
-
-    assert result.exit_code != 0
-    assert "not available" in result.output
-    fetched.assert_not_called()
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[4] == ()  # openai framework has no chat-app overlay
+    assert json.loads(result.output)["chat_app_enabled"] is False
 
 
 def test_init_json_output(tmp_path: pathlib.Path):
@@ -241,7 +267,7 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["framework"] == "langgraph"
     assert payload["template"] == "agent-langgraph"
     assert payload["directory"] == str(dest)
-    assert payload["chat_app_enabled"] is False
+    assert payload["chat_app_enabled"] is True
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):

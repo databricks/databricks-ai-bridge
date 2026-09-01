@@ -164,9 +164,15 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     "immediately (defaults to the profile from -p / `mason login`).",
 )
 @click.option(
+    "--disable-chat-app",
+    is_flag=True,
+    help="Scaffold the API-only backend, without the browser chat app and stop/start durability demo.",
+)
+@click.option(
     "--enable-chat-app",
     is_flag=True,
-    help="Include the framework-specific browser chat app and stop/start durability demo.",
+    hidden=True,
+    help="Deprecated: the chat app is included by default; this flag is a no-op.",
 )
 @click.option("--repo", default=None, help="Override the git repo URL to fetch the template from.")
 @click.option("--ref", default=None, help="Override the branch, tag, or ref to fetch.")
@@ -176,6 +182,7 @@ def init(
     directory: Optional[str],
     framework: str,
     profile: Optional[str],
+    disable_chat_app: bool,
     enable_chat_app: bool,
     repo: Optional[str],
     ref: Optional[str],
@@ -189,11 +196,9 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
-    if enable_chat_app and framework not in _CHAT_APP_TEMPLATES:
-        raise AgentCliError(
-            f"--enable-chat-app is not available for framework '{framework}'.",
-            hint="Use --framework langgraph.",
-        )
+    # The chat app is included by default for frameworks that have one; --disable-chat-app opts out.
+    # (--enable-chat-app is a deprecated no-op kept for back-compat.)
+    chat_app_enabled = framework in _CHAT_APP_TEMPLATES and not disable_chat_app
 
     spec = _TEMPLATES[framework]
     template_path = spec["path"]
@@ -209,7 +214,7 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if enable_chat_app else ()
+    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled else ()
     _fetch_template(
         repo or spec["repo"],
         ref or _template_ref(framework),
@@ -230,14 +235,14 @@ def init(
                 "framework": framework,
                 "template": template_name,
                 "directory": str(dest),
-                "chat_app_enabled": enable_chat_app,
+                "chat_app_enabled": chat_app_enabled,
                 "env_profile": env_profile if wrote_env else None,
             }
         )
         return
 
     fields = {"Framework": framework, "Directory": str(dest)}
-    if enable_chat_app:
+    if chat_app_enabled:
         fields["Chat app"] = "enabled"
     steps = [f"cd {dest}"]
     if wrote_env:
@@ -250,7 +255,7 @@ def init(
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
     steps += ["mason dev        # run locally"]
-    if enable_chat_app:
+    if chat_app_enabled:
         steps.append("Open http://localhost:8000")
     steps.append(f"mason deploy <name> --source {dest}")
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)
