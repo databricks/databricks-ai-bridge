@@ -80,9 +80,7 @@ class LakebaseBackend:
 
 def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
     """Read the app's existing resources array (empty list if it can't be read)."""
-    result = _databricks(
-        ["apps", "get", app, "-o", "json"], profile, capture=True, check=False
-    )
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
     if result.returncode != 0:
         return []
     try:

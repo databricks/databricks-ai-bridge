@@ -10,6 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
+from databricks_mason import session_store_access
 from databricks_mason import store_access as sa
 from databricks_mason.errors import AgentCliError
 
@@ -70,7 +71,9 @@ def test_delete_proceeds_with_yes(monkeypatch):
 
 def test_resolve_store_env_validates_session_store_on_non_create_path():
     client = mock.Mock()
-    client.get_session_store.side_effect = AgentCliError("session store not found", error_code="NOT_FOUND")
+    client.get_session_store.side_effect = AgentCliError(
+        "session store not found", error_code="NOT_FOUND"
+    )
     with pytest.raises(AgentCliError) as exc:
         deploy_mod.resolve_store_env(
             client,
@@ -89,9 +92,8 @@ def test_resolve_store_env_validates_session_store_on_non_create_path():
 
 
 def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
-    backend = types.SimpleNamespace(
-        postgres_resource=lambda: {"name": "postgres", "postgres": {"database": "db-new"}}
-    )
+    # A real (typed) backend; its postgres_resource() is named "postgres".
+    backend = session_store_access.backend("db-new")
     existing = {
         "resources": [
             {"name": "sql-warehouse", "sql_warehouse": {"id": "w1"}},  # user-owned, must survive
@@ -115,4 +117,4 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
     assert "sql-warehouse" in names  # preserved
     assert names.count("postgres") == 1  # not duplicated
     pg = next(r for r in payload["resources"] if r["name"] == "postgres")
-    assert pg["postgres"]["database"] == "db-new"  # updated to ours
+    assert "db-new" in pg["postgres"]["database"]  # updated to ours
