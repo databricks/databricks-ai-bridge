@@ -10,6 +10,7 @@ from typing import Optional
 
 import click
 
+from databricks_mason import errors
 from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.client import MasonClient
 from databricks_mason.deploy import deploy, deployments
@@ -56,6 +57,8 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
     or rely on the SDK's default resolution).
     """
+    # Let errors render to match the selected output mode (JSON errors for -o json).
+    errors.set_output_mode(output)
     ctx.obj = CliContext(profile=profile or load_default_profile(), output=output)
 
 
