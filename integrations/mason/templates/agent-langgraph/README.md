@@ -135,7 +135,8 @@ poll reaches the same replica, but the run itself does not survive a restart.
 
 ### Chat app state APIs
 
-When initialized with `mason init --framework langgraph --enable-chat-app`, the browser also calls:
+When initialized with the chat app (the default for `mason init --framework langgraph`, unless
+`--disable-chat-app` is passed), the browser also calls:
 
 - `POST /api/session/new` to generate a fresh session id and replace the routing cookie. The request
   has no body-level `session_id`; the response includes the new and previous ids.
