@@ -11,8 +11,16 @@ class _Client:
     def __init__(self):
         self.calls = []
 
-    def create_memory_entry(self, store, actor_id, path, content=None, description=None,
-                            session_id=None, source_type=None):
+    def create_memory_entry(
+        self,
+        store,
+        actor_id,
+        path,
+        content=None,
+        description=None,
+        session_id=None,
+        source_type=None,
+    ):
         self.calls.append({"store": store, "path": path, "content": content})
         return {"name": f"memory-stores/{store}/entries/e", "path": path}
 
@@ -46,8 +54,17 @@ def test_content_and_content_file_are_mutually_exclusive(tmp_path):
     result = CliRunner().invoke(
         entries,
         [
-            "create", "--store", "s", "--actor-id", "a", "--path", "/p.md",
-            "--content", "inline", "--content-file", str(f),
+            "create",
+            "--store",
+            "s",
+            "--actor-id",
+            "a",
+            "--path",
+            "/p.md",
+            "--content",
+            "inline",
+            "--content-file",
+            str(f),
         ],
         obj=_Ctx(client),
     )
@@ -60,8 +77,17 @@ def test_missing_content_file_is_rejected_by_click():
     client = _Client()
     result = CliRunner().invoke(
         entries,
-        ["create", "--store", "s", "--actor-id", "a", "--path", "/p.md",
-         "--content-file", "/no/such/file.md"],
+        [
+            "create",
+            "--store",
+            "s",
+            "--actor-id",
+            "a",
+            "--path",
+            "/p.md",
+            "--content-file",
+            "/no/such/file.md",
+        ],
         obj=_Ctx(client),
     )
     assert result.exit_code != 0  # click validates existence

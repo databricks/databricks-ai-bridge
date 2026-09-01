@@ -209,7 +209,9 @@ def _render_entry_detail(entry: dict) -> None:
 @click.option("--store", required=True, help="Store id or resource name.")
 @click.option("--actor-id", required=True)
 @click.option("--path", required=True, help="Absolute path, e.g. /preferences/style.md.")
-@click.option("--content", default=None, help="Entry content (inline). Use --content-file for large content.")
+@click.option(
+    "--content", default=None, help="Entry content (inline). Use --content-file for large content."
+)
 @click.option(
     "--content-file",
     "content_file",
