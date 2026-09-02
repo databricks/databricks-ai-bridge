@@ -81,7 +81,7 @@ def test_bound_store_create_memory() -> None:
     api.create_memory_entry.return_value = memory_payload()
     store = client.memory_stores.get(STORE_ID)
 
-    memory = store.create_memory(
+    memory = store.create(
         actor_id="alice",
         session_id="s1",
         path="/m/p.md",
@@ -110,7 +110,7 @@ def test_list_memories_consumes_pages() -> None:
     ]
     store = client.memory_stores.get(STORE_ID)
 
-    memories = store.list_memories(actor_id="alice", path_prefix="/m/", page_size=10)
+    memories = store.list(actor_id="alice", path_prefix="/m/", page_size=10)
 
     assert [memory.id for memory in memories] == [MEMORY_ID, "second"]
     assert api.list_memory_entries.call_args_list[1].kwargs["page_token"] == "p2"
@@ -123,7 +123,7 @@ def test_get_update_and_delete_memory() -> None:
     api.update_memory_entry.return_value = memory_payload(content="updated")
     store = client.memory_stores.get(STORE_ID)
 
-    memory = store.get_memory(MEMORY_ID, read_mask="name,content")
+    memory = store.get(MEMORY_ID, read_mask="name,content")
     updated = memory.update(content="updated")
     updated.delete()
 
@@ -150,7 +150,7 @@ def test_search_preserves_scores_and_translates_limit() -> None:
     }
     store = client.memory_stores.get(STORE_ID)
 
-    results = store.search_memories(actor_id="alice", query="prefs", limit=10)
+    results = store.search(actor_id="alice", query="prefs", limit=10)
 
     assert results[0].memory.id == MEMORY_ID
     assert results[0].score == 0.9
@@ -171,7 +171,7 @@ def test_search_supports_legacy_response_shape() -> None:
     api.search_memory_entries.return_value = {"managed_memory_entries": [memory_payload()]}
     store = client.memory_stores.get(STORE_ID)
 
-    results = store.search_memories(actor_id="alice", query="prefs", limit=10)
+    results = store.search(actor_id="alice", query="prefs", limit=10)
 
     assert results[0].memory.id == MEMORY_ID
     assert results[0].score is None
@@ -184,4 +184,4 @@ def test_search_rejects_out_of_range_limit(limit: int) -> None:
     store = client.memory_stores.get(STORE_ID)
 
     with pytest.raises(ValueError, match="limit"):
-        store.search_memories(actor_id="alice", query="q", limit=limit)
+        store.search(actor_id="alice", query="q", limit=limit)

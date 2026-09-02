@@ -104,7 +104,7 @@ class SessionStore:
     def delete(self) -> None:
         self._client._delete_store(self)
 
-    def create_session(
+    def create(
         self,
         *,
         actor_id: str,
@@ -120,7 +120,7 @@ class SessionStore:
             metadata=metadata,
         )
 
-    def list_sessions(
+    def list(
         self,
         *,
         page_size: Optional[int] = None,
@@ -134,7 +134,7 @@ class SessionStore:
             order_by=order_by,
         )
 
-    def get_session(self, session_id: str) -> Session:
+    def get(self, session_id: str) -> Session:
         return self._client._get_session(self, session_id=session_id)
 
 

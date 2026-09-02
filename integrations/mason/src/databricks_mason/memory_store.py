@@ -90,7 +90,7 @@ class MemoryStore:
     def delete(self) -> None:
         self._client._delete_store(self)
 
-    def create_memory(
+    def create(
         self,
         *,
         actor_id: str,
@@ -110,7 +110,7 @@ class MemoryStore:
             source_type=source_type,
         )
 
-    def list_memories(
+    def list(
         self,
         *,
         actor_id: str,
@@ -128,7 +128,7 @@ class MemoryStore:
             read_mask=read_mask,
         )
 
-    def get_memory(
+    def get(
         self,
         memory_id: str,
         *,
@@ -136,7 +136,7 @@ class MemoryStore:
     ) -> Memory:
         return self._client._get_memory(self, memory_id=memory_id, read_mask=read_mask)
 
-    def search_memories(
+    def search(
         self,
         *,
         actor_id: str,

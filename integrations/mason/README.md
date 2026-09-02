@@ -65,7 +65,7 @@ from databricks_mason import MasonClient
 mason = MasonClient(WorkspaceClient(profile="my-workspace"))
 
 session_store = mason.session_stores.create("support-agent-sessions")
-session = session_store.create_session(actor_id="customer-123", session_id="case-456")
+session = session_store.create(actor_id="customer-123", session_id="case-456")
 session.append_items(
     [
         {"type": "message", "role": "user", "content": "I need help with my cluster."},
@@ -74,12 +74,12 @@ session.append_items(
 )
 
 memory_store = mason.memory_stores.create("coding-agent-memory")
-memory = memory_store.create_memory(
+memory = memory_store.create(
     actor_id="alice",
     path="/preferences/style.md",
     content="The user prefers concise answers.",
 )
-results = memory_store.search_memories(
+results = memory_store.search(
     actor_id="alice",
     query="response preferences",
     limit=10,
@@ -90,11 +90,10 @@ memory.delete()
 
 The root collections manage stores: `mason.memory_stores.create/get/list` and
 `mason.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.create_memory()`,
-`memory_store.get_memory("memory-id")`, `memory_store.list_memories()`,
-`session_store.create_session()`, `session_store.get_session("session-id")`, and
-`session_store.list_sessions()`. Returned memories, sessions, and stores own their
-`update()` and `delete()` operations.
+contents, such as `memory_store.create()`, `memory_store.get("memory-id")`,
+`memory_store.list()`, and `memory_store.search()`, or `session_store.create()`,
+`session_store.get("session-id")`, and `session_store.list()`. Returned memories,
+sessions, and stores own their `update()` and `delete()` operations.
 
 All `list()` methods return iterators that automatically consume server pages. List
 `page_size` and search `limit` values must be between 1 and 100. `session.list_items()`

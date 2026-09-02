@@ -85,9 +85,9 @@ def test_create_get_and_list_sessions() -> None:
     api.get_session.return_value = session_payload()
     store = client.session_stores.get(SESSION_STORE)
 
-    created = store.create_session(actor_id="customer-123", session_id=SESSION_ID)
-    sessions = list(store.list_sessions(page_size=10))
-    fetched = store.get_session(SESSION_ID)
+    created = store.create(actor_id="customer-123", session_id=SESSION_ID)
+    sessions = list(store.list(page_size=10))
+    fetched = store.get(SESSION_ID)
 
     assert isinstance(created, Session)
     assert created.store_name == SESSION_STORE
@@ -115,7 +115,7 @@ def test_update_and_delete_session() -> None:
     api.get_session_store.return_value = session_store_payload()
     api.get_session.return_value = session_payload()
     api.update_session.return_value = session_payload(metadata={"status": "resolved"})
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
     updated = session.update(metadata={"status": "resolved"})
     updated.delete()
@@ -133,7 +133,7 @@ def test_delete_session_with_force() -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
     api.get_session.return_value = session_payload()
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
     session.delete(force=True)
 
@@ -147,7 +147,7 @@ def test_fork_unwraps_session_field() -> None:
     api.fork_session.return_value = {
         "session": session_payload(session_id="fork-1", actor_id="agent")
     }
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
     forked = session.fork(actor_id="agent", up_to_item_id="item-1", session_id="fork-1")
 
@@ -172,7 +172,7 @@ def test_item_operations_and_pagination() -> None:
         {"session_items": [item_payload(item_id="item-2")]},
     ]
     api.pop_session_item.side_effect = [{"item": item_payload(item_id="item-2")}, {}]
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
     user_data = {"type": "message", "role": "user", "content": "Help"}
 
     appended = session.append_items([user_data])
@@ -196,7 +196,7 @@ def test_append_items_requires_an_item() -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
     api.get_session.return_value = session_payload()
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
     with pytest.raises(ValueError, match="at least one item"):
         session.append_items([])
@@ -207,7 +207,7 @@ def test_list_items_rejects_out_of_range_page_size(page_size: int) -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
     api.get_session.return_value = session_payload()
-    session = client.session_stores.get(SESSION_STORE).get_session(SESSION_ID)
+    session = client.session_stores.get(SESSION_STORE).get(SESSION_ID)
 
     with pytest.raises(ValueError, match="page_size"):
         list(session.list_items(page_size=page_size))
