@@ -30,7 +30,7 @@ def test_framework_specs_have_repo_ref_path():
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
-    assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-basic"
+    assert init_mod._TEMPLATES["openai"]["path"] == "integrations/mason/templates/agent-openai"
     assert (
         init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
     )
@@ -38,14 +38,14 @@ def test_framework_specs_have_repo_ref_path():
         init_mod._CHAT_APP_TEMPLATES["langgraph"]
         == "integrations/mason/templates/ui/agent-langgraph"
     )
+    assert init_mod._CHAT_APP_TEMPLATES["openai"] == "integrations/mason/templates/ui/agent-openai"
 
 
 def test_template_ref_pins_versioned_template_to_release_tag(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(init_mod, "_installed_version", lambda _: "0.3.0")
-    # A released CLI fetches the template tagged for its own version.
+    # A released CLI fetches each versioned template tagged for its own version.
     assert init_mod._template_ref("langgraph") == "databricks-mason-v0.3.0"
-    # An unversioned framework (different repo, not tagged in lockstep) keeps its default ref.
-    assert init_mod._template_ref("openai") == "main"
+    assert init_mod._template_ref("openai") == "databricks-mason-v0.3.0"
 
 
 @pytest.mark.parametrize("installed", ["0.1.0.dev0", "0.2.0+local"])
@@ -66,7 +66,7 @@ def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
-    dest = tmp_path / "agent-openai-basic"
+    dest = tmp_path / "agent-openai"
 
     def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
@@ -78,9 +78,9 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     fetched.assert_called_once()
     # framework's repo + path passed through to the fetch
     assert fetched.call_args.args[0] == init_mod._TEMPLATES["openai"]["repo"]
-    assert fetched.call_args.args[2] == "agent-openai-basic"
+    assert fetched.call_args.args[2] == "integrations/mason/templates/agent-openai"
     assert (dest / "app.yaml").exists()
-    assert "agent-openai-basic" in result.output
+    assert "agent-openai" in result.output
 
 
 def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
@@ -245,15 +245,28 @@ def test_init_enable_chat_app_flag_is_accepted_no_op(tmp_path: pathlib.Path):
     assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
 
 
-def test_init_openai_has_no_chat_app(tmp_path: pathlib.Path):
+def test_init_openai_includes_chat_app_by_default(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
             init_mod.init, ["--framework", "openai", str(dest)], obj=_Ctx(output="json")
         )
     assert result.exit_code == 0, result.output
-    assert f.call_args.args[4] == ()  # openai framework has no chat-app overlay
-    assert json.loads(result.output)["chat_app_enabled"] is False
+    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-openai",)
+    assert json.loads(result.output)["chat_app_enabled"] is True
+
+
+def test_init_disable_chat_app_omits_openai_overlay(tmp_path: pathlib.Path):
+    dest = tmp_path / "api-only"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", "--disable-chat-app", str(dest)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[4] == ()  # no chat-app overlay
+    assert "Chat app" not in result.output
 
 
 def test_init_json_output(tmp_path: pathlib.Path):

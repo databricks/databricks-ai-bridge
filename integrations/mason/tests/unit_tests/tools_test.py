@@ -104,15 +104,30 @@ def test_add_mcp_and_uc_function_write_typed_manifest_records(tmp_path: pathlib.
         ["add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
         ["add", "mcp", "system.ai.web_search"],
         ["add", "uc-function", "main.tools.lookup_ticket"],
-        ["add", "python", "lookup-ticket"],
     ],
 )
-def test_add_rejects_framework_without_runtime_adapter(tmp_path: pathlib.Path, command: list[str]):
+def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, command: list[str]):
+    # mcp / uc_function / sandbox are framework-neutral agent.toml entries; adding them must succeed
+    # regardless of framework (every runtime adapter reads them from the manifest).
     project = _project(tmp_path, framework="openai")
 
     result = CliRunner().invoke(
         tools,
         [*command, "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools, "expected the tool to be written to the manifest"
+
+
+def test_add_python_rejects_non_langgraph_framework(tmp_path: pathlib.Path):
+    # `add python` scaffolds a framework-native tool file; only langgraph is supported so far.
+    project = _project(tmp_path, framework="openai")
+
+    result = CliRunner().invoke(
+        tools,
+        ["add", "python", "lookup-ticket", "--source", str(project)],
         obj=_Ctx(),
     )
 

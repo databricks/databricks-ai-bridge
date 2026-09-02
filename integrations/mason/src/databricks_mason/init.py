@@ -27,16 +27,17 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
-# (The two basic templates currently live in different repos; this keeps each pointed at its own.)
+# Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
+_MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {
-        "repo": "https://github.com/databricks/app-templates.git",
+        "repo": _MASON_REPO,
         "ref": "main",
-        "path": "agent-openai-basic",
+        "path": "integrations/mason/templates/agent-openai",
     },
     "langgraph": {
-        "repo": "https://github.com/databricks/databricks-ai-bridge.git",
+        "repo": _MASON_REPO,
         "ref": "main",
         "path": "integrations/mason/templates/agent-langgraph",
     },
@@ -46,13 +47,14 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 # they produce pins `databricks-mason[runtime]` at this package's version, so init fetches the
 # template tagged for the installed CLI (see `_template_ref`) rather than `main`. That keeps a
 # user's scaffold from outrunning the `databricks-mason` they have installed.
-_VERSIONED_TEMPLATES = frozenset({"langgraph"})
+_VERSIONED_TEMPLATES = frozenset({"langgraph", "openai"})
 
 # The release workflow tags each published version `databricks-mason-v<version>`.
 _RELEASE_TAG_PREFIX = "databricks-mason-v"
 
 _CHAT_APP_TEMPLATES = {
     "langgraph": "integrations/mason/templates/ui/agent-langgraph",
+    "openai": "integrations/mason/templates/ui/agent-openai",
 }
 
 
