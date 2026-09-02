@@ -462,24 +462,6 @@ async function refreshSessionView({ hydrateChat = false } = {}) {
   await refreshSessions();
 }
 
-async function recordSessionItems(items) {
-  if (!state.config?.session.managed || !items.length) return;
-  try {
-    const sessionId = await ensureManagedSession();
-    const response = await fetch("/api/demo/session/items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
-    });
-    const result = await jsonResponse(response);
-    addEvent("session.items.append", result);
-    await refreshSessionView();
-  } catch (error) {
-    stateMessage(elements.sessionItems, error instanceof Error ? error.message : String(error), "error");
-    addEvent("session.error", { message: String(error) });
-  }
-}
-
 async function listMemoryEntries() {
   if (!state.config?.memory.enabled) return;
   stateMessage(elements.memoryResults, "Loading memory entries…", "loading");
@@ -598,16 +580,8 @@ async function sendText(text, mode = state.mode) {
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
     await dispatch({ input: [{ role: "user", content }] }, mode);
-    const items = [{ role: "user", content, transport: mode, instance_id: state.instanceId }];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: mode,
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    // The agent persists the turn to its own Session; refresh the panel to show it (no client write).
+    await refreshSessionView();
     return state.lastAssistantText;
   } catch (error) {
     finishDraft();
@@ -632,18 +606,8 @@ async function resume(decision) {
   setBusy(true, "Resuming");
   try {
     await dispatch(payload, "streaming");
-    const items = [
-      { role: "human_decision", content: decision, instance_id: state.instanceId },
-    ];
-    if (state.lastAssistantText) {
-      items.push({
-        role: "assistant",
-        content: state.lastAssistantText,
-        transport: "streaming",
-        instance_id: state.instanceId,
-      });
-    }
-    await recordSessionItems(items);
+    // The agent persists the resumed turn to its own Session; refresh the panel (no client write).
+    await refreshSessionView();
   } catch (error) {
     appendError(error);
   } finally {
