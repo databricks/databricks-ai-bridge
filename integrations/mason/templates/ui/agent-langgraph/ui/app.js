@@ -788,7 +788,7 @@ async function loadConfig() {
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
       ? `${config.memory.store} · actor ${config.memory.actor}`
-      : "Deploy with --with-memory-store to expose managed entries and agent memory tools.";
+      : "Deploy with --memory to expose managed entries and agent memory tools.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history

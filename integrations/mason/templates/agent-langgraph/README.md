@@ -237,9 +237,9 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-langgraph --source .
 ```
 
-Add `--with-memory-store <name> --with-session-store <name> --actor-id <actor>` to wire managed
-state. Mason provisions or resolves the stores, injects the store/actor env vars, and deploys the
-App.
+Add `--memory <name> --session <name> --actor-id <actor>` to wire managed state. Mason
+provisions or resolves the stores (creating them if missing), injects the store/actor env vars, and
+deploys the App.
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
