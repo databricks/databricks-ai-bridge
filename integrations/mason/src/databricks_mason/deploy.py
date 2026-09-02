@@ -210,9 +210,10 @@ def resolve_store_env(
     """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
 
     Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
-    way. With `create_stores`, missing stores are created (idempotent); otherwise they must already
-    exist. The memory store resolves to its bare id (the runtime re-adds the `memory-stores/` prefix
-    when building the entries URL); the session store and trace destination are used verbatim.
+    way. With `create_stores` (the default), missing stores are created (idempotent); when it is off
+    they must already exist. The memory store resolves to its bare id (the runtime re-adds the
+    `memory-stores/` prefix when building the entries URL); the session store and trace destination
+    are used verbatim.
     """
     env: dict[str, str] = {}
     if memory_store:
@@ -224,7 +225,8 @@ def resolve_store_env(
             store = _resolve_memory_store(client, memory_store)
             if store is None:
                 raise AgentCliError(
-                    f"Memory store '{memory_store}' does not exist (create it with --create-stores)."
+                    f"Memory store '{memory_store}' does not exist "
+                    "(drop --no-create-stores to create it)."
                 )
         store_name = field(store, "name") or memory_store
         env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
@@ -238,7 +240,7 @@ def resolve_store_env(
             except AgentCliError as exc:
                 raise AgentCliError(
                     f"Session store '{session_store}' does not exist "
-                    "(create it with --create-stores).",
+                    "(drop --no-create-stores to create it).",
                     error_code=exc.error_code,
                 ) from exc
         env[_SESSION_ENV] = session_store
@@ -300,17 +302,19 @@ def _grant_store_access(
     "current directory.",
 )
 @click.option(
-    "--with-memory-store",
+    "--memory",
     "memory_store",
     default=None,
     help="Memory store display name to wire in via AGENT_MEMORY_STORE.",
 )
 @click.option(
-    "--with-session-store",
+    "--session-store",
     "session_store",
     default=None,
     help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
+@click.option("--with-memory-store", "memory_store", default=None, hidden=True)
+@click.option("--with-session-store", "session_store", default=None, hidden=True)
 @click.option(
     "--actor-id",
     default="agent",
@@ -330,9 +334,10 @@ def _grant_store_access(
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--create-stores",
-    is_flag=True,
-    help="Create the referenced stores if they don't exist (idempotent).",
+    "--create-stores/--no-create-stores",
+    default=True,
+    help="Create referenced stores if they don't exist (idempotent, default). "
+    "--no-create-stores requires them to already exist.",
 )
 @click.option(
     "--pip-index-url",

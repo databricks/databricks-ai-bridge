@@ -190,7 +190,7 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_MEMORY_STORE_ENV} by deploying with --with-memory-store.",
+            detail=f"Set {_MEMORY_STORE_ENV} by deploying with --memory.",
         )
 
 
@@ -198,7 +198,7 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_SESSION_STORE_ENV} by deploying with --with-session-store.",
+            detail=f"Set {_SESSION_STORE_ENV} by deploying with --session-store.",
         )
 
 
