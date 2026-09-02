@@ -19,7 +19,11 @@ from agent.tools import all_tools
 
 logger = logging.getLogger(__name__)
 
-MODEL = "databricks-gpt-5-2"
+# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
+# gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model your workspace
+# exposes — the demo chat app's picker lists what's available. `mason dev`'s chat UI can also
+# override this per request.
+MODEL = "system.ai.claude-sonnet-4-5"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -37,11 +41,12 @@ _pending_runs: dict[str, RunState] = {}
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
     _check_databricks_auth()
-    # Route the Agents SDK's default OpenAI client at the Databricks model endpoint (account-host
-    # routing and auth handled by the SDK), so `Agent(model=MODEL)` resolves to a Databricks model.
+    # Route the Agents SDK's default OpenAI client at the Unity Catalog AI Gateway
+    # (`<host>/ai-gateway/mlflow/v1`; auth handled by the SDK), so `Agent(model=MODEL)` resolves a
+    # `system.ai.*` gateway model.
     from agents import set_default_openai_api, set_default_openai_client
 
-    set_default_openai_client(AsyncDatabricksOpenAI())
+    set_default_openai_client(AsyncDatabricksOpenAI(use_ai_gateway=True))
     set_default_openai_api("chat_completions")
     configure_tracing()
 
@@ -70,12 +75,16 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(mcp=None) -> Agent:
-    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers."""
+def create_agent(mcp=None, model: str | None = None) -> Agent:
+    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
+
+    ``model`` overrides the default serving endpoint (``MODEL``) for this build — the demo chat app's
+    model picker passes the selected endpoint per request; falls back to ``MODEL`` when unset.
+    """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        model=MODEL,
+        model=model or MODEL,
         tools=[*all_tools(), *memory_tools()],
         mcp_servers=mcp or [],
     )
@@ -125,7 +134,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
         # (mcps.py), then connect them for the life of the run.
         servers = await mcp_servers(build_mcp_servers())
         mcp = [await stack.enter_async_context(server) for server in servers]
-        agent = create_agent(mcp)
+        # `model` (optional) lets a client pick the serving endpoint for this turn (see the demo UI's
+        # model picker); it defaults to MODEL inside create_agent.
+        agent = create_agent(mcp, request.get("model"))
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new

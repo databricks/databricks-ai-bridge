@@ -116,10 +116,12 @@ def test_demo_ui_routes(monkeypatch):
     assert index.status_code == 200
     assert 'id="new-session"' in index.text
     assert 'id="session-list"' in index.text
+    assert 'id="model-select"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
+    assert 'fetch("/api/demo/models"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
     styles = client.get("/ui-assets/styles.css").text
@@ -322,6 +324,58 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert (
         client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
     )
+
+
+class _FakeApiClient:
+    def do(self, method, path, query=None, body=None):
+        assert path == "/api/2.1/unity-catalog/model-services"
+        return {
+            "model_services": [
+                {
+                    "name": "model-services/system.ai.claude-sonnet-4-5",
+                    "supported_api_types": ["openai/v1/chat/completions"],
+                },
+                {
+                    "name": "model-services/system.ai.gte-large",
+                    "supported_api_types": ["openai/v1/embeddings"],
+                },
+                {
+                    "name": "model-services/system.ai.gpt-5-6-sol",
+                    "supported_api_types": ["openai/v1/chat/completions"],
+                },
+            ]
+        }
+
+
+class _FakeWorkspace:
+    api_client = _FakeApiClient()
+
+
+def test_models_route_lists_default_plus_gateway_models(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(ui, "workspace_client", lambda: _FakeWorkspace())
+
+    result = client.get("/api/demo/models").json()
+    # Default first (deduped), system.ai chat models kept & sorted, embeddings dropped.
+    assert result == {
+        "default": "system.ai.claude-sonnet-4-5",
+        "models": ["system.ai.claude-sonnet-4-5", "system.ai.gpt-5-6-sol"],
+    }
+
+
+def test_models_route_falls_back_to_default_when_listing_fails(monkeypatch):
+    client = _client(monkeypatch)
+
+    def _boom():
+        raise RuntimeError("cannot read system.ai")
+
+    monkeypatch.setattr(ui, "workspace_client", _boom)
+
+    result = client.get("/api/demo/models").json()
+    assert result == {
+        "default": "system.ai.claude-sonnet-4-5",
+        "models": ["system.ai.claude-sonnet-4-5"],
+    }
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

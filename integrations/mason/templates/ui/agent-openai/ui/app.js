@@ -14,6 +14,7 @@ const elements = {
   memoryMode: document.querySelector("#memory-mode-value"),
   memoryResults: document.querySelector("#memory-results"),
   memoryStatus: document.querySelector("#memory-status"),
+  modelSelect: document.querySelector("#model-select"),
   refreshMemory: document.querySelector("#refresh-memory"),
   newSession: document.querySelector("#new-session"),
   promptInput: document.querySelector("#prompt-input"),
@@ -45,6 +46,8 @@ const state = {
   lastAssistantText: "",
   managedSessionId: "",
   mode: "streaming",
+  model: "",
+  defaultModel: "",
   pendingInterrupt: null,
   sessionId: "",
 };
@@ -72,6 +75,7 @@ function setBusy(busy, label = "Working") {
   elements.chatLog.setAttribute("aria-busy", String(busy));
   elements.sendButton.disabled = busy;
   elements.promptInput.disabled = busy;
+  elements.modelSelect.disabled = busy;
   elements.approveAction.disabled = busy;
   elements.rejectAction.disabled = busy;
   elements.refreshMemory.disabled = busy || !state.config?.memory.enabled;
@@ -274,7 +278,8 @@ function invocationHeaders() {
 }
 
 function invocationPayload(payload) {
-  return { ...payload };
+  // The selected model rides the invocation body; the agent falls back to its default when absent.
+  return state.model ? { model: state.model, ...payload } : { ...payload };
 }
 
 async function jsonResponse(response) {
@@ -674,6 +679,29 @@ async function openSession(sessionId) {
   }
 }
 
+async function loadModels() {
+  try {
+    const response = await fetch("/api/demo/models", { cache: "no-store" });
+    const result = await jsonResponse(response);
+    state.defaultModel = result.default || "";
+    const models = result.models?.length ? result.models : state.defaultModel ? [state.defaultModel] : [];
+    elements.modelSelect.replaceChildren();
+    for (const name of models) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name === state.defaultModel ? `${name} (default)` : name;
+      elements.modelSelect.append(option);
+    }
+    // Keep the current pick if still offered; otherwise fall back to the default (or first model).
+    if (!models.includes(state.model)) state.model = state.defaultModel || models[0] || "";
+    elements.modelSelect.value = state.model;
+    elements.modelSelect.disabled = state.busy;
+    addEvent("runtime.models", result);
+  } catch (error) {
+    addEvent("models.error", { message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 async function loadConfig() {
   try {
     const response = await fetch("/api/demo/config", { cache: "no-store" });
@@ -707,6 +735,7 @@ async function loadConfig() {
         ? "Messages load from the in-process session for the current routing cookie."
         : "Session history is unavailable.";
     addEvent("runtime.config", config);
+    void loadModels();
     void refreshSessionView({ hydrateChat: true });
     if (config.memory.enabled) void listMemoryEntries();
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
@@ -760,6 +789,11 @@ elements.copySession.addEventListener("click", async () => {
   const label = elements.copySession.querySelector("span");
   label.textContent = "Copied";
   setTimeout(() => { label.textContent = "Copy"; }, 1200);
+});
+
+elements.modelSelect.addEventListener("change", () => {
+  state.model = elements.modelSelect.value;
+  addEvent("model.selected", { model: state.model });
 });
 
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));

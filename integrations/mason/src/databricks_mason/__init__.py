@@ -43,6 +43,7 @@ from databricks_mason.models import (
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
         configure_tracing,
+        list_ai_gateway_models,
         tag_session,
         workspace_client,
         workspace_headers,
@@ -72,12 +73,19 @@ __all__ = [
     "tag_session",
     "workspace_client",
     "workspace_headers",
+    "list_ai_gateway_models",
 ]
 
 # Neutral runtime helpers, re-exported lazily so the light CLI import path stays free of the agent
 # stack (mlflow, etc.). Everything else above is light and imported eagerly.
 _RUNTIME_REEXPORTS = frozenset(
-    {"configure_tracing", "tag_session", "workspace_client", "workspace_headers"}
+    {
+        "configure_tracing",
+        "tag_session",
+        "workspace_client",
+        "workspace_headers",
+        "list_ai_gateway_models",
+    }
 )
 
 
