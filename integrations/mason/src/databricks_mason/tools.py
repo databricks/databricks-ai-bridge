@@ -30,7 +30,18 @@ def _default_id(resource: str) -> str:
     return _identifier(resource.rsplit(".", 1)[-1])
 
 
+def _require_arg(value: str, label: str) -> str:
+    """Reject an empty/whitespace positional argument with a clear message."""
+    if value is None or not value.strip():
+        raise AgentCliError(f"A {label} is required.")
+    return value
+
+
 def _source_value(spec: ToolSpec) -> str:
+    # For a sandbox tool, the useful detail is the allowed scopes, not the (constant)
+    # 'system.ai.sandbox' service name that duplicates the KIND column.
+    if spec.source.kind == "sandbox" and spec.policy.downscope:
+        return ", ".join(s.resource for s in spec.policy.downscope)
     return spec.source.service or spec.source.function or spec.source.entrypoint or spec.source.kind
 
 
@@ -218,6 +229,7 @@ def add_mcp(
     source: pathlib.Path,
 ) -> None:
     """Bind a Databricks managed MCP SERVICE."""
+    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(
         obj,
         source.resolve(),
@@ -237,6 +249,7 @@ def add_uc_function(
     source: pathlib.Path,
 ) -> None:
     """Bind an existing three-part Unity Catalog function."""
+    _require_arg(function_name, "Unity Catalog function name (catalog.schema.function)")
     _add_spec(
         obj,
         source.resolve(),
@@ -253,6 +266,7 @@ def add_uc_function(
 @click.pass_obj
 def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
     """Scaffold a framework-native local Python tool and starter test."""
+    _require_arg(name, "tool name")
     project = AgentProject.load(source)
     _require_runtime_adapter(project)
     function = _identifier(name)
@@ -264,7 +278,19 @@ def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
     source_path = project.root / "agent" / "tools" / f"{function}.py"
     test_path = project.root / "tests" / "tools" / f"test_{function}.py"
     if existing == spec:
-        _emit_change(obj, project, spec, [])
+        # Manifest already declares this tool; recreate any scaffold files that went
+        # missing (deleted by the user) rather than silently no-op'ing.
+        missing = {}
+        if not source_path.exists():
+            missing[source_path] = _render_python_template(
+                _PYTHON_TOOL_TEMPLATE, module=function, function=function
+            )
+        if not test_path.exists():
+            missing[test_path] = _render_python_template(
+                _PYTHON_TEST_TEMPLATE, module=function, function=function
+            )
+        recreated = _write_new_files(missing) if missing else []
+        _emit_change(obj, project, spec, recreated)
         return
     if source_path.exists() or test_path.exists():
         existing_path = source_path if source_path.exists() else test_path
