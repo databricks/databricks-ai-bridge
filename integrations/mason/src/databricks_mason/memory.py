@@ -68,6 +68,16 @@ mason memory entries search --store {store_id} --actor-id alice --query "style"
     ]
 
 
+def _store_created(store: dict):
+    # The API returns RFC 3339 `create_time`; older responses used epoch-millis
+    # `created_at`. Read the current field, falling back to the legacy one.
+    return field(store, "create_time") or field(store, "created_at")
+
+
+def _store_updated(store: dict):
+    return field(store, "update_time") or field(store, "updated_at")
+
+
 def _render_store_detail(obj, store: dict) -> None:
     render.detail(
         _BREADCRUMB,
@@ -79,8 +89,8 @@ def _render_store_detail(obj, store: dict) -> None:
             "Owner": field(store, "owner_user_id"),
             "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
-            "Created": timefmt.absolute(field(store, "created_at")),
-            "Updated": timefmt.absolute(field(store, "updated_at")),
+            "Created": timefmt.absolute(_store_created(store)),
+            "Updated": timefmt.absolute(_store_updated(store)),
         },
         status="ACTIVE",
         snippets=_store_starter_code(obj, store),
@@ -123,8 +133,8 @@ def stores_list(obj, page_size, page_token) -> None:
         [
             field(s, "display_name"),
             _store_id(s),
-            timefmt.relative(field(s, "created_at")),
-            timefmt.relative(field(s, "updated_at")),
+            timefmt.relative(_store_created(s)),
+            timefmt.relative(_store_updated(s)),
             _truncate(field(s, "description"), 40),
         ]
         for s in items

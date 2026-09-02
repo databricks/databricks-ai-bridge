@@ -386,7 +386,16 @@ def items_pop(obj, store, session_id) -> None:
         render.emit_json(data)
         return
     item = field(data, "item")
-    render.success("Popped last item" if item else "Session was already empty")
+    if not item:
+        render.success("Session was already empty")
+        return
+    render.success(
+        "Popped last item",
+        fields={
+            "Item ID": field(item, "item_id"),
+            "Data": _truncate(field(item, "data"), 70),
+        },
+    )
 
 
 @items.command("clear")
