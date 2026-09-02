@@ -264,7 +264,8 @@ are never copied into the project or deployment.
 
 Only exact UC bindings are supported. There are no local, custom, or path-based sources, automatic
 discovery, or versions. The deployed Databricks App's service principal needs `USE_CATALOG` on the
-catalog, `USE_SCHEMA` on the schema, and `READ_SKILL` on the bound skill.
+catalog, `USE_SCHEMA` on the schema, and `READ_VOLUME` on the bound skill. The legacy `READ_SKILL`
+privilege does not authorize skill metadata or bundle reads.
 
 ## Test
 

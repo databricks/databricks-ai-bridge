@@ -117,7 +117,8 @@ reads referenced files with `read_skill_file`, which fetches them remotely from 
 
 Local, custom, and path-based skills, automatic discovery, and versions are not supported. A
 deployed App's service principal needs `USE_CATALOG` on the catalog, `USE_SCHEMA` on the schema,
-and `READ_SKILL` on the bound skill.
+and `READ_VOLUME` on the bound skill. The legacy `READ_SKILL` privilege does not authorize skill
+metadata or bundle reads.
 
 ## Sessions & durability
 

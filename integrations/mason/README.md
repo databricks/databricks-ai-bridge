@@ -189,7 +189,8 @@ both fetch from UC on demand. Mason does not copy skill bundles into the project
 
 This release supports UC sources on LangGraph only. Local, custom, and path-based skills,
 automatic discovery, versions, and script materialization are not supported. A deployed App's
-service principal needs `USE_CATALOG`, `USE_SCHEMA`, and `READ_SKILL` on the bound resources.
+service principal needs `USE_CATALOG`, `USE_SCHEMA`, and `READ_VOLUME` on the bound resources.
+The legacy `READ_SKILL` privilege does not authorize skill metadata or bundle reads.
 
 ## Initialize the chat app demo
 
