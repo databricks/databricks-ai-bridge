@@ -408,11 +408,11 @@ def test_lifecycle_commands_honor_json_output(monkeypatch):
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    for command, key in (
-        (deploy_mod.deployments_start, "started"),
-        (deploy_mod.deployments_stop, "stopped"),
-        (deploy_mod.deployments_delete, "deleted"),
+    for command, key, args in (
+        (deploy_mod.deployments_start, "started", ["myapp"]),
+        (deploy_mod.deployments_stop, "stopped", ["myapp", "--yes"]),  # destructive: needs --yes
+        (deploy_mod.deployments_delete, "deleted", ["myapp", "--yes"]),
     ):
-        result = CliRunner().invoke(command, ["myapp"], obj=_JsonCtx())
+        result = CliRunner().invoke(command, args, obj=_JsonCtx())
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == {key: "myapp"}

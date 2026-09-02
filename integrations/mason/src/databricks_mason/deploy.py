@@ -67,11 +67,35 @@ def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
         return None
 
 
-def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -> None:
-    """Block until a just-created app's compute is RUNNING (or raise on timeout).
+def _validate_deployment_name(name: str) -> str:
+    """Reject an empty or unsafe deployment name before it reaches a URL / workspace path."""
+    if (
+        not (name or "").strip()
+        or name != name.strip()
+        or any(token in name for token in ("/", "\\", ".."))
+        or any(character.isspace() for character in name)
+    ):
+        raise AgentCliError(
+            f"Invalid deployment name {name!r}.",
+            hint="Use a non-empty name of letters, digits, and hyphens "
+            "(no slashes, spaces, or '..').",
+        )
+    return name
 
-    `apps create` returns before compute is provisioned, but `apps deploy` requires RUNNING — so a
-    first deploy races without this wait.
+
+def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
+    """Prompt before a destructive deployment op; --yes/-y skips it (for scripts)."""
+    if assume_yes:
+        return
+    if not click.confirm(f"{target}? This cannot be undone.", default=False):
+        raise click.Abort()
+
+
+def _wait_for_running(name: str, profile: Optional[str], timeout_s: int = 300) -> None:
+    """Block until a just-created app's compute is ACTIVE (or raise on timeout).
+
+    `apps create` returns before compute is provisioned, but `apps deploy` requires the app to be
+    ACTIVE — so a first deploy races without this wait.
     """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -207,6 +231,16 @@ def resolve_store_env(
     if session_store:
         if create_stores:
             _ensure_session_store(client, session_store)
+        else:
+            # Validate existence up front so a typo fails at deploy time, not at runtime.
+            try:
+                client.get_session_store(session_store)
+            except AgentCliError as exc:
+                raise AgentCliError(
+                    f"Session store '{session_store}' does not exist "
+                    "(create it with --create-stores).",
+                    error_code=exc.error_code,
+                ) from exc
         env[_SESSION_ENV] = session_store
     if traces_destination:
         env[TRACES_DEST_ENV] = traces_destination
@@ -328,6 +362,7 @@ def deploy(
     workspace_path,
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
+    _validate_deployment_name(name)
     source_dir = pathlib.Path(source)
     client = obj.client()
 
@@ -470,6 +505,7 @@ def deployments_list(obj) -> None:
 @click.pass_obj
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
+    _validate_deployment_name(name)
     result = _databricks(["apps", "get", name, "-o", "json"], obj.profile, capture=True)
     data = json.loads(result.stdout or "{}")
     if obj.output == "json":
@@ -495,6 +531,7 @@ def deployments_get(obj, name) -> None:
 @click.pass_obj
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
+    _validate_deployment_name(name)
     _databricks(["apps", "logs", name], obj.profile)
 
 
@@ -503,6 +540,7 @@ def deployments_logs(obj, name) -> None:
 @click.pass_obj
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
+    _validate_deployment_name(name)
     _databricks(["apps", "start", name], obj.profile)
     if obj.output == "json":
         render.emit_json({"started": name})
@@ -512,9 +550,12 @@ def deployments_start(obj, name) -> None:
 
 @deployments.command("stop")
 @click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def deployments_stop(obj, name) -> None:
+def deployments_stop(obj, name, yes) -> None:
     """Stop a deployment."""
+    _validate_deployment_name(name)
+    _confirm_destroy(f"Stop deployment '{name}'", assume_yes=yes)
     _databricks(["apps", "stop", name], obj.profile)
     if obj.output == "json":
         render.emit_json({"stopped": name})
@@ -524,9 +565,12 @@ def deployments_stop(obj, name) -> None:
 
 @deployments.command("delete")
 @click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def deployments_delete(obj, name) -> None:
+def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment."""
+    _validate_deployment_name(name)
+    _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
     _databricks(["apps", "delete", name], obj.profile)
     if obj.output == "json":
         render.emit_json({"deleted": name})
