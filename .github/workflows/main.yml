@@ -325,5 +325,5 @@ jobs:
         working-directory: integrations/mason
         run: |
           uv run --resolution ${{ matrix.uv-resolution }} \
-            --exact --group tests --extra runtime --extra openai \
+            --exact --group tests --extra runtime --extra runtime-openai \
             pytest tests/unit_tests
