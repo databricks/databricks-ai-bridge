@@ -111,7 +111,7 @@ def test_registry_uses_the_supported_framework_package_path(tmp_path) -> None:
 
     path = registry.write()
 
-    assert path == tmp_path / "agent_server" / "databricks_tools.py"
+    assert path == tmp_path / "agent" / "databricks_tools.py"
     assert (
         IntegrationRegistry.load(
             tmp_path,

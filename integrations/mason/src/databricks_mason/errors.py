@@ -6,6 +6,7 @@ one-liner (plus an optional hint) and exits non-zero, instead of dumping a trace
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 import click
@@ -14,6 +15,18 @@ from rich.text import Text
 
 # Error codes indicating that a preview API is unavailable in the workspace.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED", "FEATURE_DISABLED"})
+
+# Process-global output mode, set once by the root CLI group. When "json", errors are
+# emitted as a machine-readable JSON object instead of the styled text one-liner, so a
+# script driving `mason -o json` can parse failures instead of scraping human text.
+_OUTPUT_MODE = "text"
+
+
+def set_output_mode(mode: str) -> None:
+    """Record the CLI's --output mode so errors can render to match it."""
+    global _OUTPUT_MODE
+    _OUTPUT_MODE = mode
+
 
 _PREVIEW_HINT = (
     "These agents/v1 APIs are in preview and gated per workspace. This handler is "
@@ -33,6 +46,14 @@ class AgentCliError(click.ClickException):
         self.hint = hint
 
     def show(self, file=None) -> None:
+        if _OUTPUT_MODE == "json":
+            payload: dict = {"message": self.message}
+            if self.error_code:
+                payload["code"] = self.error_code
+            if self.hint:
+                payload["hint"] = self.hint
+            click.echo(json.dumps({"error": payload}, indent=2), err=True)
+            return
         console = Console(stderr=True)
         label = f"Error [{self.error_code}]" if self.error_code else "Error"
         console.print(Text(f"{label}: ", style="bold red") + Text(self.message))

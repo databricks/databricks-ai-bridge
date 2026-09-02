@@ -65,7 +65,14 @@ class _FakeClient:
             "next_page_token": "",
         }
 
+    def create_memory_store(self, display_name):
+        # Create-if-not-exists is the deploy default; return the same id resolution would find.
+        return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+
     def get_session_store(self, name):
+        return {"session_store_name": name}
+
+    def create_session_store(self, name):
         return {"session_store_name": name}
 
 
@@ -93,7 +100,7 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--with-memory-store", "mem"],
+        ["myapp", "--source", str(src), "--memory", "mem"],
         obj=_FakeCtx(),
     )
 
@@ -205,9 +212,9 @@ def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, 
             "myapp",
             "--source",
             str(src),
-            "--with-memory-store",
+            "--memory",
             "mem",
-            "--with-session-store",
+            "--session",
             "sessions",
             "--actor-id",
             "alice",
@@ -313,8 +320,10 @@ def test_memory_store_database_resolves_by_display_name():
     assert deploy_mod._memory_store_database(_Client(), "mem") == "memory-uuidx"
 
 
-def test_deploy_without_create_resolves_memory_by_display_name(tmp_path: pathlib.Path, monkeypatch):
-    # Non-create path must resolve by display name (list+match), not get_memory_store (by id).
+def test_deploy_no_create_stores_resolves_memory_by_display_name(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # --no-create-stores path must resolve by display name (list+match), not get_memory_store (by id).
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -327,12 +336,65 @@ def test_deploy_without_create_resolves_memory_by_display_name(tmp_path: pathlib
     )
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--with-memory-store", "mem"],
+        ["myapp", "--source", str(src), "--memory", "mem", "--no-create-stores"],
         obj=_FakeCtx(),
     )
     assert result.exit_code == 0, result.output
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"  # resolved by display name, bare id
+
+
+def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkeypatch):
+    # Create-if-not-exists is now the default (no flag): a referenced store is created via the API.
+    created: list[str] = []
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    class _CreatingClient(_FakeClient):
+        def create_memory_store(self, display_name):
+            created.append(display_name)
+            return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+
+    class _Ctx(_FakeCtx):
+        def client(self):
+            return _CreatingClient()
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src), "--memory", "new-mem"], obj=_Ctx()
+    )
+    assert result.exit_code == 0, result.output
+    assert created == ["new-mem"]  # created without any --create-stores flag
+
+
+def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
+    # -m / -s are the short forms of --memory / --session.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
+        obj=_FakeCtx(),
+    )
+    assert result.exit_code == 0, result.output
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
+    assert env["AGENT_SESSION_STORE"] == "s"
 
 
 def test_with_traces_defaults_the_experiment_per_app():

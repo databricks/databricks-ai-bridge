@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mason"
-version = "0.1.1.dev0"
+version = "0.1.2.dev0"
 description = "Databricks integration for Mason"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "click>=8.1",
     "databricks-sdk>=0.49",
+    "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
     "rich>=13.7",
     "tomli>=2.0",
@@ -19,9 +20,11 @@ dependencies = [
 tracing = [
     "mlflow[databricks]>=3.9.0",
 ]
-# The agent-side runtime helpers (databricks_mason.runtime) that a deployed agent imports. Kept as
-# an extra so a plain `pip install databricks-mason` (the CLI) stays light; the template depends on
-# `databricks-mason[runtime]`.
+# The agent-side runtime helpers a deployed agent imports. Kept as extras so a plain
+# `pip install databricks-mason` (the CLI) stays light; each template depends on the extra for its
+# framework. `runtime` = the LangGraph adapter (databricks_mason.langgraph); `runtime-openai` = the
+# OpenAI Agents SDK adapter (databricks_mason.openai). Both carry the shared framework-neutral stack
+# (databricks_mason.runtime); the framework SDKs differ, so an agent installs only the one it uses.
 runtime = [
     "databricks-langchain>=0.17.0",
     "langgraph>=1.1.0",
@@ -33,8 +36,14 @@ runtime = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",
 ]
-openai = [
+runtime-openai = [
+    "openai-agents>=0.4.1",
     "databricks-openai>=0.17.1",
+    "fastapi>=0.129.0",
+    "mlflow>=3.10.1",
+    "uuid-utils>=0.10.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "databricks-agents>=1.9.3",
 ]
 
 [project.scripts]

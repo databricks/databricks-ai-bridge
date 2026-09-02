@@ -11,9 +11,7 @@ before a template has merged to its canonical repo.
 
 from __future__ import annotations
 
-import ast
 import pathlib
-import re
 import shutil
 import subprocess
 import tempfile
@@ -22,7 +20,6 @@ from importlib.metadata import version as _installed_version
 from typing import Optional
 
 import click
-import tomli
 
 from databricks_mason import render
 from databricks_mason.errors import AgentCliError
@@ -30,16 +27,17 @@ from databricks_mason.integration_codegen import IntegrationRegistry, registry_r
 from databricks_mason.project_config import write_project_metadata
 
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
-# (The two basic templates currently live in different repos; this keeps each pointed at its own.)
+# Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
+_MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {
-        "repo": "https://github.com/databricks/app-templates.git",
+        "repo": _MASON_REPO,
         "ref": "main",
-        "path": "agent-openai-agents-sdk",
+        "path": "integrations/mason/templates/agent-openai",
     },
     "langgraph": {
-        "repo": "https://github.com/databricks/databricks-ai-bridge.git",
+        "repo": _MASON_REPO,
         "ref": "main",
         "path": "integrations/mason/templates/agent-langgraph",
     },
@@ -49,15 +47,15 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 # they produce pins `databricks-mason[runtime]` at this package's version, so init fetches the
 # template tagged for the installed CLI (see `_template_ref`) rather than `main`. That keeps a
 # user's scaffold from outrunning the `databricks-mason` they have installed.
-_VERSIONED_TEMPLATES = frozenset({"langgraph"})
+_VERSIONED_TEMPLATES = frozenset({"langgraph", "openai"})
 
 # The release workflow tags each published version `databricks-mason-v<version>`.
 _RELEASE_TAG_PREFIX = "databricks-mason-v"
 
 _CHAT_APP_TEMPLATES = {
     "langgraph": "integrations/mason/templates/ui/agent-langgraph",
+    "openai": "integrations/mason/templates/ui/agent-openai",
 }
-_OPENAI_ADAPTER_REQUIREMENT = "databricks-mason[openai]>=0.1.1"
 
 
 def _template_ref(framework: str) -> str:
@@ -152,148 +150,6 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
-def _ensure_openai_adapter_dependency(dest: pathlib.Path) -> None:
-    """Add Mason's OpenAI adapter to the upstream template without owning its agent code."""
-
-    path = dest / "pyproject.toml"
-    if not path.is_file():
-        return
-    try:
-        source = path.read_text(encoding="utf-8")
-        document = tomli.loads(source)
-    except (OSError, UnicodeError, tomli.TOMLDecodeError) as exc:
-        raise AgentCliError(
-            f"Could not read OpenAI template dependencies at {path}: {exc}."
-        ) from exc
-    project = document.get("project")
-    dependencies = project.get("dependencies") if isinstance(project, dict) else None
-    if not isinstance(dependencies, list) or not all(
-        isinstance(dependency, str) for dependency in dependencies
-    ):
-        raise AgentCliError(f"OpenAI template at {path} must declare project.dependencies.")
-    if any(
-        re.split(r"[\s\[<>=!~;@]", dependency.strip(), maxsplit=1)[0].lower().replace("_", "-")
-        == "databricks-mason"
-        for dependency in dependencies
-    ):
-        return
-    assignment = re.search(r"(?m)^(?P<indent>[ \t]*)dependencies\s*=\s*\[\s*$", source)
-    if assignment is None:
-        raise AgentCliError(f"Could not update project.dependencies in OpenAI template at {path}.")
-    insertion = f'\n{assignment.group("indent")}    "{_OPENAI_ADAPTER_REQUIREMENT}",'
-    updated = f"{source[: assignment.end()]}{insertion}{source[assignment.end() :]}"
-    try:
-        tomli.loads(updated)
-        path.write_text(updated, encoding="utf-8")
-    except (OSError, UnicodeError, tomli.TOMLDecodeError) as exc:
-        raise AgentCliError(
-            f"Could not update OpenAI template dependencies at {path}: {exc}."
-        ) from exc
-
-
-def _is_named_call(node: ast.AST, name: str) -> bool:
-    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name
-
-
-def _has_openai_binding(function: ast.AsyncFunctionDef) -> bool:
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
-            continue
-        if _is_named_call(node.value, "bind_tools") and any(
-            isinstance(argument, ast.Name) and argument.id == "DATABRICKS_TOOLS"
-            for argument in node.value.args
-        ):
-            return True
-    return False
-
-
-def _ensure_openai_attachment(dest: pathlib.Path) -> None:
-    """Install the active empty-selection seam into both known request handlers."""
-
-    path = dest / "agent_server" / "agent.py"
-    if not path.is_file():
-        return
-    try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-    except (OSError, UnicodeError, SyntaxError) as exc:
-        raise AgentCliError(f"Could not inspect OpenAI template agent at {path}: {exc}.") from exc
-
-    insertions: list[tuple[int, str]] = []
-    for symbol in ("invoke_handler", "stream_handler"):
-        function = next(
-            (
-                node
-                for node in tree.body
-                if isinstance(node, ast.AsyncFunctionDef) and node.name == symbol
-            ),
-            None,
-        )
-        if function is None:
-            raise AgentCliError(f"OpenAI template at {path} has no async {symbol} function.")
-        if _has_openai_binding(function):
-            continue
-        constructors = [
-            node
-            for node in ast.walk(function)
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "agent"
-            and _is_named_call(node.value, "create_agent")
-        ]
-        if len(constructors) != 1:
-            raise AgentCliError(
-                f"Could not locate the unique agent construction seam in {path}:{symbol}."
-            )
-        constructor = constructors[0]
-        insertions.append(
-            (
-                constructor.end_lineno or constructor.lineno,
-                " " * constructor.col_offset
-                + "agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n",
-            )
-        )
-
-    lines = source.splitlines(keepends=True)
-    for line_number, content in sorted(insertions, reverse=True):
-        lines.insert(line_number, content)
-    updated = "".join(lines)
-    updated_tree = ast.parse(updated)
-    required_imports = (
-        ("agent_server.databricks_tools", "DATABRICKS_TOOLS"),
-        ("databricks_mason.openai", "bind_tools"),
-    )
-    missing = [
-        (module, name)
-        for module, name in required_imports
-        if not any(
-            isinstance(node, ast.ImportFrom)
-            and node.module == module
-            and any(alias.name == name for alias in node.names)
-            for node in updated_tree.body
-        )
-    ]
-    if missing:
-        import_end = max(
-            (
-                node.end_lineno or node.lineno
-                for node in updated_tree.body
-                if isinstance(node, (ast.Import, ast.ImportFrom))
-            ),
-            default=0,
-        )
-        import_lines = "".join(f"from {module} import {name}\n" for module, name in missing)
-        lines = updated.splitlines(keepends=True)
-        lines.insert(import_end, import_lines)
-        updated = "".join(lines)
-    try:
-        ast.parse(updated)
-        path.write_text(updated, encoding="utf-8")
-    except (OSError, UnicodeError, SyntaxError) as exc:
-        raise AgentCliError(f"Could not update OpenAI template agent at {path}: {exc}.") from exc
-
-
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
@@ -377,9 +233,6 @@ def init(
         IntegrationRegistry.load(dest, relative_path=relative_registry)
     else:
         IntegrationRegistry.empty(dest, relative_path=relative_registry).write()
-    if framework == "openai":
-        _ensure_openai_adapter_dependency(dest)
-        _ensure_openai_attachment(dest)
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

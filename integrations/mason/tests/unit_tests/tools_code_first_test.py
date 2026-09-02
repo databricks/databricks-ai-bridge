@@ -26,7 +26,7 @@ def _project(
     project = tmp_path / framework
     (project / "agent" / "tools").mkdir(parents=True)
     (project / "tests" / "tools").mkdir(parents=True)
-    template = "agent-langgraph" if framework == "langgraph" else "agent-openai-agents-sdk"
+    template = "agent-langgraph" if framework == "langgraph" else "agent-openai"
     write_project_metadata(project, framework=framework, template=template)
     IntegrationRegistry.empty(
         project,
@@ -45,15 +45,13 @@ def _project(
     else:
         attachment = (
             "from databricks_mason.openai import bind_tools\n"
-            "from agent_server.databricks_tools import DATABRICKS_TOOLS\n\n"
-            "async def invoke_handler(agent, stack):\n"
-            "    return await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n\n"
+            "from agent.databricks_tools import DATABRICKS_TOOLS\n\n"
             "async def stream_handler(agent, stack):\n"
             "    return await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n"
             if attached
             else "\ndef create_agent():\n    return object()\n"
         )
-        attachment_path = project / "agent_server" / "agent.py"
+        attachment_path = project / "agent" / "agent.py"
     attachment_path.parent.mkdir(parents=True, exist_ok=True)
     attachment_path.write_text(attachment, encoding="utf-8")
     return project
@@ -91,7 +89,7 @@ def test_add_sandbox_generates_code_for_both_supported_frameworks(
     attachment_path = (
         project / "agent" / "agent.py"
         if framework == "langgraph"
-        else project / "agent_server" / "agent.py"
+        else project / "agent" / "agent.py"
     )
     assert f"{attachment_path}:" in result.output
     assert "Attached" in result.output
@@ -110,20 +108,18 @@ def test_add_sandbox_reports_manual_action_instead_of_guessing_byo_location(
 
     assert result.exit_code == 0, result.output
     assert "Configured, not attached" in result.output
-    assert "from agent_server.databricks_tools import DATABRICKS_TOOLS" in result.output
+    assert "from agent.databricks_tools import DATABRICKS_TOOLS" in result.output
     assert "from databricks_mason.openai import bind_tools" in result.output
     assert "bind_tools" in result.output
-    assert "agent_server/agent.py:" not in result.output
+    assert "agent/agent.py:" not in result.output
 
 
 def test_attachment_detection_does_not_scan_byo_or_dead_code(tmp_path: pathlib.Path) -> None:
     byo = tmp_path / "byo"
-    (byo / "agent_server").mkdir(parents=True)
-    (byo / "agent_server" / "agent.py").write_text(
+    (byo / "agent").mkdir(parents=True)
+    (byo / "agent" / "agent.py").write_text(
         "from databricks_mason.openai import bind_tools\n"
-        "from agent_server.databricks_tools import DATABRICKS_TOOLS\n\n"
-        "async def invoke_handler(agent, stack):\n"
-        "    return await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n\n"
+        "from agent.databricks_tools import DATABRICKS_TOOLS\n\n"
         "async def stream_handler(agent, stack):\n"
         "    return await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n",
         encoding="utf-8",
@@ -172,9 +168,9 @@ def test_attachment_detection_does_not_scan_byo_or_dead_code(tmp_path: pathlib.P
     assert "Attached:" not in dead_result.output
 
 
-def test_openai_requires_both_template_construction_seams(tmp_path: pathlib.Path) -> None:
+def test_openai_requires_the_template_streaming_seam(tmp_path: pathlib.Path) -> None:
     project = _project(tmp_path, framework="openai", attached=True)
-    agent_file = project / "agent_server" / "agent.py"
+    agent_file = project / "agent" / "agent.py"
     agent_file.write_text(
         agent_file.read_text(encoding="utf-8").replace(
             "    return await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)\n",
@@ -191,7 +187,7 @@ def test_openai_requires_both_template_construction_seams(tmp_path: pathlib.Path
     )
 
     assert result.exit_code == 0, result.output
-    assert "Partially attached" in result.output
+    assert "Configured, not attached" in result.output
     assert "Active after app restart" not in result.output
 
 

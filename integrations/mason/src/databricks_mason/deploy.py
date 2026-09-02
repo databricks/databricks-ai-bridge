@@ -210,9 +210,10 @@ def resolve_store_env(
     """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
 
     Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
-    way. With `create_stores`, missing stores are created (idempotent); otherwise they must already
-    exist. The memory store resolves to its bare id (the runtime re-adds the `memory-stores/` prefix
-    when building the entries URL); the session store and trace destination are used verbatim.
+    way. With `create_stores` (the default), missing stores are created (idempotent); when it is off
+    they must already exist. The memory store resolves to its bare id (the runtime re-adds the
+    `memory-stores/` prefix when building the entries URL); the session store and trace destination
+    are used verbatim.
     """
     env: dict[str, str] = {}
     if memory_store:
@@ -224,7 +225,8 @@ def resolve_store_env(
             store = _resolve_memory_store(client, memory_store)
             if store is None:
                 raise AgentCliError(
-                    f"Memory store '{memory_store}' does not exist (create it with --create-stores)."
+                    f"Memory store '{memory_store}' does not exist "
+                    "(drop --no-create-stores to create it)."
                 )
         store_name = field(store, "name") or memory_store
         env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
@@ -238,7 +240,7 @@ def resolve_store_env(
             except AgentCliError as exc:
                 raise AgentCliError(
                     f"Session store '{session_store}' does not exist "
-                    "(create it with --create-stores).",
+                    "(drop --no-create-stores to create it).",
                     error_code=exc.error_code,
                 ) from exc
         env[_SESSION_ENV] = session_store
@@ -300,13 +302,15 @@ def _grant_store_access(
     "current directory.",
 )
 @click.option(
-    "--with-memory-store",
+    "--memory",
+    "-m",
     "memory_store",
     default=None,
     help="Memory store display name to wire in via AGENT_MEMORY_STORE.",
 )
 @click.option(
-    "--with-session-store",
+    "--session",
+    "-s",
     "session_store",
     default=None,
     help="Session store name to wire in via AGENT_SESSION_STORE.",
@@ -330,9 +334,10 @@ def _grant_store_access(
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--create-stores",
+    "--no-create-stores",
     is_flag=True,
-    help="Create the referenced stores if they don't exist (idempotent).",
+    help="Require referenced stores to already exist. By default missing stores are created "
+    "(idempotent).",
 )
 @click.option(
     "--pip-index-url",
@@ -357,7 +362,7 @@ def deploy(
     actor_id,
     traces_destination,
     traces_experiment,
-    create_stores,
+    no_create_stores,
     pip_index_url,
     workspace_path,
 ) -> None:
@@ -374,7 +379,7 @@ def deploy(
         session_store=session_store,
         traces_destination=traces_destination,
         traces_experiment=traces_experiment,
-        create_stores=create_stores,
+        create_stores=not no_create_stores,
     )
     provisioned: dict[str, Any] = {}
     if _MEMORY_ENV in env_updates:
@@ -446,7 +451,7 @@ def deploy(
         steps.insert(
             0,
             "The app's service principal needs read/write on its store tables; that grant couldn't "
-            "be applied automatically (it requires store ownership and psql). "
+            "be applied automatically (it requires store ownership). "
             f"Cause: {grant_error}",
         )
     if grants_stores and grant_error is None:

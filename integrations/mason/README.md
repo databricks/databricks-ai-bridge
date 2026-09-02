@@ -26,10 +26,10 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
-For the OpenAI Agents SDK adapter in an existing project:
+For the OpenAI Agents SDK runtime adapter in an existing project:
 
 ```sh
-pip install 'databricks-mason[openai]'
+pip install 'databricks-mason[runtime-openai]'
 ```
 
 ## Authentication
@@ -84,8 +84,8 @@ mason [-p <profile>] [-o text|json]
   init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-               [--with-memory-store N] [--with-session-store N]
-               [--with-traces C.S] [--create-stores]
+               [--memory/-m N] [--session/-s N]
+               [--with-traces C.S] [--no-create-stores]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -102,9 +102,9 @@ mason [-p <profile>] [-o text|json]
     add mcp          SERVICE [--name NAME] [--source PATH] [--framework F]
     add uc-function  FUNCTION [--name NAME] [--source PATH] [--framework F]
     list             [--source PATH] [--framework F]
-  deploy       <name> --source PATH [--with-memory-store N]
-               [--with-session-store N] [--actor-id ID]
-               [--with-traces C.S] [--create-stores]
+  deploy       <name> --source PATH [--memory/-m N]
+               [--session/-s N] [--actor-id ID]
+               [--with-traces C.S] [--no-create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
 
@@ -133,8 +133,7 @@ mason deploy my-agent
 
 Agent code and its SDK objects are the source of truth. `mason init` writes template provenance to
 `.mason/project.toml` and an ordinary Python selection registry at
-`agent/databricks_tools.py` (LangGraph) or `agent_server/databricks_tools.py` (OpenAI Agents SDK);
-it does not create `agent.toml`.
+`agent/databricks_tools.py`; it does not create `agent.toml`.
 
 The existing tool commands add Databricks Sandbox, managed MCP, and UC Function descriptors to
 `DATABRICKS_TOOLS`. The CLI never imports customer code or mutates a live agent object. After each
@@ -164,8 +163,8 @@ tools = [
 ]
 ```
 
-The OpenAI template binds at both request-scoped construction paths, with its `AsyncExitStack`
-owning the MCP connections:
+The OpenAI template binds in its request-scoped streaming path, which is also used by synchronous
+invocations. Its `AsyncExitStack` owns the MCP connections:
 
 ```python
 agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)
@@ -234,11 +233,12 @@ For the full deployed demo, connect both managed stores:
 
 ```sh
 mason --profile <profile> deploy mason-agent-demo --source . \
-  --with-session-store mason-demo-sessions \
-  --with-memory-store mason-demo-memory \
-  --actor-id alice \
-  --create-stores
+  --session mason-demo-sessions \
+  --memory mason-demo-memory \
+  --actor-id alice
 ```
+
+(Missing stores are created automatically; pass `--no-create-stores` to require they already exist.)
 
 The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
 application session id. The browser sends it automatically; API clients must reuse it as a cookie.

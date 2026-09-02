@@ -9,24 +9,18 @@ const elements = {
   composer: document.querySelector("#composer"),
   copySession: document.querySelector("#copy-session"),
   emptyState: document.querySelector("#empty-state"),
-  environmentBadge: document.querySelector("#environment-badge"),
   eventLog: document.querySelector("#event-log"),
-  memoryFact: document.querySelector("#memory-fact"),
   memoryHelp: document.querySelector("#memory-help"),
   memoryMode: document.querySelector("#memory-mode-value"),
-  memoryPath: document.querySelector("#memory-path"),
-  memoryQuery: document.querySelector("#memory-query"),
   memoryResults: document.querySelector("#memory-results"),
   memoryStatus: document.querySelector("#memory-status"),
+  refreshMemory: document.querySelector("#refresh-memory"),
   newSession: document.querySelector("#new-session"),
   promptInput: document.querySelector("#prompt-input"),
-  askMemory: document.querySelector("#ask-memory"),
-  searchMemory: document.querySelector("#search-memory"),
   refreshConfig: document.querySelector("#refresh-config"),
   refreshSession: document.querySelector("#refresh-session"),
   rejectAction: document.querySelector("#reject-action"),
   rejectSession: document.querySelector("#reject-session"),
-  rememberButton: document.querySelector("#remember-button"),
   resumeSession: document.querySelector("#resume-session"),
   runStatus: document.querySelector("#run-status"),
   sendButton: document.querySelector("#send-button"),
@@ -80,9 +74,7 @@ function setBusy(busy, label = "Working") {
   elements.promptInput.disabled = busy;
   elements.approveAction.disabled = busy;
   elements.rejectAction.disabled = busy;
-  elements.rememberButton.disabled = busy || !state.config?.memory.enabled;
-  elements.searchMemory.disabled = busy || !state.config?.memory.enabled;
-  elements.askMemory.disabled = busy || !state.config?.memory.enabled;
+  elements.refreshMemory.disabled = busy || !state.config?.memory.enabled;
   elements.newSession.disabled = busy;
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
@@ -94,9 +86,11 @@ function setBusy(busy, label = "Working") {
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
-function setCapability(element, enabled) {
-  element.classList.toggle("enabled", Boolean(enabled));
-  element.classList.toggle("disabled", !enabled);
+function setCapability(element, state) {
+  const degraded = state === "degraded";
+  element.classList.toggle("enabled", state === true);
+  element.classList.toggle("degraded", degraded);
+  element.classList.toggle("disabled", !state);
 }
 
 function formatJson(value) {
@@ -500,52 +494,6 @@ async function listMemoryEntries() {
   }
 }
 
-async function saveMemoryEntry() {
-  const path = elements.memoryPath.value.trim();
-  const content = elements.memoryFact.value.trim();
-  if (!path || !content) {
-    (path ? elements.memoryFact : elements.memoryPath).focus();
-    return;
-  }
-  stateMessage(elements.memoryResults, "Saving memory entry…", "loading");
-  try {
-    const response = await fetch("/api/demo/memory/entries", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, content }),
-    });
-    const result = await jsonResponse(response);
-    addEvent("memory.entry.create", result);
-    elements.memoryHelp.textContent = `Saved ${path} for actor ${state.config.memory.actor}.`;
-    await listMemoryEntries();
-  } catch (error) {
-    stateMessage(elements.memoryResults, error instanceof Error ? error.message : String(error), "error");
-    addEvent("memory.error", { message: String(error) });
-  }
-}
-
-async function searchMemoryEntries() {
-  const query = elements.memoryQuery.value.trim();
-  if (!query) {
-    elements.memoryQuery.focus();
-    return;
-  }
-  stateMessage(elements.memoryResults, "Searching memory…", "loading");
-  try {
-    const response = await fetch("/api/demo/memory/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, limit: 10 }),
-    });
-    const result = await jsonResponse(response);
-    renderMemoryEntries(memoryEntries(result));
-    addEvent("memory.entries.search", result);
-  } catch (error) {
-    stateMessage(elements.memoryResults, error instanceof Error ? error.message : String(error), "error");
-    addEvent("memory.error", { message: String(error) });
-  }
-}
-
 async function invokeSync(payload) {
   const response = await fetch("/invocations", {
     method: "POST",
@@ -769,7 +717,6 @@ async function loadConfig() {
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
-    elements.environmentBadge.textContent = config.deployed ? "Databricks App" : "Local runtime";
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
@@ -777,18 +724,19 @@ async function loadConfig() {
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
     setCapability(elements.streamingStatus, config.streaming.enabled);
     setCapability(elements.backgroundStatus, config.background.enabled);
-    setCapability(elements.sessionStatus, config.session.history);
+    setCapability(
+      elements.sessionStatus,
+      config.session.managed ? true : config.session.history ? "degraded" : false,
+    );
     setCapability(elements.memoryStatus, config.memory.enabled);
-    elements.rememberButton.disabled = state.busy || !config.memory.enabled;
-    elements.searchMemory.disabled = state.busy || !config.memory.enabled;
-    elements.askMemory.disabled = state.busy || !config.memory.enabled;
+    elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;
     elements.resumeSession.disabled = state.busy || !config.session.durable;
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
       ? `${config.memory.store} · actor ${config.memory.actor}`
-      : "Deploy with --with-memory-store to expose managed entries and agent memory tools.";
+      : "Deploy with --memory to expose managed entries and agent memory tools.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history
@@ -800,7 +748,6 @@ async function loadConfig() {
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
   } catch (error) {
-    elements.environmentBadge.textContent = "Runtime unavailable";
     throw error;
   }
 }
@@ -863,13 +810,7 @@ elements.rejectAction.addEventListener("click", () => resume("reject"));
 elements.resumeSession.addEventListener("click", () => resume("approve"));
 elements.rejectSession.addEventListener("click", () => resume("reject"));
 
-elements.rememberButton.addEventListener("click", saveMemoryEntry);
-elements.searchMemory.addEventListener("click", searchMemoryEntries);
-elements.askMemory.addEventListener("click", async () => {
-  const query = elements.memoryQuery.value.trim() || "my saved profile and preferences";
-  clearChat();
-  await sendText(`Use the recall tool to find what you remember about ${query}.`, "sync").catch(() => {});
-});
+elements.refreshMemory.addEventListener("click", listMemoryEntries);
 
 loadConfig().catch((error) => {
   appendError(error);

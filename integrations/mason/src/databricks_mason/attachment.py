@@ -145,13 +145,13 @@ def _required_template(
             ("create_agent_graph",),
             "*await load_tools(DATABRICKS_TOOLS)",
         )
-    if metadata.framework == "openai" and metadata.template == "agent-openai-agents-sdk":
+    if metadata.framework == "openai" and metadata.template == "agent-openai":
         return (
-            project / "agent_server" / "agent.py",
+            project / "agent" / "agent.py",
             "databricks_mason.openai",
-            "agent_server.databricks_tools",
+            "agent.databricks_tools",
             "bind_tools",
-            ("invoke_handler", "stream_handler"),
+            ("stream_handler",),
             "agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)",
         )
     return None
@@ -173,7 +173,7 @@ def activation_for(project: pathlib.Path, metadata: ProjectMetadata) -> Activati
             )
             if metadata.framework == "langgraph"
             else (
-                "from agent_server.databricks_tools import DATABRICKS_TOOLS",
+                "from agent.databricks_tools import DATABRICKS_TOOLS",
                 "from databricks_mason.openai import bind_tools",
             )
         )

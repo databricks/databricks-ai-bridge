@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Mason Agent Lab</title>
+    <link rel="stylesheet" href="/ui-assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Mason CLI</p>
+            <h1>Agent Lab</h1>
+          </div>
+        </div>
+      </header>
+
+      <div class="trust-strip">
+        <span>AI-generated responses can be wrong. Verify important output.</span>
+      </div>
+
+      <main class="workspace">
+        <aside class="left-rail" aria-label="Runtime configuration">
+          <section class="rail-section">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Runtime</p>
+                <h2>Capabilities</h2>
+              </div>
+              <button id="refresh-config" class="icon-button" type="button" aria-label="Refresh runtime configuration">↻</button>
+            </div>
+            <div class="capability-list">
+              <div class="capability-row">
+                <span class="capability-icon">↯</span>
+                <span><strong>Streaming</strong><small id="streaming-mode-value">Checking…</small></span>
+                <span id="streaming-status" class="status-orb"></span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon">◷</span>
+                <span><strong>Background</strong><small id="background-mode-value">Checking…</small></span>
+                <span id="background-status" class="status-orb"></span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon">◎</span>
+                <span><strong>Session</strong><small id="session-mode-value">Checking…</small></span>
+                <span id="session-status" class="status-orb"></span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon">◇</span>
+                <span><strong>Memory</strong><small id="memory-mode-value">Checking…</small></span>
+                <span id="memory-status" class="status-orb"></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="rail-section session-card">
+            <div class="section-heading compact">
+              <div>
+                <p class="eyebrow">Conversation history</p>
+                <h2>Sessions</h2>
+              </div>
+              <div class="button-row compact-actions">
+                <button id="new-session" class="text-button" type="button">New session</button>
+                <button id="refresh-session" class="text-button" type="button">Refresh</button>
+              </div>
+            </div>
+            <button id="copy-session" class="session-key" type="button" title="Copy session ID">
+              <code id="session-id">Loading…</code>
+              <span>Copy</span>
+            </button>
+            <div class="button-row wrap">
+              <button id="resume-session" class="button button-primary" type="button">Approve paused HITL</button>
+              <button id="reject-session" class="button button-secondary" type="button">Reject paused HITL</button>
+            </div>
+            <p id="session-store-label" class="supporting-text">The Databricks Apps routing cookie is also the application session ID.</p>
+            <label>Recent sessions</label>
+            <div id="session-list" class="state-list compact-list" aria-live="polite">
+              <div class="state-empty">Loading sessions…</div>
+            </div>
+            <label>Current transcript</label>
+            <div id="session-items" class="state-list compact-list" aria-live="polite">
+              <div class="state-empty">Connect a Session Store to mirror transcript items.</div>
+            </div>
+          </section>
+
+          <section class="rail-section identity-card">
+            <p class="eyebrow">Signed in as</p>
+            <h2>Viewer</h2>
+            <p id="viewer-value" class="identity-primary">Loading viewer…</p>
+          </section>
+        </aside>
+
+        <section class="chat-panel" aria-label="Agent chat">
+          <div class="chat-header">
+            <div>
+              <p class="eyebrow">Interactive client</p>
+              <h2>OpenAI agent</h2>
+            </div>
+            <span id="run-status" class="run-status">Ready</span>
+          </div>
+
+          <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-busy="false">
+            <div id="empty-state" class="empty-state">
+              <div class="empty-orbit" aria-hidden="true"><span></span></div>
+              <p class="eyebrow">One backend, three transports</p>
+              <h2>Start a conversation</h2>
+              <p>Switch between streaming, background, and synchronous calls while keeping the same session.</p>
+              <div class="prompt-grid">
+                <button type="button" data-prompt="Use the get_current_time tool and explain what you did.">Use a tool</button>
+                <button type="button" data-prompt="Remember in this conversation that my launch color is indigo. Do not use long-term memory.">Test session</button>
+                <button type="button" data-prompt="Send a message to demo@databricks.com saying the Mason demo is ready. Use the send_message tool.">Trigger approval</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="approval-panel" class="approval-panel" hidden>
+            <div>
+              <p class="eyebrow">Human approval required</p>
+              <p id="approval-summary">A tool is waiting for a decision.</p>
+            </div>
+            <div class="approval-actions">
+              <button id="reject-action" class="button button-secondary" type="button">Reject</button>
+              <button id="approve-action" class="button button-primary" type="button">Approve</button>
+            </div>
+          </div>
+
+          <form id="composer" class="composer">
+            <label class="sr-only" for="prompt-input">Message the agent</label>
+            <textarea id="prompt-input" rows="1" placeholder="Ask the agent, use a tool, or test memory…"></textarea>
+            <div class="composer-footer">
+              <div class="mode-switcher" aria-label="Invocation mode">
+                <button class="mode-button active" data-mode="streaming" type="button">Streaming</button>
+                <button class="mode-button" data-mode="background" type="button">Background</button>
+                <button class="mode-button" data-mode="sync" type="button">Sync</button>
+              </div>
+              <button id="send-button" class="send-button" type="submit">
+                <span>Send</span>
+                <span aria-hidden="true">↑</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="right-rail" aria-label="Demo controls">
+          <section class="control-card">
+            <div class="control-card-heading">
+              <div><p class="eyebrow">Cross-session</p><h2>Long-term memory</h2></div>
+              <button id="refresh-memory" class="icon-button" type="button" aria-label="Refresh memory entries">↻</button>
+            </div>
+            <p id="memory-help" class="supporting-text">Connect a Memory Store to manage entries.</p>
+            <div id="memory-results" class="state-list" aria-live="polite">
+              <div class="state-empty">Memory entries appear here.</div>
+            </div>
+          </section>
+
+          <section class="control-card event-card">
+            <div class="section-heading compact">
+              <div><p class="eyebrow">Native contract</p><h2>Event feed</h2></div>
+              <button id="clear-events" class="text-button" type="button">Clear</button>
+            </div>
+            <div id="event-log" class="event-log" role="log">
+              <div class="event-empty">Invocation events appear here.</div>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script src="/ui-assets/app.js" defer></script>
+  </body>
+</html>

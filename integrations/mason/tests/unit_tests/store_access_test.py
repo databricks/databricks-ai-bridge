@@ -1,9 +1,11 @@
-"""Unit tests for the store-access grant plumbing (postgres resource + owner-issued psql GRANT)."""
+"""Unit tests for the store-access grant plumbing (postgres resource + owner-issued GRANT)."""
 
 from __future__ import annotations
 
 import json
 import types
+
+import psycopg
 
 from databricks_mason import memory_store_access, session_store_access
 from databricks_mason import store_access as sa
@@ -46,35 +48,57 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
     assert names == {"postgres", "postgres-memory"}  # one update carries both
 
 
-def test_grant_tables_runs_scoped_psql_grant(monkeypatch):
-    monkeypatch.setattr(sa.shutil, "which", lambda _: "/usr/bin/psql")
+class _FakeConn:
+    """Stand-in for a psycopg connection: records the connect kwargs and executed SQL."""
+
+    def __init__(self, captured):
+        self._captured = captured
+
+    def execute(self, sql):
+        # store_access encodes the composed GRANT to bytes; decode so assertions read as text.
+        self._captured["sql"] = sql.decode() if isinstance(sql, bytes) else sql
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_grant_tables_runs_scoped_grant_over_psycopg(monkeypatch):
     monkeypatch.setattr(sa, "_resolve_pg_host", lambda b, p: "ep-x.databricks.com")
     monkeypatch.setattr(sa, "_mint_token", lambda b, p: "tok")
     captured = {}
 
-    def fake_run(cmd, env=None, **kw):
-        captured["cmd"] = cmd
-        captured["pgpassword"] = (env or {}).get("PGPASSWORD")
-        return types.SimpleNamespace(returncode=0, stdout="GRANT", stderr="")
+    def fake_connect(**kwargs):
+        captured["connect"] = kwargs
+        return _FakeConn(captured)
 
-    monkeypatch.setattr(sa.subprocess, "run", fake_run)
+    monkeypatch.setattr(sa.psycopg, "connect", fake_connect)
 
     err = sa.grant_tables(memory_store_access.backend("memory-x"), "sp-1", "me@x.com", "prof")
 
     assert err is None
-    assert captured["cmd"][0] == "psql"
-    assert "dbname=memory-x" in captured["cmd"][1]  # connects to the per-store database
-    assert captured["pgpassword"] == "tok"
-    sql = captured["cmd"][-1]
+    assert captured["connect"]["dbname"] == "memory-x"  # connects to the per-store database
+    assert captured["connect"]["password"] == "tok"
+    assert captured["connect"]["user"] == "me@x.com"
+    assert captured["connect"]["autocommit"] is True  # DDL applies without an explicit commit
+    sql = captured["sql"]
     # tables are schema-qualified so the SP's search_path doesn't matter.
     assert 'ON memory.memory_entries TO "sp-1"' in sql
     assert "USAGE ON SCHEMA memory" in sql
 
 
-def test_grant_tables_reports_missing_psql(monkeypatch):
-    monkeypatch.setattr(sa.shutil, "which", lambda _: None)
+def test_grant_tables_reports_connection_error(monkeypatch):
+    monkeypatch.setattr(sa, "_resolve_pg_host", lambda b, p: "ep-x.databricks.com")
+    monkeypatch.setattr(sa, "_mint_token", lambda b, p: "tok")
+
+    def fake_connect(**kwargs):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(sa.psycopg, "connect", fake_connect)
     err = sa.grant_tables(session_store_access.backend("s"), "sp", "me@x.com", "prof")
-    assert err is not None and "psql" in err
+    assert err is not None and "connection refused" in err
 
 
 def test_resolve_pg_host_reads_endpoint(monkeypatch):

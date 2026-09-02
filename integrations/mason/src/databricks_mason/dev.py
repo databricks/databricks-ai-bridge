@@ -45,13 +45,15 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
 @click.option(
-    "--with-memory-store",
+    "--memory",
+    "-m",
     "memory_store",
     default=None,
     help="Memory store display name to wire in via AGENT_MEMORY_STORE (same as `mason deploy`).",
 )
 @click.option(
-    "--with-session-store",
+    "--session",
+    "-s",
     "session_store",
     default=None,
     help="Session store name to wire in via AGENT_SESSION_STORE (same as `mason deploy`).",
@@ -68,9 +70,10 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--create-stores",
+    "--no-create-stores",
     is_flag=True,
-    help="Create the referenced stores if they don't exist (idempotent).",
+    help="Require referenced stores to already exist. By default missing stores are created "
+    "(idempotent).",
 )
 @click.pass_obj
 def dev(
@@ -82,7 +85,7 @@ def dev(
     session_store: Optional[str],
     traces_destination: Optional[str],
     traces_experiment: Optional[str],
-    create_stores: bool,
+    no_create_stores: bool,
 ) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
@@ -91,8 +94,9 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    The ``--with-*`` flags wire an agent's stores/traces into ``app.yaml`` before running, exactly as
-    ``mason deploy`` does — so you can iterate locally against a real store without hand-editing env.
+    The ``--memory`` / ``--session`` / ``--with-traces`` flags wire an agent's stores/traces
+    into ``app.yaml`` before running, exactly as ``mason deploy`` does — so you can iterate locally
+    against a real store without hand-editing env.
     Locally the store owner (you) already has access, so no service-principal grant is needed here;
     that grant happens at ``mason deploy`` time.
     """
@@ -115,7 +119,7 @@ def dev(
             session_store=session_store,
             traces_destination=traces_destination,
             traces_experiment=traces_experiment,
-            create_stores=create_stores,
+            create_stores=not no_create_stores,
         )
         if env_updates:
             _upsert_manifest_env(source_dir, env_updates)

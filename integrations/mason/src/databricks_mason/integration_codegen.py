@@ -15,7 +15,7 @@ from databricks_mason.integrations import Integration, MCPService, Sandbox, Scop
 _DEFAULT_RELATIVE_PATH = pathlib.Path("agent/databricks_tools.py")
 _REGISTRY_PATHS = {
     "langgraph": _DEFAULT_RELATIVE_PATH,
-    "openai": pathlib.Path("agent_server/databricks_tools.py"),
+    "openai": _DEFAULT_RELATIVE_PATH,
 }
 _ALIAS = "mason_integrations"
 

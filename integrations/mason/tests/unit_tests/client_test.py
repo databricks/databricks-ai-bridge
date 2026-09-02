@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
 from databricks_mason.client import (
     MasonClient,
     _workspace_client,
     memory_entry_path,
     memory_store_path,
+    session_store_path,
 )
 from databricks_mason.errors import AgentCliError
 
@@ -167,3 +170,57 @@ def test_path_helpers():
     assert memory_store_path("memory-stores/abc") == "memory-stores/abc"
     assert memory_entry_path("s", "e") == "memory-stores/s/entries/e"
     assert memory_entry_path("s", "memory-stores/s/entries/e") == "memory-stores/s/entries/e"
+
+
+def test_memory_store_path_rejects_empty_and_wrong_type():
+    # Empty / whitespace-only ids must not build a "memory-stores/" URL (ML-69222).
+    for bad in ["", "   ", "/", "memory-stores/"]:
+        with pytest.raises(AgentCliError):
+            memory_store_path(bad)
+    # A wrong-typed resource name is rejected rather than nested into the URL.
+    with pytest.raises(AgentCliError):
+        memory_store_path("session-stores/abc")
+
+
+def test_session_store_path_rejects_empty():
+    for bad in ["", "   ", "/", "session-stores/"]:
+        with pytest.raises(AgentCliError):
+            session_store_path(bad)
+    assert session_store_path("s1") == "session-stores/s1"
+    assert session_store_path("session-stores/s1") == "session-stores/s1"
+
+
+def test_memory_entry_path_rejects_empty_entry():
+    with pytest.raises(AgentCliError):
+        memory_entry_path("s", "")
+
+
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_update_memory_store_no_fields_raises_without_calling_api(workspace_client):
+    c, do = _client(workspace_client)
+    with pytest.raises(AgentCliError):
+        c.update_memory_store("abc")  # no display_name / description
+    do.assert_not_called()
+
+
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_update_session_store_no_fields_raises_without_calling_api(workspace_client):
+    c, do = _client(workspace_client)
+    with pytest.raises(AgentCliError):
+        c.update_session_store("s1")  # no description / metadata
+    do.assert_not_called()
+
+
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_client):
+    c, do = _client(workspace_client)
+    with pytest.raises(AgentCliError):
+        c.update_memory_entry("s", "memory-stores/s/entries/e")
+    do.assert_not_called()
+
+
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_delete_session_store_normalizes_path(workspace_client):
+    c, do = _client(workspace_client)
+    c.delete_session_store("session-stores/s1")
+    do.assert_called_once_with("DELETE", "/api/agents/v1/session-stores/s1", query=None, body=None)
