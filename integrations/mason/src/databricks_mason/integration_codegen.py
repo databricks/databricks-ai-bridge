@@ -107,9 +107,9 @@ def _integration(node: ast.AST) -> Integration:
     raise AgentCliError(f"Unsupported constructor {name!r} in the CLI-owned integration registry.")
 
 
-def _parse(source: str) -> tuple[list[Integration], dict[str, int]]:
+def _parse(source_text: str) -> tuple[list[Integration], dict[str, int]]:
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(source_text)
         compile(tree, "<databricks_tools.py>", "exec")
     except SyntaxError as exc:
         raise AgentCliError(
@@ -210,9 +210,9 @@ def render_registry(integrations: Iterable[Integration]) -> str:
     for integration in integrations:
         lines.extend(f"{line}\n" for line in _render_integration(integration))
     lines.append(")\n")
-    source = "".join(lines)
-    ast.parse(source)
-    return source
+    source_text = "".join(lines)
+    ast.parse(source_text)
+    return source_text
 
 
 def _summary(integration: Integration) -> str:
@@ -264,7 +264,7 @@ class IntegrationRegistry:
         project_root = pathlib.Path(root).expanduser().resolve()
         path = project_root / relative_path
         try:
-            source = path.read_text(encoding="utf-8")
+            source_text = path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
             raise AgentCliError(
                 f"Could not find Databricks integration registry at {path}."
@@ -273,7 +273,7 @@ class IntegrationRegistry:
             raise AgentCliError(
                 f"Could not read Databricks integration registry at {path}: {exc}."
             ) from exc
-        integrations, lines = _parse(source)
+        integrations, lines = _parse(source_text)
         return cls(
             project_root,
             integrations,
@@ -296,7 +296,7 @@ class IntegrationRegistry:
         return True
 
     def write(self) -> pathlib.Path:
-        source = render_registry(self.integrations)
+        source_text = render_registry(self.integrations)
         temporary: pathlib.Path | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -309,7 +309,7 @@ class IntegrationRegistry:
                 delete=False,
             ) as output:
                 temporary = pathlib.Path(output.name)
-                output.write(source)
+                output.write(source_text)
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, self.path)
@@ -319,7 +319,7 @@ class IntegrationRegistry:
             raise AgentCliError(
                 f"Could not write Databricks integration registry at {self.path}: {exc}."
             ) from exc
-        _, self._definition_lines = _parse(source)
+        _, self._definition_lines = _parse(source_text)
         return self.path
 
     def definition_line(self, integration_id: str) -> int:
