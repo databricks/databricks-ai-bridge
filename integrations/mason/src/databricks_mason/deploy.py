@@ -45,6 +45,23 @@ def _deployment_exists(name: str, profile: Optional[str]) -> bool:
     return _databricks(["apps", "get", name], profile, capture=True, check=False).returncode == 0
 
 
+def _compute_flags(instances: Optional[int]) -> list[str]:
+    """`databricks apps` compute-scaling flags for a fixed instance count (empty if unset).
+
+    Apps doesn't autoscale, so manual replicas are a fixed count — and the API rejects setting one
+    bound without the other ("both compute_min_instances and compute_max_instances must be
+    provided"), so pin min == max to the requested count.
+    """
+    if instances is None:
+        return []
+    return [
+        "--compute-min-instances",
+        str(instances),
+        "--compute-max-instances",
+        str(instances),
+    ]
+
+
 def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
     """The app's service principal client id (its Postgres role identity), or None if unavailable."""
     result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
@@ -52,6 +69,17 @@ def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
         return None
     try:
         return json.loads(result.stdout).get("service_principal_client_id")
+    except json.JSONDecodeError:
+        return None
+
+
+def _app_instances(name: str, profile: Optional[str]) -> Optional[int]:
+    """The existing app's fixed instance count (compute_min_instances), or None if unreadable."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("compute_min_instances")
     except json.JSONDecodeError:
         return None
 
@@ -347,6 +375,14 @@ def _grant_store_access(
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
 )
+@click.option(
+    "--min-instances",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of app instances to run (manual horizontal scaling). More instances add capacity "
+    "and redundancy; Apps does not autoscale yet, so this is a fixed count. Only settable when the "
+    "app is first created — re-scaling an existing app requires deleting and recreating it.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -360,6 +396,7 @@ def deploy(
     create_stores,
     pip_index_url,
     workspace_path,
+    min_instances,
 ) -> None:
     """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
     _validate_deployment_name(name)
@@ -389,6 +426,8 @@ def deploy(
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
         provisioned["Package index"] = pip_index_url
+    if min_instances is not None:
+        provisioned["Instances"] = str(min_instances)
 
     # 2. Patch the app.yaml manifest with the store identifiers.
     scaffolded = False
@@ -397,10 +436,24 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
-        _databricks(["apps", "create", name], obj.profile)
+        _databricks(["apps", "create", name] + _compute_flags(min_instances), obj.profile)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         _wait_for_running(name, obj.profile)
+    elif min_instances is not None:
+        # Instance count can only be set at create time. Neither Apps update path re-scales a
+        # fixed-count app in place: the sync API rejects the change outright, and the async one
+        # ("apps create-update") refuses because a fixed-count app counts as "scalable" and it won't
+        # let scaling be downgraded. So if the existing app already runs the requested count this is
+        # a no-op; otherwise fail clearly rather than passing a doomed flag downstream.
+        current = _app_instances(name, obj.profile)
+        if current is not None and current != min_instances:
+            raise AgentCliError(
+                f"App '{name}' already exists with {current} instance(s); its instance count can't "
+                f"be changed to {min_instances} on deploy (Apps only sets it at creation).",
+                hint=f"To re-scale, delete and recreate it: `mason deployments delete {name}` then "
+                "re-run deploy with --min-instances.",
+            )
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own

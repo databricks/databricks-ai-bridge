@@ -99,7 +99,7 @@ mason [-p <profile>] [-o text|json]
     list             [--source PATH]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
-               [--with-traces C.S] [--create-stores]
+               [--with-traces C.S] [--create-stores] [--min-instances N]
   deployments  list | get | logs | start | stop | delete
 ```
 

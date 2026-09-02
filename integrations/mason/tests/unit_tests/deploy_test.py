@@ -184,6 +184,123 @@ def test_wait_for_running_times_out(monkeypatch):
         pass
 
 
+def test_create_passes_min_instances_to_apps_create(tmp_path: pathlib.Path, monkeypatch):
+    # For a new app, --min-instances is set at creation time via `apps create`.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--min-instances", "3"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    # Apps has no autoscaling: a fixed count pins both min and max to the same value.
+    assert [
+        "apps",
+        "create",
+        "myapp",
+        "--compute-min-instances",
+        "3",
+        "--compute-max-instances",
+        "3",
+    ] in calls
+    # scaling is only set on create here; no separate `apps update`
+    assert not any(a[:2] == ["apps", "update"] for a in calls)
+
+
+def test_existing_app_with_matching_instances_is_noop(tmp_path: pathlib.Path, monkeypatch):
+    # Instance count is create-only: re-deploying an existing app at its current count just proceeds
+    # (no `apps update`, which the API rejects for instance-count changes).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_instances", lambda name, p: 2)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--min-instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not any(a[:2] == ["apps", "update"] for a in calls)
+    assert any(a[:2] == ["apps", "deploy"] for a in calls)
+
+
+def test_existing_app_rescale_is_rejected(tmp_path: pathlib.Path, monkeypatch):
+    # Asking for a different count than the running app fails clearly (Apps can't re-scale in place).
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_instances", lambda name, p: 2)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--min-instances", "5"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert not any(a[:2] == ["apps", "deploy"] for a in calls), (
+        "must not deploy on a doomed re-scale"
+    )
+
+
+def test_no_instance_lookup_without_min_instances(tmp_path: pathlib.Path, monkeypatch):
+    # Without --min-instances an existing-app deploy must not touch the app's compute config.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: calls.append(args)
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert not any(a[:2] == ["apps", "update"] for a in calls)
+
+
 def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
