@@ -177,16 +177,18 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "curl -X POST" in " ".join(result.output.split())
 
 
-def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
+def test_dev_runs_from_code_first_project_without_agent_manifest(
     tmp_path: pathlib.Path,
 ):
     (tmp_path / "app.yaml").write_text("command: []\n")
-    manifest = tmp_path / "agent.toml"
-    manifest.write_text('schema_version = 1\n\n[agent]\nframework = "langgraph"\n')
+    registry = tmp_path / "agent" / "databricks_tools.py"
+    registry.parent.mkdir()
+    registry.write_text("DATABRICKS_TOOLS = ()\n")
 
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
 
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
-    assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    assert registry.read_text() == "DATABRICKS_TOOLS = ()\n"
+    assert not (tmp_path / "agent.toml").exists()

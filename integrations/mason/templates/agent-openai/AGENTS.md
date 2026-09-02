@@ -77,6 +77,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | --- | --- |
 | Change model / instructions | `agent/agent.py` (`create_agent`) |
 | Add a function tool | new `*.py` in `agent/tools/` with a `@function_tool` function (auto-collected) |
+| Add a Databricks-managed integration | `mason tools add sandbox`, `mcp`, or `uc-function` (updates `agent/databricks_tools.py`) |
 | Require human approval for a tool | `needs_approval=True` on the tool + its name in `REQUIRE_APPROVAL` (`agent/agent.py`) |
 | Add an MCP server | append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
@@ -91,7 +92,7 @@ behind those handlers in `agent/agent.py`, so the serving layer is the same rega
 
 `databricks_mason.runtime` (from the `databricks-mason` package) holds framework-neutral plumbing
 (tracing, workspace client, background store), and `databricks_mason.openai` holds the OpenAI-specific
-pieces (session store, MCP servers, memory tools), so the template ships only your agent code.
+pieces (session store, integration binding, memory tools), so the template ships only your agent code.
 
 ## How tools register
 

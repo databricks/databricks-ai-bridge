@@ -22,6 +22,7 @@ programmatic token authentication. Polling and health checks likewise have `/api
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
   agent.py             #   invoke / stream handlers + create_agent() + event serialization
+  databricks_tools.py  #   Databricks-managed integrations selected by mason tools
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@function_tool)
     send_message.py    #     a side-effecting tool gated by human approval (needs_approval=True)
@@ -33,8 +34,9 @@ tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session store, tracing,
-MCP server construction, background store) lives in the `databricks-mason` package —
+You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; `mason tools` maintains
+`agent/databricks_tools.py` for selected Databricks integrations. The plumbing (session store,
+tracing, MCP server construction, background store) lives in the `databricks-mason` package —
 framework-neutral pieces under `databricks_mason.runtime`, OpenAI-specific ones under
 `databricks_mason.openai` — so the template ships only your agent code. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
@@ -206,6 +208,8 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Model / instructions:** `create_agent()` in `agent/agent.py`.
 - **Add a tool:** drop a new file in `agent/tools/` with a `@function_tool`-decorated function; it's
   collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
+- **Add a Databricks integration:** run `mason tools add sandbox`, `mcp`, or `uc-function`; Mason
+  updates `agent/databricks_tools.py`, which is bound in `stream_handler()`.
 - **Require approval for a tool:** add `needs_approval=True` to the tool and its name to
   `REQUIRE_APPROVAL` in `agent/agent.py` (see the human-in-the-loop section above); empty the set to
   disable gating.

@@ -364,8 +364,8 @@ class Runner:
                 if authoring == "cli":
                     self._author_cli(project)
                 else:
-                    self._author_direct(project, framework)
-                self._write_python_marker(project)
+                    self._author_direct(project)
+                self._write_python_tool(project)
                 app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
@@ -382,23 +382,20 @@ class Runner:
                 "--name",
                 "mason_uc_marker",
             ],
-            ["tools", "add", "python", "matrix-marker"],
         ]
         for args in commands:
             self.run([str(self.mason), *args, "--source", str(project)])
 
-    def _author_direct(self, project: pathlib.Path, framework: str) -> None:
-        fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_agent.toml"
-        manifest = (
-            fixture.read_text(encoding="utf-8")
-            .replace("__FRAMEWORK__", framework)
-            .replace("__UC_FUNCTION__", self.uc_function or "")
+    def _author_direct(self, project: pathlib.Path) -> None:
+        fixture = pathlib.Path(__file__).parent / "fixtures" / "direct_databricks_tools.py"
+        registry = fixture.read_text(encoding="utf-8").replace(
+            "__UC_FUNCTION__", self.uc_function or ""
         )
-        target = project / "agent.toml"
+        target = project / "agent" / "databricks_tools.py"
         self.transcript.file_step(target, "direct authoring; no mason tools command")
-        target.write_text(manifest, encoding="utf-8")
+        target.write_text(registry, encoding="utf-8")
 
-    def _write_python_marker(self, project: pathlib.Path) -> None:
+    def _write_python_tool(self, project: pathlib.Path) -> None:
         body = (
             "from langchain_core.tools import tool\n\n\n"
             "@tool\n"

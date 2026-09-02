@@ -22,8 +22,8 @@ from typing import Optional
 import click
 
 from databricks_mason import render
-from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
+from databricks_mason.integration_codegen import IntegrationRegistry, registry_relative_path
 from databricks_mason.project_config import write_project_metadata
 
 # Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
@@ -227,7 +227,12 @@ def init(
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=framework, template=template_name)
-    AgentProject.create(dest, framework=framework).write()
+    relative_registry = registry_relative_path(framework)
+    registry_path = dest / relative_registry
+    if registry_path.is_file():
+        IntegrationRegistry.load(dest, relative_path=relative_registry)
+    else:
+        IntegrationRegistry.empty(dest, relative_path=relative_registry).write()
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

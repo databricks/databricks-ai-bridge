@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from databricks_mason import init as init_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.integration_codegen import IntegrationRegistry, registry_relative_path
 
 
 class _Ctx:
@@ -112,8 +113,37 @@ def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
     }
 
 
-def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_never_creates_agent_manifest(tmp_path: pathlib.Path, framework: str):
+    dest = tmp_path / framework
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", framework, str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "agent.toml").exists()
+
+
+def test_init_langgraph_creates_empty_code_registry(tmp_path: pathlib.Path):
+    dest = tmp_path / "langgraph"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert IntegrationRegistry.load(dest).integrations == []
+
+
+def test_init_openai_creates_empty_code_registry(tmp_path: pathlib.Path):
+    dest = tmp_path / "openai"
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
         result = CliRunner().invoke(
@@ -123,12 +153,9 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         )
 
     assert result.exit_code == 0, result.output
-    with (dest / "agent.toml").open("rb") as manifest_file:
-        manifest = tomli.load(manifest_file)
-    assert manifest == {
-        "schema_version": 1,
-        "agent": {"framework": "openai"},
-    }
+    relative_path = registry_relative_path("openai")
+    assert IntegrationRegistry.load(dest, relative_path=relative_path).integrations == []
+    assert relative_path == pathlib.Path("agent/databricks_tools.py")
 
 
 def test_init_langgraph_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):

@@ -75,8 +75,9 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | --- | --- |
 | Change model / instructions | `agent/agent.py` (`create_agent_graph`) |
 | Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
+| Add Databricks Sandbox / managed MCP / UC Function tools | `mason tools add ...` (`agent/databricks_tools.py`) |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
-| Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
+| Add a custom MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
 | Change the session checkpointer | `databricks_mason/langgraph/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
@@ -94,9 +95,14 @@ code.
 ## How tools register
 
 `agent/tools/all_tools()` auto-imports every module in the package and collects every
-`@tool`-decorated `BaseTool` it finds. So a tool registers just by existing in a file there —
-`create_agent_graph()` calls `all_tools()`. **Do not** edit `agent/agent.py` to add a tool — just add
-a file to `agent/tools/`.
+`@tool`-decorated `BaseTool` it finds. So a local tool registers just by existing in a file there —
+`create_agent_graph()` calls `all_tools()`.
+
+Databricks-managed integrations live as inert descriptors in `agent/databricks_tools.py`. The
+template already calls `await load_tools(...)` while constructing the agent, passing
+`DATABRICKS_TOOLS`, `build_mcp_servers()`, and the local tools whose names must remain unique. An
+empty registry is a no-op; `mason tools add ...` updates it and reports the exact definition and
+attachment lines. Custom MCP connections remain explicit objects returned by `build_mcp_servers()`.
 
 ## Sessions
 

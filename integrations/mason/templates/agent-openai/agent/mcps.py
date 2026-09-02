@@ -1,9 +1,8 @@
 """MCP servers to offer the agent — this is where you configure them.
 
-Empty by default: the agent runs with only the MCP servers declared in ``agent.toml``. Add servers
-to ``build_mcp_servers`` to offer more; ``agent.py`` passes them to ``mcp_servers``, which joins them
-with the ``agent.toml`` servers. The Agents SDK connects each server and lists its tools lazily
-during the run.
+Empty by default. Add customer-authored servers to ``build_mcp_servers``; ``agent.py`` connects
+them alongside the Databricks integrations selected in ``agent/databricks_tools.py``. The Agents
+SDK lists each server's tools lazily during the run.
 """
 
 from databricks_openai.agents import McpServer

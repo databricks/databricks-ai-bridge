@@ -18,10 +18,6 @@ Package: tomli
 Project URL: https://github.com/hukkin/tomli
 Copyright: 2021 Taneli Hukkinen
 
-Package: tomlkit
-Project URL: https://github.com/python-poetry/tomlkit
-Copyright: 2018 Sébastien Eustace
-
 # Apache License 2.0
 
 This Software contains code from the following open source projects, licensed under the Apache License 2.0 license (https://www.apache.org/licenses/LICENSE-2.0).

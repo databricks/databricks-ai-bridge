@@ -1,13 +1,14 @@
 """LangGraph adapter for running an agent on Databricks (installed via ``databricks-mason[runtime]``).
 
-Composable pieces you drop into an existing LangGraph agent — a session-store checkpointer, MCP
-tools declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot
+Composable pieces you drop into an existing LangGraph agent — a session-store checkpointer,
+explicit Databricks integration specs, long-term memory tools, and MLflow tracing. Each maps onto a slot
 LangGraph already has, so migrating an existing agent is a graft, not a rewrite::
 
+    from agent.databricks_tools import DATABRICKS_TOOLS
     from databricks_mason.langgraph import (
         checkpointer,
         thread_config,
-        mcp_tools,
+        load_tools,
         configure_tracing,
     )
 
@@ -16,8 +17,8 @@ LangGraph already has, so migrating an existing agent is a graft, not a rewrite:
         model=...,
         tools=[
             *your_tools,
-            *await mcp_tools(),
-        ],  # mcp_tools() includes your agent.toml servers
+            *await load_tools(DATABRICKS_TOOLS),
+        ],
         checkpointer=checkpointer(),  # durable when AGENT_SESSION_STORE is set
     )
     result = await agent.ainvoke(inputs, config=thread_config(session_id))
@@ -32,7 +33,7 @@ are reachable by their submodule paths but not re-exported here.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_mason.langgraph.mcp import mcp_tools
+    from databricks_mason.langgraph.mcp import load_tools, mcp_tools
     from databricks_mason.langgraph.memory import memory_tools, recall, remember
     from databricks_mason.langgraph.session_store import checkpointer, thread_config
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
@@ -52,7 +53,9 @@ def configure_tracing() -> None:
 
 
 __all__ = [
-    # MCP tools from agent.toml (plus any servers you pass) — add them to your agent's tool list.
+    # Explicit Databricks integrations — add the resulting native tools to your agent's tool list.
+    "load_tools",
+    # Retired manifest API kept as a loud migration guard.
     "mcp_tools",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
@@ -73,6 +76,7 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds LangChain autolog).
 _MODULE_BY_NAME = {
+    "load_tools": "databricks_mason.langgraph.mcp",
     "mcp_tools": "databricks_mason.langgraph.mcp",
     "memory_tools": "databricks_mason.langgraph.memory",
     "remember": "databricks_mason.langgraph.memory",

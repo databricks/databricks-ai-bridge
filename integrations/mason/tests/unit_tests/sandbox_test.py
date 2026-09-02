@@ -209,6 +209,23 @@ def test_add_sandbox_uses_langgraph_adapter_and_injects_fixed_meta(
     )
 
 
+def test_add_sandbox_ignores_retired_agent_toml_compatibility_marker(tmp_path: pathlib.Path):
+    project, mcps, _runtime = _langgraph_project(tmp_path)
+    (project / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n',
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        add_sandbox,
+        ["--source", str(project), "--scope", "table:samples.nyctaxi.trips"],
+        obj=_TextCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "_sandbox_tool_interceptor" in mcps.read_text(encoding="utf-8")
+
+
 def test_add_sandbox_infers_legacy_langgraph_project_from_dependencies(tmp_path: pathlib.Path):
     project, mcps, runtime = _langgraph_project(tmp_path, framework=None)
     (project / "pyproject.toml").write_text(

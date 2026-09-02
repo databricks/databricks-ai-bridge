@@ -1,112 +1,147 @@
-"""Build MCP tools for the agent from the servers declared in ``agent.toml`` (plus any the agent adds).
-
-``mcp_tools()`` is the entry point: it reads the MCP servers declared in ``agent.toml``
-(sandbox/mcp + uc_function), fetches their LangChain tools with sandbox downscoping applied, and
-returns them. An agent with its own hand-built servers passes them as ``extra_servers``; leaving
-``agent.toml`` empty simply yields no declared servers. Typical agent use::
-
-    tools = await mcp_tools()  # just the agent.toml servers
-    tools = await mcp_tools(build_mcp_servers())  # agent.toml servers + the agent's own
-"""
+"""Materialize explicit Databricks integration specs as native LangChain tools."""
 
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING, Any
+from collections import Counter
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, cast
 
 from databricks_langchain import DatabricksMCPServer, DatabricksMultiServerMCPClient
 from langchain_mcp_adapters.sessions import create_session
 
 if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
     from databricks_langchain import MCPServer
 
-from databricks_mason.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
-from databricks_mason.runtime.workspace import workspace_client, workspace_headers
+from databricks_mason.integrations import (
+    Integration,
+    MCPService,
+    Sandbox,
+    downscope_wire,
+)
+from databricks_mason.runtime.workspace import workspace_client as _default_workspace_client
+from databricks_mason.runtime.workspace import workspace_headers
 
-logger = logging.getLogger(__name__)
 
-
-def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
-    client = workspace_client()
+def _server_from_integration(
+    integration: Integration,
+    client: WorkspaceClient,
+) -> DatabricksMCPServer:
     host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
+    if isinstance(integration, (Sandbox, MCPService)):
+        service = "system.ai.sandbox" if isinstance(integration, Sandbox) else integration.service
         return DatabricksMCPServer(
-            name=tool.id,
-            url=f"{host}/ai-gateway/mcp-services/{tool.service}",
+            name=integration.id,
+            url=f"{host}/ai-gateway/mcp-services/{service}",
             headers=workspace_headers() or None,
             workspace_client=client,
             timeout=120.0,
         )
-    if tool.kind == "uc_function":
-        catalog, schema, function_name = (tool.function or "").split(".")
-        return DatabricksMCPServer.from_uc_function(
-            catalog=catalog,
-            schema=schema,
-            function_name=function_name,
-            name=tool.id,
-            headers=workspace_headers() or None,
-            workspace_client=client,
-            timeout=120.0,
-        )
-    return None
+    catalog, schema, function_name = integration.function.split(".")
+    return DatabricksMCPServer.from_uc_function(
+        catalog=catalog,
+        schema=schema,
+        function_name=function_name,
+        name=integration.id,
+        headers=workspace_headers() or None,
+        workspace_client=client,
+        timeout=120.0,
+    )
 
 
-def _declared_servers() -> list[DatabricksMCPServer]:
-    """The MCP servers declared in the agent's ``agent.toml`` (may be empty)."""
-    tools = load_tools(expected_framework="langgraph")
-    return [server for tool in tools if (server := _server_from_tool(tool)) is not None]
-
-
-def _sandbox_interceptor():
+def _sandbox_interceptor(
+    sandboxes: dict[str, tuple[Sandbox, DatabricksMCPServer]],
+):
     async def interceptor(request: Any, handler: Any) -> Any:
-        tools = {tool.id: tool for tool in load_tools(expected_framework="langgraph")}
-        tool = tools.get(request.server_name)
-        if tool is None or tool.kind != "sandbox":
+        binding = sandboxes.get(request.server_name)
+        if binding is None:
             return await handler(request)
 
-        server = _server_from_tool(tool)
-        if server is None:
-            raise RuntimeError(f"Could not build sandbox MCP server {tool.id!r}.")
+        sandbox, server = binding
         async with create_session(server.to_connection_dict()) as session:
             await session.initialize()
             return await session.call_tool(
                 request.name,
                 request.args,
-                meta={"downscope": downscope_wire(tool)},
+                meta={"downscope": downscope_wire(sandbox)},
             )
 
     return interceptor
 
 
-def _has_sandbox_tool() -> bool:
-    return any(tool.kind == "sandbox" for tool in load_tools(expected_framework="langgraph"))
+def mcp_client(
+    servers: Sequence[DatabricksMCPServer],
+    *,
+    sandboxes: dict[str, tuple[Sandbox, DatabricksMCPServer]] | None = None,
+) -> DatabricksMultiServerMCPClient:
+    """Build a native client whose Sandbox policy closes over the explicit selection."""
 
-
-def mcp_client(servers: list[DatabricksMCPServer]) -> DatabricksMultiServerMCPClient:
-    """A multi-server MCP client over ``servers`` with the sandbox downscoping interceptor attached.
-
-    The interceptor is derived from the ``agent.toml`` manifest, so sandbox tools run downscoped
-    regardless of how the caller drives the returned client (``get_tools`` or otherwise). Callers who
-    build their own client instead take on applying downscoping themselves.
-    """
-    interceptors = [_sandbox_interceptor()] if _has_sandbox_tool() else []
+    server_list = list(servers)
+    names = [server.name for server in server_list]
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+    if duplicates:
+        rendered = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(f"MCP server names must be unique; duplicates: {rendered}.")
+    for name, (sandbox, server) in (sandboxes or {}).items():
+        if sandbox.id != name or server.name != name or server not in server_list:
+            raise ValueError(f"Sandbox binding {name!r} does not match its MCP server.")
+    interceptors = [_sandbox_interceptor(sandboxes)] if sandboxes else []
     # DatabricksMCPServer is a subclass of MCPServer, so coerce the type for the API
-    servers_as_mcp: list[MCPServer] = servers  # type: ignore[name-defined,assignment]
+    servers_as_mcp = cast("list[MCPServer]", server_list)
     return DatabricksMultiServerMCPClient(servers_as_mcp, tool_interceptors=interceptors)
 
 
-async def mcp_tools(extra_servers: list[DatabricksMCPServer] | None = None) -> list:
-    """Fetch LangChain MCP tools for the agent (with sandbox downscoping). Fail-open to ``[]``.
+async def load_tools(
+    integrations: Sequence[Integration],
+    *,
+    extra_servers: Sequence[DatabricksMCPServer] = (),
+    workspace_client: WorkspaceClient | None = None,
+    existing_tools: Sequence[Any] = (),
+) -> list:
+    """Resolve only ``integrations`` and return their native LangChain tools."""
 
-    Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Returns an empty list when there are no servers or the fetch fails, so it is
-    safe to spread straight into an agent's tool list.
-    """
-    servers = [*_declared_servers(), *(extra_servers or [])]
+    selected = tuple(integrations)
+    supplied_servers = tuple(extra_servers)
+    names = [item.id for item in selected]
+    names.extend(server.name for server in supplied_servers)
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+    if duplicates:
+        rendered = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(
+            f"Integration and MCP server names must be unique; duplicates: {rendered}."
+        )
+
+    declared_servers: list[DatabricksMCPServer] = []
+    sandbox_bindings: dict[str, tuple[Sandbox, DatabricksMCPServer]] = {}
+    if selected:
+        client = workspace_client or _default_workspace_client()
+        for item in selected:
+            server = _server_from_integration(item, client)
+            declared_servers.append(server)
+            if isinstance(item, Sandbox):
+                sandbox_bindings[item.id] = (item, server)
+    servers = [*declared_servers, *supplied_servers]
     if not servers:
         return []
-    try:
-        return await mcp_client(servers).get_tools()
-    except Exception:
-        logger.warning("Failed to fetch MCP tools; continuing without them.", exc_info=True)
-        return []
+    tools = await mcp_client(servers, sandboxes=sandbox_bindings).get_tools()
+    tool_names = [
+        name
+        for tool in (*existing_tools, *tools)
+        if isinstance(name := getattr(tool, "name", None), str)
+    ]
+    duplicates = sorted(name for name, count in Counter(tool_names).items() if count > 1)
+    if duplicates:
+        rendered = ", ".join(repr(name) for name in duplicates)
+        raise ValueError(f"LangGraph MCP tool names must be unique; duplicates: {rendered}.")
+    return tools
+
+
+async def mcp_tools(extra_servers: list[DatabricksMCPServer] | None = None) -> list:
+    """Fail loudly for the retired manifest-backed API instead of dropping integrations."""
+
+    del extra_servers
+    raise RuntimeError(
+        "mcp_tools() no longer discovers tools from agent.toml; migrate the selected "
+        "integrations to DATABRICKS_TOOLS and call "
+        "load_tools(DATABRICKS_TOOLS, extra_servers=build_mcp_servers())."
+    )

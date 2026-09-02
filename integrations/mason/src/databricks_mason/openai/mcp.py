@@ -1,94 +1,153 @@
-"""Build MCP servers for the agent from the ones declared in ``agent.toml`` (plus any the agent adds).
-
-``mcp_servers()`` is the entry point: it reads the MCP servers declared in ``agent.toml``
-(sandbox/mcp + uc_function) and returns Agents SDK ``McpServer`` objects, with sandbox downscoping
-applied. Hand them to ``Agent(mcp_servers=...)``; the Agents SDK connects and lists their tools
-lazily inside ``Runner.run``. An agent with its own hand-built servers passes them as
-``extra_servers``; leaving ``agent.toml`` empty simply yields no declared servers. Typical use::
-
-    servers = await mcp_servers()  # just the agent.toml servers
-    servers = await mcp_servers(build_mcp_servers())  # agent.toml servers + the agent's own
-
-Unlike a fetch-once tool list, these are connection objects: open them for the life of the request
-(e.g. via ``AsyncExitStack``), because the SDK lists each server's tools only when the run needs them.
-"""
+"""Attach explicit Databricks integrations to an OpenAI Agents SDK agent."""
 
 from __future__ import annotations
 
-import logging
-from typing import Any
+from collections.abc import Sequence
+from contextlib import AsyncExitStack
+from typing import Any, TypeVar
 
+from agents import Agent
+from agents.mcp import MCPServerStreamableHttpParams
+from databricks.sdk import WorkspaceClient
 from databricks_openai.agents import McpServer
 
-from databricks_mason.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
-from databricks_mason.runtime.workspace import workspace_client
+from databricks_mason.integrations import (
+    Integration,
+    MCPService,
+    Sandbox,
+    UCFunction,
+    downscope_wire,
+)
+from databricks_mason.runtime.workspace import (
+    workspace_client as _default_workspace_client,
+)
+from databricks_mason.runtime.workspace import (
+    workspace_headers,
+)
 
-logger = logging.getLogger(__name__)
-
-_FRAMEWORK = "openai"
+TContext = TypeVar("TContext")
 
 
-class _DownscopedMcpServer(McpServer):
-    """An ``McpServer`` that injects a sandbox downscope into every ``call_tool``.
+class _SandboxMcpServer(McpServer):
+    """MCP server that enforces the selected Sandbox scope on every call."""
 
-    The Databricks sandbox MCP applies the downscope from the call's ``_meta``; the Agents SDK does
-    not surface a per-call hook, so bind the manifest's downscope to the server and add it on each
-    invocation. Only sandbox bindings need this — plain MCP / UC-function servers use the base class.
-    """
+    def __init__(self, *, sandbox: Sandbox, **kwargs: Any) -> None:
+        self._sandbox = sandbox
+        super().__init__(**kwargs)
 
-    def __init__(self, *args: Any, downscope: dict[str, Any], **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._downscope = downscope
-
-    async def call_tool(self, tool_name, arguments, **kwargs):
-        meta = {**(kwargs.pop("meta", None) or {}), "downscope": self._downscope}
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        **kwargs: Any,
+    ) -> Any:
+        incoming_meta = kwargs.pop("meta", None)
+        meta = dict(incoming_meta) if isinstance(incoming_meta, dict) else {}
+        meta["downscope"] = downscope_wire(self._sandbox)
         return await super().call_tool(tool_name, arguments, meta=meta, **kwargs)
 
 
-def _server_from_tool(tool: ToolRecord) -> McpServer | None:
-    client = workspace_client()
-    host = client.config.host.rstrip("/")
-    if tool.kind in {"sandbox", "mcp"}:
-        url = f"{host}/ai-gateway/mcp-services/{tool.service}"
-        if tool.kind == "sandbox":
-            return _DownscopedMcpServer(
-                url=url,
-                name=tool.id,
-                workspace_client=client,
-                timeout=120.0,
-                downscope=downscope_wire(tool),
-            )
-        return McpServer(url=url, name=tool.id, workspace_client=client, timeout=120.0)
-    if tool.kind == "uc_function":
-        catalog, schema, function_name = (tool.function or "").split(".")
+def _transport_params() -> MCPServerStreamableHttpParams | None:
+    headers = workspace_headers()
+    if not headers:
+        return None
+    return MCPServerStreamableHttpParams(url="", headers=headers)
+
+
+def _server_from_integration(
+    integration: Integration,
+    workspace_client: WorkspaceClient,
+) -> McpServer:
+    host = workspace_client.config.host.rstrip("/")
+    if isinstance(integration, MCPService):
+        return McpServer(
+            url=f"{host}/ai-gateway/mcp-services/{integration.service}",
+            name=integration.id,
+            workspace_client=workspace_client,
+            timeout=120.0,
+            params=_transport_params(),
+        )
+    if isinstance(integration, Sandbox):
+        return _SandboxMcpServer(
+            sandbox=integration,
+            url=f"{host}/ai-gateway/mcp-services/system.ai.sandbox",
+            name=integration.id,
+            workspace_client=workspace_client,
+            timeout=120.0,
+            params=_transport_params(),
+            tool_filter={"allowed_tool_names": ["sandbox", "run_code"]},
+        )
+    if isinstance(integration, UCFunction):
+        catalog, schema, function_name = integration.function.split(".")
         return McpServer.from_uc_function(
             catalog=catalog,
             schema=schema,
             function_name=function_name,
-            name=tool.id,
-            workspace_client=client,
+            name=integration.id,
+            workspace_client=workspace_client,
             timeout=120.0,
+            params=_transport_params(),
         )
-    return None
+    raise TypeError(f"Unsupported integration: {type(integration).__name__}")
 
 
-def _declared_servers() -> list[McpServer]:
-    """The MCP servers declared in the agent's ``agent.toml`` (may be empty)."""
-    tools = load_tools(expected_framework=_FRAMEWORK)
-    return [server for tool in tools if (server := _server_from_tool(tool)) is not None]
+def _validate_server_names(agent: Agent[Any], integrations: Sequence[Integration]) -> None:
+    owners: dict[str, str] = {}
+    candidates = [
+        *((server.name, "existing agent") for server in agent.mcp_servers),
+        *((integration.id, "Databricks integration") for integration in integrations),
+    ]
+    for name, owner in candidates:
+        if previous_owner := owners.get(name):
+            raise ValueError(
+                f"MCP server name {name!r} is used by both {previous_owner} and {owner}."
+            )
+        owners[name] = owner
 
 
-async def mcp_servers(extra_servers: list[McpServer] | None = None) -> list[McpServer]:
-    """Build the agent's MCP servers (with sandbox downscoping). Fail-open to ``[]``.
+def _claim_tool(tool_owners: dict[str, str], name: str, owner: str) -> None:
+    if previous_owner := tool_owners.get(name):
+        raise ValueError(
+            f"MCP tool {name!r} is advertised by both {previous_owner!r} and {owner!r}."
+        )
+    tool_owners[name] = owner
 
-    Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
-    agent builds itself. Returns an empty list when there are no servers or construction fails, so it
-    is safe to spread straight into ``Agent(mcp_servers=...)``. The SDK connects and lists each
-    server's tools lazily during the run — health-check them at connect time if one bad server must
-    not fail the whole request.
+
+async def bind_tools(
+    agent: Agent[TContext],
+    integrations: Sequence[Integration],
+    *,
+    stack: AsyncExitStack,
+    workspace_client: WorkspaceClient | None = None,
+) -> Agent[TContext]:
+    """Connect selected integrations and return an isolated clone of ``agent``.
+
+    The caller owns ``stack`` and must keep it open for as long as the returned agent can run.
+    Closing the stack disconnects every server materialized by this call. Existing servers on the
+    input agent are preserved, and their lifecycle remains owned by the caller that supplied them.
+    Existing servers are not eagerly inspected because dynamic tool filters require request
+    context; the Agents SDK discovers and validates the full MCP tool set during each run. Server
+    names and newly materialized tool names are validated before cloning.
     """
-    try:
-        return [*_declared_servers(), *(extra_servers or [])]
-    except Exception:
-        logger.warning("Failed to build MCP servers; continuing without them.", exc_info=True)
-        return []
+
+    servers: list[McpServer] = []
+    if integrations:
+        _validate_server_names(agent, integrations)
+        tool_owners = {
+            name: "local agent tool"
+            for tool in agent.tools
+            if isinstance(name := getattr(tool, "name", None), str)
+        }
+        client = workspace_client if workspace_client is not None else _default_workspace_client()
+        for integration in integrations:
+            server = await stack.enter_async_context(_server_from_integration(integration, client))
+            for tool in await server.list_tools():
+                _claim_tool(tool_owners, tool.name, integration.id)
+            servers.append(server)
+    return agent.clone(
+        tools=[*agent.tools],
+        mcp_servers=[*agent.mcp_servers, *servers],
+        handoffs=[*agent.handoffs],
+        input_guardrails=[*agent.input_guardrails],
+        output_guardrails=[*agent.output_guardrails],
+    )

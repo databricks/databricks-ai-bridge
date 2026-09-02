@@ -1,8 +1,7 @@
-"""MCP servers to offer the agent — this is where you configure them.
+"""Customer-authored MCP servers to offer alongside ``DATABRICKS_TOOLS``.
 
-Empty by default: the agent runs with only the MCP servers declared in ``agent.toml``. Add servers
-to ``build_mcp_servers`` to offer more; ``agent.py`` passes them to ``mcp_tools``, which joins them
-with the ``agent.toml`` servers and fetches their tools each request.
+Empty by default. Add servers to ``build_mcp_servers`` when you need a custom MCP connection;
+``agent.py`` passes them to the same explicit tool-loading seam used by Mason integrations.
 """
 
 from databricks_langchain import DatabricksMCPServer

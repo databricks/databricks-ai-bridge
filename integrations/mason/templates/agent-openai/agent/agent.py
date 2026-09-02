@@ -4,18 +4,18 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack
 from typing import Any
 
-from agents import Agent, RunResultStreaming, Runner, RunState
+from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.items import ToolApprovalItem
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
-from databricks_mason import tag_session, workspace_client
-from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
-
+from agent.databricks_tools import DATABRICKS_TOOLS
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
+from databricks_mason import tag_session, workspace_client
+from databricks_mason.openai import bind_tools, configure_tracing, memory_tools, session_store
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +121,11 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     # The agent runs inside an AsyncExitStack so any MCP servers stay connected for the whole run —
     # the Agents SDK lists each server's tools lazily inside Runner.run.
     async with AsyncExitStack() as stack:
-        # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones
-        # (mcps.py), then connect them for the life of the run.
-        servers = await mcp_servers(build_mcp_servers())
-        mcp = [await stack.enter_async_context(server) for server in servers]
+        # Connect customer-authored MCP servers first, then bind the Databricks integrations
+        # selected in agent/databricks_tools.py. The stack owns every connection for this run.
+        mcp = [await stack.enter_async_context(server) for server in build_mcp_servers()]
         agent = create_agent(mcp)
+        agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
@@ -157,7 +157,7 @@ def _apply_decisions(session_id: str, resume: dict) -> RunState:
             "different replica loses them; retry the turn."
         )
     decisions = resume.get("decisions") or []
-    for decision, item in zip(decisions, state.get_interruptions()):
+    for decision, item in zip(decisions, state.get_interruptions(), strict=False):
         if decision.get("type") == "approve":
             state.approve(item)
         else:

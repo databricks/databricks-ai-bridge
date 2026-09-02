@@ -1,36 +1,30 @@
-"""OpenAI Agents SDK adapter for running an agent on Databricks (installed via ``databricks-mason[runtime-openai]``).
+"""OpenAI Agents SDK adapter for running an agent on Databricks.
 
-Composable pieces you drop into an existing OpenAI Agents SDK agent — a session store, MCP servers
-declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each maps onto a slot the
-Agents SDK already has, so migrating an existing agent is a graft, not a rewrite::
+Composable pieces you drop into an existing OpenAI Agents SDK agent include explicit Databricks
+integration binding, session storage, long-term memory tools, and MLflow tracing. Install them via
+``databricks-mason[runtime-openai]``::
 
-    from databricks_mason.openai import (
-        session_store,
-        mcp_servers,
-        memory_tools,
-        configure_tracing,
-    )
+    from contextlib import AsyncExitStack
 
-    configure_tracing()
-    agent = Agent(
-        name="Agent",
-        model="databricks-gpt-5-2",
-        tools=[*your_tools, *memory_tools()],
-        mcp_servers=await mcp_servers(),  # your agent.toml servers + any you pass
-    )
-    result = await Runner.run(agent, messages, session=session_store(session_id))
+    from databricks_mason.openai import bind_tools, memory_tools, session_store
 
-These need the agent stack (openai-agents, databricks-openai, mlflow), so they sit behind the
-``[runtime-openai]`` extra to keep a plain ``databricks-mason`` CLI install light.
+    async with AsyncExitStack() as stack:
+        agent = Agent(
+            name="Agent",
+            model="databricks-gpt-5-2",
+            tools=[*your_tools, *memory_tools()],
+        )
+        agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)
+        result = await Runner.run(agent, messages, session=session_store(session_id))
 
-``__all__`` is the curated surface. Other entry points (``DatabricksSessionStore``) are reachable by
-their submodule paths but not re-exported here.
+``__all__`` is the curated surface. Other entry points (``DatabricksSessionStore``) are
+reachable by their submodule paths but not re-exported here.
 """
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_mason.openai.mcp import mcp_servers
+    from databricks_mason.openai.mcp import bind_tools
     from databricks_mason.openai.memory import memory_tools, recall, remember
     from databricks_mason.openai.sessions import session_store
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
@@ -40,7 +34,7 @@ def configure_tracing() -> None:
     """Enable MLflow tracing with OpenAI autologging. Call once at startup.
 
     Safe to call unconditionally — tracing turns on only when the MLflow destination and experiment
-    are configured in the environment (see :func:`databricks_mason.runtime.configure_tracing`).
+    are configured in the environment (see :func:``databricks_mason.runtime.configure_tracing``).
     """
     import mlflow
 
@@ -50,8 +44,8 @@ def configure_tracing() -> None:
 
 
 __all__ = [
-    # MCP servers from agent.toml (plus any you pass) — hand them to Agent(mcp_servers=...).
-    "mcp_servers",
+    # Explicit Databricks integrations — bind them for the lifetime of the caller-owned stack.
+    "bind_tools",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
     "remember",
@@ -69,7 +63,7 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds OpenAI autolog).
 _MODULE_BY_NAME = {
-    "mcp_servers": "databricks_mason.openai.mcp",
+    "bind_tools": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "remember": "databricks_mason.openai.memory",
     "recall": "databricks_mason.openai.memory",
