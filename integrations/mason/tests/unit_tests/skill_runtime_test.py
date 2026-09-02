@@ -200,7 +200,7 @@ def test_uc_skill_injects_metadata_and_loads_body_and_reference_lazily(
     assert "REFERENCE_MARKER" not in context
     assert [tool.name for tool in tools] == ["load_skill", "read_skill_file"]
     assert [server.url for server in server_type.created] == [
-        "https://df1.example.com/api/2.0/ai-gateway/skills/?schema=main.finance"
+        "https://df1.example.com/ai-gateway/skills/?schema=main.finance"
     ]
     assert server_type.created[0].kwargs["workspace_client"] is client
     assert server_type.created[0].kwargs["headers"] == {"X-Databricks-Org-Id": "123"}

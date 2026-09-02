@@ -126,7 +126,7 @@ def _uc_server(catalog: str, schema: str) -> DatabricksMCPServer:
     host = client.config.host.rstrip("/")
     return DatabricksMCPServer(
         name=f"uc-skills-{catalog}-{schema}",
-        url=f"{host}/api/2.0/ai-gateway/skills/?schema={catalog}.{schema}",
+        url=f"{host}/ai-gateway/skills/?schema={catalog}.{schema}",
         headers=workspace_headers() or None,
         workspace_client=client,
         timeout=120.0,
