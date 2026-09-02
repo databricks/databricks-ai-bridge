@@ -57,7 +57,13 @@ def _render_store_detail(store: dict) -> None:
 
 
 @stores.command("create")
-@click.option("--name", "name", required=True, help="Workspace-unique store name (3-63 chars).")
+@click.option(
+    "--name",
+    "--display-name",
+    "name",
+    required=True,
+    help="Workspace-unique store name, 3-63 chars (--display-name is accepted as an alias).",
+)
 @click.option("--description", default=None)
 @click.option("--metadata", default=None, help="JSON object of string labels.")
 @click.pass_obj
@@ -140,9 +146,11 @@ def stores_update(obj, name, description, metadata) -> None:
 
 @stores.command("delete")
 @click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def stores_delete(obj, name) -> None:
+def stores_delete(obj, name, yes) -> None:
     """Delete a session store."""
+    render.confirm_destroy(f"session store '{name}'", assume_yes=yes)
     obj.client().delete_session_store(name)
     if obj.output == "json":
         render.emit_json({"deleted": name})
@@ -261,10 +269,14 @@ def sessions_list(obj, store, filter_, order_by, page_size, page_token) -> None:
 
 @sessions.command("get")
 @click.argument("session_id")
-@click.option("--store", default=None, help="Store name; omit to resolve by session id.")
+@click.option("--store", default=None, help="Session store name (required in this preview).")
 @click.pass_obj
 def sessions_get(obj, session_id, store) -> None:
     """Get a session by id."""
+    if not store:
+        raise AgentCliError(
+            "Provide --store. Resolving a session by id alone is not supported in this preview."
+        )
     data = obj.client().get_session(session_id, store)
     if obj.output == "json":
         render.emit_json(data)
@@ -292,9 +304,11 @@ def sessions_update(obj, session_id, store, metadata) -> None:
 @click.argument("session_id")
 @click.option("--store", required=True)
 @click.option("--force", is_flag=True, help="Cascade-delete descendant sessions.")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
-def sessions_delete(obj, session_id, store, force) -> None:
+def sessions_delete(obj, session_id, store, force, yes) -> None:
     """Delete a session."""
+    render.confirm_destroy(f"session '{session_id}'", assume_yes=yes)
     obj.client().delete_session(store, session_id, force)
     if obj.output == "json":
         render.emit_json({"deleted": session_id})
@@ -303,17 +317,39 @@ def sessions_delete(obj, session_id, store, force) -> None:
 
 
 @sessions.command("fork")
+@click.argument("source_session_id_arg", required=False, metavar="[SOURCE_SESSION_ID]")
 @click.option("--store", required=True)
-@click.option("--source-session-id", required=True)
+@click.option(
+    "--source-session-id",
+    "source_session_id_opt",
+    default=None,
+    help="Source session to fork (or pass it as the positional argument).",
+)
 @click.option("--actor-id", required=True)
 @click.option("--up-to-item-id", default=None, help="Copy through this item id inclusively.")
 @click.option("--session-id", default=None, help="Optional id for the fork.")
 @click.option("--metadata", default=None)
 @click.pass_obj
 def sessions_fork(
-    obj, store, source_session_id, actor_id, up_to_item_id, session_id, metadata
+    obj,
+    source_session_id_arg,
+    store,
+    source_session_id_opt,
+    actor_id,
+    up_to_item_id,
+    session_id,
+    metadata,
 ) -> None:
     """Fork a session into a new independent top-level session."""
+    source_session_id = source_session_id_arg or source_session_id_opt
+    if not source_session_id:
+        raise AgentCliError(
+            "Provide the source session id (as the positional argument or --source-session-id)."
+        )
+    if source_session_id_arg and source_session_id_opt:
+        raise AgentCliError(
+            "Pass the source session id once — either positionally or via --source-session-id."
+        )
     data = obj.client().fork_session(
         store, source_session_id, actor_id, up_to_item_id, session_id, _parse_metadata(metadata)
     )
