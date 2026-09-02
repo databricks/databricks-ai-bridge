@@ -90,7 +90,7 @@ class MemoryStore:
     def delete(self) -> None:
         self._client._delete_store(self)
 
-    def create(
+    def add(
         self,
         *,
         actor_id: str,
@@ -100,7 +100,7 @@ class MemoryStore:
         description: Optional[str] = None,
         source_type: Optional[str] = None,
     ) -> Memory:
-        return self._client._create_memory(
+        return self._client._add_memory(
             self,
             actor_id=actor_id,
             path=path,
@@ -206,7 +206,7 @@ class MemoryStores:
     def _delete_store(self, store: MemoryStore) -> None:
         self._api.delete_memory_store(store.id)
 
-    def _create_memory(
+    def _add_memory(
         self,
         store: MemoryStore,
         *,

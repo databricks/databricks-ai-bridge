@@ -65,7 +65,7 @@ from databricks_mason import MasonClient
 mason = MasonClient(WorkspaceClient(profile="my-workspace"))
 
 session_store = mason.session_stores.create("support-agent-sessions")
-session = session_store.create(actor_id="customer-123", session_id="case-456")
+session = session_store.add(actor_id="customer-123", session_id="case-456")
 session.append_items(
     [
         {"type": "message", "role": "user", "content": "I need help with my cluster."},
@@ -74,7 +74,7 @@ session.append_items(
 )
 
 memory_store = mason.memory_stores.create("coding-agent-memory")
-memory = memory_store.create(
+memory = memory_store.add(
     actor_id="alice",
     path="/preferences/style.md",
     content="The user prefers concise answers.",
@@ -90,8 +90,8 @@ memory.delete()
 
 The root collections manage stores: `mason.memory_stores.create/get/list` and
 `mason.session_stores.create/get/list`. A returned store owns operations on its
-contents, such as `memory_store.create()`, `memory_store.get("memory-id")`,
-`memory_store.list()`, and `memory_store.search()`, or `session_store.create()`,
+contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
+`memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
 `session_store.get("session-id")`, and `session_store.list()`. Returned memories,
 sessions, and stores own their `update()` and `delete()` operations.
 

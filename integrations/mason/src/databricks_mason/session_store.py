@@ -104,7 +104,7 @@ class SessionStore:
     def delete(self) -> None:
         self._client._delete_store(self)
 
-    def create(
+    def add(
         self,
         *,
         actor_id: str,
@@ -112,7 +112,7 @@ class SessionStore:
         parent_session_id: Optional[str] = None,
         metadata: Optional[dict[str, str]] = None,
     ) -> Session:
-        return self._client._create_session(
+        return self._client._add_session(
             self,
             actor_id=actor_id,
             session_id=session_id,
@@ -192,7 +192,7 @@ class SessionStores:
     def _delete_store(self, store: SessionStore) -> None:
         self._api.delete_session_store(store.name)
 
-    def _create_session(
+    def _add_session(
         self,
         store: SessionStore,
         *,

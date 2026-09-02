@@ -38,15 +38,38 @@ def _as(cls: type, resp: Any) -> Any:
 
 
 def memory_store_path(name: str) -> str:
-    """Normalize a store id or name into the `memory-stores/{id}` resource segment."""
-    name = name.strip().strip("/")
-    return name if name.startswith("memory-stores/") else f"memory-stores/{name}"
+    """Normalize a store id or name into the `memory-stores/{id}` resource segment.
+
+    Validate locally so malformed resource names do not produce misleading endpoint errors.
+    """
+    raw = (name or "").strip()
+    if raw.startswith("memory-stores/"):
+        raw = raw[len("memory-stores/") :]
+    raw = raw.strip().strip("/")
+    if not raw:
+        raise AgentCliError("A memory store id or resource name is required.")
+    if "/" in raw:
+        raise AgentCliError(f"Invalid memory store id or resource name: {name!r}")
+    return f"memory-stores/{raw}"
+
+
+def session_store_path(name: str) -> str:
+    """Normalize a session store name into the `session-stores/{name}` resource segment."""
+    raw = (name or "").strip()
+    if raw.startswith("session-stores/"):
+        raw = raw[len("session-stores/") :]
+    raw = raw.strip().strip("/")
+    if not raw:
+        raise AgentCliError("A session store name is required.")
+    return f"session-stores/{raw}"
 
 
 def memory_entry_path(store: str, entry: str) -> str:
-    entry = entry.strip().strip("/")
+    entry = (entry or "").strip().strip("/")
     if entry.startswith("memory-stores/"):
         return entry
+    if not entry:
+        raise AgentCliError("A memory entry id or resource name is required.")
     return f"{memory_store_path(store)}/entries/{entry}"
 
 
@@ -164,6 +187,8 @@ class _MasonApiClient:
         self, name: str, display_name: Optional[str] = None, description: Optional[str] = None
     ) -> models.MemoryStore:
         body = _body(display_name=display_name, description=description)
+        if not body:
+            raise AgentCliError("No fields to update. Provide a display name and/or description.")
         mask = ",".join(body.keys())
         return _as(
             models.MemoryStore,
@@ -274,6 +299,8 @@ class _MasonApiClient:
         description: Optional[str] = None,
     ) -> models.MemoryEntry:
         body = _body(content=content, description=description)
+        if not body:
+            raise AgentCliError("No fields to update. Provide content and/or a description.")
         return _as(
             models.MemoryEntry,
             self._do("PATCH", f"{_BASE}/{memory_entry_path(store, entry)}", body=body),
@@ -296,7 +323,7 @@ class _MasonApiClient:
         )
 
     def get_session_store(self, name: str) -> models.SessionStore:
-        return _as(models.SessionStore, self._do("GET", f"{_BASE}/session-stores/{name}"))
+        return _as(models.SessionStore, self._do("GET", f"{_BASE}/{session_store_path(name)}"))
 
     def list_session_stores(
         self, page_size: Optional[int] = None, page_token: Optional[str] = None
@@ -314,16 +341,21 @@ class _MasonApiClient:
         self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
     ) -> models.SessionStore:
         body = _body(description=description, metadata=metadata)
+        if not body:
+            raise AgentCliError("No fields to update. Provide a description and/or metadata.")
         mask = ",".join(body.keys())
         return _as(
             models.SessionStore,
             self._do(
-                "PATCH", f"{_BASE}/session-stores/{name}", query=_query(update_mask=mask), body=body
+                "PATCH",
+                f"{_BASE}/{session_store_path(name)}",
+                query=_query(update_mask=mask),
+                body=body,
             ),
         )
 
     def delete_session_store(self, name: str) -> dict:
-        return self._do("DELETE", f"{_BASE}/session-stores/{name}")
+        return self._do("DELETE", f"{_BASE}/{session_store_path(name)}")
 
     # --- sessions ------------------------------------------------------------
 

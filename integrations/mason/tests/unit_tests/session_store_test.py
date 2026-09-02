@@ -74,7 +74,7 @@ def test_update_and_delete_store() -> None:
     api.delete_session_store.assert_called_once_with(SESSION_STORE)
 
 
-def test_create_get_and_list_sessions() -> None:
+def test_add_get_and_list_sessions() -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
     api.create_session.return_value = session_payload()
@@ -85,7 +85,7 @@ def test_create_get_and_list_sessions() -> None:
     api.get_session.return_value = session_payload()
     store = client.session_stores.get(SESSION_STORE)
 
-    created = store.create(actor_id="customer-123", session_id=SESSION_ID)
+    created = store.add(actor_id="customer-123", session_id=SESSION_ID)
     sessions = list(store.list(page_size=10))
     fetched = store.get(SESSION_ID)
 

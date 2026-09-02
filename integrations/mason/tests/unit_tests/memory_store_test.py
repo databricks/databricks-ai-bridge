@@ -75,13 +75,13 @@ def test_bound_store_update_and_delete() -> None:
     api.delete_memory_store.assert_called_once_with(STORE_ID)
 
 
-def test_bound_store_create_memory() -> None:
+def test_bound_store_add_memory() -> None:
     client, api = resource_client()
     api.get_memory_store.return_value = mem_store_payload()
     api.create_memory_entry.return_value = memory_payload()
     store = client.memory_stores.get(STORE_ID)
 
-    memory = store.create(
+    memory = store.add(
         actor_id="alice",
         session_id="s1",
         path="/m/p.md",
