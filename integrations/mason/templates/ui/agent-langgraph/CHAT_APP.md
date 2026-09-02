@@ -7,22 +7,15 @@ intentionally not a post-generation mutation command.
 ## Installed files
 
 - `ui/` contains the zero-build chat client.
-- `runtime/ui.py` serves the assets and exposes demo APIs for memory, sessions, and recovery.
+- `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
 - `runtime/main.py` installs the chat routes on the base FastAPI runtime.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
-The durability backend is part of the base agent template, not this UI overlay:
-`databricks_mason/runtime/durability.py`, `databricks_mason/langgraph/recovery.py`, and
-`databricks_mason/langgraph/long_running.py`.
-
 ## Behavior
 
-The overlay always includes Start App and Stop App. There are no enable-stop or enable-crash flags.
-Durability becomes active when `AGENT_SESSION_STORE` is configured.
-
 The capability indicators are automatic. Streaming and background reflect the runtime contract;
-Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`; Durability and Heartbeat
-require a managed Session Store. The transport selector is the only manual capability choice.
+Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`. The transport selector is
+the only manual capability choice.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and
@@ -38,10 +31,5 @@ same actor, replaces the routing cookie, and reloads its transcript and pending 
 local in-memory mode only the current browser session can be listed because there is no shared
 session index.
 
-The session list excludes internal `mason-demo-durability` execution sessions. Transcript responses
-also include only user, assistant, tool, system, and human-decision message items; checkpoint
-fragments and durability events remain in Session Store but are never returned to the chat UI.
-
-The recovery flow is intentionally a demo, not a production lease implementation: ownership is
-last-writer-wins, the worker persists heartbeats, the browser detects a stale owner, and work resumes
-at the first node whose output was not checkpointed.
+Transcript responses include only user, assistant, tool, system, and human-decision message items;
+checkpoint fragments remain in Session Store but are never returned to the chat UI.

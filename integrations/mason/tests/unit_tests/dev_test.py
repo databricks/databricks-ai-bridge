@@ -173,6 +173,8 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert "API-only" in result.output
     assert "http://localhost:8000/invocations" in result.output
+    # a copy-pasteable sample request, not just the bare endpoint
+    assert "curl -X POST" in " ".join(result.output.split())
 
 
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(

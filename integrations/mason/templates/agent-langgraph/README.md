@@ -66,8 +66,8 @@ storage, tracing — is off by default and requires no setup.
 ## Client contract
 
 The Databricks Apps `__Host-databricks-app-router` cookie is the single session identifier. It both
-keeps requests on the same App replica and keys LangGraph checkpoints, HITL resumes, Session Store
-records, and the durability demo. Do **not** send `session_id` in request bodies. The runtime ignores
+keeps requests on the same App replica and keys LangGraph checkpoints, HITL resumes, and Session
+Store records. Do **not** send `session_id` in request bodies. The runtime ignores
 an old body value and injects the cookie value before calling the agent. Browsers resend the Apps
 cookie automatically; API clients must preserve it in a cookie jar. Localhost has no Apps router, so
 the server sets an HTTP-only `mason-local-session` fallback cookie instead.
@@ -92,9 +92,9 @@ curl -s -c "$COOKIE_JAR" "$BASE/health"
 ```
 
 When the chat app is enabled, `GET /api/demo/config` returns the resolved `session_id`, process
-`instance_id`, execution identity, and the enabled state for streaming, background, Session Store,
-Memory Store, durability, heartbeat, and app control. The UI uses this response to color capability
-indicators automatically. Only the sync/streaming/background selector is a manual client choice.
+`instance_id`, the signed-in viewer, and the enabled state for streaming, background, Session Store,
+and Memory Store. The UI uses this response to color capability indicators automatically. Only the
+sync/streaming/background selector is a manual client choice.
 
 **Non-streaming:**
 
@@ -147,7 +147,7 @@ When initialized with the chat app (the default for `mason init --framework lang
   routing cookie, and load that session's transcript and pending state.
 - `GET /api/demo/session/items` to load the current transcript. Without a managed Session Store it
   reconstructs messages and pending interrupts from the in-process LangGraph checkpoint. Managed
-  responses filter out checkpoint fragments and durability events before returning items to the UI.
+  responses filter out checkpoint fragments before returning items to the UI.
 - `POST /api/demo/session/items` to mirror user, assistant, tool, and human-decision items into the
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
@@ -202,27 +202,6 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: application/json" \
   -d '{"input":[{"role":"user","content":"What is my name?"}]}'
 ```
-
-### Stop/start durability demo
-
-The chat app always includes Start App and Stop App; there are no enable-stop or enable-crash flags.
-With `AGENT_SESSION_STORE` configured:
-
-1. `POST /api/demo/app/start` starts `tool_step_1` through `tool_step_4` in a sequential LangGraph.
-2. Each completed tool output is checkpointed before the next node begins.
-3. `databricks_mason/runtime/durability.py` appends attempt, owner, heartbeat, completion, and failure events to
-   Session Store. Heartbeats default to every 3 seconds and become stale after 10 seconds.
-4. `POST /api/demo/app/stop` schedules `os._exit(86)`. Databricks Apps restarts the process; locally
-   restart `uv run start-server` with a supervisor or manually.
-5. The browser keeps the same routing cookie, waits for a new `instance_id`, polls
-   `GET /api/demo/recovery`, and calls `POST /api/demo/app/start` after the old heartbeat is stale.
-6. LangGraph restores the checkpoint, skips completed tools, and continues at the first incomplete
-   node. A tool interrupted before its output checkpoint commits can run again (at-least-once).
-
-This is intentionally demo-grade durability. Session Store does not provide an atomic
-compare-and-swap lease here, so ownership is last-writer-wins (`atomic_claim: false`). A production
-runtime also needs transactional ownership, server-side stale-run scanning, idempotent side effects,
-and durable event replay.
 
 ## Customize the agent
 

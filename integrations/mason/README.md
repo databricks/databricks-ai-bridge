@@ -176,11 +176,9 @@ cd ./my-agent
 uv run start-server
 ```
 
-The chat app always includes synchronous, SSE streaming, background polling, Session Store,
-Memory Store, HITL resume, Start App, Stop App, heartbeat, and recovery UI. There are no separate
-stop/crash flags. The base agent owns `agent/mason/durability.py`, `agent/mason/recovery.py`, and
-`agent/mason/long_running.py`; the framework-specific overlay only adds `ui/`, `runtime/ui.py`, the
-UI-enabled `runtime/main.py`, and UI tests.
+The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
+and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, the UI-enabled
+`runtime/main.py`, and UI tests.
 
 For the full deployed demo, connect both managed stores:
 
@@ -198,17 +196,6 @@ Request bodies never carry `session_id`. A localhost-only `mason-local-session` 
 same behavior outside Databricks Apps. TODO: move to `X-Routing-Key` when Apps supports it.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
-invocations, background submission and polling, session transcript loading, HITL resume, memory
-entry operations, and stop/start recovery. Capability colors are automatic from `/api/demo/config`;
-only the sync/streaming/background transport selector is manual.
-
-Start App runs `tool_step_1` through `tool_step_4` in a checkpointed sequence. Each completed output
-is committed before the next node. Stop App schedules `os._exit(86)`; Databricks Apps restarts the
-process, the browser waits for a new instance and a stale heartbeat, and then starts a new attempt
-with the same routing cookie. Completed tools are restored and skipped; an interrupted tool whose
-output was not committed can run again.
-
-The ownership log is intentionally demo-grade: Session Store records append-only attempts and
-heartbeats, but the claim is last-writer-wins rather than atomic (`atomic_claim: false`). Production
-durability also needs transactional ownership, server-side stale scanning, idempotent side effects,
-and durable event replay.
+invocations, background submission and polling, session transcript loading, HITL resume, and memory
+entry operations. Capability colors are automatic from `/api/demo/config`; only the
+sync/streaming/background transport selector is manual.

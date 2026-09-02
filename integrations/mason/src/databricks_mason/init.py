@@ -166,7 +166,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 @click.option(
     "--disable-chat-app",
     is_flag=True,
-    help="Scaffold the API-only backend, without the browser chat app and stop/start durability demo.",
+    help="Scaffold the API-only backend, without the browser chat app.",
 )
 @click.option(
     "--enable-chat-app",

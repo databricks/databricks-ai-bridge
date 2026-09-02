@@ -7,21 +7,10 @@ const elements = {
   chatLog: document.querySelector("#chat-log"),
   clearEvents: document.querySelector("#clear-events"),
   composer: document.querySelector("#composer"),
-  connectionStatus: document.querySelector("#connection-status"),
   copySession: document.querySelector("#copy-session"),
-  durabilityAttempt: document.querySelector("#durability-attempt"),
-  durabilityExecution: document.querySelector("#durability-execution"),
-  durabilityHeartbeat: document.querySelector("#durability-heartbeat"),
-  durabilityMode: document.querySelector("#durability-mode-value"),
-  durabilityOwner: document.querySelector("#durability-owner"),
-  durabilityStatus: document.querySelector("#durability-status"),
   emptyState: document.querySelector("#empty-state"),
   environmentBadge: document.querySelector("#environment-badge"),
   eventLog: document.querySelector("#event-log"),
-  identitySummary: document.querySelector("#identity-summary"),
-  identityValue: document.querySelector("#identity-value"),
-  heartbeatMode: document.querySelector("#heartbeat-mode-value"),
-  heartbeatStatus: document.querySelector("#heartbeat-status"),
   memoryFact: document.querySelector("#memory-fact"),
   memoryHelp: document.querySelector("#memory-help"),
   memoryMode: document.querySelector("#memory-mode-value"),
@@ -33,8 +22,6 @@ const elements = {
   promptInput: document.querySelector("#prompt-input"),
   askMemory: document.querySelector("#ask-memory"),
   searchMemory: document.querySelector("#search-memory"),
-  recoverySteps: document.querySelector("#recovery-steps"),
-  recoveryStatus: document.querySelector("#recovery-status"),
   refreshConfig: document.querySelector("#refresh-config"),
   refreshSession: document.querySelector("#refresh-session"),
   rejectAction: document.querySelector("#reject-action"),
@@ -49,8 +36,6 @@ const elements = {
   sessionMode: document.querySelector("#session-mode-value"),
   sessionStatus: document.querySelector("#session-status"),
   sessionStoreLabel: document.querySelector("#session-store-label"),
-  startApp: document.querySelector("#start-app"),
-  stopApp: document.querySelector("#stop-app"),
   streamingMode: document.querySelector("#streaming-mode-value"),
   streamingStatus: document.querySelector("#streaming-status"),
   viewerValue: document.querySelector("#viewer-value"),
@@ -63,17 +48,10 @@ const state = {
   draftText: "",
   events: [],
   instanceId: null,
-  lastDurabilityAttempt: 0,
-  lastDurabilityHeartbeat: "",
-  lastRecoveryStatus: "",
   lastAssistantText: "",
   managedSessionId: "",
   mode: "streaming",
   pendingInterrupt: null,
-  recovery: null,
-  recoveryPollTimer: null,
-  recoverySessionId: "",
-  recoverySignature: "",
   sessionId: "",
 };
 
@@ -88,11 +66,6 @@ function setSessionId(value) {
   if (state.sessionId !== nextSessionId) state.managedSessionId = "";
   state.sessionId = nextSessionId;
   elements.sessionId.textContent = state.sessionId;
-}
-
-function setConnection(status, label) {
-  elements.connectionStatus.dataset.state = status;
-  elements.connectionStatus.querySelector("span:last-child").textContent = label;
 }
 
 function setStatus(label, type = "ready") {
@@ -117,7 +90,6 @@ function setBusy(busy, label = "Working") {
   document.querySelectorAll(".session-open-button").forEach((button) => {
     button.disabled = busy;
   });
-  updateRecoveryControls();
   if (busy) setStatus(label, "busy");
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
@@ -125,24 +97,6 @@ function setBusy(busy, label = "Working") {
 function setCapability(element, enabled) {
   element.classList.toggle("enabled", Boolean(enabled));
   element.classList.toggle("disabled", !enabled);
-}
-
-function recoveryInProgress() {
-  return Boolean(
-    state.recovery?.worker_active
-      || state.recovery?.owner_active
-      || state.recovery?.needs_resume,
-  );
-}
-
-function updateRecoveryControls() {
-  const canStart = state.config?.recovery.enabled
-    && (!state.recovery || state.recovery.status === "not_started" || state.recovery.needs_resume);
-  const checkpointedSteps = state.recovery?.outputs?.length || 0;
-  const canStop = state.config?.app_control.stop_enabled
-    && (state.pendingInterrupt || (state.recovery?.worker_active && checkpointedSteps >= 2));
-  elements.startApp.disabled = state.busy || !canStart;
-  elements.stopApp.disabled = state.busy || !canStop;
 }
 
 function formatJson(value) {
@@ -302,9 +256,6 @@ function handleInterrupt(interrupt) {
   elements.approvalSummary.textContent = interruptSummary(interrupt);
   elements.approvalPanel.hidden = false;
   appendMessage("system", interruptSummary(interrupt), "Approval required");
-  if (state.config?.app_control.stop_enabled && state.config?.session.durable) {
-    elements.recoveryStatus.textContent = "Paused run detected. Stop App, then approve it after restart.";
-  }
 }
 
 function handleEvent(event) {
@@ -709,7 +660,6 @@ async function sendText(text, mode = state.mode) {
       });
     }
     await recordSessionItems(items);
-    setConnection("online", "Connected");
     return state.lastAssistantText;
   } catch (error) {
     finishDraft();
@@ -766,26 +716,9 @@ function clearChat({ recordEvent = true } = {}) {
 }
 
 function resetSessionState() {
-  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
-  state.lastDurabilityAttempt = 0;
-  state.lastDurabilityHeartbeat = "";
-  state.lastRecoveryStatus = "";
-  state.recovery = null;
-  state.recoveryPollTimer = null;
-  state.recoverySessionId = "";
-  state.recoverySignature = "";
   clearChat({ recordEvent: false });
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   stateMessage(elements.sessionItems, "Loading transcript…", "loading");
-  stateMessage(elements.recoverySteps, "No recovery sequence started for this session.");
-  elements.durabilityExecution.textContent = "Not started";
-  elements.durabilityAttempt.textContent = "—";
-  elements.durabilityOwner.textContent = "—";
-  elements.durabilityHeartbeat.textContent = "Not started";
-  elements.recoveryStatus.textContent = state.config?.recovery.enabled
-    ? "Start App to run the durable tool sequence for this session."
-    : "Stop is included, but durability needs a managed Session Store.";
-  updateRecoveryControls();
 }
 
 async function createNewSession() {
@@ -802,10 +735,6 @@ async function createNewSession() {
     addEvent("session.new", result);
     if (state.config?.session.managed) await ensureManagedSession();
     await refreshSessionView({ hydrateChat: true });
-    if (state.config?.recovery.enabled) {
-      await monitorRecovery(state.sessionId, { autoResume: false });
-    }
-    setConnection("online", "Connected");
   } catch (error) {
     appendError(error);
   } finally {
@@ -826,10 +755,6 @@ async function openSession(sessionId) {
     resetSessionState();
     addEvent("session.open", result);
     await refreshSessionView({ hydrateChat: true });
-    if (state.config?.recovery.enabled) {
-      await monitorRecovery(state.sessionId, { autoResume: true });
-    }
-    setConnection("online", "Connected");
   } catch (error) {
     appendError(error);
   } finally {
@@ -838,31 +763,22 @@ async function openSession(sessionId) {
 }
 
 async function loadConfig() {
-  setConnection("loading", "Connecting");
   try {
     const response = await fetch("/api/demo/config", { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
-    elements.environmentBadge.textContent = config.app_control.restart_managed ? "Databricks App" : "Local runtime";
+    elements.environmentBadge.textContent = config.deployed ? "Databricks App" : "Local runtime";
     elements.viewerValue.textContent = config.viewer;
-    elements.identityValue.textContent = config.execution_identity;
-    elements.identitySummary.textContent = `Agent executes as ${config.execution_identity}`;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
-    elements.durabilityMode.textContent = config.durability.mode;
-    elements.heartbeatMode.textContent = config.heartbeat.enabled
-      ? `Every ${config.heartbeat.interval_seconds}s · stale after ${config.heartbeat.stale_after_seconds}s`
-      : "Not connected";
     setCapability(elements.streamingStatus, config.streaming.enabled);
     setCapability(elements.backgroundStatus, config.background.enabled);
     setCapability(elements.sessionStatus, config.session.history);
     setCapability(elements.memoryStatus, config.memory.enabled);
-    setCapability(elements.durabilityStatus, config.durability.enabled);
-    setCapability(elements.heartbeatStatus, config.heartbeat.enabled);
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
     elements.askMemory.disabled = state.busy || !config.memory.enabled;
@@ -878,283 +794,16 @@ async function loadConfig() {
       : config.session.history
         ? "Messages load from the in-process LangGraph checkpoint for the current routing cookie."
         : "Session history is unavailable.";
-    updateRecoveryControls();
-    elements.recoveryStatus.textContent = !config.session.durable
-      ? "Stop is included, but durability needs a managed Session Store."
-      : `Ready: ${config.recovery.steps.length} steps, about ${config.recovery.step_seconds}s each.`;
-    setConnection("online", "Connected");
     addEvent("runtime.config", config);
     void refreshSessionView({ hydrateChat: true });
-    if (config.recovery.enabled) {
-      const recoverySessionId = state.recoverySessionId || state.sessionId;
-      void monitorRecovery(recoverySessionId, { autoResume: true });
-    }
     if (config.memory.enabled) void listMemoryEntries();
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
   } catch (error) {
-    setConnection("offline", "Unavailable");
     elements.environmentBadge.textContent = "Runtime unavailable";
     throw error;
   }
 }
-
-function recoveryStatusText(result) {
-  if (result.status === "failed") return `Sequence failed: ${result.error || "unknown error"}`;
-  if (result.status === "completed") {
-    const restored = result.outputs.some(
-      (output) => output.instance_id && output.instance_id !== result.instance_id,
-    );
-    return restored
-      ? "Recovered and completed. Earlier tool outputs were restored and skipped on this process."
-      : "All tool steps completed for this routing session.";
-  }
-  if (result.needs_resume) {
-    return `Heartbeat is stale. Starting attempt ${result.attempt + 1} from the first incomplete checkpoint…`;
-  }
-  if (result.owner_active && !result.worker_active) {
-    const age = Number(result.heartbeat_age_seconds || 0).toFixed(1);
-    return `Previous owner heartbeat is ${age}s old. Waiting until ${result.stale_after_seconds}s before takeover…`;
-  }
-  if (result.worker_active && result.outputs.length >= 2) {
-    return `${result.outputs.length} steps are checkpointed. Stop App now to test recovery.`;
-  }
-  if (result.worker_active) return `Running ${result.current_step || "the next tool"}…`;
-  return "Start App, wait for a few completed outputs, then stop the app process.";
-}
-
-function renderRecovery(result) {
-  state.recovery = result;
-  const outputs = new Map((result.outputs || []).map((output) => [output.tool, output]));
-  elements.recoverySteps.replaceChildren();
-  for (const [index, name] of (result.steps || []).entries()) {
-    const output = outputs.get(name);
-    const row = document.createElement("div");
-    const restored = Boolean(output?.instance_id && output.instance_id !== result.instance_id);
-    row.className = [
-      "recovery-step",
-      output ? "completed" : "pending",
-      result.current_step === name ? "current" : "",
-      restored ? "restored" : "",
-    ].filter(Boolean).join(" ");
-
-    const number = document.createElement("span");
-    number.className = "recovery-step-index";
-    number.textContent = output ? "✓" : String(index + 1);
-
-    const body = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = name;
-    const detail = document.createElement("small");
-    if (output) {
-      const process = output.instance_id ? ` · process ${output.instance_id}` : "";
-      detail.textContent = `${output.output || "Completed"}${process}`;
-    } else if (result.current_step === name) {
-      detail.textContent = result.worker_active
-        ? `Running on process ${result.instance_id}`
-        : result.owner_active
-          ? `Owned by process ${result.owner_id}`
-          : "Will resume from this checkpoint";
-    } else {
-      detail.textContent = "Waiting";
-    }
-    body.append(title, detail);
-    row.append(number, body);
-    elements.recoverySteps.append(row);
-  }
-
-  elements.recoveryStatus.textContent = recoveryStatusText(result);
-  elements.durabilityExecution.textContent = result.execution_id || "Not started";
-  elements.durabilityExecution.title = result.execution_id || "";
-  elements.durabilityAttempt.textContent = result.attempt || "—";
-  elements.durabilityOwner.textContent = result.owner_id || "—";
-  elements.durabilityOwner.title = result.owner_id || "";
-  elements.durabilityHeartbeat.textContent = result.heartbeat_at
-    ? `${Number(result.heartbeat_age_seconds || 0).toFixed(1)}s ago · ${result.heartbeat_fresh ? "fresh" : "stale"}`
-    : "Not started";
-
-  if (result.attempt && result.attempt !== state.lastDurabilityAttempt) {
-    state.lastDurabilityAttempt = result.attempt;
-    addEvent("durability.attempt", {
-      execution_id: result.execution_id,
-      attempt: result.attempt,
-      owner_id: result.owner_id,
-      atomic_claim: result.atomic_claim,
-      claim_mode: result.claim_mode,
-    });
-  }
-  if (result.heartbeat_at && result.heartbeat_at !== state.lastDurabilityHeartbeat) {
-    state.lastDurabilityHeartbeat = result.heartbeat_at;
-    addEvent("durability.heartbeat", {
-      execution_id: result.execution_id,
-      attempt: result.attempt,
-      owner_id: result.owner_id,
-      heartbeat_at: result.heartbeat_at,
-      stale_after_seconds: result.stale_after_seconds,
-    });
-  }
-  if (result.status === "stopped" && state.lastRecoveryStatus !== "stopped") {
-    addEvent("durability.stale", {
-      execution_id: result.execution_id,
-      attempt: result.attempt,
-      heartbeat_age_seconds: result.heartbeat_age_seconds,
-    });
-  }
-  state.lastRecoveryStatus = result.status;
-  const signature = JSON.stringify([
-    result.status,
-    result.attempt,
-    result.current_step,
-    result.worker_active,
-    result.needs_resume,
-    result.outputs,
-  ]);
-  if (signature !== state.recoverySignature) {
-    state.recoverySignature = signature;
-    addEvent("recovery.status", result);
-  }
-  updateRecoveryControls();
-}
-
-function scheduleRecoveryPoll(sessionId, delay = 1000) {
-  if (state.recoveryPollTimer) clearTimeout(state.recoveryPollTimer);
-  state.recoveryPollTimer = setTimeout(() => {
-    monitorRecovery(sessionId, { autoResume: true }).catch(() => {});
-  }, delay);
-}
-
-async function resumeRecoverySequence(sessionId) {
-  const response = await fetch("/api/demo/app/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  const result = await jsonResponse(response);
-  renderRecovery(result);
-  addEvent("app.start", result);
-  scheduleRecoveryPoll(sessionId);
-  return result;
-}
-
-async function monitorRecovery(sessionId, { autoResume = false } = {}) {
-  if (!state.config?.recovery.enabled || !sessionId) return null;
-  state.recoverySessionId = sessionId;
-  try {
-    const response = await fetch("/api/demo/recovery", {
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-    const result = await jsonResponse(response);
-    renderRecovery(result);
-    setConnection("online", "Connected");
-    if (result.needs_resume && autoResume) return resumeRecoverySequence(sessionId);
-    if (result.status === "running" || result.needs_resume) scheduleRecoveryPoll(sessionId);
-    return result;
-  } catch (error) {
-    if (recoveryInProgress()) {
-      setConnection("offline", "Process stopped");
-      elements.recoveryStatus.textContent = "Waiting for the app process to restart…";
-      scheduleRecoveryPoll(sessionId, 1500);
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function startApp() {
-  if (state.busy || !state.config?.recovery.enabled) return;
-  const sessionId = ensureSessionId();
-  state.recoverySessionId = sessionId;
-  elements.startApp.disabled = true;
-  elements.recoveryStatus.textContent = "Starting durable app work…";
-  try {
-    const response = await fetch("/api/demo/app/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const result = await jsonResponse(response);
-    renderRecovery(result);
-    addEvent("app.start", result);
-    scheduleRecoveryPoll(sessionId);
-  } catch (error) {
-    elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
-    appendError(error);
-    updateRecoveryControls();
-  }
-}
-
-async function waitForRestart(previousInstanceId) {
-  const deadline = Date.now() + 180000;
-  elements.recoveryStatus.textContent = "Waiting for a new app process…";
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    try {
-      const response = await fetch("/api/demo/config", { cache: "no-store" });
-      if (!response.ok) continue;
-      const config = await response.json();
-      if (config.instance_id && config.instance_id !== previousInstanceId) {
-        state.config = config;
-        state.instanceId = config.instance_id;
-        setConnection("online", "Restarted");
-        addEvent("runtime.restarted", config);
-        return config;
-      }
-      setConnection("loading", "Restarting");
-    } catch {
-      setConnection("offline", "Process stopped");
-    }
-  }
-  throw new Error("The app did not restart within three minutes. Local runs need an auto-restarting supervisor.");
-}
-
-async function stopCurrentApp() {
-  const previousInstanceId = state.instanceId;
-  setBusy(true, "Stopping");
-  elements.recoveryStatus.textContent = "Stopping the current app process…";
-  try {
-    const response = await fetch("/api/demo/app/stop", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const result = await jsonResponse(response);
-    addEvent("app.stop", result);
-    await waitForRestart(previousInstanceId);
-    await loadConfig();
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function stopAndRecover() {
-  if (state.busy || !state.config?.app_control.stop_enabled) return;
-  if (state.pendingInterrupt) {
-    try {
-      await stopCurrentApp();
-      elements.approvalPanel.hidden = false;
-      elements.recoveryStatus.textContent = "New process is ready. Approve or reject the same paused run.";
-    } catch (error) {
-      elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
-      appendError(error);
-    }
-    return;
-  }
-  if (!state.recovery?.worker_active || !state.recoverySessionId) {
-    appendError(new Error("Start App before stopping the app process."));
-    return;
-  }
-  const sessionId = state.recoverySessionId;
-  try {
-    await stopCurrentApp();
-    elements.recoveryStatus.textContent = "Host restarted. Waiting for stale-heartbeat takeover…";
-    await monitorRecovery(sessionId, { autoResume: true });
-  } catch (error) {
-    elements.recoveryStatus.textContent = error instanceof Error ? error.message : String(error);
-    if (!String(error).includes("Failed to fetch")) appendError(error);
-  }
-}
-
 elements.composer.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = elements.promptInput.value;
@@ -1222,11 +871,7 @@ elements.askMemory.addEventListener("click", async () => {
   await sendText(`Use the recall tool to find what you remember about ${query}.`, "sync").catch(() => {});
 });
 
-elements.startApp.addEventListener("click", startApp);
-elements.stopApp.addEventListener("click", stopAndRecover);
-
 loadConfig().catch((error) => {
   appendError(error);
   elements.memoryHelp.textContent = "Runtime configuration is unavailable.";
-  elements.recoveryStatus.textContent = "Runtime configuration is unavailable.";
 });

@@ -25,9 +25,8 @@ LangGraph already has, so migrating an existing agent is a graft, not a rewrite:
 These need the agent stack (databricks-langchain, langgraph, langchain, fastapi, mlflow), so they sit
 behind the ``[runtime]`` extra to keep a plain ``databricks-mason`` CLI install light.
 
-``__all__`` is the curated surface. Other entry points (``mcp_client``, ``DatabricksSessionStoreSaver``,
-and the ``recovery`` / ``long_running`` stop-start demo modules) are reachable by their submodule
-paths but not re-exported here.
+``__all__`` is the curated surface. Other entry points (``mcp_client``, ``DatabricksSessionStoreSaver``)
+are reachable by their submodule paths but not re-exported here.
 """
 
 from typing import TYPE_CHECKING
