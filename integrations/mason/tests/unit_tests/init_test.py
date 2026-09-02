@@ -16,6 +16,7 @@ from click.testing import CliRunner
 
 from databricks_mason import init as init_mod
 from databricks_mason.errors import AgentCliError
+from databricks_mason.integration_codegen import IntegrationRegistry, registry_relative_path
 
 
 class _Ctx:
@@ -30,7 +31,7 @@ def test_framework_specs_have_repo_ref_path():
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
-    assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-basic"
+    assert init_mod._TEMPLATES["openai"]["path"] == "agent-openai-agents-sdk"
     assert (
         init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
     )
@@ -66,7 +67,7 @@ def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
-    dest = tmp_path / "agent-openai-basic"
+    dest = tmp_path / "agent-openai-agents-sdk"
 
     def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
         target.mkdir(parents=True)
@@ -78,9 +79,9 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     fetched.assert_called_once()
     # framework's repo + path passed through to the fetch
     assert fetched.call_args.args[0] == init_mod._TEMPLATES["openai"]["repo"]
-    assert fetched.call_args.args[2] == "agent-openai-basic"
+    assert fetched.call_args.args[2] == "agent-openai-agents-sdk"
     assert (dest / "app.yaml").exists()
-    assert "agent-openai-basic" in result.output
+    assert "agent-openai-agents-sdk" in result.output
 
 
 def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
@@ -112,8 +113,37 @@ def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
     }
 
 
-def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_never_creates_agent_manifest(tmp_path: pathlib.Path, framework: str):
+    dest = tmp_path / framework
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", framework, str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "agent.toml").exists()
+
+
+def test_init_langgraph_creates_empty_code_registry(tmp_path: pathlib.Path):
+    dest = tmp_path / "langgraph"
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert IntegrationRegistry.load(dest).integrations == []
+
+
+def test_init_openai_creates_empty_code_registry_in_agent_server(tmp_path: pathlib.Path):
+    dest = tmp_path / "openai"
 
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
         result = CliRunner().invoke(
@@ -123,12 +153,67 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         )
 
     assert result.exit_code == 0, result.output
-    with (dest / "agent.toml").open("rb") as manifest_file:
-        manifest = tomli.load(manifest_file)
-    assert manifest == {
-        "schema_version": 1,
-        "agent": {"framework": "openai"},
-    }
+    relative_path = registry_relative_path("openai")
+    assert IntegrationRegistry.load(dest, relative_path=relative_path).integrations == []
+    assert not (dest / "agent" / "databricks_tools.py").exists()
+
+
+def test_init_openai_adds_the_mason_openai_adapter_dependency(tmp_path: pathlib.Path):
+    dest = tmp_path / "openai"
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "agent"\ndependencies = [\n    "openai-agents>=0.5",\n]\n',
+            encoding="utf-8",
+        )
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    with (dest / "pyproject.toml").open("rb") as project_file:
+        dependencies = tomli.load(project_file)["project"]["dependencies"]
+    assert "databricks-mason[openai]>=0.1.1" in dependencies
+
+
+def test_init_openai_adds_active_empty_binding_to_both_request_paths(
+    tmp_path: pathlib.Path,
+):
+    dest = tmp_path / "openai"
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        package = target / "agent_server"
+        package.mkdir(parents=True)
+        (package / "agent.py").write_text(
+            "from contextlib import AsyncExitStack\n\n"
+            "async def invoke_handler():\n"
+            "    async with AsyncExitStack() as stack:\n"
+            "        agent = create_agent()\n"
+            "        return agent\n\n"
+            "async def stream_handler():\n"
+            "    async with AsyncExitStack() as stack:\n"
+            "        agent = create_agent()\n"
+            "        return agent\n",
+            encoding="utf-8",
+        )
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "openai", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    source = (dest / "agent_server" / "agent.py").read_text(encoding="utf-8")
+    assert "from agent_server.databricks_tools import DATABRICKS_TOOLS" in source
+    assert "from databricks_mason.openai import bind_tools" in source
+    assert source.count("agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)") == 2
 
 
 def test_init_langgraph_does_not_vendor_runtime_plumbing(tmp_path: pathlib.Path):

@@ -108,11 +108,13 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
-def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
+def test_deploy_sync_keeps_code_selected_tool_registry(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    (src / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    registry = src / "agent" / "databricks_tools.py"
+    registry.parent.mkdir()
+    registry.write_text("DATABRICKS_TOOLS = ()\n")
     calls: list[list[str]] = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -132,7 +134,8 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
         "/Workspace/Users/me@example.com/mason_deployments/myapp",
     ]
     excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
-    assert "agent.toml" not in excluded
+    assert "agent/databricks_tools.py" not in excluded
+    assert registry.read_text() == "DATABRICKS_TOOLS = ()\n"
 
 
 def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path, monkeypatch):

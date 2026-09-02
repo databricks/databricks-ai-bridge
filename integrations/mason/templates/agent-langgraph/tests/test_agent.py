@@ -10,11 +10,12 @@ from uuid import UUID
 
 import pytest
 from agent.agent import _serialize_events, _session_id
-from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from agent.tools import all_tools
 from fastapi.testclient import TestClient
 from langchain_core.tools import BaseTool
 from runtime.runtime import build_app
+
+from databricks_mason.langgraph.session_store import checkpointer, thread_config
 
 
 def test_tools_autoregister():
@@ -67,9 +68,7 @@ def test_chat_model_forwards_account_routing_header(monkeypatch):
     monkeypatch.setenv("DATABRICKS_WORKSPACE_ID", "123456")
     model = _RoutedChatDatabricks(endpoint="test-endpoint")
 
-    assert model._get_client_kwargs()["default_headers"] == {
-        "X-Databricks-Org-Id": "123456"
-    }
+    assert model._get_client_kwargs()["default_headers"] == {"X-Databricks-Org-Id": "123456"}
 
 
 def test_thread_config_from_session_id():
@@ -228,6 +227,31 @@ def _has_workspace_auth() -> bool:
         os.getenv("DATABRICKS_CONFIG_PROFILE")
         or (os.getenv("DATABRICKS_HOST") and os.getenv("DATABRICKS_TOKEN"))
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_attaches_empty_databricks_registry_at_construction(monkeypatch):
+    import agent.agent as agent_module
+
+    loaded = []
+
+    async def fake_load_tools(integrations, *, extra_servers=(), existing_tools=()):
+        loaded.append((integrations, extra_servers, existing_tools))
+        return ["managed"]
+
+    monkeypatch.setattr(agent_module, "load_tools", fake_load_tools)
+    monkeypatch.setattr(agent_module, "all_tools", lambda: ["local"])
+    monkeypatch.setattr(agent_module, "memory_tools", lambda: ["memory"])
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: ["custom"])
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: object())
+    monkeypatch.setattr(agent_module, "_RoutedChatDatabricks", lambda **_: "model")
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: "checkpointer")
+    monkeypatch.setattr(agent_module, "create_agent", lambda **kwargs: kwargs)
+
+    graph = await agent_module.create_agent_graph()
+
+    assert loaded == [((), ["custom"], ["local", "memory"])]
+    assert graph["tools"] == ["local", "memory", "managed"]
 
 
 @pytest.mark.skipif(

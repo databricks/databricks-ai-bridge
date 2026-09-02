@@ -6,7 +6,7 @@ import pathlib
 
 from click.testing import CliRunner
 
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.integration_codegen import IntegrationRegistry
 from databricks_mason.project_config import write_project_metadata
 from databricks_mason.tools import tools
 
@@ -22,7 +22,7 @@ def _project(tmp_path: pathlib.Path, framework: str = "langgraph") -> pathlib.Pa
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
     write_project_metadata(project, framework=framework, template=f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    IntegrationRegistry.empty(project).write()
     return project
 
 
@@ -86,8 +86,9 @@ def test_tools_add_outside_project_gives_clear_hint(tmp_path):
         tools, ["add", "mcp", "system.ai.web_search", "--source", str(empty)], obj=_Ctx()
     )
     assert result.exit_code != 0
-    assert "needs a Mason project" in result.output
-    assert "legacy compatibility command" not in result.output
+    assert "Could not determine the Mason framework" in result.output
+    assert "mason init" in result.output
+    assert "--framework" in result.output
 
 
 # --- ML-69255: conflict error names what differs -----------------------------

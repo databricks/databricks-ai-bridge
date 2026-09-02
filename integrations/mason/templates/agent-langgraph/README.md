@@ -22,6 +22,7 @@ programmatic token authentication. Polling and health checks likewise have `/api
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
   agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
+  databricks_tools.py  #   Sandbox, managed MCP, and UC Function selections (ordinary Python)
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
@@ -33,14 +34,17 @@ tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session checkpointer,
-tracing, MCP tool loading, background store) lives in the `databricks-mason` package —
+You edit `agent/agent.py`, `agent/databricks_tools.py`, `agent/tools/`, and `agent/mcps.py`; the
+plumbing (session checkpointer, tracing, MCP tool loading, background store) lives in the
+`databricks-mason` package —
 framework-neutral pieces under `databricks_mason.runtime`, LangGraph-specific ones under
 `databricks_mason.langgraph` — so the template ships only your agent code. `runtime/runtime.py` is the
 SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
 endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
 package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
-`mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+`databricks_tools.py` is an empty, importable registry until `mason tools add` writes a descriptor;
+the active `await load_tools(DATABRICKS_TOOLS, ...)` seam in `create_agent_graph()` makes empty input
+a no-op. `mcps.py` exposes `build_mcp_servers()` for custom MCP connections and is empty by default.
 
 ## Run locally
 
@@ -208,9 +212,13 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Model / instructions:** `create_agent_graph()` in `agent/agent.py`.
 - **Add a tool:** drop a new file in `agent/tools/` with a `@tool`-decorated function; it's
   collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
+- **Add a Databricks integration:** run `mason tools add sandbox`, `mason tools add mcp`, or
+  `mason tools add uc-function`. The CLI updates `agent/databricks_tools.py` and reports its exact
+  definition and active attachment lines.
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
   human-in-the-loop section above); empty the dict to disable gating.
-- **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
+- **Add a custom MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in
+  `agent/mcps.py`; it is passed as an explicit extra server at the same construction seam.
 - **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
   checkpointer lives in `databricks_mason/langgraph/session_store.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`

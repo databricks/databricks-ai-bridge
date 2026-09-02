@@ -1,5 +1,7 @@
 """Starter test for the Mason-scaffolded Python tool."""
 
+# mason:python-tool id=__MASON_TOOL_ID__ entrypoint=agent.tools.__MASON_TOOL_MODULE__:__MASON_TOOL_FUNCTION__
+
 import pytest
 from agent.tools.__MASON_TOOL_MODULE__ import (  # ty: ignore[unresolved-import]
     __MASON_TOOL_FUNCTION__,

@@ -26,6 +26,12 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+For the OpenAI Agents SDK adapter in an existing project:
+
+```sh
+pip install 'databricks-mason[openai]'
+```
+
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
@@ -92,11 +98,11 @@ mason [-p <profile>] [-o text|json]
   mcp
     list             [--schema CATALOG.SCHEMA]
   tools
-    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
-    add mcp          SERVICE [--name NAME] [--source PATH]
-    add uc-function  FUNCTION [--name NAME] [--source PATH]
-    add python       NAME [--source PATH]
-    list             [--source PATH]
+    add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH] [--framework F]
+    add mcp          SERVICE [--name NAME] [--source PATH] [--framework F]
+    add uc-function  FUNCTION [--name NAME] [--source PATH] [--framework F]
+    add python       NAME [--source PATH] [--framework F]
+    list             [--source PATH] [--framework F]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
@@ -126,14 +132,15 @@ mason deploy my-agent
 
 ## Agent tools
 
-`mason init` writes portable tool intent to `agent.toml` and template provenance to
-`.mason/project.toml`. The manifest runtime is currently implemented only by the in-repository
-`agent-langgraph` template; `mason tools add` fails explicitly for other frameworks until they
-provide an adapter at the same runtime seam.
+Agent code and its SDK objects are the source of truth. `mason init` writes template provenance to
+`.mason/project.toml` and an ordinary Python selection registry at
+`agent/databricks_tools.py` (LangGraph) or `agent_server/databricks_tools.py` (OpenAI Agents SDK);
+it does not create `agent.toml`.
 
-Remote tools update only `agent.toml`; they do not generate framework source. The LangGraph runtime
-loads the manifest and materializes its native MCP tools when the agent runs, so a direct manifest
-edit and a CLI edit have the same behavior:
+The existing tool commands add Databricks Sandbox, managed MCP, and UC Function descriptors to
+`DATABRICKS_TOOLS`. The CLI never imports customer code or mutates a live agent object. After each
+change it prints the exact definition line and either the exact attachment line or the one-line
+framework snippet the user still needs to add:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
@@ -142,6 +149,37 @@ mason tools add uc-function catalog.schema.lookup_ticket
 mason tools add python lookup-ticket
 mason tools list
 ```
+
+Both Mason templates include an active construction seam. An empty registry is a credential-free
+no-op, so the source diff from `mason tools add` is the activation change. The LangGraph template
+also checks remote names against its local and memory tools:
+
+```python
+local_tools = [*all_tools(), *memory_tools()]
+tools = [
+    *local_tools,
+    *await load_tools(
+        DATABRICKS_TOOLS,
+        extra_servers=build_mcp_servers(),
+        existing_tools=local_tools,
+    ),
+]
+```
+
+The OpenAI template binds at both request-scoped construction paths, with its `AsyncExitStack`
+owning the MCP connections:
+
+```python
+agent = await bind_tools(agent, DATABRICKS_TOOLS, stack=stack)
+```
+
+For a bring-your-own agent, attach the generated registry once at the framework's agent-construction
+boundary. Mason reports `Configured, not attached` and prints the appropriate LangGraph or OpenAI
+Agents SDK snippet when it cannot find that explicit seam. It does not guess a customer symbol or
+silently patch their loop. A legacy Mason `agent.toml` must be migrated to `DATABRICKS_TOOLS`; the
+CLI does not support it as a second source of truth. An unrelated customer-owned file with the same
+name is not an agent integration contract. For a BYO project whose framework cannot be inferred,
+pass `--framework langgraph` or `--framework openai`.
 
 Discover the MCP Services available to your user before adding one. By default Mason lists the
 Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
@@ -153,9 +191,11 @@ mason mcp list
 mason mcp list --schema main.tools
 ```
 
-The Python command additionally creates user-owned `agent/tools/<name>.py` and
-`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. `mason dev` and
-`mason deploy` preserve `agent.toml`; they do not generate or patch agent source.
+The Python command creates user-owned `agent/tools/<name>.py` and
+`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. These local tools
+remain normal framework code and are auto-collected by the template; they are not remote
+`DATABRICKS_TOOLS` descriptors. `mason dev` and `mason deploy` preserve the authored Python source
+and do not patch the agent at runtime.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
