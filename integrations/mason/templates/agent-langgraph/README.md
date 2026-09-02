@@ -237,7 +237,7 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-langgraph --source .
 ```
 
-Add `--memory <name> --session-store <name> --actor-id <actor>` to wire managed state. Mason
+Add `--memory <name> --session <name> --actor-id <actor>` to wire managed state. Mason
 provisions or resolves the stores (creating them if missing), injects the store/actor env vars, and
 deploys the App.
 

@@ -121,7 +121,7 @@ def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
     ):
         result = CliRunner().invoke(
             dev_mod.dev,
-            ["--source", str(tmp_path), "--session-store", "s", "--memory", "m"],
+            ["--source", str(tmp_path), "--session", "s", "--memory", "m"],
             obj=_Ctx(),
         )
     assert result.exit_code == 0, result.output

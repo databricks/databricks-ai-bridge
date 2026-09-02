@@ -198,7 +198,7 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_SESSION_STORE_ENV} by deploying with --session-store.",
+            detail=f"Set {_SESSION_STORE_ENV} by deploying with --session.",
         )
 
 

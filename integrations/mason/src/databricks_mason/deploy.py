@@ -303,18 +303,18 @@ def _grant_store_access(
 )
 @click.option(
     "--memory",
+    "-m",
     "memory_store",
     default=None,
     help="Memory store display name to wire in via AGENT_MEMORY_STORE.",
 )
 @click.option(
-    "--session-store",
+    "--session",
+    "-s",
     "session_store",
     default=None,
     help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
-@click.option("--with-memory-store", "memory_store", default=None, hidden=True)
-@click.option("--with-session-store", "session_store", default=None, hidden=True)
 @click.option(
     "--actor-id",
     default="agent",

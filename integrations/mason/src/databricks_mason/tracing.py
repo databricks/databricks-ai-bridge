@@ -4,7 +4,7 @@ Parallel to `mason memory` and `mason sessions`: `setup` provisions the trace de
 (links a UC schema to an MLflow experiment, the analog of creating a store), `list`/`get`
 read traces back, and `instrument` prints the wiring snippet (the "Starter code" analog).
 `mason deploy --with-traces` injects the destination into a deployment's app.yaml, exactly as
-`--memory` / `--session-store` inject their stores.
+`--memory` / `--session` inject their stores.
 
 MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.9.0`
 installed and lazily import it; `instrument` (and the deploy wiring) are pure and need nothing.

@@ -46,18 +46,18 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
 @click.option(
     "--memory",
+    "-m",
     "memory_store",
     default=None,
     help="Memory store display name to wire in via AGENT_MEMORY_STORE (same as `mason deploy`).",
 )
 @click.option(
-    "--session-store",
+    "--session",
+    "-s",
     "session_store",
     default=None,
     help="Session store name to wire in via AGENT_SESSION_STORE (same as `mason deploy`).",
 )
-@click.option("--with-memory-store", "memory_store", default=None, hidden=True)
-@click.option("--with-session-store", "session_store", default=None, hidden=True)
 @click.option(
     "--with-traces",
     "traces_destination",
@@ -94,7 +94,7 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    The ``--memory`` / ``--session-store`` / ``--with-traces`` flags wire an agent's stores/traces
+    The ``--memory`` / ``--session`` / ``--with-traces`` flags wire an agent's stores/traces
     into ``app.yaml`` before running, exactly as ``mason deploy`` does — so you can iterate locally
     against a real store without hand-editing env.
     Locally the store owner (you) already has access, so no service-principal grant is needed here;

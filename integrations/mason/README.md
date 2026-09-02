@@ -78,7 +78,7 @@ mason [-p <profile>] [-o text|json]
   init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-               [--memory N] [--session-store N]
+               [--memory/-m N] [--session/-s N]
                [--with-traces C.S] [--no-create-stores]
   memory
     stores     create | list | get | update | delete
@@ -97,8 +97,8 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
-  deploy       <name> --source PATH [--memory N]
-               [--session-store N] [--actor-id ID]
+  deploy       <name> --source PATH [--memory/-m N]
+               [--session/-s N] [--actor-id ID]
                [--with-traces C.S] [--no-create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
@@ -184,7 +184,7 @@ For the full deployed demo, connect both managed stores:
 
 ```sh
 mason --profile <profile> deploy mason-agent-demo --source . \
-  --session-store mason-demo-sessions \
+  --session mason-demo-sessions \
   --memory mason-demo-memory \
   --actor-id alice
 ```

@@ -100,7 +100,7 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--with-memory-store", "mem"],
+        ["myapp", "--source", str(src), "--memory", "mem"],
         obj=_FakeCtx(),
     )
 
@@ -211,7 +211,7 @@ def test_deploy_injects_shared_actor_for_managed_stores(tmp_path: pathlib.Path, 
             str(src),
             "--memory",
             "mem",
-            "--session-store",
+            "--session",
             "sessions",
             "--actor-id",
             "alice",
@@ -371,8 +371,8 @@ def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkey
     assert created == ["new-mem"]  # created without any --create-stores flag
 
 
-def test_deploy_accepts_deprecated_with_store_aliases(tmp_path: pathlib.Path, monkeypatch):
-    # The old --with-memory-store / --with-session-store names still work (hidden back-compat).
+def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
+    # -m / -s are the short forms of --memory / --session.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -385,7 +385,7 @@ def test_deploy_accepts_deprecated_with_store_aliases(tmp_path: pathlib.Path, mo
     )
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--with-memory-store", "mem", "--with-session-store", "s"],
+        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
         obj=_FakeCtx(),
     )
     assert result.exit_code == 0, result.output
