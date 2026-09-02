@@ -105,12 +105,10 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
         "mason tools add mcp system.ai.web_search",
         "mason tools add uc-function catalog.schema.lookup_ticket",
-        "mason tools add python lookup-ticket",
     ),
     ("tools", "add", "sandbox"): ("mason tools add sandbox --scope table:samples.nyctaxi.trips",),
     ("tools", "add", "mcp"): ("mason tools add mcp system.ai.web_search",),
     ("tools", "add", "uc-function"): ("mason tools add uc-function catalog.schema.lookup_ticket",),
-    ("tools", "add", "python"): ("mason tools add python lookup-ticket",),
     ("tools", "list"): ("mason tools list",),
 }
 

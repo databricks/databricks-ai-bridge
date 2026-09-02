@@ -101,7 +101,6 @@ mason [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH] [--framework F]
     add mcp          SERVICE [--name NAME] [--source PATH] [--framework F]
     add uc-function  FUNCTION [--name NAME] [--source PATH] [--framework F]
-    add python       NAME [--source PATH] [--framework F]
     list             [--source PATH] [--framework F]
   deploy       <name> --source PATH [--with-memory-store N]
                [--with-session-store N] [--actor-id ID]
@@ -146,7 +145,6 @@ framework snippet the user still needs to add:
 mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
-mason tools add python lookup-ticket
 mason tools list
 ```
 
@@ -191,11 +189,23 @@ mason mcp list
 mason mcp list --schema main.tools
 ```
 
-The Python command creates user-owned `agent/tools/<name>.py` and
-`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. These local tools
-remain normal framework code and are auto-collected by the template; they are not remote
-`DATABRICKS_TOOLS` descriptors. `mason dev` and `mason deploy` preserve the authored Python source
-and do not patch the agent at runtime.
+Custom Python tools do not go through `mason tools`. Write them as ordinary framework-native code.
+For the LangGraph template, drop a typed `@tool` function into `agent/tools/`; `all_tools()`
+auto-collects it without another registry entry:
+
+```python
+# agent/tools/lookup_ticket.py
+from langchain_core.tools import tool
+
+
+@tool
+def lookup_ticket(ticket_id: str) -> str:
+    """Look up one support ticket."""
+    return f"Ticket {ticket_id}"
+```
+
+`mason dev` and `mason deploy` run that authored Python source unchanged. The
+`DATABRICKS_TOOLS` registry is only for Databricks-managed integrations.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the

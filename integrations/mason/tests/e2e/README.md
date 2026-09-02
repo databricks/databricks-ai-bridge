@@ -1,7 +1,7 @@
 # Mason agent-tool matrix
 
-This suite proves that CLI-generated and directly authored Python integration registries reach the
-same runtime code. It creates two LangGraph projects (CLI/direct), runs each with `mason dev`, deploys each to
+This suite proves that CLI-generated and directly authored Databricks integration registries reach
+the same runtime code. It creates two LangGraph projects (CLI/direct), runs each with `mason dev`, deploys each to
 Databricks Apps, and semantically exercises sandbox, `system.ai.web_search`, a local Python tool,
 and a temporary Unity Catalog function. The result is 16 evidence rows.
 
@@ -30,9 +30,10 @@ The template repo/ref flags make `mason init` read the exact checkout under test
 clone throttling; provide both or omit both to test the default upstream template.
 
 Direct authoring does not call `mason tools add`: it replaces `agent/databricks_tools.py` with
-`fixtures/direct_databricks_tools.py` and creates the user-owned Python tool file. CLI authoring
-invokes all four `mason tools add ...` commands, then implements the generated Python stub. Every
-exact command and generated-file step is captured in `commands.log`.
+`fixtures/direct_databricks_tools.py`. CLI authoring invokes the sandbox, MCP, and UC Function
+`mason tools add ...` commands. Both paths create the same ordinary, user-owned Python tool file;
+local Python tools do not use the Databricks integration registry. Every exact command and
+generated-file step is captured in `commands.log`.
 
 ## Verify existing evidence
 

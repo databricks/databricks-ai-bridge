@@ -42,6 +42,13 @@ def test_root_registers_supported_commands():
     assert "add-sandbox" not in names
 
 
+def test_tools_add_only_manages_databricks_integrations():
+    add = cli.tools.commands["add"]
+
+    assert isinstance(add, click.Group)
+    assert set(add.commands) == {"sandbox", "mcp", "uc-function"}
+
+
 def test_nested_command_help_shows_usage_options_and_examples():
     result = CliRunner().invoke(cli.mason, ["tools", "add", "sandbox", "--help"])
 
@@ -56,9 +63,9 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage code-selected tools for a Mason agent project." in result.output
-    assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
-    assert "List tools configured for this agent." in result.output
+    assert "Manage Databricks integrations selected in agent code." in result.output
+    assert "Add a sandbox, MCP service, or UC function." in result.output
+    assert "List Databricks integrations configured for this agent." in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
 
@@ -73,7 +80,6 @@ def test_tools_add_help_explains_types_and_project_targeting():
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
         "mason tools add mcp system.ai.web_search",
         "mason tools add uc-function catalog.schema.lookup_ticket",
-        "mason tools add python lookup-ticket",
     ):
         assert example in result.output
 
