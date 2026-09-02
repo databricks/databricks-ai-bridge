@@ -38,12 +38,9 @@ class _FakeStateClient:
                     "last_activity_time": "2026-08-27T12:00:00Z",
                 },
                 {
-                    "session_id": "durability-s1",
+                    "session_id": "public-s1",
                     "actor_id": "alice",
-                    "metadata": {
-                        "client": "mason-demo-durability",
-                        "public_session_id": "s1",
-                    },
+                    "metadata": {"public_session_id": "s1"},
                     "last_activity_time": "2026-08-28T12:01:00Z",
                 },
             ]
@@ -63,13 +60,6 @@ class _FakeStateClient:
                 {
                     "item_id": "3",
                     "data": {"event_type": "checkpoint", "checkpoint_id": "checkpoint-1"},
-                },
-                {
-                    "item_id": "4",
-                    "data": {
-                        "event_type": "mason_demo_durability",
-                        "event": "heartbeat",
-                    },
                 },
             ]
         }
@@ -92,52 +82,7 @@ async def _session_history(session_id):
     }
 
 
-async def _recovery_status(session_id):
-    return {
-        "session_id": session_id,
-        "status": "stopped",
-        "steps": ["tool_step_1", "tool_step_2"],
-        "outputs": [{"tool": "tool_step_1", "output": "done"}],
-        "current_step": "tool_step_2",
-        "worker_active": False,
-        "owner_active": False,
-        "needs_resume": True,
-        "error": None,
-        "instance_id": "instance-1",
-        "step_seconds": 1,
-        "execution_id": "execution-1",
-        "attempt": 1,
-        "owner_id": "instance-0",
-        "heartbeat_at": "2026-08-28T00:00:00+00:00",
-        "heartbeat_age_seconds": 11,
-        "heartbeat_fresh": False,
-        "heartbeat_interval_seconds": 3,
-        "stale_after_seconds": 10,
-        "durability_event_count": 4,
-        "recent_durability_events": [],
-        "claim_mode": "session_store_last_writer_wins",
-        "atomic_claim": False,
-    }
-
-
-async def _recovery_start(session_id):
-    result = await _recovery_status(session_id)
-    return {
-        **result,
-        "status": "running",
-        "worker_active": True,
-        "owner_active": True,
-        "heartbeat_fresh": True,
-        "needs_resume": False,
-    }
-
-
-async def _recovery_resume(session_id):
-    return await _recovery_start(session_id)
-
-
 def _client(monkeypatch, *, configured=False, history=False, session_id="routing-session"):
-    monkeypatch.delenv("MASON_DEMO_TOOL_STEP_SECONDS", raising=False)
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
         monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
@@ -147,9 +92,6 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
-    monkeypatch.setattr(ui.recovery, "status", _recovery_status)
-    monkeypatch.setattr(ui.recovery, "start", _recovery_start)
-    monkeypatch.setattr(ui.recovery, "resume", _recovery_resume)
     if history:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
 
@@ -186,15 +128,14 @@ def test_demo_ui_routes(monkeypatch):
 
     config = client.get("/api/demo/config").json()
     assert config["session_id"] == "routing-session"
+    assert config["deployed"] is False
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
-    assert config["app_control"]["stop_enabled"] is True
-    assert config["durability"]["enabled"] is False
-    assert config["heartbeat"]["enabled"] is False
-    assert config["recovery"]["enabled"] is False
+    assert "durability" not in config
+    assert "recovery" not in config
 
     sessions = client.get("/api/demo/sessions").json()
     assert sessions == {
@@ -253,17 +194,13 @@ def test_managed_session_list_is_actor_scoped(monkeypatch):
     ]
 
 
-def test_chat_session_items_exclude_checkpoints_and_durability_events():
+def test_chat_session_items_exclude_non_message_items():
     result = ui._chat_session_items(
         {
             "session_items": [
                 {"item_id": "1", "data": {"role": "user", "content": "hello"}},
                 {"item_id": "2", "data": {"type": "ai", "content": "hi"}},
                 {"item_id": "3", "data": {"event_type": "checkpoint"}},
-                {
-                    "item_id": "4",
-                    "data": {"event_type": "mason_demo_durability", "event": "heartbeat"},
-                },
                 {"item_id": "5", "data": {"content": "missing role"}},
             ],
             "next_page_token": "next",
@@ -341,23 +278,6 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert config["session"]["store"] == "sessions"
     assert config["session"]["actor"] == "alice"
     assert config["session"]["history"] is True
-    assert config["durability"] == {
-        "enabled": True,
-        "mode": "Session Store checkpoint + event log",
-        "claim_mode": "Last-writer-wins demo lease",
-        "atomic_claim": False,
-    }
-    assert config["heartbeat"] == {
-        "enabled": True,
-        "interval_seconds": 3,
-        "stale_after_seconds": 10,
-    }
-    assert config["recovery"] == {
-        "enabled": True,
-        "automatic_resume": True,
-        "steps": ["tool_step_1", "tool_step_2", "tool_step_3", "tool_step_4"],
-        "step_seconds": 6,
-    }
 
     created = client.post(
         "/api/demo/memory/entries",
@@ -402,11 +322,6 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert (
         client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
     )
-
-    assert client.get("/api/demo/recovery").json()["needs_resume"] is True
-    assert client.post("/api/demo/recovery/start").json()["worker_active"] is True
-    assert client.post("/api/demo/app/start").json()["worker_active"] is True
-    assert client.post("/api/demo/recovery/resume").json()["worker_active"] is True
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

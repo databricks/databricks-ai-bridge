@@ -88,8 +88,8 @@ plain `dict -> dict` / `dict -> AsyncGenerator[dict]`) to the endpoints. The age
 behind those handlers in `agent/agent.py`, so the serving layer is the same regardless of SDK.
 
 `databricks_mason.runtime` (from the `databricks-mason` package) holds plumbing (session
-checkpointer, tracing, MCP tool loading, background store, durability log, and recovery workflow),
-so the template ships only your agent code.
+checkpointer, tracing, MCP tool loading, background store), so the template ships only your agent
+code.
 
 ## How tools register
 
@@ -98,7 +98,7 @@ so the template ships only your agent code.
 `create_agent_graph()` calls `all_tools()`. **Do not** edit `agent/agent.py` to add a tool — just add
 a file to `agent/tools/`.
 
-## Sessions & durability
+## Sessions
 
 - Default: `databricks_mason/langgraph/session_store.py`'s `checkpointer()` returns an in-process `InMemorySaver`,
   keyed per request by `thread_config(session_id)` — no database, multi-turn works in-process.

@@ -147,14 +147,20 @@ def dev(
 
 
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
-    """Print how to reach the running app: the chat UI if present, else the API endpoint."""
+    """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
     if (source_dir / "runtime" / "ui.py").is_file():
         render.success("Starting agent", fields={"Chat UI": base})
     else:
+        # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
+        sample = (
+            f"curl -X POST {base}/invocations -H 'Content-Type: application/json' "
+            '-d \'{"input": [{"role": "user", "content": "hi"}]}\''
+        )
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
             fields={"Invoke": f"POST {base}/invocations"},
+            next_steps=[sample],
         )
 
 

@@ -5,8 +5,8 @@ construction — so they work regardless of which framework an agent is built wi
 helpers (session-store checkpointer, MCP tools, memory tools) live in the per-framework adapter
 package, e.g. :mod:`databricks_mason.langgraph`, which re-exports these for a single import point.
 
-``__all__`` is the supported surface. ``tool_manifest``, ``session_store_client``, ``background``,
-and ``durability`` are internal and reachable by their submodule paths but not re-exported here.
+``__all__`` is the supported surface. ``tool_manifest``, ``session_store_client``, and ``background``
+are internal and reachable by their submodule paths but not re-exported here.
 
 The re-exports below are resolved lazily (PEP 562) so importing a neutral submodule such as
 ``databricks_mason.runtime.tool_manifest`` does not pull in the tracing module's ``mlflow`` dependency.

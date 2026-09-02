@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from databricks_mason import workspace_client
-from databricks_mason.langgraph import recovery
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
-_INSTANCE_ID = recovery.process_id()
+_INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 _MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
 _SESSION_STORE_ENV = "AGENT_SESSION_STORE"
@@ -50,15 +50,6 @@ class MemorySearchRequest(BaseModel):
 
 class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
-
-
-def _execution_identity() -> str:
-    if os.getenv("DATABRICKS_APP_NAME"):
-        return "Databricks App service principal"
-    profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-    return (
-        f"Local Databricks profile: {profile}" if profile else "Databricks default authentication"
-    )
 
 
 def _memory_store() -> str:
@@ -211,17 +202,6 @@ def _require_session() -> None:
         )
 
 
-def _require_recovery() -> None:
-    _require_session()
-
-
-async def _recovery_call(handler, session_id: str) -> dict[str, Any]:
-    try:
-        return await handler(session_id)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-
-
 async def _checkpoint_history(session_id: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
     from databricks_mason.langgraph.session_store import thread_config
@@ -253,7 +233,7 @@ def _chat_sessions(result: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         metadata = session.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
-        if metadata.get("client") == "mason-demo-durability" or metadata.get("public_session_id"):
+        if metadata.get("public_session_id"):
             continue
         sessions.append(session)
     return sessions
@@ -290,12 +270,11 @@ def install_ui(app: FastAPI) -> None:
         )
         memory_store = _memory_store()
         session_store = _session_store()
-        durability_enabled = bool(session_store)
         return {
             "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
             "viewer": viewer,
-            "execution_identity": _execution_identity(),
+            "deployed": bool(os.getenv("DATABRICKS_APP_NAME")),
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": False},
             "session": {
@@ -310,31 +289,6 @@ def install_ui(app: FastAPI) -> None:
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": _memory_actor(),
-            },
-            "durability": {
-                "enabled": durability_enabled,
-                "mode": (
-                    "Session Store checkpoint + event log"
-                    if durability_enabled
-                    else "Not configured"
-                ),
-                "claim_mode": "Last-writer-wins demo lease",
-                "atomic_claim": False,
-            },
-            "heartbeat": {
-                "enabled": durability_enabled,
-                "interval_seconds": recovery.heartbeat_seconds(),
-                "stale_after_seconds": recovery.stale_seconds(),
-            },
-            "app_control": {
-                "stop_enabled": True,
-                "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
-            },
-            "recovery": {
-                "enabled": durability_enabled,
-                "automatic_resume": True,
-                "steps": recovery.step_names(),
-                "step_seconds": recovery.step_seconds(),
             },
         }
 
@@ -424,32 +378,3 @@ def install_ui(app: FastAPI) -> None:
             result = await _managed_call(_state_client().list_session_items, session_id)
             return _chat_session_items(result)
         return await _checkpoint_history(session_id)
-
-    @app.get("/api/demo/recovery", include_in_schema=False)
-    async def recovery_status(request: Request) -> dict:
-        _require_recovery()
-        return await _recovery_call(recovery.status, request.state.session_id)
-
-    @app.post("/api/demo/recovery/start", include_in_schema=False)
-    async def start_recovery(request: Request) -> dict:
-        _require_recovery()
-        return await _recovery_call(recovery.start, request.state.session_id)
-
-    @app.post("/api/demo/app/start", include_in_schema=False)
-    async def start_app(request: Request) -> dict:
-        _require_recovery()
-        return await _recovery_call(recovery.start, request.state.session_id)
-
-    @app.post("/api/demo/recovery/resume", include_in_schema=False)
-    async def resume_recovery(request: Request) -> dict:
-        _require_recovery()
-        return await _recovery_call(recovery.resume, request.state.session_id)
-
-    @app.post("/api/demo/app/stop", include_in_schema=False)
-    async def stop_app() -> dict:
-        asyncio.get_running_loop().call_later(0.5, os._exit, 86)
-        return {
-            "status": "stopping",
-            "instance_id": _INSTANCE_ID,
-            "restart_managed": bool(os.getenv("DATABRICKS_APP_NAME")),
-        }
