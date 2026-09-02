@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from databricks_mason.langgraph.mcp import mcp_tools
     from databricks_mason.langgraph.memory import memory_tools, recall, remember
     from databricks_mason.langgraph.session_store import checkpointer, thread_config
+    from databricks_mason.langgraph.skills import build_skill_context
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
 
 
@@ -55,6 +56,8 @@ def configure_tracing() -> None:
 __all__ = [
     # MCP tools from agent.toml (plus any servers you pass) — add them to your agent's tool list.
     "mcp_tools",
+    # UC Skills declared in agent.toml — add returned tools and prompt context to the agent.
+    "build_skill_context",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
     "remember",
@@ -75,6 +78,7 @@ __all__ = [
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds LangChain autolog).
 _MODULE_BY_NAME = {
     "mcp_tools": "databricks_mason.langgraph.mcp",
+    "build_skill_context": "databricks_mason.langgraph.skills",
     "memory_tools": "databricks_mason.langgraph.memory",
     "remember": "databricks_mason.langgraph.memory",
     "recall": "databricks_mason.langgraph.memory",

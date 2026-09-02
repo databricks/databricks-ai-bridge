@@ -1,7 +1,7 @@
 # `databricks-mason`
 
 Mason is an experimental CLI for Databricks custom agent preview APIs and
-deployments. It manages memory, sessions, tracing, and deployments from one
+deployments. It manages skills, memory, sessions, tracing, and deployments from one
 authenticated command.
 
 > The underlying APIs are in preview and may need workspace enablement.
@@ -91,6 +91,9 @@ mason [-p <profile>] [-o text|json]
     list | get | instrument
   mcp
     list             [--schema CATALOG.SCHEMA]
+  skills
+    list             --schema CATALOG.SCHEMA
+    add uc           CATALOG.SCHEMA.SKILL [--name NAME] [--source PATH]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
@@ -161,6 +164,33 @@ Sandbox scopes default to read-only access. Repeat `--scope` to allow more than 
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
 agent needs writes. Every sandbox call carries this fixed downscope in MCP `_meta`, outside the tool
 arguments controlled by the model.
+
+## Unity Catalog skills
+
+Mason's LangGraph template supports exact Unity Catalog skill bindings. Discover visible skills in
+a schema, then attach one to the current agent project:
+
+```sh
+mason skills list --schema catalog.schema
+mason skills add uc catalog.schema.skill --source .
+```
+
+The add command writes the same declarative contract you can author directly:
+
+```toml
+[[skills]]
+id = "skill"
+source = { kind = "uc", name = "catalog.schema.skill" }
+```
+
+At graph construction, Mason injects only each declared skill's ID, FQN, and description. The
+model calls `load_skill` when the task matches and `read_skill_file` for a referenced relative file;
+both fetch from UC on demand. Mason does not copy skill bundles into the project or deployment.
+
+This release supports UC sources on LangGraph only. Local, custom, and path-based skills,
+automatic discovery, versions, and script materialization are not supported. A deployed App's
+service principal needs `USE_CATALOG`, `USE_SCHEMA`, and `READ_VOLUME` on the bound resources.
+The legacy `READ_SKILL` privilege does not authorize skill metadata or bundle reads.
 
 ## Initialize the chat app demo
 

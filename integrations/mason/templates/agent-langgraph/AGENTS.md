@@ -77,6 +77,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
+| Attach a Unity Catalog skill | `mason skills add uc catalog.schema.skill --source .` (`agent.toml`) |
 | Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
 | Change the session checkpointer | `databricks_mason/langgraph/session_store.py` |
 | Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
@@ -97,6 +98,27 @@ so the template ships only your agent code.
 `@tool`-decorated `BaseTool` it finds. So a tool registers just by existing in a file there —
 `create_agent_graph()` calls `all_tools()`. **Do not** edit `agent/agent.py` to add a tool — just add
 a file to `agent/tools/`.
+
+## Unity Catalog skills
+
+This LangGraph template supports exact Unity Catalog skill bindings only:
+
+```toml
+[[skills]]
+id = "review"
+source = { kind = "uc", name = "catalog.schema.skill" }
+```
+
+Use `mason skills list --schema catalog.schema` to discover skills and
+`mason skills add uc catalog.schema.skill --source .` to add one. The model initially receives only
+the declared skills' names and descriptions. It loads instructions lazily with `load_skill` and
+reads referenced files with `read_skill_file`, which fetches them remotely from UC through
+`get_skill_files`; those files are never copied into the project or deployment.
+
+Local, custom, and path-based skills, automatic discovery, and versions are not supported. A
+deployed App's service principal needs `USE_CATALOG` on the catalog, `USE_SCHEMA` on the schema,
+and `READ_VOLUME` on the bound skill. The legacy `READ_SKILL` privilege does not authorize skill
+metadata or bundle reads.
 
 ## Sessions & durability
 

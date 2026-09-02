@@ -240,6 +240,33 @@ and durable event replay.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
 
+### Use Unity Catalog skills (LangGraph only)
+
+Discover the skills in a Unity Catalog schema, then attach an exact skill binding to this project:
+
+```bash
+mason skills list --schema catalog.schema
+mason skills add uc catalog.schema.skill --source .
+```
+
+Bindings live in `agent.toml`:
+
+```toml
+[[skills]]
+id = "review"
+source = { kind = "uc", name = "catalog.schema.skill" }
+```
+
+The agent receives each declared skill's name and description as metadata. Instructions are fetched
+only when it calls `load_skill` with the binding ID; referenced files are fetched remotely from UC
+through `read_skill_file` and the `get_skill_files` endpoint. Skill instructions and reference files
+are never copied into the project or deployment.
+
+Only exact UC bindings are supported. There are no local, custom, or path-based sources, automatic
+discovery, or versions. The deployed Databricks App's service principal needs `USE_CATALOG` on the
+catalog, `USE_SCHEMA` on the schema, and `READ_VOLUME` on the bound skill. The legacy `READ_SKILL`
+privilege does not authorize skill metadata or bundle reads.
+
 ## Test
 
 ```bash

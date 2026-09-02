@@ -36,6 +36,7 @@ def test_root_registers_supported_commands():
         "deploy",
         "deployments",
         "mcp",
+        "skills",
         "tools",
     } <= names
     assert "help" not in names
@@ -76,6 +77,26 @@ def test_tools_add_help_explains_types_and_project_targeting():
         "mason tools add python lookup-ticket",
     ):
         assert example in result.output
+
+
+def test_skills_help_explains_uc_workflow():
+    result = CliRunner().invoke(cli.mason, ["skills", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Discover and attach Unity Catalog agent skills." in result.output
+    assert "List Unity Catalog skills that can be attached to an agent." in result.output
+    assert "Attach an exact skill binding to agent.toml." in result.output
+    assert "mason skills list --schema catalog.schema" in result.output
+    assert "mason skills add uc catalog.schema.skill" in result.output
+
+
+def test_skills_add_uc_help_shows_project_targeting_and_example():
+    result = CliRunner().invoke(cli.mason, ["skills", "add", "uc", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage: mason skills add uc [OPTIONS] NAME" in result.output
+    assert "--source DIRECTORY" in result.output
+    assert "mason skills add uc catalog.schema.skill --source ." in result.output
 
 
 def test_help_examples_recommend_the_default_happy_path():
