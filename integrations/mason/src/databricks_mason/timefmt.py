@@ -1,9 +1,9 @@
 """Timestamp parsing and humanization for the Mason CLI.
 
-The agents/v1 APIs return timestamps two ways: memory *stores* use epoch-millis
-int64 (`created_at`/`updated_at`), while entries, sessions, and session items use
-`google.protobuf.Timestamp`, which serializes to an RFC 3339 string
-(`2026-08-15T01:29:00Z`). `parse_timestamp` accepts either.
+The agents/v1 APIs return timestamps as `google.protobuf.Timestamp`, which
+serializes to an RFC 3339 string (`2026-08-15T01:29:00Z`) under the fields
+`create_time`/`update_time`. Older memory-store responses used epoch-millis
+int64 (`created_at`/`updated_at`); `parse_timestamp` accepts either form.
 
 `relative` returns concise phrases such as "13 days ago" and "An hour ago".
 """

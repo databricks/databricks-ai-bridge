@@ -153,6 +153,28 @@ def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
     db.assert_not_called()
 
 
+def test_dev_announces_chat_ui_when_overlay_present(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "ui.py").write_text("# chat UI\n")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(
+            dev_mod.dev, ["--source", str(tmp_path), "--app-port", "9000"], obj=_Ctx()
+        )
+    assert result.exit_code == 0, result.output
+    assert "Chat UI" in result.output
+    assert "http://localhost:9000" in result.output
+
+
+def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")  # API-only: no runtime/ui.py
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "API-only" in result.output
+    assert "http://localhost:8000/invocations" in result.output
+
+
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     tmp_path: pathlib.Path,
 ):

@@ -1,16 +1,12 @@
-"""Build MCP servers and tools from the agent's ``agent.toml`` tool manifest.
+"""Build MCP tools for the agent from the servers declared in ``agent.toml`` (plus any the agent adds).
 
-Two seams the agent composes:
-  - ``manifest_servers()`` — the MCP servers declared in ``agent.toml`` (sandbox/mcp + uc_function).
-  - ``mcp_client(servers)`` — a ``DatabricksMultiServerMCPClient`` with the sandbox downscoping
-    interceptor already attached, so downscoping holds however the caller drives it.
-``mcp_tools(servers)`` is a convenience wrapper that just calls ``.get_tools()``.
+``mcp_tools()`` is the entry point: it reads the MCP servers declared in ``agent.toml``
+(sandbox/mcp + uc_function), fetches their LangChain tools with sandbox downscoping applied, and
+returns them. An agent with its own hand-built servers passes them as ``extra_servers``; leaving
+``agent.toml`` empty simply yields no declared servers. Typical agent use::
 
-The agent's own hand-declared servers (its ``agent/mcps.py`` hook) are joined in by the agent, not
-here — this module never imports agent code, so it lives in the shared package. Typical agent use::
-
-    servers = manifest_servers() + build_mcp_servers()  # ours + the agent's own
-    tools = await mcp_tools(servers)
+    tools = await mcp_tools()  # just the agent.toml servers
+    tools = await mcp_tools(build_mcp_servers())  # agent.toml servers + the agent's own
 """
 
 from __future__ import annotations
@@ -55,8 +51,8 @@ def _server_from_tool(tool: ToolRecord) -> DatabricksMCPServer | None:
     return None
 
 
-def manifest_servers() -> list[DatabricksMCPServer]:
-    """The MCP servers declared in the agent's ``agent.toml`` tool manifest (may be empty)."""
+def _declared_servers() -> list[DatabricksMCPServer]:
+    """The MCP servers declared in the agent's ``agent.toml`` (may be empty)."""
     tools = load_tools(expected_framework="langgraph")
     return [server for tool in tools if (server := _server_from_tool(tool)) is not None]
 
@@ -99,8 +95,14 @@ def mcp_client(servers: list[DatabricksMCPServer]) -> DatabricksMultiServerMCPCl
     return DatabricksMultiServerMCPClient(servers_as_mcp, tool_interceptors=interceptors)
 
 
-async def mcp_tools(servers: list[DatabricksMCPServer]) -> list:
-    """Fetch LangChain MCP tools from ``servers`` (with sandbox downscoping). Fail-open to ``[]``."""
+async def mcp_tools(extra_servers: list[DatabricksMCPServer] | None = None) -> list:
+    """Fetch LangChain MCP tools for the agent (with sandbox downscoping). Fail-open to ``[]``.
+
+    Includes the MCP servers declared in ``agent.toml``; pass ``extra_servers`` to add servers the
+    agent builds itself. Returns an empty list when there are no servers or the fetch fails, so it is
+    safe to spread straight into an agent's tool list.
+    """
+    servers = [*_declared_servers(), *(extra_servers or [])]
     if not servers:
         return []
     try:

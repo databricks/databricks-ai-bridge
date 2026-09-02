@@ -14,6 +14,7 @@ from databricks_mason.auth import load_default_profile, login, logout
 from databricks_mason.client import MasonClient
 from databricks_mason.deploy import deploy, deployments
 from databricks_mason.dev import dev
+from databricks_mason.help import configure_help
 from databricks_mason.init import init
 from databricks_mason.mcp import mcp
 from databricks_mason.memory import memory
@@ -70,6 +71,7 @@ mason.add_command(tracing)
 mason.add_command(deploy)
 mason.add_command(deployments)
 mason.add_command(tools)
+configure_help(mason)
 
 
 def main() -> None:

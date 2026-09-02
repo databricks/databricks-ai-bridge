@@ -291,7 +291,8 @@ class AgentProject:
         except FileNotFoundError as exc:
             raise AgentCliError(
                 f"Could not find agent.toml in {project_root}.",
-                hint="Run `mason init` or use a legacy compatibility command.",
+                hint="This command needs a Mason project. Run `mason init` to create one, "
+                "or point at an existing project with --source <dir>.",
             ) from exc
         except (OSError, ParseError) as exc:
             raise AgentCliError(f"Could not read agent manifest at {path}: {exc}.") from exc
@@ -334,7 +335,17 @@ class AgentProject:
                 continue
             if existing == spec:
                 return False
-            raise AgentCliError(f"Tool id {spec.id!r} already exists with different configuration.")
+
+            def _summary(s: ToolSpec) -> str:
+                src = s.source
+                return src.service or src.function or src.entrypoint or src.kind
+
+            raise AgentCliError(
+                f"Tool id {spec.id!r} already exists with a different configuration "
+                f"(existing: {_summary(existing)}; requested: {_summary(spec)}).",
+                hint="Use --name to add it under a different id, or remove the existing "
+                "tool from agent.toml first.",
+            )
         raw_tools = self._document.get("tools")
         if raw_tools is None:
             raw_tools = tomlkit.aot()

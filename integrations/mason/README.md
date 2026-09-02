@@ -75,8 +75,11 @@ accessors (`store.name`) while remaining plain dicts underneath — so `store["n
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--enable-chat-app]
+  init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
+  dev          [--source PATH] [--prepare-environment] [--app-port PORT]
+               [--with-memory-store N] [--with-session-store N]
+               [--with-traces C.S] [--create-stores]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
@@ -88,7 +91,6 @@ mason [-p <profile>] [-o text|json]
     list | get | instrument
   mcp
     list             [--schema CATALOG.SCHEMA]
-  init          [--framework openai|langgraph] [--profile P] [DIRECTORY]
   tools
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
@@ -99,6 +101,27 @@ mason [-p <profile>] [-o text|json]
                [--with-session-store N] [--actor-id ID]
                [--with-traces C.S] [--create-stores]
   deployments  list | get | logs | start | stop | delete
+```
+
+## Command help
+
+Use the conventional help flag at any command level. Every command's help includes runnable
+examples:
+
+```sh
+mason --help
+mason deploy --help
+mason sessions items append --help
+```
+
+For the shortest path from a blank directory to a running and deployed agent:
+
+```sh
+mason login --profile my-workspace
+mason init my-agent
+cd my-agent
+mason dev
+mason deploy my-agent
 ```
 
 ## Agent tools
@@ -141,17 +164,19 @@ arguments controlled by the model.
 
 ## Initialize the chat app demo
 
-The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project:
+The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project.
+It is included by default for `--framework langgraph`; pass `--disable-chat-app` to scaffold the
+API-only backend instead.
 
 ```sh
-mason init --framework langgraph --enable-chat-app \
+mason init --framework langgraph \
   --profile <profile> \
   ./my-agent
 cd ./my-agent
 uv run start-server
 ```
 
-`--enable-chat-app` always includes synchronous, SSE streaming, background polling, Session Store,
+The chat app always includes synchronous, SSE streaming, background polling, Session Store,
 Memory Store, HITL resume, Start App, Stop App, heartbeat, and recovery UI. There are no separate
 stop/crash flags. The base agent owns `agent/mason/durability.py`, `agent/mason/recovery.py`, and
 `agent/mason/long_running.py`; the framework-specific overlay only adds `ui/`, `runtime/ui.py`, the

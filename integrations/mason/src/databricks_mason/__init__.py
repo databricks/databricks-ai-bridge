@@ -12,7 +12,14 @@ Construct a `MasonClient` and call one method per API operation:
 
 Auth resolves through the Databricks SDK: pass a `.databrickscfg` profile or rely on
 its default resolution. API errors surface as `AgentCliError`.
+
+The framework-neutral runtime helpers (``configure_tracing``, ``tag_session``, ``workspace_client``,
+``workspace_headers``) are also re-exported here for convenience — they live in
+:mod:`databricks_mason.runtime` and are resolved lazily (PEP 562) so a plain CLI ``import
+databricks_mason`` does not pull in the tracing module's ``mlflow`` dependency.
 """
+
+from typing import TYPE_CHECKING
 
 from databricks_mason.client import MasonClient, memory_entry_path, memory_store_path
 from databricks_mason.errors import AgentCliError
@@ -33,6 +40,14 @@ from databricks_mason.models import (
     StorageBackend,
 )
 
+if TYPE_CHECKING:
+    from databricks_mason.runtime import (
+        configure_tracing,
+        tag_session,
+        workspace_client,
+        workspace_headers,
+    )
+
 __all__ = [
     "MasonClient",
     "AgentCliError",
@@ -52,4 +67,23 @@ __all__ = [
     "SessionItem",
     "SessionItemList",
     "PoppedSessionItem",
+    # Framework-neutral runtime helpers (lazily re-exported from databricks_mason.runtime).
+    "configure_tracing",
+    "tag_session",
+    "workspace_client",
+    "workspace_headers",
 ]
+
+# Neutral runtime helpers, re-exported lazily so the light CLI import path stays free of the agent
+# stack (mlflow, etc.). Everything else above is light and imported eagerly.
+_RUNTIME_REEXPORTS = frozenset(
+    {"configure_tracing", "tag_session", "workspace_client", "workspace_headers"}
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _RUNTIME_REEXPORTS:
+        import importlib
+
+        return getattr(importlib.import_module("databricks_mason.runtime"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -45,6 +45,19 @@ def emit_json(data: Any) -> None:
     click.echo(json.dumps(data, indent=2, default=str))
 
 
+def confirm_destroy(target: str, *, assume_yes: bool) -> None:
+    """Guard a destructive action with a confirmation prompt.
+
+    No-op when `assume_yes` is set (the `--yes/-y` flag, for scripts). Otherwise prompts
+    on the terminal and aborts unless the user answers yes. A non-interactive stdin (a
+    pipe with no `--yes`) answers no and aborts, which is the safe default.
+    """
+    if assume_yes:
+        return
+    if not click.confirm(f"Delete {target}? This cannot be undone.", default=False):
+        raise click.Abort()
+
+
 def status_pill(status: Optional[str]) -> Text:
     """Create a colored ●/○ status indicator."""
     value = (status or "").strip().upper()

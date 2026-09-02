@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from agent.mason.durability import SessionStoreDurabilityLog, execution_id
+from databricks_mason.runtime.durability import SessionStoreDurabilityLog, execution_id
 
 
 class _ApiError(Exception):

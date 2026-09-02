@@ -1,7 +1,8 @@
 # Mason LangGraph Chat App Overlay
 
-`mason init --framework langgraph --enable-chat-app` copies this framework-specific overlay after
-the base `agent-langgraph` template. It is intentionally not a post-generation mutation command.
+`mason init --framework langgraph` copies this framework-specific overlay after the base
+`agent-langgraph` template (it is included by default; `--disable-chat-app` opts out). It is
+intentionally not a post-generation mutation command.
 
 ## Installed files
 
@@ -11,8 +12,8 @@ the base `agent-langgraph` template. It is intentionally not a post-generation m
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
 The durability backend is part of the base agent template, not this UI overlay:
-`agent/mason/durability.py`, `agent/mason/recovery.py`, and
-`agent/mason/long_running.py`.
+`databricks_mason/runtime/durability.py`, `databricks_mason/langgraph/recovery.py`, and
+`databricks_mason/langgraph/long_running.py`.
 
 ## Behavior
 

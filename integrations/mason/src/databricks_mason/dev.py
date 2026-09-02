@@ -15,9 +15,13 @@ from typing import Optional
 import click
 import yaml
 
+from databricks_mason import render
 from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
+
+# Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
+_DEFAULT_APP_PORT = 8000
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -96,7 +100,7 @@ def dev(
     app_yaml = source_dir / "app.yaml"
     if not app_yaml.exists():
         raise AgentCliError(
-            f"No app.yaml in '{source_dir}'.",
+            f"No app.yaml found at {app_yaml}.",
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
@@ -133,8 +137,25 @@ def dev(
     if entry_point is not None:
         args += ["--entry-point", str(entry_point)]
 
+    # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
+    # misleading for an API-only project, which serves no page there (404). Print an accurate line up
+    # front, keyed on whether this project actually carries the chat-app overlay.
+    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
+
     # Run in the project dir so run-local finds the app; stream output (no capture).
     _databricks(args, obj.profile, cwd=str(source_dir))
+
+
+def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
+    """Print how to reach the running app: the chat UI if present, else the API endpoint."""
+    base = f"http://localhost:{port}"
+    if (source_dir / "runtime" / "ui.py").is_file():
+        render.success("Starting agent", fields={"Chat UI": base})
+    else:
+        render.success(
+            "Starting API-only agent (no chat UI — see `mason init --help`)",
+            fields={"Invoke": f"POST {base}/invocations"},
+        )
 
 
 def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
@@ -156,5 +177,8 @@ def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
         return None  # no index override present — run-local can use app.yaml directly
     doc["env"] = filtered
     dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
-    dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    try:
+        dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
+    except OSError as exc:
+        raise AgentCliError(f"Could not write {dev_yaml}: {exc}") from exc
     return dev_yaml

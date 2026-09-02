@@ -78,15 +78,36 @@ class LakebaseBackend:
         }
 
 
+def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
+    """Read the app's existing resources array (empty list if it can't be read)."""
+    result = _databricks(["apps", "get", app, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return []
+    try:
+        resources = json.loads(result.stdout or "{}").get("resources", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    return resources if isinstance(resources, list) else []
+
+
 def apply_postgres_resources(
     app: str, backends: list[LakebaseBackend], profile: Optional[str]
 ) -> Optional[str]:
     """Bind each backend's database as a `postgres` app resource in one update.
 
-    `apps update --json` replaces the whole resources array, so all needed backends must be applied
-    together. Returns None on success or a human-readable reason on failure.
+    `apps update --json` REPLACES the whole resources array, so we must send the complete set:
+    read the app's current resources, drop the ones we manage (matched by name) so re-deploys
+    update rather than duplicate them, keep every other (user-owned) resource, and append ours.
+    Returns None on success or a human-readable reason on failure.
     """
-    payload = {"resources": [b.postgres_resource() for b in backends]}
+    ours = [b.postgres_resource() for b in backends]
+    our_names = {r["name"] for r in ours}
+    preserved = [
+        r
+        for r in _current_app_resources(app, profile)
+        if isinstance(r, dict) and r.get("name") not in our_names
+    ]
+    payload = {"resources": preserved + ours}
     result = _databricks(
         ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
     )
