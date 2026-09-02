@@ -70,10 +70,10 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--create-stores/--no-create-stores",
-    default=True,
-    help="Create referenced stores if they don't exist (idempotent, default). "
-    "--no-create-stores requires them to already exist.",
+    "--no-create-stores",
+    is_flag=True,
+    help="Require referenced stores to already exist. By default missing stores are created "
+    "(idempotent).",
 )
 @click.pass_obj
 def dev(
@@ -85,7 +85,7 @@ def dev(
     session_store: Optional[str],
     traces_destination: Optional[str],
     traces_experiment: Optional[str],
-    create_stores: bool,
+    no_create_stores: bool,
 ) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
@@ -119,7 +119,7 @@ def dev(
             session_store=session_store,
             traces_destination=traces_destination,
             traces_experiment=traces_experiment,
-            create_stores=create_stores,
+            create_stores=not no_create_stores,
         )
         if env_updates:
             _upsert_manifest_env(source_dir, env_updates)

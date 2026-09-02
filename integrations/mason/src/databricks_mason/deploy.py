@@ -334,10 +334,10 @@ def _grant_store_access(
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--create-stores/--no-create-stores",
-    default=True,
-    help="Create referenced stores if they don't exist (idempotent, default). "
-    "--no-create-stores requires them to already exist.",
+    "--no-create-stores",
+    is_flag=True,
+    help="Require referenced stores to already exist. By default missing stores are created "
+    "(idempotent).",
 )
 @click.option(
     "--pip-index-url",
@@ -362,7 +362,7 @@ def deploy(
     actor_id,
     traces_destination,
     traces_experiment,
-    create_stores,
+    no_create_stores,
     pip_index_url,
     workspace_path,
 ) -> None:
@@ -379,7 +379,7 @@ def deploy(
         session_store=session_store,
         traces_destination=traces_destination,
         traces_experiment=traces_experiment,
-        create_stores=create_stores,
+        create_stores=not no_create_stores,
     )
     provisioned: dict[str, Any] = {}
     if _MEMORY_ENV in env_updates:
