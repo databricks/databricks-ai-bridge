@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 import pathlib
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -101,6 +103,32 @@ class _FakeStructuredTool:
         return await self.coroutine(**arguments)
 
 
+def _import_runtime(monkeypatch):
+    """Import the runtime adapter with only its optional dependencies faked."""
+    databricks_langchain = types.ModuleType("databricks_langchain")
+    databricks_langchain.__dict__["DatabricksMCPServer"] = object
+    langchain_core = types.ModuleType("langchain_core")
+    langchain_tools = types.ModuleType("langchain_core.tools")
+    langchain_tools.__dict__["BaseTool"] = object
+    langchain_tools.__dict__["StructuredTool"] = _FakeStructuredTool
+    adapters = types.ModuleType("langchain_mcp_adapters")
+    sessions = types.ModuleType("langchain_mcp_adapters.sessions")
+    sessions.__dict__["create_session"] = lambda connection: None
+    monkeypatch.setitem(sys.modules, "databricks_langchain", databricks_langchain)
+    monkeypatch.setitem(sys.modules, "langchain_core", langchain_core)
+    monkeypatch.setitem(sys.modules, "langchain_core.tools", langchain_tools)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", adapters)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.sessions", sessions)
+    sys.modules.pop("databricks_mason.langgraph.skills", None)
+    return importlib.import_module("databricks_mason.langgraph.skills")
+
+
+@pytest.fixture(autouse=True)
+def _unload_skill_runtime_after_test():
+    yield
+    sys.modules.pop("databricks_mason.langgraph.skills", None)
+
+
 class _FakeSessions:
     def __init__(self, tools):
         self.tools = tools
@@ -150,7 +178,7 @@ def _uc_tool(
 def _load_runtime(monkeypatch, tmp_path: pathlib.Path, tools):
     _write_manifest(tmp_path, UC_SKILL)
     monkeypatch.setenv("MASON_PROJECT_ROOT", str(tmp_path))
-    runtime = importlib.import_module("databricks_mason.langgraph.skills")
+    runtime = _import_runtime(monkeypatch)
     sessions = _FakeSessions(tools)
 
     class FakeDatabricksMCPServer:
@@ -232,8 +260,8 @@ def test_uc_skill_rejects_missing_dynamic_tool(monkeypatch, tmp_path: pathlib.Pa
         asyncio.run(runtime.build_skill_context())
 
 
-def test_uc_skill_rejects_content_over_one_mibibyte():
-    runtime = importlib.import_module("databricks_mason.langgraph.skills")
+def test_uc_skill_rejects_content_over_one_mibibyte(monkeypatch):
+    runtime = _import_runtime(monkeypatch)
     content = "é" * (1024 * 1024 // 2) + "a"
     result = SimpleNamespace(
         isError=False,
@@ -256,8 +284,8 @@ def test_uc_reference_reader_requires_relative_contained_path(
     assert sessions.calls == []
 
 
-def test_langgraph_package_exports_skill_context_builder():
+def test_langgraph_package_exports_skill_context_builder(monkeypatch):
     langgraph = importlib.import_module("databricks_mason.langgraph")
-    runtime = importlib.import_module("databricks_mason.langgraph.skills")
+    runtime = _import_runtime(monkeypatch)
 
     assert langgraph.build_skill_context is runtime.build_skill_context
