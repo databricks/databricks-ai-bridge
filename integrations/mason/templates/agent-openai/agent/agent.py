@@ -70,12 +70,16 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(mcp=None) -> Agent:
-    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers."""
+def create_agent(mcp=None, model: str | None = None) -> Agent:
+    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
+
+    ``model`` overrides the default serving endpoint (``MODEL``) for this build — the demo chat app's
+    model picker passes the selected endpoint per request; falls back to ``MODEL`` when unset.
+    """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        model=MODEL,
+        model=model or MODEL,
         tools=[*all_tools(), *memory_tools()],
         mcp_servers=mcp or [],
     )
@@ -125,7 +129,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
         # (mcps.py), then connect them for the life of the run.
         servers = await mcp_servers(build_mcp_servers())
         mcp = [await stack.enter_async_context(server) for server in servers]
-        agent = create_agent(mcp)
+        # `model` (optional) lets a client pick the serving endpoint for this turn (see the demo UI's
+        # model picker); it defaults to MODEL inside create_agent.
+        agent = create_agent(mcp, request.get("model"))
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new

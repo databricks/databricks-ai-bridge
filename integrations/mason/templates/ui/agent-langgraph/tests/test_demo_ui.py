@@ -116,10 +116,12 @@ def test_demo_ui_routes(monkeypatch):
     assert index.status_code == 200
     assert 'id="new-session"' in index.text
     assert 'id="session-list"' in index.text
+    assert 'id="model-select"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
+    assert 'fetch("/api/demo/models"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
     styles = client.get("/ui-assets/styles.css").text
@@ -322,6 +324,49 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert (
         client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
     )
+
+
+class _FakeEndpoint:
+    def __init__(self, name, task):
+        self.name = name
+        self.task = task
+
+
+class _FakeServingEndpoints:
+    def list(self):
+        return [
+            _FakeEndpoint("databricks-gpt-5-2", "llm/v1/chat"),
+            _FakeEndpoint("my-embeddings", "llm/v1/embeddings"),
+            _FakeEndpoint("team-chat-agent", "agent/v2/chat"),
+        ]
+
+
+class _FakeWorkspace:
+    serving_endpoints = _FakeServingEndpoints()
+
+
+def test_models_route_lists_default_plus_chat_endpoints(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(ui, "workspace_client", lambda: _FakeWorkspace())
+
+    result = client.get("/api/demo/models").json()
+    # Default first (deduped), chat endpoints kept, embeddings dropped.
+    assert result == {
+        "default": "databricks-gpt-5-2",
+        "models": ["databricks-gpt-5-2", "team-chat-agent"],
+    }
+
+
+def test_models_route_falls_back_to_default_when_listing_fails(monkeypatch):
+    client = _client(monkeypatch)
+
+    def _boom():
+        raise RuntimeError("cannot list serving endpoints")
+
+    monkeypatch.setattr(ui, "workspace_client", _boom)
+
+    result = client.get("/api/demo/models").json()
+    assert result == {"default": "databricks-gpt-5-2", "models": ["databricks-gpt-5-2"]}
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

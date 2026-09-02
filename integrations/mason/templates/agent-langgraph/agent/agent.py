@@ -73,8 +73,12 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-async def create_agent_graph():
-    """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools."""
+async def create_agent_graph(model: str | None = None):
+    """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools.
+
+    ``model`` overrides the default serving endpoint (``MODEL``) for this build — the demo chat app's
+    model picker passes the selected endpoint per request; falls back to ``MODEL`` when unset.
+    """
     # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones (mcps.py),
     # then fetch their tools. Edit build_mcp_servers in agent/mcps.py to add servers.
     mcp = await mcp_tools(build_mcp_servers())
@@ -83,7 +87,7 @@ async def create_agent_graph():
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
     return create_agent(
-        model=_RoutedChatDatabricks(endpoint=MODEL, workspace_client=workspace_client()),
+        model=_RoutedChatDatabricks(endpoint=model or MODEL, workspace_client=workspace_client()),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),
@@ -127,7 +131,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     session_id = _session_id(request)
     tag_session(session_id)
 
-    agent = await create_agent_graph()
+    # `model` (optional) lets a client pick the serving endpoint for this turn (see the demo UI's
+    # model picker); it defaults to MODEL inside create_agent_graph.
+    agent = await create_agent_graph(request.get("model"))
     # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from
     # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
     # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).

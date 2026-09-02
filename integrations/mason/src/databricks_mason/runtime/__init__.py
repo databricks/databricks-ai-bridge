@@ -15,6 +15,7 @@ The re-exports below are resolved lazily (PEP 562) so importing a neutral submod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from databricks_mason.runtime.models import list_chat_model_endpoints
     from databricks_mason.runtime.tracing import configure_tracing, tag_session
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
@@ -26,6 +27,8 @@ __all__ = [
     # Workspace SDK client construction (account-host / run-local routing handled).
     "workspace_client",
     "workspace_headers",
+    # Serving-endpoint discovery (chat-capable models, for the demo UI's model picker).
+    "list_chat_model_endpoints",
 ]
 
 _MODULE_BY_NAME = {
@@ -33,6 +36,7 @@ _MODULE_BY_NAME = {
     "tag_session": "tracing",
     "workspace_client": "workspace",
     "workspace_headers": "workspace",
+    "list_chat_model_endpoints": "models",
 }
 
 

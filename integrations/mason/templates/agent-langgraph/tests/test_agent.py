@@ -223,6 +223,35 @@ def test_runtime_rotates_apps_routing_cookie_and_clears_local_fallback():
     assert client.post("/invocations", json={"input": []}).json()["session_id"] == session_id
 
 
+@pytest.mark.asyncio
+async def test_stream_handler_forwards_selected_model(monkeypatch):
+    # The demo UI's model picker sends `model` in the request body; it must reach create_agent_graph.
+    import agent.agent as agent_module
+
+    captured = {}
+
+    class _FakeAgent:
+        async def astream(self, *args, **kwargs):
+            return
+            yield  # pragma: no cover - marks this an (empty) async generator
+
+    async def _fake_create_agent_graph(model=None):
+        captured["model"] = model
+        return _FakeAgent()
+
+    monkeypatch.setattr(agent_module, "create_agent_graph", _fake_create_agent_graph)
+    monkeypatch.setattr(agent_module, "tag_session", lambda *a, **k: None)
+
+    events = [
+        event
+        async for event in agent_module.stream_handler(
+            {"session_id": "s1", "input": [], "model": "databricks-claude-sonnet-4"}
+        )
+    ]
+    assert events == []
+    assert captured["model"] == "databricks-claude-sonnet-4"
+
+
 def _has_workspace_auth() -> bool:
     return bool(
         os.getenv("DATABRICKS_CONFIG_PROFILE")

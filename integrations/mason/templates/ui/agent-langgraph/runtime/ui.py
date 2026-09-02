@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from databricks_mason import workspace_client
+from databricks_mason.runtime.models import list_chat_model_endpoints
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -253,6 +254,23 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
     return {**result, "session_items": items}
 
 
+def _model_catalog() -> dict:
+    """The agent's default model plus any chat-capable serving endpoints, for the picker.
+
+    The default (``agent.agent.MODEL``) is always first and always present, even when listing
+    endpoints fails (e.g. the caller can't list serving endpoints) — the picker then just offers the
+    default. Runs the workspace call on the caller's thread; wrap in a threadpool from async code.
+    """
+    from agent.agent import MODEL
+
+    try:
+        available = list_chat_model_endpoints(workspace_client())
+    except Exception:
+        available = []
+    models = [MODEL, *(name for name in available if name != MODEL)]
+    return {"default": MODEL, "models": models}
+
+
 def install_ui(app: FastAPI) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
@@ -291,6 +309,11 @@ def install_ui(app: FastAPI) -> None:
                 "actor": _memory_actor(),
             },
         }
+
+    @app.get("/api/demo/models", include_in_schema=False)
+    async def demo_models() -> dict:
+        # Off the event loop: listing serving endpoints is a blocking workspace call.
+        return await asyncio.to_thread(_model_catalog)
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:

@@ -161,6 +161,48 @@ def test_session_id_is_required_from_runtime():
         _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
+@pytest.mark.asyncio
+async def test_stream_handler_forwards_selected_model(monkeypatch):
+    # The demo UI's model picker sends `model` in the request body; it must reach create_agent.
+    import agent.agent as agent_module
+
+    captured = {}
+
+    def _fake_create_agent(mcp=None, model=None):
+        captured["model"] = model
+        return object()
+
+    class _FakeResult:
+        interruptions: list = []
+
+        async def stream_events(self):
+            return
+            yield  # pragma: no cover - marks this an (empty) async generator
+
+    class _FakeRunner:
+        @staticmethod
+        def run_streamed(agent, run_input, session=None):
+            return _FakeResult()
+
+    async def _fake_mcp_servers(servers):
+        return []
+
+    monkeypatch.setattr(agent_module, "create_agent", _fake_create_agent)
+    monkeypatch.setattr(agent_module, "mcp_servers", _fake_mcp_servers)
+    monkeypatch.setattr(agent_module, "session_store", lambda session_id: None)
+    monkeypatch.setattr(agent_module, "Runner", _FakeRunner)
+    monkeypatch.setattr(agent_module, "tag_session", lambda *a, **k: None)
+
+    events = [
+        event
+        async for event in agent_module.stream_handler(
+            {"session_id": "s1", "input": [], "model": "databricks-claude-sonnet-4"}
+        )
+    ]
+    assert events == []
+    assert captured["model"] == "databricks-claude-sonnet-4"
+
+
 def _has_workspace_auth() -> bool:
     return bool(
         os.getenv("DATABRICKS_CONFIG_PROFILE")
