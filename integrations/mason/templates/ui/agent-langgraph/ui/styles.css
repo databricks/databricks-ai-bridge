@@ -81,7 +81,6 @@ code {
 }
 
 .brand-lockup,
-.topbar-status,
 .section-heading,
 .control-card-heading,
 .button-row,
@@ -144,28 +143,11 @@ h2 {
   line-height: 1.25;
 }
 
-.topbar-status {
-  gap: 10px;
-}
-
-.badge,
 .run-status {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
   white-space: nowrap;
-}
-
-.badge {
-  min-height: 28px;
-  padding: 4px 10px;
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
-.badge-neutral {
-  background: var(--surface-muted);
-  color: var(--ink-soft);
 }
 
 .status-orb {
@@ -178,6 +160,11 @@ h2 {
 .status-orb.enabled {
   background: var(--success);
   box-shadow: 0 0 0 4px var(--success-soft);
+}
+
+.status-orb.degraded {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px var(--warning-soft);
 }
 
 .status-orb.disabled {
@@ -981,7 +968,6 @@ h2 {
     padding: 13px 16px;
   }
 
-  .badge-neutral,
   .trust-strip span:last-child {
     display: none;
   }
@@ -1016,10 +1002,6 @@ h2 {
 }
 
 @media (max-width: 560px) {
-  .topbar-status {
-    gap: 4px;
-  }
-
   .left-rail {
     display: flex;
   }

@@ -75,17 +75,22 @@ def _emit_change(
 
 
 def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
+    # mcp / uc_function / sandbox are framework-neutral agent.toml entries — every runtime adapter
+    # reads them from the manifest — so they are added regardless of framework. Only `add python`
+    # scaffolds framework-specific code (see add_python) and is gated separately.
     project = AgentProject.load(source)
-    _require_runtime_adapter(project)
     changed = project.add_tool(spec)
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
 
 
-def _require_runtime_adapter(project: AgentProject) -> None:
+def _require_python_tool_support(project: AgentProject) -> None:
+    # `tools add python` scaffolds a framework-native tool file; only the LangGraph template is
+    # supported so far (the OpenAI template's tools use @function_tool — a follow-up).
     if project.framework != "langgraph":
         raise AgentCliError(
-            f"Mason tools supports only the 'langgraph' framework; found {project.framework!r}."
+            f"Mason `tools add python` supports only the 'langgraph' framework; "
+            f"found {project.framework!r}."
         )
 
 
@@ -268,7 +273,7 @@ def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
     """Scaffold a framework-native local Python tool and starter test."""
     _require_arg(name, "tool name")
     project = AgentProject.load(source)
-    _require_runtime_adapter(project)
+    _require_python_tool_support(project)
     function = _identifier(name)
     spec = ToolSpec.python(
         name,

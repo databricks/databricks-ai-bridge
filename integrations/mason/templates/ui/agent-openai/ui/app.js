@@ -9,7 +9,6 @@ const elements = {
   composer: document.querySelector("#composer"),
   copySession: document.querySelector("#copy-session"),
   emptyState: document.querySelector("#empty-state"),
-  environmentBadge: document.querySelector("#environment-badge"),
   eventLog: document.querySelector("#event-log"),
   memoryFact: document.querySelector("#memory-fact"),
   memoryHelp: document.querySelector("#memory-help"),
@@ -94,9 +93,11 @@ function setBusy(busy, label = "Working") {
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
-function setCapability(element, enabled) {
-  element.classList.toggle("enabled", Boolean(enabled));
-  element.classList.toggle("disabled", !enabled);
+function setCapability(element, state) {
+  const degraded = state === "degraded";
+  element.classList.toggle("enabled", state === true);
+  element.classList.toggle("degraded", degraded);
+  element.classList.toggle("disabled", !state);
 }
 
 function formatJson(value) {
@@ -769,7 +770,6 @@ async function loadConfig() {
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
-    elements.environmentBadge.textContent = config.deployed ? "Databricks App" : "Local runtime";
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
@@ -777,7 +777,10 @@ async function loadConfig() {
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
     setCapability(elements.streamingStatus, config.streaming.enabled);
     setCapability(elements.backgroundStatus, config.background.enabled);
-    setCapability(elements.sessionStatus, config.session.history);
+    setCapability(
+      elements.sessionStatus,
+      config.session.managed ? true : config.session.history ? "degraded" : false,
+    );
     setCapability(elements.memoryStatus, config.memory.enabled);
     elements.rememberButton.disabled = state.busy || !config.memory.enabled;
     elements.searchMemory.disabled = state.busy || !config.memory.enabled;
@@ -800,7 +803,6 @@ async function loadConfig() {
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
   } catch (error) {
-    elements.environmentBadge.textContent = "Runtime unavailable";
     throw error;
   }
 }
