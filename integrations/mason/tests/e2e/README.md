@@ -34,6 +34,9 @@ Direct authoring does not call `mason tools add`: it replaces `agent.toml` with
 four `mason tools add ...` commands, then implements the generated Python stub. Every exact command
 and generated-file step is captured in `commands.log`.
 
+The CLI path first adds an unavailable MCP service and removes it by ID. The subsequent dev and
+deployed tool matrix proves the recovered manifest no longer bricks agent startup.
+
 ## Verify existing evidence
 
 ```bash

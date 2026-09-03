@@ -58,9 +58,21 @@ def test_tools_help_explains_add_workflow():
     assert result.exit_code == 0, result.output
     assert "Manage tools configured in an agent project's agent.toml." in result.output
     assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
+    assert "Remove a tool binding from this agent." in result.output
     assert "List tools configured for this agent." in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+
+
+def test_tools_remove_help_shows_id_and_project_targeting():
+    result = CliRunner().invoke(cli.mason, ["tools", "remove", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
+    assert "--source DIRECTORY" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "mason tools remove web_search" in result.output
 
 
 def test_tools_add_help_explains_types_and_project_targeting():
