@@ -14,15 +14,23 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
+import time
 from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
 
 from databricks_mason import models
-from databricks_mason.errors import AgentCliError, wrap_api_error
+from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
+
+# Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so absorb a
+# few before surfacing them. The SDK only retries on connection/timeout errors, not on these
+# error-code responses. Creates are safe to retry: a duplicate surfaces ALREADY_EXISTS, which
+# the ensure-store callers already treat as success.
+_MAX_ATTEMPTS = 3
+_RETRY_BASE_DELAY_S = 0.5
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -142,10 +150,16 @@ class MasonClient:
     def _do(
         self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
     ) -> Any:
-        try:
-            return self._w.api_client.do(method, path, query=query, body=body)
-        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
-            raise wrap_api_error(exc) from exc
+        delay = _RETRY_BASE_DELAY_S
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                return self._w.api_client.do(method, path, query=query, body=body)
+            except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+                retryable = getattr(exc, "error_code", None) in TRANSIENT_ERROR_CODES
+                if not retryable or attempt == _MAX_ATTEMPTS:
+                    raise wrap_api_error(exc) from exc
+                time.sleep(delay)
+                delay *= 2
 
     # --- Unity Catalog MCP Services -----------------------------------------
 

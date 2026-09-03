@@ -151,6 +151,55 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     assert "`databricks auth login --profile <name>`" not in hint
 
 
+class _TransientError(RuntimeError):
+    error_code = "CANCELLED"
+
+
+@mock.patch("databricks_mason.client.time.sleep")
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
+    c, do = _client(workspace_client)
+    # First attempt is a transient CANCELLED (str() == "None"), second succeeds.
+    do.side_effect = [_TransientError(None), {"session_store_name": "s"}]
+
+    store = c.create_session_store("s")
+
+    assert store["session_store_name"] == "s"
+    assert do.call_count == 2
+    sleep.assert_called_once()
+
+
+@mock.patch("databricks_mason.client.time.sleep")
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_do_stops_after_max_attempts(workspace_client, sleep):
+    c, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError) as excinfo:
+        c.list_memory_stores()
+
+    assert do.call_count == 3
+    assert excinfo.value.error_code == "CANCELLED"
+    assert "None" not in excinfo.value.message
+
+
+@mock.patch("databricks_mason.client.time.sleep")
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
+    c, do = _client(workspace_client)
+
+    class NotFoundError(RuntimeError):
+        error_code = "NOT_FOUND"
+
+    do.side_effect = NotFoundError("missing")
+
+    with pytest.raises(AgentCliError):
+        c.list_memory_stores()
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
+
+
 def test_account_routed_profile_uses_configured_host_and_workspace_header():
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"
