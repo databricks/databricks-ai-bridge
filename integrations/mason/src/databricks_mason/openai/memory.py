@@ -16,8 +16,6 @@ and ``recall``'s own parameters and cannot set or spoof the actor. Pass a fixed 
 memory (e.g. a team knowledge base).
 """
 
-import os
-
 from agents import FunctionTool, function_tool
 
 from databricks_mason.runtime.workspace import workspace_client
@@ -25,30 +23,32 @@ from databricks_mason.runtime.workspace import workspace_client
 _AGENTS_V1 = "/api/agents/v1"
 
 
-def _store_path() -> str:
-    return f"{_AGENTS_V1}/memory-stores/{os.environ['AGENT_MEMORY_STORE']}"
-
-
 def _api():
     # Build the client lazily (needs workspace auth) so importing this module stays cheap.
     return workspace_client().api_client
 
 
-def memory_tools(actor: str) -> list[FunctionTool]:
-    """The long-term-memory tools for ``actor`` when ``AGENT_MEMORY_STORE`` is set, else none.
+def memory_tools(actor: str, store: str | None = None) -> list[FunctionTool]:
+    """The long-term-memory tools for ``actor`` when a memory store is configured, else none.
 
-    ``actor`` partitions the memory store; it is captured in the tools' closures (not exposed to the
-    model). Call this per request with the identity whose memory to use (e.g. the signed-in user).
+    The store resolves ``store`` arg → ``AGENT_MEMORY_STORE`` env → the ``[memory_store]`` binding in
+    agent.toml (`mason memory bind`) → none (no tools). ``actor`` partitions the store; it is captured
+    in the tools' closures (not exposed to the model). Call this per request with the identity whose
+    memory to use (e.g. the signed-in user).
     """
-    if not os.getenv("AGENT_MEMORY_STORE"):
+    from databricks_mason.runtime.tool_manifest import resolve_memory_store
+
+    store = resolve_memory_store(store)
+    if not store:
         return []
+    store_path = f"{_AGENTS_V1}/memory-stores/{store}"
 
     @function_tool
     def remember(fact: str, topic: str) -> str:
         """Persist a durable fact about the user in long-term memory."""
         _api().do(
             "POST",
-            f"{_store_path()}/entries",
+            f"{store_path}/entries",
             body={"actor_id": actor, "path": f"/{topic}/{fact[:8]}.md", "content": fact},
         )
         return "stored"
@@ -58,7 +58,7 @@ def memory_tools(actor: str) -> list[FunctionTool]:
         """Search the user's long-term memory for facts relevant to the query."""
         data = _api().do(
             "POST",
-            f"{_store_path()}/entries:search",
+            f"{store_path}/entries:search",
             body={"actor_id": actor, "query": query, "limit": 5},
         )
         entries = data.get("managed_memory_entries") or []

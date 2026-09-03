@@ -19,8 +19,6 @@ from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
-_MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
-_SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 _AGENTS_API = "/api/agents/v1"
 _MESSAGE_ROLES = {
     "ai",
@@ -54,11 +52,17 @@ _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
 
 
 def _memory_store() -> str:
-    return os.getenv(_MEMORY_STORE_ENV, "").strip().strip("/")
+    # Same resolution the agent uses (AGENT_MEMORY_STORE env → agent.toml binding), so the demo
+    # panels reflect exactly the store the agent reads/writes.
+    from databricks_mason.runtime.tool_manifest import resolve_memory_store
+
+    return (resolve_memory_store() or "").strip().strip("/")
 
 
 def _session_store() -> str:
-    return os.getenv(_SESSION_STORE_ENV, "").strip()
+    from databricks_mason.runtime.tool_manifest import resolve_session_store
+
+    return (resolve_session_store() or "").strip()
 
 
 def _request_actor(request: Request) -> str:
@@ -202,7 +206,7 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_MEMORY_STORE_ENV} by deploying with --memory.",
+            detail="No memory store configured. Run `mason memory bind <store>`.",
         )
 
 
@@ -210,7 +214,7 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_SESSION_STORE_ENV} by deploying with --session.",
+            detail="No session store configured. Run `mason sessions bind <store>`.",
         )
 
 
