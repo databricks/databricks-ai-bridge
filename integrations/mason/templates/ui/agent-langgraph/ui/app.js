@@ -710,7 +710,7 @@ async function openSession(sessionId) {
   }
 }
 
-async function loadConfig() {
+async function loadConfig({ hydrateChat = true } = {}) {
   try {
     const response = await fetch("/api/demo/config", { cache: "no-store" });
     const config = await jsonResponse(response);
@@ -743,7 +743,10 @@ async function loadConfig() {
         ? "Messages load from the in-process LangGraph checkpoint for the current routing cookie."
         : "Session history is unavailable.";
     addEvent("runtime.config", config);
-    void refreshSessionView({ hydrateChat: true });
+    // Rebuild the chat log from the persisted transcript only on initial load. The Capabilities
+    // refresh (#refresh-config) passes hydrateChat=false so re-reading runtime config does not
+    // wipe/rebuild the conversation (which would drop browser-only + empty-content tool-call bubbles).
+    void refreshSessionView({ hydrateChat });
     if (config.memory.enabled) void listMemoryEntries();
     else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
     return config;
@@ -798,7 +801,7 @@ elements.copySession.addEventListener("click", async () => {
   setTimeout(() => { label.textContent = "Copy"; }, 1200);
 });
 
-elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));
+elements.refreshConfig.addEventListener("click", () => loadConfig({ hydrateChat: false }).catch(appendError));
 elements.newSession.addEventListener("click", createNewSession);
 elements.refreshSession.addEventListener("click", () => refreshSessionView({ hydrateChat: true }));
 elements.clearEvents.addEventListener("click", () => {
