@@ -7,6 +7,7 @@ is stubbed so login never touches the network.
 from __future__ import annotations
 
 import json
+import sys
 from unittest import mock
 
 from click.testing import CliRunner
@@ -95,31 +96,18 @@ def test_login_configures_invalid_profile_then_revalidates(tmp_path, monkeypatch
     )
 
 
-def test_login_fallback_keeps_json_stdout_clean(tmp_path, monkeypatch):
-    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
-    validated = mock.Mock(current_user="me@example.com", host="https://ws")
-    monkeypatch.setattr(
-        auth,
-        "MasonClient",
-        mock.Mock(side_effect=[auth.AgentCliError("no credentials"), validated]),
-    )
-    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
-
-    def databricks_login(*_args, **kwargs):
-        kwargs["stdout"].write("Databricks browser login output\n")
-        return mock.Mock(returncode=0)
-
+def test_databricks_login_routes_child_stdout_to_stderr(monkeypatch):
+    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
     monkeypatch.setattr(auth.subprocess, "run", databricks_login)
 
-    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx(output="json"))
+    auth._run_databricks_login("prof")
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout) == {
-        "profile": "prof",
-        "user": "me@example.com",
-        "host": "https://ws",
-    }
-    assert "Databricks browser login output" in result.stderr
+    databricks_login.assert_called_once_with(
+        ["databricks", "auth", "login", "--profile", "prof"],
+        text=True,
+        check=False,
+        stdout=sys.stderr,
+    )
 
 
 def test_login_reauthenticates_unauthenticated_api_response(tmp_path, monkeypatch):
