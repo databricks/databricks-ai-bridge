@@ -26,6 +26,12 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+## Shell completion
+Add this to `~/.zshrc`:
+```sh
+eval "$(_MASON_COMPLETE=zsh_source mason)"
+```
+
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
