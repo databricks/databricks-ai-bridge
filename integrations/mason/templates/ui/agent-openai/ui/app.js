@@ -222,10 +222,17 @@ function appendError(error) {
   addEvent("error", { message });
 }
 
-function startDraft() {
+function startDraft({ waiting = false } = {}) {
   if (state.draft) return state.draft;
   const draft = appendMessage("assistant", "", "Agent · streaming");
   draft.wrapper.classList.add("streaming");
+  if (waiting) {
+    draft.wrapper.classList.add("waiting");
+    const loadingLabel = document.createElement("span");
+    loadingLabel.className = "sr-only";
+    loadingLabel.textContent = "Waiting for agent response.";
+    draft.text.append(loadingLabel);
+  }
   state.draft = draft;
   state.draftText = "";
   return draft;
@@ -235,6 +242,7 @@ function appendDelta(content) {
   const text = extractText(content);
   if (!text) return;
   const draft = startDraft();
+  draft.wrapper.classList.remove("waiting");
   state.draftText += text;
   state.lastAssistantText = state.draftText;
   draft.text.textContent = state.draftText;
@@ -243,12 +251,18 @@ function appendDelta(content) {
 
 function finishDraft(finalText = "") {
   if (!state.draft) return false;
+  if (state.draft.wrapper.classList.contains("waiting") && !finalText && !state.draftText) {
+    state.draft.wrapper.remove();
+    state.draft = null;
+    state.draftText = "";
+    return true;
+  }
   if (finalText) {
     state.draftText = finalText;
     state.lastAssistantText = finalText;
     state.draft.text.textContent = finalText;
   }
-  state.draft.wrapper.classList.remove("streaming");
+  state.draft.wrapper.classList.remove("streaming", "waiting");
   state.draft.wrapper.querySelector(".message-meta").textContent = "Agent";
   state.draft = null;
   return true;
@@ -267,7 +281,8 @@ function handleAgentMessage(message) {
   if (role === "user") return;
   if (role === "assistant") {
     const text = extractText(message?.content);
-    if (finishDraft(text)) return;
+    if (text && finishDraft(text)) return;
+    if (!text && message?.tool_calls?.length) finishDraft();
     if (text) {
       state.lastAssistantText = text;
       appendMessage("assistant", text, "Agent");
@@ -620,6 +635,7 @@ async function sendText(text, mode = state.mode) {
   if (!content || state.busy) return "";
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
+  if (mode === "streaming") startDraft({ waiting: true });
   try {
     await dispatch({ input: [{ role: "user", content }] }, mode);
     // The agent persists the turn to its own Session; refresh the panel to show it (no client write).
@@ -646,6 +662,7 @@ async function resume(decision) {
       : { resume: { decisions: [{ type: "reject", message: "Rejected from the Mason demo UI." }] } };
   appendMessage("system", decision === "approve" ? "Approved pending tool call." : "Rejected pending tool call.", "Human decision");
   setBusy(true, "Resuming");
+  startDraft({ waiting: true });
   try {
     await dispatch(payload, "streaming");
     // The agent persists the resumed turn to its own Session; refresh the panel (no client write).
