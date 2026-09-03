@@ -77,9 +77,12 @@ def stores_create(obj, name, description, metadata) -> None:
         f"Created session store '{name}'",
         fields={"Store ID": field(data, "session_store_id")},
         next_steps=[
-            f"mason sessions create --store {name} --actor-id <id>",
-            f"mason sessions stores get {name}",
-            f"mason deploy <agent> --source <path> --with-session-store {name}",
+            (
+                f"mason sessions create --store {name} --actor-id <id>",
+                "Start a session for an actor",
+            ),
+            (f"mason sessions stores get {name}", "View this store's details"),
+            (f"mason deploy <agent> --session {name}", "Wire this store into a deployment"),
         ],
     )
 
@@ -224,8 +227,11 @@ def sessions_create(obj, store, actor_id, session_id, parent_session_id, metadat
         f"Created session '{field(data, 'session_id')}'",
         fields={"Actor": actor_id, "Store": store},
         next_steps=[
-            f"mason sessions items append --store {store} "
-            f"--session-id {field(data, 'session_id')} --data '{{...}}'",
+            (
+                f"mason sessions items append --store {store} "
+                f"--session-id {field(data, 'session_id')} --data '{{...}}'",
+                "Append an item to this session",
+            ),
         ],
     )
 

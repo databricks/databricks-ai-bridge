@@ -110,7 +110,7 @@ def login(obj, profile) -> None:
     if not profile:
         raise AgentCliError(
             "No profile to save.",
-            hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
+            hint="Pass one to remember, e.g. `mason login --profile <profile>`.",
         )
     client, user = _authenticate_profile(profile)
     _save_default_profile(profile)
@@ -120,7 +120,9 @@ def login(obj, profile) -> None:
     render.success(
         f"Logged in as {user}",
         fields={"Profile": profile, "Host": client.host},
-        next_steps=["mason sessions stores list", "mason memory stores list"],
+        next_steps=[
+            ("mason init my-agent", "Scaffold a new agent project"),
+        ],
     )
 
 

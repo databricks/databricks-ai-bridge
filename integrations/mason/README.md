@@ -125,7 +125,7 @@ mason sessions items append --help
 For the shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-mason login --profile my-workspace
+mason login --profile <profile>
 mason init my-agent
 cd my-agent
 mason dev

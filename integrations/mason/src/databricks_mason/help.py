@@ -10,13 +10,13 @@ CommandPath = tuple[str, ...]
 
 _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     (): (
-        "mason login --profile my-workspace",
+        "mason login --profile <profile>",
         "mason init my-agent",
         "cd my-agent",
         "mason dev",
         "mason deploy my-agent",
     ),
-    ("login",): ("mason login --profile my-workspace",),
+    ("login",): ("mason login --profile <profile>",),
     ("logout",): ("mason logout",),
     ("init",): ("mason init my-agent",),
     ("dev",): ("mason dev",),
