@@ -56,6 +56,17 @@ def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
         return None
 
 
+def _app_url(name: str, profile: Optional[str]) -> Optional[str]:
+    """The deployed app's browsable URL, or None if it can't be read."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("url") or None
+    except json.JSONDecodeError:
+        return None
+
+
 def _app_compute_state(name: str, profile: Optional[str]) -> Optional[str]:
     """The app's compute state (e.g. RUNNING), or None if it can't be read."""
     result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
@@ -428,10 +439,13 @@ def deploy(
                 name, sp, client.current_user, session_store, memory_database, obj.profile
             )
 
+    app_url = _app_url(name, obj.profile)
+
     if obj.output == "json":
         render.emit_json(
             {
                 "deployment": name,
+                "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
                 "store_grant": "skipped"
@@ -443,6 +457,8 @@ def deploy(
         return
 
     steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
+    if app_url:
+        steps.insert(0, f"open {app_url}")
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
@@ -456,9 +472,11 @@ def deploy(
         )
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
+    fields = {"URL": app_url} if app_url else {}
+    fields.update({"Workspace path": ws_path, **provisioned})
     render.success(
         f"Deployed agent '{name}'",
-        fields={"Workspace path": ws_path, **provisioned},
+        fields=fields,
         next_steps=steps,
     )
 
