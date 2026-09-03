@@ -102,12 +102,15 @@ def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -
 
     client = obj.client()
     if no_create_stores:
-        if _resolve_memory_store(client, store) is None:
+        with render.status(f"Resolving memory store '{store}'…"):
+            exists = _resolve_memory_store(client, store) is not None
+        if not exists:
             raise AgentCliError(
                 f"Memory store '{store}' does not exist (drop --no-create-stores to create it)."
             )
     else:
-        _ensure_memory_store(client, store)
+        with render.status(f"Provisioning memory store '{store}'…"):
+            _ensure_memory_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_memory_store(store)
@@ -210,7 +213,8 @@ def _render_store_detail(obj, store: dict) -> None:
 @click.pass_obj
 def stores_create(obj, display_name, description) -> None:
     """Create a memory store."""
-    data = obj.client().create_memory_store(display_name, description)
+    with render.status(f"Creating memory store '{display_name}'…"):
+        data = obj.client().create_memory_store(display_name, description)
     if obj.output == "json":
         render.emit_json(data)
         return

@@ -72,14 +72,16 @@ def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool)
     client = obj.client()
     if no_create_stores:
         try:
-            client.get_session_store(store)
+            with render.status(f"Resolving session store '{store}'…"):
+                client.get_session_store(store)
         except AgentCliError as exc:
             raise AgentCliError(
                 f"Session store '{store}' does not exist (drop --no-create-stores to create it).",
                 error_code=exc.error_code,
             ) from exc
     else:
-        _ensure_session_store(client, store)
+        with render.status(f"Provisioning session store '{store}'…"):
+            _ensure_session_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
@@ -145,7 +147,8 @@ def _render_store_detail(store: dict) -> None:
 @click.pass_obj
 def stores_create(obj, name, description, metadata) -> None:
     """Create a session store."""
-    data = obj.client().create_session_store(name, description, _parse_metadata(metadata))
+    with render.status(f"Creating session store '{name}'…"):
+        data = obj.client().create_session_store(name, description, _parse_metadata(metadata))
     if obj.output == "json":
         render.emit_json(data)
         return

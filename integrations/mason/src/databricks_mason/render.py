@@ -7,7 +7,8 @@ Functions accept an optional `console` for testability; default is stdout.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Literal, Optional, Sequence
+from contextlib import contextmanager
+from typing import Any, Iterable, Iterator, Literal, Optional, Sequence
 
 import click
 from rich import box
@@ -26,6 +27,18 @@ _stdout = Console()
 
 def console() -> Console:
     return _stdout
+
+
+@contextmanager
+def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
+    """Show an animated spinner with ``message`` while a slow call runs, then clear it.
+
+    Wraps ``rich``'s console status; a no-op spinner (no TTY) still runs the body. Use around
+    network work like store provisioning so the CLI doesn't look hung.
+    """
+    con = con or _stdout
+    with con.status(message, spinner="dots"):
+        yield
 
 
 # --- small helpers -----------------------------------------------------------
