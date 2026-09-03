@@ -25,12 +25,12 @@ from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_a
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
-# Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so absorb a
-# few before surfacing them. The SDK only retries on connection/timeout errors, not on these
+# Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry once
+# before surfacing them. The SDK only retries on connection/timeout errors, not on these
 # error-code responses. Creates are safe to retry: a duplicate surfaces ALREADY_EXISTS, which
 # the ensure-store callers already treat as success.
-_MAX_ATTEMPTS = 3
-_RETRY_BASE_DELAY_S = 0.5
+_MAX_ATTEMPTS = 2
+_RETRY_BASE_DELAY_S = 0.2
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:

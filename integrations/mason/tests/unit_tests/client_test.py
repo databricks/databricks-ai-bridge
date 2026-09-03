@@ -178,7 +178,7 @@ def test_do_stops_after_max_attempts(workspace_client, sleep):
     with pytest.raises(AgentCliError) as excinfo:
         c.list_memory_stores()
 
-    assert do.call_count == 3
+    assert do.call_count == 2
     assert excinfo.value.error_code == "CANCELLED"
     assert "None" not in excinfo.value.message
 
