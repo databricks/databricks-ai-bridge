@@ -784,7 +784,7 @@ async function loadConfig() {
       config.session.managed
         ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
         : "Session state is kept in process and resets when the app restarts.",
-      config.session.managed ? null : "mason deploy --session <name>",
+      config.session.managed ? null : "mason deploy <deployment-name> --session <store-name>",
     );
     setCapability(
       elements.memoryStatus,
@@ -792,7 +792,7 @@ async function loadConfig() {
       config.memory.enabled
         ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
         : "No long-term memory is connected.",
-      config.memory.enabled ? null : "mason deploy --memory <name>",
+      config.memory.enabled ? null : "mason deploy <deployment-name> --memory <store-name>",
     );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
