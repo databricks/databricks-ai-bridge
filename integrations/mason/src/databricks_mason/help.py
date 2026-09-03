@@ -29,6 +29,12 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
         ("mason deploy <agent> --memory agent-memory", "wire it into a deployment"),
     ),
+    ("memory", "bind"): (
+        ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
+    ),
+    ("memory", "unbind"): (
+        ("mason memory unbind --source .", "remove the memory store binding from agent.toml"),
+    ),
     ("memory", "stores"): (("mason memory stores list", "list managed memory stores"),),
     ("memory", "stores", "create"): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
@@ -81,6 +87,12 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("sessions",): (
         ("mason sessions stores list", "list managed session stores"),
         ("mason sessions list --help", "see how to list sessions"),
+    ),
+    ("sessions", "bind"): (
+        ("mason sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
+    ),
+    ("sessions", "unbind"): (
+        ("mason sessions unbind --source .", "remove the session store binding from agent.toml"),
     ),
     ("sessions", "stores"): (("mason sessions stores list", "list managed session stores"),),
     ("sessions", "stores", "create"): (

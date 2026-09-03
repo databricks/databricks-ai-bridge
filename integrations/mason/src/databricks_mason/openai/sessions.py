@@ -25,7 +25,6 @@ unpublished dependency; swap it for the published package when it lands.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Optional
 
 from agents import SQLiteSession, TResponseInputItem
@@ -33,9 +32,6 @@ from agents.memory import SessionABC
 
 from databricks_mason.runtime.session_store_client import Session as _StoreSession
 from databricks_mason.runtime.session_store_client import SessionStoreClient
-
-_SESSION_STORE_ENV = "AGENT_SESSION_STORE"
-_SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 
 # Fetch items oldest-first so the transcript replays in write order.
 _ORDER_BY = "create_time asc"
@@ -45,20 +41,22 @@ _ORDER_BY = "create_time asc"
 _local_sessions: dict[str, SQLiteSession] = {}
 
 
-def _session_actor(session_id: str) -> str:
-    """Actor partition for the durable store. Defaults to the session id (one actor per session)."""
-    return os.getenv(_SESSION_ACTOR_ENV) or session_id
-
-
-def session_store(session_id: str) -> SessionABC:
+def session_store(
+    session_id: str, actor: str | None = None, store: str | None = None
+) -> SessionABC:
     """The Session the agent persists conversation state to for ``session_id``.
 
-    In-memory ``SQLiteSession`` by default; a durable ``DatabricksSessionStore`` when
-    ``AGENT_SESSION_STORE`` names a managed Session Store.
+    In-memory ``SQLiteSession`` by default; a durable ``DatabricksSessionStore`` when a managed store
+    is configured. The store name resolves ``store`` arg → ``AGENT_SESSION_STORE`` env → the
+    ``[session_store]`` binding in agent.toml (`mason sessions bind`) → none. ``actor`` partitions the
+    durable store — the caller supplies it (typically the signed-in user), so each user's transcripts
+    stay separate; it defaults to ``session_id`` and is ignored by the in-memory store.
     """
-    store = os.getenv(_SESSION_STORE_ENV)
+    from databricks_mason.runtime.tool_manifest import resolve_session_store
+
+    store = resolve_session_store(store)
     if store:
-        return DatabricksSessionStore(session_id, store, actor_id=_session_actor(session_id))
+        return DatabricksSessionStore(session_id, store, actor_id=actor or session_id)
     cached = _local_sessions.get(session_id)
     if cached is None:
         cached = SQLiteSession(session_id)  # ":memory:" — process-local, non-durable

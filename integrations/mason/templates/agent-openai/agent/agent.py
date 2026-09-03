@@ -71,13 +71,17 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(mcp=None) -> Agent:
-    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers."""
+def create_agent(actor: str, mcp=None) -> Agent:
+    """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
+
+    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
+    memory tools' closures (never exposed to the model). See ``_actor``.
+    """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
         model=MODEL,
-        tools=[*all_tools(), *memory_tools()],
+        tools=[*all_tools(), *memory_tools(actor)],
         mcp_servers=mcp or [],
     )
 
@@ -89,6 +93,17 @@ def _session_id(request: dict) -> str:
     the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
     """
     return str(request["session_id"])
+
+
+def _actor(request: dict) -> str:
+    """The identity that owns this request's memory and session data.
+
+    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
+    deployment platform sets); it partitions long-term memory and the durable session store so each
+    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
+    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
+    """
+    return str(request.get("actor") or "agent")
 
 
 async def invoke_handler(request: dict) -> dict:
@@ -117,6 +132,7 @@ async def invoke_handler(request: dict) -> dict:
 async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
     session_id = _session_id(request)
+    actor = _actor(request)
     tag_session(session_id)
 
     servers = await mcp_servers(build_mcp_servers())
@@ -141,7 +157,7 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(mcp)
+        agent = create_agent(actor, mcp)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
@@ -152,7 +168,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
             result = Runner.run_streamed(agent, run_input)
         else:
             result = Runner.run_streamed(
-                agent, request.get("input") or [], session=session_store(session_id)
+                agent,
+                request.get("input") or [],
+                session=session_store(session_id, actor),
             )
 
         async for event in _serialize_events(result, session_id):

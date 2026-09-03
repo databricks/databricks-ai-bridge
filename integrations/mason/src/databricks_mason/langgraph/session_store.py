@@ -23,7 +23,6 @@ from __future__ import annotations
 import base64
 import builtins
 import hashlib
-import os
 import random
 from collections import defaultdict
 from typing import Any, Iterator, Optional, Sequence
@@ -43,8 +42,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from databricks_mason.runtime.session_store_client import Session, SessionStoreClient
 
-_SESSION_STORE_ENV = "AGENT_SESSION_STORE"
-
 # Discriminators stored inside each session item's `data` JSON.
 _EVENT_CHECKPOINT = "checkpoint"
 _EVENT_CHANNEL_DATA = "channel_data"
@@ -61,28 +58,31 @@ _ORDER_BY = "create_time asc"
 _saver: BaseCheckpointSaver | None = None
 
 
-def checkpointer() -> BaseCheckpointSaver:
+def checkpointer(store: str | None = None) -> BaseCheckpointSaver:
     """The checkpointer the agent persists conversation state to (built once, then shared).
 
-    In-memory by default; a durable ``DatabricksSessionStoreSaver`` when ``AGENT_SESSION_STORE`` names
-    a managed Session Store.
+    In-memory by default; a durable ``DatabricksSessionStoreSaver`` when a managed store is
+    configured. The store resolves ``store`` arg → ``AGENT_SESSION_STORE`` env → the
+    ``[session_store]`` binding in agent.toml (`mason sessions bind`) → none (in-memory).
     """
+    from databricks_mason.runtime.tool_manifest import resolve_session_store
+
     global _saver
     if _saver is None:
-        store = os.getenv(_SESSION_STORE_ENV)
+        store = resolve_session_store(store)
         _saver = DatabricksSessionStoreSaver(store) if store else InMemorySaver()
     return _saver
 
 
-def thread_config(session_id: str) -> dict:
+def thread_config(session_id: str, actor: str | None = None) -> dict:
     """Run config that anchors this request to ``session_id``'s conversation thread.
 
     Includes ``actor_id`` because the durable saver maps it onto the Session's actor; it's ignored by
-    the in-memory default. ``AGENT_SESSION_ACTOR_ID`` selects the actor partition; without it, each
-    session id is its own actor for backward compatibility.
+    the in-memory default. ``actor`` partitions the durable store — the caller supplies it (typically
+    the signed-in user), so each user's threads stay separate; it defaults to ``session_id`` (one
+    actor per conversation).
     """
-    actor_id = os.getenv("AGENT_SESSION_ACTOR_ID") or session_id
-    return {"configurable": {"thread_id": session_id, "actor_id": actor_id}}
+    return {"configurable": {"thread_id": session_id, "actor_id": actor or session_id}}
 
 
 class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):

@@ -111,7 +111,8 @@ add a file to `agent/tools/`.
   returns a `DatabricksSessionStore` — an Agents SDK `Session` that stores each Responses item via the
   Session Store REST API (no DB connection), so the transcript survives restarts/replicas. Over a
   vendored REST client (`session_store_client.py`); swap for the published package when it lands.
-  `AGENT_SESSION_ACTOR_ID` selects the actor partition.
+  `session_store(session_id, actor)` partitions by actor — the handler passes the signed-in user
+  (`_actor`), so each user's threads stay separate.
 - Background mode is in-memory / single-process — non-durable. The store is
   `databricks_mason/runtime/background.py` (wired in `runtime/runtime.py`); swap it for a durable
   backend for cross-restart/replica recovery.

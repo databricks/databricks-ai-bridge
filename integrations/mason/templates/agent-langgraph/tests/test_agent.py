@@ -79,9 +79,9 @@ def test_thread_config_from_session_id():
     }
 
 
-def test_thread_config_uses_configured_actor(monkeypatch):
-    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
-    assert thread_config("abc-123") == {
+def test_thread_config_uses_supplied_actor():
+    # A caller-supplied actor (e.g. the signed-in user) partitions the durable store per user.
+    assert thread_config("abc-123", "alice") == {
         "configurable": {"thread_id": "abc-123", "actor_id": "alice"}
     }
 
@@ -239,9 +239,9 @@ async def test_agent_responds_end_to_end():
     from agent.agent import configure, create_agent_graph
 
     configure()
-    agent = await create_agent_graph()
+    agent = await create_agent_graph("test-actor")
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "Reply with the single word: pong"}]},
-        config=thread_config("test-e2e"),
+        config=thread_config("test-e2e", "test-actor"),
     )
     assert result["messages"][-1].content

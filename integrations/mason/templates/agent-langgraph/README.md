@@ -152,7 +152,8 @@ When initialized with the chat app (the default for `mason init --framework lang
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
   `POST /api/demo/memory/search` for managed long-term memory. Created entries are tagged with the
-  current cookie-backed session id; actor partitioning comes from `AGENT_MEMORY_ACTOR_ID`.
+  current cookie-backed session id; entries are partitioned by the signed-in user (the request's
+  forwarded-identity header), so the panel shows that user's own memory.
 
 ### Human-in-the-loop (tool approval)
 
@@ -237,9 +238,9 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-langgraph --source .
 ```
 
-Add `--memory <name> --session <name> --actor-id <actor>` to wire managed state. Mason
-provisions or resolves the stores (creating them if missing), injects the store/actor env vars, and
-deploys the App.
+Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
+stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
+session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
@@ -289,9 +290,7 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_MEMORY_ACTOR_ID` | `agent` | Actor partition used by memory tools |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
-| `AGENT_SESSION_ACTOR_ID` | session id | Actor used by the durable saver |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |

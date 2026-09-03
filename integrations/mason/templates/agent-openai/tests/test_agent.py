@@ -106,7 +106,7 @@ async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
     monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
     monkeypatch.setattr(agent_module, "create_agent", create_agent)
     monkeypatch.setattr(agent_module, "tag_session", lambda _session_id: None)
-    monkeypatch.setattr(agent_module, "session_store", lambda _session_id: None)
+    monkeypatch.setattr(agent_module, "session_store", lambda _session_id, _actor: None)
     monkeypatch.setattr(
         agent_module.Runner,
         "run_streamed",
@@ -114,7 +114,8 @@ async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
     )
 
     assert [event async for event in agent_module.stream_handler({"session_id": "s"})] == []
-    assert create_agent.call_args.args[0] == [healthy]
+    # create_agent(actor, mcp) — the healthy servers are the second positional arg.
+    assert create_agent.call_args.args[1] == [healthy]
     assert healthy.cache_tools_list is True
     assert all(
         server.tool_filter is tool_filter
@@ -234,10 +235,10 @@ async def test_agent_responds_end_to_end():
     from databricks_mason.openai import session_store
 
     configure()
-    agent = create_agent()
+    agent = create_agent("test-actor")
     result = await Runner.run(
         agent,
         [{"role": "user", "content": "Reply with the single word: pong"}],
-        session=session_store("test-e2e"),
+        session=session_store("test-e2e", "test-actor"),
     )
     assert result.final_output

@@ -19,10 +19,6 @@ from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
-_MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
-_MEMORY_ACTOR_ENV = "AGENT_MEMORY_ACTOR_ID"
-_SESSION_STORE_ENV = "AGENT_SESSION_STORE"
-_SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _AGENTS_API = "/api/agents/v1"
 _MESSAGE_ROLES = {
     "ai",
@@ -52,20 +48,34 @@ class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
 
 
+_USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
+
+
 def _memory_store() -> str:
-    return os.getenv(_MEMORY_STORE_ENV, "").strip().strip("/")
+    # Same resolution the agent uses (AGENT_MEMORY_STORE env → agent.toml binding), so the demo
+    # panels reflect exactly the store the agent reads/writes.
+    from databricks_mason.runtime.tool_manifest import resolve_memory_store
 
-
-def _memory_actor() -> str:
-    return os.getenv(_MEMORY_ACTOR_ENV, "agent")
+    return (resolve_memory_store() or "").strip().strip("/")
 
 
 def _session_store() -> str:
-    return os.getenv(_SESSION_STORE_ENV, "").strip()
+    from databricks_mason.runtime.tool_manifest import resolve_session_store
+
+    return (resolve_session_store() or "").strip()
 
 
-def _session_actor() -> str:
-    return os.getenv(_SESSION_ACTOR_ENV) or _memory_actor()
+def _request_actor(request: Request) -> str:
+    """The actor for a demo request — the signed-in user, so the panels show that user's own data.
+
+    Mirrors how the agent resolves its actor (same forwarded-identity headers), so the memory and
+    session views here list exactly what the agent reads/writes for the current user. Falls back to
+    ``"agent"`` locally / when unauthenticated.
+    """
+    for header in _USER_HEADERS:
+        if value := request.headers.get(header):
+            return value
+    return "agent"
 
 
 def _is_deployed() -> bool:
@@ -93,9 +103,9 @@ class _ManagedStateClient:
             )
         return result
 
-    def create_memory_entry(self, request: MemoryEntryRequest, session_id: str) -> dict:
+    def create_memory_entry(self, actor: str, request: MemoryEntryRequest, session_id: str) -> dict:
         body = {
-            "actor_id": _memory_actor(),
+            "actor_id": actor,
             "path": request.path,
             "content": request.content,
             "session_id": session_id,
@@ -104,33 +114,33 @@ class _ManagedStateClient:
             body["description"] = request.description
         return self._do("POST", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", body=body)
 
-    def list_memory_entries(self, path_prefix: str | None = None) -> dict:
-        query = {"actor_id": _memory_actor(), "page_size": 100}
+    def list_memory_entries(self, actor: str, path_prefix: str | None = None) -> dict:
+        query = {"actor_id": actor, "page_size": 100}
         if path_prefix:
             query["path_prefix"] = path_prefix
         return self._do(
             "GET", f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries", query=query
         )
 
-    def search_memory_entries(self, request: MemorySearchRequest) -> dict:
+    def search_memory_entries(self, actor: str, request: MemorySearchRequest) -> dict:
         return self._do(
             "POST",
             f"{_AGENTS_API}/memory-stores/{_memory_store()}/entries:search",
             body={
-                "actor_id": _memory_actor(),
+                "actor_id": actor,
                 "query": request.query,
                 "limit": request.limit,
             },
         )
 
-    def ensure_session(self, session_id: str) -> dict:
+    def ensure_session(self, actor: str, session_id: str) -> dict:
         try:
             return self._do(
                 "POST",
                 f"{_AGENTS_API}/session-stores/{_session_store()}/sessions",
                 query={"session_id": session_id},
                 body={
-                    "actor_id": _session_actor(),
+                    "actor_id": actor,
                     "metadata": {"client": "mason-demo-ui"},
                 },
             )
@@ -150,12 +160,12 @@ class _ManagedStateClient:
             f"{_AGENTS_API}/session-stores/{_session_store()}/sessions/{session_id}",
         )
 
-    def list_sessions(self) -> dict:
+    def list_sessions(self, actor: str) -> dict:
         return self._do(
             "GET",
             f"{_AGENTS_API}/session-stores/{_session_store()}/sessions",
             query={
-                "filter": f"actor_id = {json.dumps(_session_actor())}",
+                "filter": f"actor_id = {json.dumps(actor)}",
                 "order_by": "last_activity_time desc",
                 "page_size": 50,
             },
@@ -196,7 +206,7 @@ def _require_memory() -> None:
     if not _memory_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_MEMORY_STORE_ENV} by deploying with --memory.",
+            detail="No memory store configured. Run `mason memory bind <store>`.",
         )
 
 
@@ -204,7 +214,7 @@ def _require_session() -> None:
     if not _session_store():
         raise HTTPException(
             status_code=503,
-            detail=f"Set {_SESSION_STORE_ENV} by deploying with --session.",
+            detail="No session store configured. Run `mason sessions bind <store>`.",
         )
 
 
@@ -263,17 +273,13 @@ def install_ui(app: FastAPI) -> None:
 
     @app.get("/api/demo/config", include_in_schema=False)
     async def demo_config(request: Request) -> dict:
-        viewer = (
-            request.headers.get("x-forwarded-email")
-            or request.headers.get("x-forwarded-user")
-            or "Local developer"
-        )
+        actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
         return {
             "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
-            "viewer": viewer,
+            "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": False},
@@ -283,12 +289,12 @@ def install_ui(app: FastAPI) -> None:
                 "history": True,
                 "mode": "Managed Session Store" if session_store else "In-process session",
                 "store": session_store or None,
-                "actor": _session_actor(),
+                "actor": actor,
             },
             "memory": {
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
-                "actor": _memory_actor(),
+                "actor": actor,
             },
         }
 
@@ -296,42 +302,53 @@ def install_ui(app: FastAPI) -> None:
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:
         _require_memory()
         return await _managed_call(
-            _state_client().create_memory_entry, payload, request.state.session_id
+            _state_client().create_memory_entry,
+            _request_actor(request),
+            payload,
+            request.state.session_id,
         )
 
     @app.get("/api/demo/memory/entries", include_in_schema=False)
     async def list_memory_entries(
+        request: Request,
         path_prefix: str | None = Query(default=None),
     ) -> dict:
         _require_memory()
-        return await _managed_call(_state_client().list_memory_entries, path_prefix)
+        return await _managed_call(
+            _state_client().list_memory_entries, _request_actor(request), path_prefix
+        )
 
     @app.post("/api/demo/memory/search", include_in_schema=False)
-    async def search_memory_entries(request: MemorySearchRequest) -> dict:
+    async def search_memory_entries(request: Request, payload: MemorySearchRequest) -> dict:
         _require_memory()
-        return await _managed_call(_state_client().search_memory_entries, request)
+        return await _managed_call(
+            _state_client().search_memory_entries, _request_actor(request), payload
+        )
 
     @app.post("/api/demo/sessions", include_in_schema=False)
     async def ensure_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().ensure_session, request.state.session_id)
+        return await _managed_call(
+            _state_client().ensure_session, _request_actor(request), request.state.session_id
+        )
 
     @app.get("/api/demo/sessions", include_in_schema=False)
     async def list_sessions(request: Request) -> dict:
         session_id = request.state.session_id
+        actor = _request_actor(request)
         if not _session_store():
             return {
                 "sessions": [
                     {
                         "session_id": session_id,
-                        "actor_id": _session_actor(),
+                        "actor_id": actor,
                         "metadata": {"client": "mason-demo-ui-local"},
                     }
                 ],
                 "current_session_id": session_id,
                 "managed": False,
             }
-        result = await _managed_call(_state_client().list_sessions)
+        result = await _managed_call(_state_client().list_sessions, actor)
         return {
             **result,
             "sessions": _chat_sessions(result),
@@ -343,7 +360,7 @@ def install_ui(app: FastAPI) -> None:
     async def open_session(request: Request, session_id: str) -> JSONResponse:
         _require_session()
         session = await _managed_call(_state_client().get_session, session_id)
-        if session.get("actor_id") != _session_actor():
+        if session.get("actor_id") != _request_actor(request):
             raise HTTPException(status_code=403, detail="Session belongs to another actor.")
         previous_session_id = request.state.session_id
         request.state.session_id = session_id
