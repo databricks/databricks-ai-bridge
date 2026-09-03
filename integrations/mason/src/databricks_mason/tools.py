@@ -341,3 +341,28 @@ def list_tools(obj: Any, source: pathlib.Path) -> None:
         [("ID", "left"), ("KIND", "left"), ("SOURCE", "left")],
         [(row["id"], row["kind"], row["source"]) for row in rows],
     )
+
+
+@tools.command("remove")
+@click.argument("tool_id")
+@_source_option
+@click.pass_obj
+def remove_tool(obj: Any, tool_id: str, source: pathlib.Path) -> None:
+    """Remove a tool binding from this agent."""
+    project = AgentProject.load(source)
+    changed = project.remove_tool(tool_id)
+    changed_files = [project.write()] if changed else []
+    if getattr(obj, "output", "text") == "json":
+        render.emit_json(
+            {
+                "schema_version": 1,
+                "changed": changed,
+                "changed_files": [str(path) for path in changed_files],
+                "tool_id": tool_id,
+            }
+        )
+        return
+    if changed:
+        render.success("Removed " + tool_id, fields={"Manifest": str(project.path)})
+    else:
+        click.echo(f"Tool {tool_id!r} is not configured in {project.path}")

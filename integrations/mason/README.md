@@ -148,8 +148,12 @@ mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
 mason tools add python lookup-ticket
+mason tools remove web_search
 mason tools list
 ```
+
+Remove bindings by the ID shown in `mason tools list`. Removal updates only `agent.toml`; Python
+source and test files remain user-owned.
 
 Discover the MCP Services available to your user before adding one. By default Mason lists the
 Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
