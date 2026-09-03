@@ -256,8 +256,15 @@ def tracing_list(obj, experiment, limit) -> None:
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, None)
     exp_name = experiment or _DEFAULT_EXPERIMENT
-    traces = mlflow.search_traces(
-        experiment_names=[exp_name], max_results=limit, return_type="list"
+    # search_traces selects experiments by id, not name, so resolve first. A missing experiment means
+    # no traces have been recorded there yet — show an empty list rather than erroring.
+    exp = mlflow.get_experiment_by_name(exp_name)
+    traces = (
+        mlflow.search_traces(
+            experiment_ids=[exp.experiment_id], max_results=limit, return_type="list"
+        )
+        if exp
+        else []
     )
 
     if obj.output == "json":
