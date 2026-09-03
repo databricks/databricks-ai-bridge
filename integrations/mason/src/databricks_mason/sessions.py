@@ -79,6 +79,7 @@ def stores_create(obj, name, description, metadata) -> None:
         next_steps=[
             f"mason sessions create --store {name} --actor-id <id>",
             f"mason sessions stores get {name}",
+            f"mason deploy <agent> --source <path> --with-session-store {name}",
         ],
     )
 
