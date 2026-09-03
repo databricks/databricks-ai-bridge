@@ -160,7 +160,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             fields={"Chat UI": base},
             next_steps=[
                 f"Open {base} to chat with your agent",
-                ("Edit agent/agent.py", "Change the model, prompt, or tools, then reload"),
+                "Edit agent/agent.py to change the model, prompt, or tools, then reload",
                 (f"mason deploy {deploy_name} --source .", "Deploy it to Databricks"),
             ],
         )

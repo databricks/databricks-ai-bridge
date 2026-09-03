@@ -74,11 +74,11 @@ def test_success_next_steps_render_command_and_description():
     out = buf.getvalue()
     # The header hints the steps are runnable when at least one is a command.
     assert "run these in your terminal" in out
-    # Both the command and its description are shown.
-    assert "mason init my-agent" in out
+    # Commands get a `$ ` prompt prefix and show their description.
+    assert "$ mason init my-agent" in out
     assert "Scaffold a new agent project" in out
-    # A bare-string step renders as prose (no description column).
-    assert "Open http://localhost:8000 to chat with it" in out
+    # A bare-string step renders as prose with a `•` bullet (not a command prompt).
+    assert "• Open http://localhost:8000 to chat with it" in out
 
 
 def test_success_prose_only_next_steps_omit_terminal_hint():

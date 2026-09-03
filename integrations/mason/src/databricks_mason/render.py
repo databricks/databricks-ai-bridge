@@ -205,10 +205,12 @@ def success(
         steps.add_column(style=MUTED)
         for step in next_steps:
             if isinstance(step, tuple):
+                # A `$ ` prompt prefix marks a runnable command (both in accent).
                 command, description = step
-                steps.add_row(Text("→ ", style=ACCENT) + Text(command, style=ACCENT), description)
+                steps.add_row(Text("$ ", style=ACCENT) + Text(command, style=ACCENT), description)
             else:
-                steps.add_row(Text("→ ", style=ACCENT) + Text(step), "")
+                # Prose (e.g. "Open <url>") gets a muted bullet, not a command prompt.
+                steps.add_row(Text("• ", style=MUTED) + Text(step), "")
         body.append(steps)
 
     con.print()
