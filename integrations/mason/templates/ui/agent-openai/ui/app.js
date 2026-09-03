@@ -90,12 +90,11 @@ function setBusy(busy, label = "Working") {
 // green/amber/red states are self-explanatory.
 const CAPABILITY_SUMMARY = { enabled: "Available", degraded: "Limited", disabled: "Unavailable" };
 
-function setCapability(element, state, detail) {
+function setCapability(element, state, detail, command) {
   const key = state === true ? "enabled" : state === "degraded" ? "degraded" : "disabled";
   element.classList.toggle("enabled", key === "enabled");
   element.classList.toggle("degraded", key === "degraded");
   element.classList.toggle("disabled", key === "disabled");
-  const title = detail ? `${CAPABILITY_SUMMARY[key]} — ${detail}` : CAPABILITY_SUMMARY[key];
   element.setAttribute("role", "img");
   element.setAttribute("aria-label", `Status: ${CAPABILITY_SUMMARY[key]}`);
   const row = element.closest(".capability-row");
@@ -111,7 +110,29 @@ function setCapability(element, state, detail) {
     row.tabIndex = 0;
     row.setAttribute("aria-describedby", tooltip.id);
   }
-  tooltip.textContent = title;
+  tooltip.dataset.state = key;
+  tooltip.replaceChildren();
+
+  const summary = document.createElement("strong");
+  summary.className = "capability-tooltip-status";
+  summary.textContent = CAPABILITY_SUMMARY[key];
+  tooltip.append(summary);
+
+  if (detail) {
+    const description = document.createElement("span");
+    description.className = "capability-tooltip-detail";
+    description.textContent = detail;
+    tooltip.append(description);
+  }
+  if (command) {
+    const guidance = document.createElement("span");
+    guidance.className = "capability-tooltip-guidance";
+    guidance.textContent = "Connect by redeploying:";
+    const commandText = document.createElement("code");
+    commandText.className = "capability-tooltip-command";
+    commandText.textContent = command;
+    tooltip.append(guidance, commandText);
+  }
 }
 
 function formatJson(value) {
@@ -718,22 +739,24 @@ async function loadConfig() {
       elements.backgroundStatus,
       config.background.enabled,
       config.background.enabled
-        ? `Background invocations enabled — ${config.background.durable ? "durable" : "in-process"} run store.`
+        ? `Background invocations use a ${config.background.durable ? "durable" : "in-process"} run store.`
         : "Background invocations are disabled.",
     );
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
       config.session.managed
-        ? `Connected to Session Store "${config.session.store}" (actor ${config.session.actor}) — durable, shareable session state.`
-        : "Not connected — session state is kept in-process and resets on restart. Connect a Session Store by redeploying with:\nmason deploy --session <name>",
+        ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
+        : "Session state is kept in process and resets when the app restarts.",
+      config.session.managed ? null : "mason deploy --session <name>",
     );
     setCapability(
       elements.memoryStatus,
       config.memory.enabled,
       config.memory.enabled
-        ? `Connected to ${config.memory.store} (actor ${config.memory.actor}).`
-        : "Not connected — no long-term memory. Connect a Memory Store by redeploying with:\nmason deploy --memory <name>",
+        ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
+        : "No long-term memory is connected.",
+      config.memory.enabled ? null : "mason deploy --memory <name>",
     );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
