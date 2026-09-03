@@ -6,6 +6,7 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import FunctionTool
@@ -68,6 +69,59 @@ class _FakeStreamResult:
 
     def to_state(self):
         return self._state
+
+
+@pytest.mark.asyncio
+async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
+    import agent.agent as agent_module
+
+    def server(name, *, connect_error=None, list_error=None, cleanup_error=None):
+        value = MagicMock(name=name)
+        value.name = name
+        value.tool_filter = lambda *_args: True
+        value.cache_tools_list = False
+        value.connect = AsyncMock(side_effect=connect_error)
+        value.cleanup = AsyncMock(side_effect=cleanup_error)
+        value.list_tools = AsyncMock(return_value=[], side_effect=list_error)
+        return value
+
+    healthy = server("healthy")
+    unavailable = [
+        server("connect-failure", connect_error=PermissionError("HTTP error 403")),
+        server(
+            "list-failure",
+            list_error=RuntimeError("tool discovery failed"),
+            cleanup_error=RuntimeError("cleanup failed"),
+        ),
+    ]
+    all_servers = [healthy, *unavailable]
+    tool_filters = [server.tool_filter for server in all_servers]
+
+    async def mcp_servers(_extra):
+        return [healthy, *unavailable]
+
+    create_agent = MagicMock(return_value=object())
+
+    monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(agent_module, "create_agent", create_agent)
+    monkeypatch.setattr(agent_module, "tag_session", lambda _session_id: None)
+    monkeypatch.setattr(agent_module, "session_store", lambda _session_id: None)
+    monkeypatch.setattr(
+        agent_module.Runner,
+        "run_streamed",
+        lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
+    )
+
+    assert [event async for event in agent_module.stream_handler({"session_id": "s"})] == []
+    assert create_agent.call_args.args[0] == [healthy]
+    assert healthy.cache_tools_list is True
+    assert all(
+        server.tool_filter is tool_filter
+        for server, tool_filter in zip(all_servers, tool_filters, strict=True)
+    )
+    for server in all_servers:
+        server.cleanup.assert_awaited_once()
 
 
 @pytest.mark.asyncio
