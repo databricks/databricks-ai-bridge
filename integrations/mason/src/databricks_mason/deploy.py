@@ -354,9 +354,7 @@ def _grant_store_access(
     "--pip-index-url",
     default=_DEFAULT_PIP_INDEX_URL,
     show_default=True,
-    help="Package index the Apps build installs from. Defaults to public PyPI as a temporary "
-    "workaround: the Apps build environment currently can't reach the internal proxy. Pass an "
-    "empty string to use the build's default index.",
+    help="Base URL of the Python Package Index. Defaults to public PyPI.",
 )
 @click.option(
     "--workspace-path",
