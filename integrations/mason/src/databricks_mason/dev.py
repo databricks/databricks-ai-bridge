@@ -160,7 +160,8 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             fields={"Chat UI": base},
             next_steps=[
                 f"Open {base} to chat with your agent",
-                "Edit agent/agent.py to change the model, prompt, or tools, then reload",
+                ("mason tools add mcp <service>", "Give the agent a tool (see `mason mcp list`)"),
+                ("mason dev -m <store> -s <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
@@ -175,6 +176,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             fields={"Invoke": f"POST {base}/invocations"},
             next_steps=[
                 (sample, "Send a test request"),
+                ("mason tools add mcp <service>", "Give the agent a tool (see `mason mcp list`)"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
