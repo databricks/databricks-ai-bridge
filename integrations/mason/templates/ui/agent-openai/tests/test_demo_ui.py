@@ -112,6 +112,8 @@ def test_demo_ui_routes(monkeypatch):
     assert 'id="session-list"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
+    assert "mason dev --memory <store-name>" in app_script.text
+    assert "mason deploy <app-name> --source . --memory <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
@@ -147,6 +149,15 @@ def test_demo_ui_routes(monkeypatch):
 
     assert client.post("/api/demo/memory/search", json={"query": "profile"}).status_code == 503
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
+
+
+def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "app")
+    monkeypatch.setenv("DATABRICKS_APP_URL", "http://127.0.0.1:8000")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is False
+
+    monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is True
 
 
 def test_unmanaged_local_history_route(monkeypatch):

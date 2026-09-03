@@ -68,6 +68,12 @@ def _session_actor() -> str:
     return os.getenv(_SESSION_ACTOR_ENV) or _memory_actor()
 
 
+def _is_deployed() -> bool:
+    app_url = os.getenv("DATABRICKS_APP_URL", "")
+    is_local = app_url.startswith(("http://localhost", "http://127.0.0.1"))
+    return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
+
+
 class _ManagedStateClient:
     def __init__(self) -> None:
         self._workspace = workspace_client()
@@ -274,7 +280,7 @@ def install_ui(app: FastAPI) -> None:
             "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
             "viewer": viewer,
-            "deployed": bool(os.getenv("DATABRICKS_APP_NAME")),
+            "deployed": _is_deployed(),
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": False},
             "session": {
