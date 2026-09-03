@@ -432,11 +432,9 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
-        _databricks(
-            ["apps", "create", name],
-            obj.profile,
-            output_replacement=_AGENT_COMPUTE_OUTPUT,
-        )
+        result = _databricks(["apps", "create", name], obj.profile, capture=True)
+        old, new = _AGENT_COMPUTE_OUTPUT
+        click.echo((result.stdout or "").replace(old, new), nl=False)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         _wait_for_running(name, obj.profile)
@@ -445,11 +443,7 @@ def deploy(
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
     _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
-    _databricks(
-        ["apps", "deploy", name, "--source-code-path", ws_path],
-        obj.profile,
-        output_replacement=_AGENT_COMPUTE_OUTPUT,
-    )
+    _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
 
     # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
     #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without

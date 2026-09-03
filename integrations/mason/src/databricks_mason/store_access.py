@@ -15,169 +15,14 @@ supply the per-store project/schema/table specifics.
 
 from __future__ import annotations
 
-import codecs
-import errno
 import json
-import os
-import queue
 import subprocess
-import sys
-import threading
 from dataclasses import dataclass
-from typing import IO, Optional, TextIO
+from typing import Optional
 
 import psycopg
 
 from databricks_mason.errors import AgentCliError
-
-
-def _replace_output_chunk(
-    text: str,
-    pending: str,
-    replacement: tuple[str, str],
-    *,
-    final: bool = False,
-) -> tuple[str, str]:
-    """Replace one term incrementally without delaying unrelated output."""
-    old, new = replacement
-    if not old:
-        raise ValueError("output replacement term must not be empty")
-    output: list[str] = []
-    for character in text:
-        pending += character
-        while pending and not old.startswith(pending):
-            output.append(pending[0])
-            pending = pending[1:]
-        if pending == old:
-            output.append(new)
-            pending = ""
-    if final:
-        output.append(pending)
-        pending = ""
-    return "".join(output), pending
-
-
-def _relay_replaced_output(
-    source: IO[bytes],
-    destination: TextIO,
-    replacement: tuple[str, str],
-    failed: threading.Event,
-    failures: queue.SimpleQueue[BaseException],
-) -> None:
-    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    pending = ""
-    destination_open = True
-    try:
-        read = getattr(source, "read1", source.read)
-        while True:
-            try:
-                chunk = read(4096)
-            except OSError as exc:
-                if exc.errno != errno.EIO:
-                    raise
-                chunk = b""  # PTYs report EIO when the child closes the slave.
-            final = not chunk
-            text = decoder.decode(chunk, final=final)
-            output, pending = _replace_output_chunk(text, pending, replacement, final=final)
-            if output and destination_open:
-                try:
-                    destination.write(output)
-                    destination.flush()
-                except BaseException as exc:
-                    failures.put(exc)
-                    failed.set()
-                    destination_open = False
-            if final:
-                return
-    except BaseException as exc:
-        failures.put(exc)
-        failed.set()
-
-
-def _terminate(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-
-
-def _run_with_replaced_output(
-    cmd: list[str], cwd: Optional[str], replacement: tuple[str, str]
-) -> subprocess.CompletedProcess:
-    """Relay stdout/stderr live while preserving each destination's TTY behavior."""
-    destinations: tuple[TextIO, TextIO] = (sys.stdout, sys.stderr)
-    child_targets = []
-    pty_channels: list[Optional[tuple[int, int]]] = []
-    for destination in destinations:
-        if os.name == "posix" and destination.isatty():
-            import fcntl
-            import termios
-
-            master, slave = os.openpty()
-            attributes = termios.tcgetattr(slave)
-            attributes[1] &= ~termios.OPOST
-            termios.tcsetattr(slave, termios.TCSANOW, attributes)
-            try:
-                window_size = fcntl.ioctl(destination.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, window_size)
-            except (AttributeError, OSError):
-                pass
-            child_targets.append(slave)
-            pty_channels.append((master, slave))
-        else:
-            child_targets.append(subprocess.PIPE)
-            pty_channels.append(None)
-
-    process: Optional[subprocess.Popen] = None
-    sources: list[IO[bytes]] = []
-    threads: list[threading.Thread] = []
-    failed = threading.Event()
-    failures: queue.SimpleQueue[BaseException] = queue.SimpleQueue()
-    try:
-        process = subprocess.Popen(cmd, stdout=child_targets[0], stderr=child_targets[1], cwd=cwd)
-        pipe_sources = (process.stdout, process.stderr)
-        for index, channel in enumerate(pty_channels):
-            if channel is None:
-                source = pipe_sources[index]
-                assert source is not None
-            else:
-                master, slave = channel
-                os.close(slave)
-                source = os.fdopen(master, "rb", buffering=0)
-            sources.append(source)
-            thread = threading.Thread(
-                target=_relay_replaced_output,
-                args=(source, destinations[index], replacement, failed, failures),
-            )
-            thread.start()
-            threads.append(thread)
-
-        while process.poll() is None:
-            if failed.wait(timeout=0.05):
-                _terminate(process)
-                break
-        returncode = process.wait()
-        for thread in threads:
-            thread.join()
-        if failed.is_set():
-            raise failures.get()
-        return subprocess.CompletedProcess(cmd, returncode)
-    except BaseException:
-        if process is not None:
-            _terminate(process)
-        raise
-    finally:
-        for source in sources:
-            source.close()
-        for channel in pty_channels[len(sources) :]:
-            if channel is not None:
-                master, slave = channel
-                os.close(master)
-                os.close(slave)
 
 
 def _databricks(
@@ -187,19 +32,11 @@ def _databricks(
     capture: bool = False,
     check: bool = True,
     cwd: Optional[str] = None,
-    output_replacement: Optional[tuple[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
-    if output_replacement and not capture:
-        result = _run_with_replaced_output(cmd, cwd, output_replacement)
-    else:
-        result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
-    if output_replacement and capture:
-        old, new = output_replacement
-        result.stdout = (result.stdout or "").replace(old, new)
-        result.stderr = (result.stderr or "").replace(old, new)
+    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip() if capture else None
         raise AgentCliError(f"`{' '.join(cmd)}` failed (exit {result.returncode})", hint=detail)
