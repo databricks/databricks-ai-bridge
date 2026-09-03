@@ -110,7 +110,7 @@ def login(obj, profile) -> None:
     if not profile:
         raise AgentCliError(
             "No profile to save.",
-            hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
+            hint="Pass one to remember, e.g. `mason login --profile <profile>`.",
         )
     client, user = _authenticate_profile(profile)
     _save_default_profile(profile)

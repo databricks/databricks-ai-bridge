@@ -82,7 +82,7 @@ def test_help_examples_recommend_the_default_happy_path():
     runner = CliRunner()
     expected_examples = {
         (): (
-            "mason login --profile my-workspace",
+            "mason login --profile <profile>",
             "mason init my-agent",
             "cd my-agent",
             "mason dev",
