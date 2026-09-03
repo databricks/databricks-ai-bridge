@@ -41,6 +41,18 @@ def test_status_pill_colors():
     assert "Disabled" in render.status_pill("DISABLED").plain
 
 
+def test_hyperlink_carries_url_and_plain_text():
+    link = render.hyperlink("my-app", "https://example.com/app")
+    assert link.plain == "my-app"  # shows the label, not the raw URL
+    assert "link https://example.com/app" in str(link.style)
+
+
+def test_hyperlink_without_url_is_plain():
+    link = render.hyperlink("my-app", None)
+    assert link.plain == "my-app"
+    assert not link.style
+
+
 def test_field_snake_and_camel():
     assert render.field({"display_name": "x"}, "display_name") == "x"
     assert render.field({"displayName": "y"}, "display_name") == "y"
