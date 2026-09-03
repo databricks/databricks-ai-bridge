@@ -736,7 +736,9 @@ async function loadConfig() {
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
       ? `${config.memory.store} · actor ${config.memory.actor}`
-      : "Deploy with --memory to expose managed entries and agent memory tools.";
+      : config.deployed
+        ? "Run from the project directory: mason deploy <app-name> --source . --memory <store-name>. Mason creates the store if needed."
+        : "Run from the project directory: mason dev --memory <store-name>. Mason creates the store if needed.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history
@@ -745,7 +747,7 @@ async function loadConfig() {
     addEvent("runtime.config", config);
     void refreshSessionView({ hydrateChat: true });
     if (config.memory.enabled) void listMemoryEntries();
-    else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
+    else stateMessage(elements.memoryResults, "Run the command above to connect a Memory Store and enable agent memory tools.");
     return config;
   } catch (error) {
     throw error;
