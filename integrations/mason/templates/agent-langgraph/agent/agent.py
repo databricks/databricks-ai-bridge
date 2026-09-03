@@ -60,15 +60,13 @@ def _check_databricks_auth() -> None:
         workspace_client()
     except Exception as e:
         profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = (
-            f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
-        )
+        tried = f"profile {profile!r}" if profile else "no profile (Databricks default resolution)"
         raise RuntimeError(
-            f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
-            "Fix one of:\n"
-            "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
-            "  • run `databricks auth login --profile <name>` to create one, or\n"
-            "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
+            f"Databricks auth is not configured — the agent can't call the model (tried {tried}).\n"
+            "Authenticate once with `mason login --profile <name>` "
+            "(see `databricks auth profiles` for names), then make sure the agent process sees it: "
+            "set DATABRICKS_CONFIG_PROFILE=<name> in .env for local `mason dev`, or "
+            "DATABRICKS_HOST + DATABRICKS_TOKEN for a deployed app.\n"
             f"(underlying error: {e})"
         ) from e
 
