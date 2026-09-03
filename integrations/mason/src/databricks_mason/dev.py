@@ -153,8 +153,17 @@ def dev(
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
+    deploy_name = source_dir.resolve().name
     if (source_dir / "runtime" / "ui.py").is_file():
-        render.success("Starting agent", fields={"Chat UI": base})
+        render.success(
+            "Starting agent",
+            fields={"Chat UI": base},
+            next_steps=[
+                f"Open {base} to chat with your agent",
+                ("Edit agent/agent.py", "Change the model, prompt, or tools, then reload"),
+                (f"mason deploy {deploy_name} --source .", "Deploy it to Databricks"),
+            ],
+        )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
         sample = (
@@ -164,7 +173,10 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
             fields={"Invoke": f"POST {base}/invocations"},
-            next_steps=[sample],
+            next_steps=[
+                (sample, "Send a test request"),
+                (f"mason deploy {deploy_name} --source .", "Deploy it to Databricks"),
+            ],
         )
 
 

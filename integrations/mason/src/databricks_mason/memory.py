@@ -147,8 +147,11 @@ def stores_create(obj, display_name, description) -> None:
         f"Created memory store '{display_name}'",
         fields={"Store ID": store_id, "Name": field(data, "name")},
         next_steps=[
-            f"mason memory entries create --store {store_id} --actor-id <id> --path </p>",
-            f"mason memory stores get {store_id}",
+            (
+                f"mason memory entries create --store {store_id} --actor-id <id> --path </p>",
+                "Add a memory entry for an actor",
+            ),
+            (f"mason memory stores get {store_id}", "View this store's details"),
         ],
     )
 

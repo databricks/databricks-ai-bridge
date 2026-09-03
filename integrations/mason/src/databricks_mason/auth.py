@@ -120,7 +120,11 @@ def login(obj, profile) -> None:
     render.success(
         f"Logged in as {user}",
         fields={"Profile": profile, "Host": client.host},
-        next_steps=["mason sessions stores list", "mason memory stores list"],
+        next_steps=[
+            ("mason init my-agent", "Scaffold a new agent project"),
+            ("mason dev", "Run an agent locally with a chat UI"),
+            ("mason deploy my-agent", "Deploy an agent to Databricks"),
+        ],
     )
 
 

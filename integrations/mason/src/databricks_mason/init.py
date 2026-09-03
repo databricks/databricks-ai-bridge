@@ -246,18 +246,18 @@ def init(
     fields = {"Framework": framework, "Directory": str(dest)}
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
-    steps = [f"cd {dest}"]
+    steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
     if wrote_env:
         fields["Profile (.env)"] = env_profile
     else:
         # No profile resolved, so no .env was seeded — call out the auth step explicitly rather
         # than burying it, since running locally fails without a Databricks profile.
         steps += [
-            "cp .env.example .env",
+            ("cp .env.example .env", "Create your local env file"),
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
-    steps += ["mason dev        # run locally"]
+    steps.append(("mason dev", "Run the agent locally"))
     if chat_app_enabled:
-        steps.append("Open http://localhost:8000")
-    steps.append(f"mason deploy <name> --source {dest}")
+        steps.append("Open http://localhost:8000 to chat with it")
+    steps.append((f"mason deploy {dest.name} --source {dest}", "Deploy it to Databricks"))
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

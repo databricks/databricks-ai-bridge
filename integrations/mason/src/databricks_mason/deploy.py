@@ -454,9 +454,12 @@ def deploy(
         )
         return
 
-    steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
+    steps: list[str | tuple[str, str]] = [
+        (f"mason deployments get {name}", "Check its status and URL"),
+        (f"mason deployments logs {name}", "Tail its logs"),
+    ]
     if app_url:
-        steps.insert(0, f"open {app_url}")
+        steps.insert(0, (f"open {app_url}", "Open the deployed app"))
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
