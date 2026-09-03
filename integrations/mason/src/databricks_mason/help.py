@@ -99,7 +99,7 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
         "mason tools add --help",
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
         "mason tools add mcp system.ai.web_search",
-        "mason tools remove web_search",
+        "mason tools remove mcp system.ai.web_search",
         "mason tools list",
     ),
     ("tools", "add"): (

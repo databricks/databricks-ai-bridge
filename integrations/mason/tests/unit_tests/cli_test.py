@@ -62,7 +62,7 @@ def test_tools_help_explains_add_workflow():
     assert "List tools configured for this agent." in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
-    assert "mason tools remove web_search" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
 
 
 def test_tools_remove_help_shows_id_and_project_targeting():
