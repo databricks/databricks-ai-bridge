@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pathlib
+import subprocess
+import types
 from unittest import mock
 
 import pytest
@@ -149,6 +152,66 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     assert "`mason --profile <name> <command>`" in hint
     assert "`mason login --profile <name>`" in hint
     assert "`databricks auth login --profile <name>`" not in hint
+
+
+def test_profile_auth_is_forwarded_when_multiple_profiles_share_a_host(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    config_path = tmp_path / "databrickscfg"
+    config_path.write_text(
+        "[duplicate]\n"
+        "host = https://workspace.cloud.databricks.com\n"
+        "account_id = account-id\n"
+        "discovery_url = https://workspace.cloud.databricks.com/oidc/.well-known/oauth-authorization-server\n"
+        "auth_type = databricks-cli\n"
+        "\n"
+        "[selected]\n"
+        "host = https://workspace.cloud.databricks.com\n"
+        "account_id = account-id\n"
+        "discovery_url = https://workspace.cloud.databricks.com/oidc/.well-known/oauth-authorization-server\n"
+        "auth_type = databricks-cli\n"
+    )
+    for name in (
+        "DATABRICKS_AUTH_TYPE",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_CONFIG_PROFILE",
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("DATABRICKS_CLI_PATH", "/fake/databricks")
+    monkeypatch.setenv("DATABRICKS_DISABLE_ASYNC_TOKEN_REFRESH", "true")
+
+    def run_cli(args: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+        if args[1:] == ["version", "--output", "json"]:
+            stdout = b'{"Major": 0, "Minor": 300, "Patch": 0}'
+        else:
+            assert args[1:3] == ["auth", "token"]
+            assert "--host" not in args
+            assert args[args.index("--profile") + 1] == "selected"
+            stdout = (
+                b'{"access_token": "test-token", "token_type": "Bearer", '
+                b'"expiry": "2099-01-01T00:00:00Z"}'
+            )
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr=b"")
+
+    host_metadata = types.SimpleNamespace(
+        account_id=None,
+        workspace_id=None,
+        oidc_endpoint="",
+        cloud=None,
+        token_federation_default_oidc_audiences=[],
+    )
+    # Keep the test hermetic while exercising the SDK's real CLI command selection.
+    with (
+        mock.patch("databricks.sdk.config.get_host_metadata", return_value=host_metadata),
+        mock.patch("databricks.sdk.credentials_provider._run_subprocess", side_effect=run_cli),
+    ):
+        client = _workspace_client("selected")
+
+    assert client.config.profile == "selected"
 
 
 class _TransientError(RuntimeError):
