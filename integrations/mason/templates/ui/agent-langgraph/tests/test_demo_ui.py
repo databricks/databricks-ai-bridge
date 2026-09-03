@@ -274,6 +274,46 @@ def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
     assert ui._discover_chat_models() == ["databricks-gpt-5-2"]
 
 
+def test_discover_chat_models_ranks_foundation_first_and_caps(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+    # A big workspace: many custom endpoints plus a few foundation models. The cap must keep the
+    # default and the databricks-* foundation models, not an arbitrary alphabetical slice of customs.
+    endpoints = [_endpoint(f"zz-custom-{i:03d}") for i in range(30)]
+    endpoints += [_endpoint("databricks-gpt-5-5"), _endpoint("databricks-claude-sonnet-4")]
+    fake_wc = type(
+        "WC", (), {"serving_endpoints": type("SE", (), {"list": lambda self: endpoints})()}
+    )()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    result = ui._discover_chat_models()
+    assert len(result) == 20  # capped
+    assert result[0] == "databricks-gpt-5-2"  # default pinned
+    # Foundation models win slots ahead of any custom endpoint.
+    assert result[1:3] == ["databricks-claude-sonnet-4", "databricks-gpt-5-5"]
+    assert all(name.startswith(("databricks-", "zz-custom-")) for name in result)
+
+
+def test_discover_chat_models_retries_transient_list_error(monkeypatch):
+    import time
+
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+    monkeypatch.setattr(time, "sleep", lambda _s: None)  # don't actually wait between retries
+    calls = {"n": 0}
+
+    def _list(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient 500")
+        return [_endpoint("databricks-gpt-5-5")]
+
+    fake_wc = type("WC", (), {"serving_endpoints": type("SE", (), {"list": _list})()})()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    # First attempt fails, second succeeds -> the endpoint is discovered, not lost.
+    assert ui._discover_chat_models() == ["databricks-gpt-5-2", "databricks-gpt-5-5"]
+    assert calls["n"] == 2
+
+
 @pytest.mark.asyncio
 async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
     import agent.agent as agent_module

@@ -24,6 +24,11 @@ endpoint as `model` in the invocation body; the agent is rebuilt per turn, so th
 model for the next turn without a restart. Discovery is best-effort: if listing is unavailable (e.g.
 no permission), the picker falls back to just the default. Omitting `model` uses `MODEL`.
 
+A large workspace can expose thousands of endpoints, so the picker is capped (`_MODEL_LIMIT`, 20)
+and ranked — default first, then `databricks-*` foundation models, then other custom/external chat
+endpoints — so the cap keeps the canonical choices. The list call is unpaginated and occasionally
+fails on big workspaces, so it is retried a few times before falling back to the default.
+
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and
 the application session id; request bodies do not carry `session_id`. Local development uses the
