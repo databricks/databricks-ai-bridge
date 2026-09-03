@@ -192,7 +192,7 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
 
 def _ensure_memory_store(client, display_name: str) -> dict:
     try:
-        return client.create_memory_store(display_name)
+        return client.create_memory_store(display_name, retry_transient=True)
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
@@ -204,7 +204,7 @@ def _ensure_memory_store(client, display_name: str) -> dict:
 
 def _ensure_session_store(client, name: str) -> dict:
     try:
-        return client.create_session_store(name)
+        return client.create_session_store(name, retry_transient=True)
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise

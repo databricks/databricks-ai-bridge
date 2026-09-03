@@ -162,11 +162,33 @@ def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     # First attempt is a transient CANCELLED (str() == "None"), second succeeds.
     do.side_effect = [_TransientError(None), {"session_store_name": "s"}]
 
-    store = c.create_session_store("s")
+    store = c.create_session_store("s", retry_transient=True)
 
     assert store["session_store_name"] == "s"
     assert do.call_count == 2
     sleep.assert_called_once()
+
+
+@mock.patch("databricks_mason.client.time.sleep")
+@mock.patch("databricks_mason.client.WorkspaceClient")
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("create_memory_store", ("m",)),
+        ("create_session_store", ("s",)),
+    ],
+)
+def test_create_store_does_not_retry_transient_error_by_default(
+    workspace_client, sleep, method_name, args
+):
+    c, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError):
+        getattr(c, method_name)(*args)
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
 
 
 @mock.patch("databricks_mason.client.time.sleep")

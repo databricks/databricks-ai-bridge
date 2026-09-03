@@ -184,12 +184,21 @@ class MasonClient:
     # --- memory stores -------------------------------------------------------
 
     def create_memory_store(
-        self, display_name: str, description: Optional[str] = None
+        self,
+        display_name: str,
+        description: Optional[str] = None,
+        *,
+        retry_transient: bool = False,
     ) -> models.MemoryStore:
         body = _query(display_name=display_name, description=description)
         return _as(
             models.MemoryStore,
-            self._do("POST", f"{_BASE}/memory-stores", body=body, safe_to_retry=True),
+            self._do(
+                "POST",
+                f"{_BASE}/memory-stores",
+                body=body,
+                safe_to_retry=retry_transient,
+            ),
         )
 
     def get_memory_store(self, name: str) -> models.MemoryStore:
@@ -316,7 +325,12 @@ class MasonClient:
     # --- session stores ------------------------------------------------------
 
     def create_session_store(
-        self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
+        self,
+        name: str,
+        description: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        *,
+        retry_transient: bool = False,
     ) -> models.SessionStore:
         body = _query(description=description, metadata=metadata)
         return _as(
@@ -326,7 +340,7 @@ class MasonClient:
                 f"{_BASE}/session-stores",
                 query={"session_store_name": name},
                 body=body,
-                safe_to_retry=True,
+                safe_to_retry=retry_transient,
             ),
         )
 
