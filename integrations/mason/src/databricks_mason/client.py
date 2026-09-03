@@ -19,7 +19,7 @@ from typing import Any, Optional
 from databricks.sdk import WorkspaceClient
 
 from databricks_mason import models
-from databricks_mason.errors import AgentCliError, wrap_api_error
+from databricks_mason.errors import AgentCliError, auth_hint, wrap_api_error
 
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
@@ -118,8 +118,7 @@ class MasonClient:
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Select an existing profile with `mason --profile <name> <command>` "
-                "or authenticate and save it with `mason login --profile <name>`.",
+                hint=auth_hint(profile),
             ) from exc
 
     @property

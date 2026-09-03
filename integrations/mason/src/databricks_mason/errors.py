@@ -7,6 +7,7 @@ one-liner (plus an optional hint) and exits non-zero, instead of dumping a trace
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 import click
@@ -72,3 +73,28 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     message = str(exc).strip() or exc.__class__.__name__
     hint = _PREVIEW_HINT if error_code in _PREVIEW_ERROR_CODES else None
     return AgentCliError(message, error_code=error_code, hint=hint)
+
+
+def auth_hint(profile: Optional[str] = None) -> str:
+    """The remediation to append to any Databricks auth failure.
+
+    We deliberately do not parse the SDK's error text — its wording varies by version and
+    failure mode, and the message is already surfaced verbatim as the error itself (see
+    ``MasonClient.__init__``). This mirrors ``wrap_api_error``, which passes the upstream
+    message through and only adds a supplemental hint. Here that hint is a single,
+    always-valid next step — ``mason login``, which both authenticates and remembers the
+    profile — plus a note for the one case the SDK message rarely makes obvious: a stray
+    ``DATABRICKS_TOKEN`` in the environment silently overrides profile auth. That token
+    check is a structural environment probe, not string matching on the error.
+    """
+    sel = f"--profile {profile}" if profile else "--profile <name>"
+    lead = ""
+    if os.environ.get("DATABRICKS_TOKEN"):
+        lead = (
+            "A DATABRICKS_TOKEN is set and overrides profile auth — `unset DATABRICKS_TOKEN` "
+            "if you meant to use a profile. "
+        )
+    return (
+        f"{lead}Run `mason login {sel}` to authenticate "
+        "(list profiles with `databricks auth profiles`)."
+    )

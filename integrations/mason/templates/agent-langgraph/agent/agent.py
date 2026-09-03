@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
@@ -59,16 +58,10 @@ def _check_databricks_auth() -> None:
     try:
         workspace_client()
     except Exception as e:
-        profile = os.getenv("DATABRICKS_CONFIG_PROFILE")
-        target = (
-            f"profile {profile!r}" if profile else "the DEFAULT profile / DATABRICKS_HOST+TOKEN"
-        )
         raise RuntimeError(
-            f"Databricks auth is not configured — the agent can't call the model. Tried {target}.\n"
-            "Fix one of:\n"
-            "  • set DATABRICKS_CONFIG_PROFILE in .env to a profile from `databricks auth profiles`, or\n"
-            "  • run `databricks auth login --profile <name>` to create one, or\n"
-            "  • set DATABRICKS_HOST and DATABRICKS_TOKEN in .env.\n"
+            "Databricks auth is not configured — the agent can't call the model.\n"
+            "Log in with `mason login --profile <name>`, then set "
+            "DATABRICKS_CONFIG_PROFILE=<name> in .env (or set DATABRICKS_HOST and DATABRICKS_TOKEN).\n"
             f"(underlying error: {e})"
         ) from e
 
