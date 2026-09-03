@@ -1,10 +1,11 @@
 """`mason login` / `logout` — remember an optional Databricks profile.
 
-`login` validates a named profile and persists the selection; the root group falls back
-to it whenever `-p` is omitted. Without a saved profile, the Databricks SDK performs its
-normal default authentication resolution. `logout` removes only Mason's saved selection,
-not the underlying credentials. State lives in a small JSON file under `~/.mason`
-(override the directory with `MASON_CONFIG_HOME`, mainly for tests).
+`login` validates a named profile and persists the selection; when validation fails in an
+interactive terminal, it delegates credential setup to `databricks auth login` and retries.
+The root group falls back to the saved profile whenever `-p` is omitted. Without a saved
+profile, the Databricks SDK performs its normal default authentication resolution. `logout`
+removes only Mason's saved selection, not the underlying credentials. State lives in a small
+JSON file under `~/.mason` (override the directory with `MASON_CONFIG_HOME`, mainly for tests).
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import subprocess
+import sys
 from typing import Optional
 
 import click
@@ -41,6 +44,52 @@ def _save_default_profile(profile: str) -> None:
     path.write_text(json.dumps({"profile": profile}, indent=2) + "\n")
 
 
+def _validate_profile(profile: str) -> tuple[MasonClient, str]:
+    client = MasonClient(profile)
+    return client, client.current_user
+
+
+def _is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _run_databricks_login(profile: str) -> None:
+    command = ["databricks", "auth", "login", "--profile", profile]
+    try:
+        result = subprocess.run(command, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise AgentCliError(
+            "Could not configure Databricks authentication: the `databricks` CLI was not found.",
+            hint=f"Install the Databricks CLI, then retry `mason login --profile {profile}`.",
+        ) from exc
+    if result.returncode != 0:
+        raise AgentCliError(
+            f"`databricks auth login --profile {profile}` failed (exit {result.returncode})."
+        )
+
+
+def _authenticate_profile(profile: str) -> tuple[MasonClient, str]:
+    try:
+        return _validate_profile(profile)
+    except Exception as initial_error:  # noqa: BLE001 - validation may require interactive login
+        if not _is_interactive():
+            raise AgentCliError(
+                f"Could not validate Databricks profile {profile!r}: {initial_error}",
+                hint="Run this command in an interactive terminal so Mason can open "
+                "Databricks login, or authenticate first with "
+                f"`databricks auth login --profile {profile}`.",
+            ) from initial_error
+
+    _run_databricks_login(profile)
+    try:
+        return _validate_profile(profile)
+    except Exception as retry_error:  # noqa: BLE001 - normalize the post-login failure
+        raise AgentCliError(
+            f"Databricks login completed, but profile {profile!r} could not be validated: "
+            f"{retry_error}"
+        ) from retry_error
+
+
 @click.command()
 @click.option(
     "--profile",
@@ -50,15 +99,14 @@ def _save_default_profile(profile: str) -> None:
 )
 @click.pass_obj
 def login(obj, profile) -> None:
-    """Validate a profile's credentials and save it as the default, so later commands can omit -p."""
+    """Authenticate a profile and save it as the default, so later commands can omit -p."""
     profile = profile or obj.profile
     if not profile:
         raise AgentCliError(
             "No profile to save.",
             hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
         )
-    client = MasonClient(profile)
-    user = client.current_user  # round-trips current_user.me(), so a bad profile fails here
+    client, user = _authenticate_profile(profile)
     _save_default_profile(profile)
     if obj.output == "json":
         render.emit_json({"profile": profile, "user": user, "host": client.host})
