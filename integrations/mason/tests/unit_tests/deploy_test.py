@@ -115,6 +115,32 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
+def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        deploy_mod, "_app_url", lambda name, p: "https://myapp-123.databricksapps.com"
+    )
+    captured: dict = {}
+    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda data: captured.update(data))
+
+    class _JsonCtx(_FakeCtx):
+        output = "json"
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_JsonCtx())
+
+    assert result.exit_code == 0, result.output
+    assert captured["url"] == "https://myapp-123.databricksapps.com"
+
+
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
