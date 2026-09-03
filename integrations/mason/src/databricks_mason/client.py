@@ -119,9 +119,8 @@ class MasonClient:
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
                 hint="Select an existing profile with `mason --profile <name> <command>` "
-                "(global options must precede subcommands), or save it with "
-                "`mason login --profile <name>`. If the profile has no valid credentials, "
-                "run `databricks auth login --profile <name>` first.",
+                "(global options must precede subcommands), or authenticate and save it with "
+                "`mason login --profile <name>`.",
             ) from exc
 
     @property

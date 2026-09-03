@@ -1,11 +1,11 @@
 """`mason login` / `logout` — remember an optional Databricks profile.
 
-`login` validates a named profile and persists the selection; when validation fails in an
-interactive terminal, it delegates credential setup to `databricks auth login` and retries.
-The root group falls back to the saved profile whenever `-p` is omitted. Without a saved
-profile, the Databricks SDK performs its normal default authentication resolution. `logout`
-removes only Mason's saved selection, not the underlying credentials. State lives in a small
-JSON file under `~/.mason` (override the directory with `MASON_CONFIG_HOME`, mainly for tests).
+`login` validates a named profile and persists the selection; when credentials are missing or
+rejected in an interactive terminal, it delegates setup to `databricks auth login` and retries.
+The root group falls back to the saved profile whenever `-p` is omitted. Without a saved profile,
+the Databricks SDK performs its normal default authentication resolution. `logout` removes only
+Mason's saved selection, not the underlying credentials. State lives in a small JSON file under
+`~/.mason` (override the directory with `MASON_CONFIG_HOME`, mainly for tests).
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import sys
 from typing import Optional
 
 import click
+from databricks.sdk.errors import Unauthenticated
 
 from databricks_mason import render
 from databricks_mason.client import MasonClient
@@ -56,7 +57,8 @@ def _is_interactive() -> bool:
 def _run_databricks_login(profile: str) -> None:
     command = ["databricks", "auth", "login", "--profile", profile]
     try:
-        result = subprocess.run(command, text=True, check=False)
+        # Keep the child process interactive while preserving stdout for Mason's JSON output.
+        result = subprocess.run(command, text=True, check=False, stdout=sys.stderr)
     except FileNotFoundError as exc:
         raise AgentCliError(
             "Could not configure Databricks authentication: the `databricks` CLI was not found.",
@@ -71,7 +73,7 @@ def _run_databricks_login(profile: str) -> None:
 def _authenticate_profile(profile: str) -> tuple[MasonClient, str]:
     try:
         return _validate_profile(profile)
-    except Exception as initial_error:  # noqa: BLE001 - validation may require interactive login
+    except (AgentCliError, Unauthenticated) as initial_error:
         if not _is_interactive():
             raise AgentCliError(
                 f"Could not validate Databricks profile {profile!r}: {initial_error}",
@@ -79,6 +81,10 @@ def _authenticate_profile(profile: str) -> tuple[MasonClient, str]:
                 "Databricks login, or authenticate first with "
                 f"`databricks auth login --profile {profile}`.",
             ) from initial_error
+    except Exception as validation_error:  # noqa: BLE001 - normalize unexpected API failures
+        raise AgentCliError(
+            f"Could not validate Databricks profile {profile!r}: {validation_error}"
+        ) from validation_error
 
     _run_databricks_login(profile)
     try:

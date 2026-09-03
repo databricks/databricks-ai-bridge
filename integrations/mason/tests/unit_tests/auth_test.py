@@ -88,8 +88,73 @@ def test_login_configures_invalid_profile_then_revalidates(tmp_path, monkeypatch
     assert auth.load_default_profile() == "prof"
     assert mason_client.call_args_list == [mock.call("prof"), mock.call("prof")]
     databricks_login.assert_called_once_with(
-        ["databricks", "auth", "login", "--profile", "prof"], text=True, check=False
+        ["databricks", "auth", "login", "--profile", "prof"],
+        text=True,
+        check=False,
+        stdout=mock.ANY,
     )
+
+
+def test_login_fallback_keeps_json_stdout_clean(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    validated = mock.Mock(current_user="me@example.com", host="https://ws")
+    monkeypatch.setattr(
+        auth,
+        "MasonClient",
+        mock.Mock(side_effect=[auth.AgentCliError("no credentials"), validated]),
+    )
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+
+    def databricks_login(*_args, **kwargs):
+        kwargs["stdout"].write("Databricks browser login output\n")
+        return mock.Mock(returncode=0)
+
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx(output="json"))
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == {
+        "profile": "prof",
+        "user": "me@example.com",
+        "host": "https://ws",
+    }
+    assert "Databricks browser login output" in result.stderr
+
+
+def test_login_reauthenticates_unauthenticated_api_response(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    validated = mock.Mock(current_user="me@example.com", host="https://ws")
+    validate_profile = mock.Mock(
+        side_effect=[auth.Unauthenticated("expired credentials"), (validated, "me@example.com")]
+    )
+    monkeypatch.setattr(auth, "_validate_profile", validate_profile)
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert validate_profile.call_count == 2
+    databricks_login.assert_called_once()
+
+
+def test_login_does_not_reauthenticate_non_auth_validation_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        auth, "_validate_profile", mock.Mock(side_effect=RuntimeError("service unavailable"))
+    )
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    databricks_login = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "service unavailable" in result.output
+    assert auth.load_default_profile() is None
+    databricks_login.assert_not_called()
 
 
 def test_login_does_not_launch_browser_when_noninteractive(tmp_path, monkeypatch):

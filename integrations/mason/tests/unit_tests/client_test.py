@@ -149,7 +149,7 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     assert "`mason --profile <name> <command>`" in hint
     assert "global options must precede subcommands" in hint
     assert "`mason login --profile <name>`" in hint
-    assert "`databricks auth login --profile <name>`" in hint
+    assert "`databricks auth login --profile <name>`" not in hint
 
 
 def test_account_routed_profile_uses_configured_host_and_workspace_header():

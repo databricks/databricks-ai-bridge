@@ -36,10 +36,10 @@ mason login --profile <profile>
 mason sessions stores list
 ```
 
-`mason login` validates existing credentials first. If validation fails in an interactive
-terminal, Mason runs `databricks auth login --profile <profile>`, revalidates the profile,
-and stores the selection in `~/.mason/config.json`. This browser-based setup requires the
-Databricks CLI. In non-interactive environments, authenticate the profile before running
+`mason login` validates existing credentials first. If credentials are missing or rejected in
+an interactive terminal, Mason runs `databricks auth login --profile <profile>`, revalidates the
+profile, and stores the selection in `~/.mason/config.json`. This browser-based setup requires
+the Databricks CLI. In non-interactive environments, authenticate the profile before running
 Mason. `mason logout` forgets the saved selection without revoking the underlying credentials.
 
 If Databricks SDK default authentication is already configured, you can skip `mason login`.
