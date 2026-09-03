@@ -16,6 +16,7 @@ from databricks_mason import (
     workspace_headers,
 )
 from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
+from databricks_mason.runtime import DurableAgentApp, DurableAgentContext
 
 from agent.mcps import build_mcp_servers
 
@@ -25,6 +26,8 @@ from agent.tools import all_tools
 logger = logging.getLogger(__name__)
 
 MODEL = "databricks-gpt-5-2"
+app = DurableAgentApp()
+_RUN_METADATA_KEY = "databricks_mason.run_id"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -94,69 +97,70 @@ async def create_agent_graph(actor: str):
     )
 
 
-def _session_id(request: dict) -> str:
-    """Return the session id derived by the runtime from the Apps routing cookie.
-
-    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
-    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
-    """
-    return str(request["session_id"])
+@app.invoke
+async def invoke(request: dict, context: DurableAgentContext) -> dict:
+    """Translate an invocation payload into LangGraph input and run it to completion."""
+    return await _run_agent(_invocation_input(request), context)
 
 
-def _actor(request: dict) -> str:
-    """The identity that owns this request's memory and session data.
+@app.recover
+async def recover(request: dict, context: DurableAgentContext) -> dict:
+    """Resume the same LangGraph session after the runtime replaces a failed worker."""
+    saver = checkpointer()
+    checkpoint = await saver.aget_tuple(thread_config(context.session_id, context.actor))
+    current_run_checkpointed = bool(
+        checkpoint and checkpoint.metadata.get(_RUN_METADATA_KEY) == context.run_id
+    )
+    agent_input = None if current_run_checkpointed else _invocation_input(request)
+    return await _run_agent(agent_input, context)
 
-    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
-    deployment platform sets); it partitions long-term memory and the durable session store so each
-    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
-    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
-    """
-    return str(request.get("actor") or "agent")
+
+def _invocation_input(request: dict) -> Any:
+    """Translate an invocation payload into LangGraph's native input."""
+    resume = request.get("resume")
+    if resume is not None:
+        return Command(resume=resume)
+    return {"messages": request.get("input") or []}
 
 
-async def invoke_handler(request: dict) -> dict:
-    """Run one turn to completion. Called by the runtime for POST /invocations.
-
-    ``request`` is a dict with an ``input`` list of LangChain message dicts; the returned dict carries
-    the run's new messages (LangChain-native shape) and the ``session_id`` to pass back next turn. If a
-    gated tool needs approval the run pauses: ``output`` then ends with an ``interrupt`` event and
-    ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
-    payload.
-    """
-    request = {**request, "session_id": _session_id(request)}
+async def _run_agent(agent_input: Any, context: DurableAgentContext) -> dict:
+    """Run one turn while the server persists events and attempt state."""
+    tag_session(context.session_id)
     outputs = [
         event
-        async for event in stream_handler(request)
+        async for event in _persisted_agent_events(agent_input, context)
         if event.get("type") in ("message", "interrupt")
     ]
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": request["session_id"],
         "status": "interrupted" if interrupted else "completed",
     }
 
 
-async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
-    """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
-    session_id = _session_id(request)
-    actor = _actor(request)
-    tag_session(session_id)
+async def _persisted_agent_events(
+    agent_input: Any, context: DurableAgentContext
+) -> AsyncGenerator[dict, None]:
+    """Persist framework events before the server delivers or replays them."""
+    async for event in _agent_events(agent_input, context):
+        await context.emit(event)
+        yield event
 
-    agent = await create_agent_graph(actor)
-    # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from
-    # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
-    # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
-    resume = request.get("resume")
-    agent_input = (
-        Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
-    )
 
+async def _agent_events(
+    agent_input: Any, context: DurableAgentContext
+) -> AsyncGenerator[dict, None]:
+    """Translate one LangGraph event stream into the server's JSON event contract."""
+    agent = await create_agent_graph(context.actor)
     async for event in _serialize_events(
         agent.astream(
             input=agent_input,
-            config=thread_config(session_id, actor),
+            config={
+                **thread_config(context.session_id, context.actor),
+                "metadata": {_RUN_METADATA_KEY: context.run_id},
+            },
             stream_mode=["updates", "messages"],
+            durability="sync",
         )
     ):
         yield event

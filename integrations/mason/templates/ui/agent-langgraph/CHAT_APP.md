@@ -1,27 +1,26 @@
 # Mason LangGraph Chat App Overlay
 
-`mason init --framework langgraph` copies this framework-specific overlay after the base
-`agent-langgraph` template (it is included by default; `--disable-chat-app` opts out). It is
-intentionally not a post-generation mutation command.
+`mason init --framework langgraph` copies this overlay after the base template. Use
+`--disable-chat-app` to generate an API-only project.
 
 ## Installed files
 
 - `ui/` contains the zero-build chat client.
 - `runtime/ui.py` serves the assets and exposes demo APIs for memory and sessions.
-- `runtime/main.py` installs the chat routes on the base FastAPI runtime.
+- `runtime/main.py` installs the chat routes on the SDK-provided FastAPI application.
 - `tests/test_demo_ui.py` verifies the browser-facing routes.
 
 ## Behavior
 
-The capability indicators are automatic. Streaming and background reflect the runtime contract;
-Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`. The transport selector is
-the only manual capability choice.
+The capability indicators are automatic. Streaming and background reflect the SDK runtime contract;
+Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`; and Durability reflects
+whether the application is using a persistent runtime store. The transport selector is the only
+manual capability choice.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
-items. The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and
-the application session id; request bodies do not carry `session_id`. Local development uses the
-runtime's `mason-local-session` fallback cookie. TODO: switch to `X-Routing-Key` when Apps supports
-it.
+items. The browser uses the Databricks Apps routing cookie, or the server's local fallback cookie,
+to keep its selected UI session. Programmatic clients must preserve the same cookie; body
+`session_id` values are ignored.
 
 The Sessions card calls `POST /api/session/new` to replace that routing cookie with a fresh UUID and
 start an empty conversation. With a managed Session Store, `GET /api/demo/sessions` lists the most
@@ -32,4 +31,6 @@ local in-memory mode only the current browser session can be listed because ther
 session index.
 
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
-checkpoint fragments remain in Session Store but are never returned to the chat UI.
+checkpoint fragments remain in Session Store but are never returned to the chat UI. Crash recovery
+uses the application's internal durable runtime and the same registered recovery hook as every
+other invocation.

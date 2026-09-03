@@ -76,13 +76,27 @@ class _FakeClient:
         # One page; the store's resource name is an id distinct from its display name (as the real
         # API returns), so resolution must match on display_name, not id.
         return {
-            "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}],
+            "managed_memory_stores": [
+                {
+                    "name": "memory-stores/mem-id-123",
+                    "display_name": "mem",
+                    "storage_backend": {
+                        "backend_id": "projects/databricks-internal-agent-memory-store/branches/production/databases/memory-123"
+                    },
+                }
+            ],
             "next_page_token": "",
         }
 
     def create_memory_store(self, display_name, *, retry_transient=False):
         # Create-if-not-exists is the deploy default; return the same id resolution would find.
-        return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+        return {
+            "name": "memory-stores/mem-id-123",
+            "display_name": display_name,
+            "storage_backend": {
+                "backend_id": "projects/databricks-internal-agent-memory-store/branches/production/databases/memory-123"
+            },
+        }
 
     def get_session_store(self, name):
         return {"session_store_name": name}
@@ -99,6 +113,12 @@ class _FakeCtx:
         return _FakeClient()
 
 
+def _write_langgraph_metadata(source: pathlib.Path) -> None:
+    config = source / ".mason" / "project.toml"
+    config.parent.mkdir()
+    config.write_text('schema_version = 1\nframework = "langgraph"\ntemplate = "agent-langgraph"\n')
+
+
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
@@ -106,6 +126,11 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
 
     calls: list[list[str]] = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -129,6 +154,102 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     # Display name "mem" resolves to store id memory-stores/mem-id-123; the runtime re-adds the
     # `memory-stores/` prefix, so the env var must carry the bare id.
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
+
+
+def test_durability_resources_reuse_session_backend_and_keep_memory_access() -> None:
+    session = deploy_mod.session_store_access.backend("sessions")
+    memory = deploy_mod.memory_store_access.backend("memory-123")
+
+    resources = deploy_mod._durability_resources(session, [session, memory])
+
+    assert [backend.resource_name for backend in resources] == ["postgres", "postgres-memory"]
+    assert resources[0].database_path == session.database_path
+    assert resources[1].database_path == memory.database_path
+
+
+def test_deploy_langgraph_reuses_memory_lakebase_for_durability(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_langgraph_metadata(src)
+    attached = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.durability_store_access,
+        "ensure_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse memory")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: attached.extend(backends) or None,
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    monkeypatch.setattr(deploy_mod, "_grant_store_tables", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--memory", "mem"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(attached) == 1
+    assert attached[0].project == "databricks-internal-agent-memory-store"
+    assert attached[0].database == "memory-123"
+    assert attached[0].resource_name == "postgres"
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == attached[0].endpoint_path
+
+
+def test_deploy_langgraph_provisions_and_attaches_one_durability_backend_before_startup(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_langgraph_metadata(src)
+    selected = deploy_mod.durability_store_access.backend("mason-myapp")
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.durability_store_access,
+        "ensure_backend",
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    assert events[0][1] == [selected]
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == selected.endpoint_path
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
@@ -273,6 +394,11 @@ def test_deploy_injects_store_env_without_actor(tmp_path: pathlib.Path, monkeypa
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
         deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
@@ -395,6 +521,11 @@ def test_deploy_no_create_stores_resolves_memory_by_display_name(
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
     monkeypatch.setattr(
         deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
@@ -418,6 +549,11 @@ def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkey
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
     monkeypatch.setattr(
         deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
@@ -425,7 +561,27 @@ def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkey
     class _CreatingClient(_FakeClient):
         def create_memory_store(self, display_name, *, retry_transient=False):
             created.append(display_name)
-            return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+            return {
+                "name": "memory-stores/mem-id-123",
+                "display_name": display_name,
+                "storage_backend": {
+                    "backend_id": "projects/databricks-internal-agent-memory-store/branches/production/databases/memory-123"
+                },
+            }
+
+        def list_memory_stores(self, page_size=None, page_token=None):
+            return {
+                "managed_memory_stores": [
+                    {
+                        "name": "memory-stores/mem-id-123",
+                        "display_name": "new-mem",
+                        "storage_backend": {
+                            "backend_id": "projects/databricks-internal-agent-memory-store/branches/production/databases/memory-123"
+                        },
+                    }
+                ],
+                "next_page_token": "",
+            }
 
     class _Ctx(_FakeCtx):
         def client(self):
@@ -445,6 +601,11 @@ def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",

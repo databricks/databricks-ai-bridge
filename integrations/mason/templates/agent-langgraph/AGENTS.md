@@ -1,8 +1,8 @@
 # Agent Development Guide
 
-A LangGraph agent backend for Databricks Apps, served from a FastAPI app (no serving
-framework). Local-first: runs with no database and no setup beyond a Databricks auth profile. MLflow
-tracing is optional.
+A LangGraph agent backend for Databricks Apps, served by the SDK-provided
+`DurableAgentApp`. Local-first: runs with no database and no setup beyond a Databricks auth
+profile. MLflow tracing is optional.
 
 See `README.md` for the full run / deploy / client-contract docs. This file is the quick map for
 making changes.
@@ -77,19 +77,18 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
-| Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
+| Change how a request maps to a run | `agent/agent.py` (`invoke` / `recover`) |
 | Change the session checkpointer | `databricks_mason/langgraph/session_store.py` |
-| Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
-| Change the background-run store (make it durable) | `databricks_mason/runtime/background.py` |
+| Add application-specific HTTP routes | register them on `app.asgi_app` |
 | Add a test | `tests/` (hermetic; gate model calls on a workspace profile — see `test_agent.py`) |
 
-`runtime/runtime.py` is **SDK-agnostic** — it wires two generic handlers (`invoke_handler`/`stream_handler`,
-plain `dict -> dict` / `dict -> AsyncGenerator[dict]`) to the endpoints. The agent SDK lives entirely
-behind those handlers in `agent/agent.py`, so the serving layer is the same regardless of SDK.
+`DurableAgentApp` is the public server layer. It delegates execution, heartbeats, claims,
+and event replay to an internal framework-neutral runtime engine that can become a public embedding
+API later. The LangGraph adapter lives behind the registered hooks in `agent/agent.py`.
 
-`databricks_mason.runtime` (from the `databricks-mason` package) holds plumbing (session
-checkpointer, tracing, MCP tool loading, background store), so the template ships only your agent
-code.
+`databricks_mason.runtime` holds the application, internal execution runtime, and shared tracing;
+`databricks_mason.langgraph` holds the session checkpointer and LangGraph-specific helpers. The
+template therefore ships only the agent and a thin startup entry point.
 
 ## How tools register
 
@@ -113,18 +112,19 @@ a file to `agent/tools/`.
   package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`);
   `thread_config(session_id, actor)` partitions by actor — the handler passes the signed-in user
   (`_actor`), so each user's threads stay separate.
-- Background mode is in-memory / single-process — non-durable. The store is `databricks_mason/runtime/background.py`
-  (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
+- Runtime invocation state is in-memory locally. `mason deploy` stores it in exactly one Lakebase
+  database: Session Store first, otherwise Memory Store, otherwise a dedicated `<app>-durability`
+  project. Mason adds only its own schema and tables to the selected database.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
-  `resume` with the same cookie — no runtime change; it rides `/invocations` through the handlers.
-  Durability follows the checkpointer: in-process by default, cross-restart with `AGENT_SESSION_STORE`.
+  `resume` with the same cookie. Runtime recovery is Lakebase-backed after deployment, while the
+  LangGraph checkpoint itself is cross-restart only when `AGENT_SESSION_STORE` is configured.
 
 ## MLflow tracing
 
 Optional. Set both a destination (`MLFLOW_TRACKING_URI` or `MLFLOW_TRACING_DESTINATION`) and an
 experiment (`MLFLOW_EXPERIMENT_ID` or `MLFLOW_EXPERIMENT_NAME`) to enable (`mlflow.langchain.autolog()`);
-leave either half unset to skip. `runtime/runtime.py` opens a per-request span regardless.
+leave either half unset to skip.
 
 ## Quick commands
 
@@ -138,5 +138,5 @@ leave either half unset to skip. `runtime/runtime.py` opens a per-request span r
 
 - The event serialization in `agent/agent.py` (`_serialize_events`) is LangGraph-specific: it turns
   `astream` `updates`/`messages` events into native LangChain-message JSON dicts (and relays
-  `__interrupt__` as an `interrupt` event), without reshaping to another contract. `runtime/runtime.py`
-  is SDK-agnostic.
+  `__interrupt__` as an `interrupt` event), without reshaping to another contract. The application
+  emits these events through its internal SDK-agnostic runtime.

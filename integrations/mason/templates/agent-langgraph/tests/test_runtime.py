@@ -1,22 +1,28 @@
-from collections.abc import AsyncGenerator
-
-from runtime.runtime import build_app
+from databricks_mason.runtime import DurableAgentApp
 
 
-async def _invoke(request: dict) -> dict:
-    return request
+def _app() -> DurableAgentApp:
+    app = DurableAgentApp()
 
+    @app.invoke
+    async def invoke(request, context):
+        return request
 
-async def _stream(request: dict) -> AsyncGenerator[dict, None]:
-    yield request
+    @app.recover
+    async def recover(request, context):
+        return request
+
+    return app
 
 
 def test_invocation_routes_support_local_and_deployed_app_auth_paths() -> None:
-    paths = build_app(_invoke, _stream).openapi()["paths"]
+    paths = _app().asgi_app.openapi()["paths"]
 
     assert paths["/invocations"]["post"]
     assert paths["/api/invocations"]["post"]
-    assert paths["/invocations/{invocation_id}"]["get"]
-    assert paths["/api/invocations/{invocation_id}"]["get"]
+    assert paths["/invocations/{run_id}"]["get"]
+    assert paths["/api/invocations/{run_id}"]["get"]
+    assert paths["/invocations/{run_id}/events"]["get"]
+    assert paths["/api/invocations/{run_id}/events"]["get"]
     assert paths["/health"]["get"]
     assert paths["/api/health"]["get"]

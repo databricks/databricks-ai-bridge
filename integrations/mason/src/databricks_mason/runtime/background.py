@@ -6,7 +6,7 @@ dict in this process, so they do NOT survive a restart and are NOT shared across
 
 TODO: the SDK contract for managing background-run lifecycle isn't finalized. When it lands, replace
 this with a shared durable store (crash recovery, cross-pod resume, surviving the ~120s Apps proxy
-timeout) with the same interface — ``runtime/runtime.py`` only depends on
+timeout) with the same interface — the SDK runtime only depends on
 ``start``/``complete``/``fail``/``get``.
 """
 

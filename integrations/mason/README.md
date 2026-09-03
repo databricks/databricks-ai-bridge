@@ -26,6 +26,12 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+For the SDK-hosted durable agent application, install the runtime extra:
+
+```sh
+pip install 'databricks-mason[runtime]'
+```
+
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
@@ -106,6 +112,51 @@ transport will be replaced by the generated `WorkspaceClient.mason` service when
 is released, without changing this public surface. Deployment, sandbox, tracing, and
 the existing CLI commands remain separate.
 
+## Durable agent application
+
+`databricks_mason.runtime` publicly exposes the application/server layer used by the LangGraph
+template. Its durable execution engine and stores remain internal so the runtime can become a
+separate public embedding API later without coupling applications to today's implementation:
+
+```python
+from databricks_mason.runtime import DurableAgentApp, DurableAgentContext
+
+app = DurableAgentApp()
+
+
+@app.invoke
+async def invoke(payload: dict, context: DurableAgentContext) -> dict:
+    return await run_agent(payload, session_id=context.session_id)
+
+
+@app.recover
+async def recover(payload: dict, context: DurableAgentContext) -> dict:
+    return await resume_agent(payload, session_id=context.session_id)
+
+
+app.run()
+```
+
+The application exposes `POST /invocations`, `GET /invocations/{run_id}`, and
+`GET /invocations/{run_id}/events?after={cursor}`. `run_id`, `background`, and `stream` are
+transport parameters; the Apps routing cookie is the session identifier, so a body `session_id` is
+ignored. All other JSON fields reach the registered hook unchanged. The internal runtime persists
+the payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
+
+Local execution defaults to an in-memory durability store. `mason deploy` gives every generated
+LangGraph application one Lakebase database for runtime durability, chosen in this order:
+
+1. Reuse the configured Session Store's Lakebase database.
+2. Otherwise reuse the configured Memory Store's Lakebase database.
+3. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
+
+Mason adds only its `databricks_mason_runtime` schema and tables to the selected database. If both
+managed stores are configured, runtime durability still uses only the Session Store database; the
+Memory Store database remains a separate app resource only because the managed stores themselves
+currently live in different service-managed Lakebase projects. A replacement worker claims a stale
+heartbeat and calls `recover`; agent checkpoint restoration and idempotent external side effects
+remain the developer's responsibility.
+
 ## Commands
 
 ```text
@@ -135,7 +186,7 @@ mason [-p <profile>] [-o text|json]
     add python       NAME [--source PATH]
     list             [--source PATH]
   deploy       <name> --source PATH [--memory/-m N]
-               [--session/-s N] [--actor-id ID]
+               [--session/-s N]
                [--with-traces C.S] [--no-create-stores]
   deployments  list | get | logs | start | stop | delete
 ```
@@ -219,26 +270,24 @@ uv run start-server
 ```
 
 The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
-and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, the UI-enabled
-`runtime/main.py`, and UI tests.
+and HITL resume UI through the SDK-hosted durable application. The framework-specific overlay adds
+`ui/`, `runtime/ui.py`, the UI-enabled `runtime/main.py`, and UI tests.
 
 For the full deployed demo, connect both managed stores:
 
 ```sh
 mason --profile <profile> deploy mason-agent-demo --source . \
   --session mason-demo-sessions \
-  --memory mason-demo-memory \
-  --actor-id alice
+  --memory mason-demo-memory
 ```
 
 (Missing stores are created automatically; pass `--no-create-stores` to require they already exist.)
 
-The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
-application session id. The browser sends it automatically; API clients must reuse it as a cookie.
-Request bodies never carry `session_id`. A localhost-only `mason-local-session` cookie provides the
-same behavior outside Databricks Apps. TODO: move to `X-Routing-Key` when Apps supports it.
+The browser and programmatic clients preserve the Databricks Apps routing cookie, or a local
+fallback cookie, to keep their session selected. Invocation request bodies do not select sessions.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory
-entry operations. Capability colors are automatic from `/api/demo/config`; only the
-sync/streaming/background transport selector is manual.
+entry operations. Runtime durability, heartbeat recovery, and event replay are provided by the
+internal runtime behind `databricks_mason.runtime.DurableAgentApp`, rather than
+template-owned demo code.
