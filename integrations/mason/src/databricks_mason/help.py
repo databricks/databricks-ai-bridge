@@ -20,7 +20,10 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     ("logout",): ("mason logout",),
     ("init",): ("mason init my-agent",),
     ("dev",): ("mason dev",),
-    ("memory",): ("mason memory stores list", "mason memory entries search --help"),
+    ("memory",): (
+        "mason memory stores create --display-name agent-memory",
+        "mason deploy <agent> --memory agent-memory",
+    ),
     ("memory", "stores"): ("mason memory stores list",),
     ("memory", "stores", "create"): ("mason memory stores create --display-name agent-memory",),
     ("memory", "stores", "list"): ("mason memory stores list",),
