@@ -14,6 +14,7 @@ const elements = {
   memoryMode: document.querySelector("#memory-mode-value"),
   memoryResults: document.querySelector("#memory-results"),
   memoryStatus: document.querySelector("#memory-status"),
+  modelSelect: document.querySelector("#model-select"),
   refreshMemory: document.querySelector("#refresh-memory"),
   newSession: document.querySelector("#new-session"),
   promptInput: document.querySelector("#prompt-input"),
@@ -44,6 +45,7 @@ const state = {
   instanceId: null,
   lastAssistantText: "",
   managedSessionId: "",
+  model: "",
   mode: "streaming",
   pendingInterrupt: null,
   sessionId: "",
@@ -76,6 +78,7 @@ function setBusy(busy, label = "Working") {
   elements.rejectAction.disabled = busy;
   elements.refreshMemory.disabled = busy || !state.config?.memory.enabled;
   elements.newSession.disabled = busy;
+  elements.modelSelect.disabled = busy || elements.modelSelect.options.length <= 1;
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
@@ -316,7 +319,9 @@ function invocationHeaders() {
 }
 
 function invocationPayload(payload) {
-  return { ...payload };
+  // Carry the picker's model so the runtime builds the agent on the selected endpoint. Omit it when
+  // unset so the agent falls back to its configured default.
+  return state.model ? { ...payload, model: state.model } : { ...payload };
 }
 
 async function jsonResponse(response) {
@@ -752,6 +757,21 @@ async function openSession(sessionId) {
   }
 }
 
+function renderModels(models) {
+  const available = models?.available?.length ? models.available : [models?.default].filter(Boolean);
+  state.model = available.includes(state.model) ? state.model : models?.default || available[0] || "";
+  elements.modelSelect.replaceChildren();
+  for (const name of available) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    option.selected = name === state.model;
+    elements.modelSelect.append(option);
+  }
+  // A single choice is informational, not a decision to make.
+  elements.modelSelect.disabled = state.busy || available.length <= 1;
+}
+
 async function loadConfig() {
   try {
     const response = await fetch("/api/demo/config", { cache: "no-store" });
@@ -759,6 +779,7 @@ async function loadConfig() {
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
+    renderModels(config.models);
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
@@ -848,6 +869,11 @@ document.querySelectorAll(".mode-button").forEach((button) => {
     state.mode = button.dataset.mode;
     document.querySelectorAll(".mode-button").forEach((item) => item.classList.toggle("active", item === button));
   });
+});
+
+elements.modelSelect.addEventListener("change", () => {
+  state.model = elements.modelSelect.value;
+  addEvent("model.selected", { model: state.model });
 });
 
 document.querySelectorAll("[data-prompt]").forEach((button) => {

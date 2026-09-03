@@ -84,6 +84,48 @@ def _is_deployed() -> bool:
     return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
 
 
+# The task string the Model Serving API reports for chat/completions endpoints; only these can back
+# a conversational agent, so the picker filters the workspace's endpoints down to them.
+_CHAT_TASK = "llm/v1/chat"
+
+
+def _default_model() -> str:
+    """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
+
+    Imported inside the function, not at module load, so the light UI import path doesn't pull in the
+    agent stack (matching ``_local_history`` below).
+    """
+    from agent.agent import MODEL
+
+    return MODEL
+
+
+def _discover_chat_models() -> list[str]:
+    """List the workspace's ready chat serving endpoints, the agent's default pinned first.
+
+    Powers the chat UI's model picker. Best-effort: any failure (missing list permission, transient
+    API error) yields just the default so the picker still works. The default is always present and
+    first even if the listing omits it.
+    """
+    default = _default_model()
+    names: list[str] = []
+    try:
+        for endpoint in workspace_client().serving_endpoints.list():
+            if endpoint.task != _CHAT_TASK:
+                continue
+            state = getattr(endpoint.state, "ready", None)
+            if state is not None and getattr(state, "value", state) != "READY":
+                continue
+            if endpoint.name:
+                names.append(endpoint.name)
+    except Exception:
+        names = []
+    # Pin the configured default first and drop duplicates while preserving discovery order.
+    ordered = [default, *(n for n in names if n != default)]
+    seen: set[str] = set()
+    return [n for n in ordered if not (n in seen or seen.add(n))]
+
+
 class _ManagedStateClient:
     def __init__(self) -> None:
         self._workspace = workspace_client()
@@ -276,11 +318,14 @@ def install_ui(app: FastAPI) -> None:
         actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
+        # Off-thread: serving_endpoints.list() is a blocking SDK call.
+        available_models = await asyncio.to_thread(_discover_chat_models)
         return {
             "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
+            "models": {"default": _default_model(), "available": available_models},
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": False},
             "session": {
