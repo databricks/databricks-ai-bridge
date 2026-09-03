@@ -210,8 +210,6 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
   `REQUIRE_APPROVAL` in `agent/agent.py` (see the human-in-the-loop section above); empty the set to
   disable gating.
 - **Add an MCP server:** append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py`.
-  Unavailable servers are logged and omitted for that request, leaving the agent and healthy MCP
-  servers available.
 - **Make history durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the session
   store lives in `databricks_mason/openai/sessions.py`.
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent()`

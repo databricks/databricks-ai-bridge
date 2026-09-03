@@ -1,24 +1,22 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agents import Agent, Runner, RunResultStreaming, RunState
+from agents import Agent, RunResultStreaming, Runner, RunState
 from agents.items import ToolApprovalItem
+from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
+
+from databricks_mason import tag_session, workspace_client
+from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
 
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
-from databricks_mason import tag_session, workspace_client
-from databricks_mason.openai import (
-    configure_tracing,
-    connected_mcp_servers,
-    memory_tools,
-    session_store,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +119,28 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     session_id = _session_id(request)
     tag_session(session_id)
 
-    # Join the manifest's MCP servers (from agent.toml) with hand-declared ones (mcps.py). Servers
-    # that fail to connect or list tools are omitted so one broken integration cannot fail the run.
-    async with connected_mcp_servers(build_mcp_servers()) as mcp:
+    servers = await mcp_servers(build_mcp_servers())
+    async with MCPServerManager(servers) as manager:
+        mcp = []
+        for server in manager.active_servers:
+            # Cache raw tools now; the SDK applies any context-dependent filter during the run.
+            tool_filter = server.tool_filter
+            try:
+                server.tool_filter = None
+                server.cache_tools_list = True
+                async with asyncio.timeout(manager.connect_timeout_seconds):
+                    await server.list_tools()
+            except Exception:
+                logger.warning(
+                    "Failed to list tools from MCP server %r; continuing without it.",
+                    server.name,
+                    exc_info=True,
+                )
+            else:
+                mcp.append(server)
+            finally:
+                server.tool_filter = tool_filter
+
         agent = create_agent(mcp)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn

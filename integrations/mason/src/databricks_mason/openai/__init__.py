@@ -5,21 +5,20 @@ declared in ``agent.toml``, long-term memory tools, and MLflow tracing. Each map
 Agents SDK already has, so migrating an existing agent is a graft, not a rewrite::
 
     from databricks_mason.openai import (
-        connected_mcp_servers,
         session_store,
+        mcp_servers,
         memory_tools,
         configure_tracing,
     )
 
     configure_tracing()
-    async with connected_mcp_servers() as mcp:
-        agent = Agent(
-            name="Agent",
-            model="databricks-gpt-5-2",
-            tools=[*your_tools, *memory_tools()],
-            mcp_servers=mcp,  # healthy agent.toml servers + any you pass
-        )
-        result = await Runner.run(agent, messages, session=session_store(session_id))
+    agent = Agent(
+        name="Agent",
+        model="databricks-gpt-5-2",
+        tools=[*your_tools, *memory_tools()],
+        mcp_servers=await mcp_servers(),  # your agent.toml servers + any you pass
+    )
+    result = await Runner.run(agent, messages, session=session_store(session_id))
 
 These need the agent stack (openai-agents, databricks-openai, mlflow), so they sit behind the
 ``[runtime-openai]`` extra to keep a plain ``databricks-mason`` CLI install light.
@@ -31,7 +30,7 @@ their submodule paths but not re-exported here.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from databricks_mason.openai.mcp import connected_mcp_servers, mcp_servers
+    from databricks_mason.openai.mcp import mcp_servers
     from databricks_mason.openai.memory import memory_tools, recall, remember
     from databricks_mason.openai.sessions import session_store
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
@@ -51,9 +50,7 @@ def configure_tracing() -> None:
 
 
 __all__ = [
-    # Connected, healthy MCP servers from agent.toml (plus any you pass).
-    "connected_mcp_servers",
-    # Unconnected MCP server objects for callers managing their own lifecycle.
+    # MCP servers from agent.toml (plus any you pass) — hand them to Agent(mcp_servers=...).
     "mcp_servers",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
@@ -72,7 +69,6 @@ __all__ = [
 # Re-exports resolved lazily (PEP 562) so importing one submodule (e.g. ``.mcp``) does not eagerly
 # pull in the others' dependencies. ``configure_tracing`` is defined above (binds OpenAI autolog).
 _MODULE_BY_NAME = {
-    "connected_mcp_servers": "databricks_mason.openai.mcp",
     "mcp_servers": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "remember": "databricks_mason.openai.memory",
