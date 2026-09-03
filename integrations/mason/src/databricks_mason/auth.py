@@ -68,9 +68,9 @@ def _run_databricks_login(profile: str, host: Optional[str]) -> None:
         ) from exc
     if result.returncode != 0:
         raise AgentCliError(
-            f"Sign-in failed (`{' '.join(cmd)}` exited {result.returncode}).",
-            hint="Re-run `mason login` and complete the browser sign-in, or pass "
-            "--host <workspace-url> if this is a new profile.",
+            "Sign-in didn't complete.",
+            hint="Re-run `mason login` and finish the browser sign-in, or pass "
+            "--host <workspace-url> if this profile is new.",
         )
 
 
