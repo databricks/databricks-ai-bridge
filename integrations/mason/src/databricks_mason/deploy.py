@@ -36,6 +36,7 @@ _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 # PIP_INDEX_URL; uv reads UV_INDEX_URL / UV_DEFAULT_INDEX — set all three to cover both build paths.
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
+_AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 
 # Mason names every deployment `mason-<name>` so `deployments list` can filter to its own apps.
 _DEPLOYMENT_PREFIX = "mason-"
@@ -431,7 +432,9 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
-        _databricks(["apps", "create", name], obj.profile)
+        result = _databricks(["apps", "create", name], obj.profile, capture=True)
+        old, new = _AGENT_COMPUTE_OUTPUT
+        click.echo((result.stdout or "").replace(old, new), nl=False)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         _wait_for_running(name, obj.profile)
