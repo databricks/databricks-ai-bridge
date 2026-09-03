@@ -5,26 +5,27 @@ from runtime.runtime import build_app
 
 
 class _FakeStateClient:
-    def create_memory_entry(self, request, session_id):
+    def create_memory_entry(self, actor, request, session_id):
         return {
             "name": "memory-stores/store/entries/entry",
             "session_id": session_id,
+            "actor_id": actor,
             **request.model_dump(),
         }
 
-    def list_memory_entries(self, path_prefix=None):
+    def list_memory_entries(self, actor, path_prefix=None):
         return {"managed_memory_entries": [{"path": f"{path_prefix or ''}/profile.md"}]}
 
-    def search_memory_entries(self, request):
+    def search_memory_entries(self, actor, request):
         return {"managed_memory_entries": [{"path": "/profile.md", "content": request.query}]}
 
-    def ensure_session(self, session_id):
-        return {"session_id": session_id, "actor_id": "alice"}
+    def ensure_session(self, actor, session_id):
+        return {"session_id": session_id, "actor_id": actor}
 
     def get_session(self, session_id):
         return {"session_id": session_id, "actor_id": "alice"}
 
-    def list_sessions(self):
+    def list_sessions(self, actor):
         return {
             "sessions": [
                 {
@@ -71,7 +72,7 @@ class _FakeInterrupt:
         self.id = id
 
 
-async def _session_history(session_id):
+async def _session_history(session_id, actor):
     return {
         "session_id": session_id,
         "session_items": [
@@ -85,9 +86,7 @@ async def _session_history(session_id):
 def _client(monkeypatch, *, configured=False, history=False, session_id="routing-session"):
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
-        monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
         monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
-        monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
         monkeypatch.setattr(ui, "_state_client", lambda: _FakeStateClient())
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
@@ -106,6 +105,10 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
+    if configured:
+        # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
+        # unconfigured requests have no header and fall back to the "agent" actor.
+        client.headers["X-Forwarded-Email"] = "alice"
     return client
 
 
@@ -182,14 +185,14 @@ def test_unmanaged_checkpoint_history_route(monkeypatch):
 
 def test_managed_session_list_is_actor_scoped(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
-    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", 'alice "demo"')
     state_client = object.__new__(ui._ManagedStateClient)
     calls = []
     state_client._do = lambda method, path, **kwargs: calls.append((method, path, kwargs)) or {
         "sessions": []
     }
 
-    assert state_client.list_sessions() == {"sessions": []}
+    # The actor (a signed-in user) is escaped into the list filter.
+    assert state_client.list_sessions('alice "demo"') == {"sessions": []}
     assert calls == [
         (
             "GET",
@@ -231,8 +234,6 @@ def test_chat_session_items_exclude_non_message_items():
 async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
     import agent.agent as agent_module
 
-    monkeypatch.delenv("AGENT_SESSION_ACTOR_ID", raising=False)
-
     class Message:
         id = "message-1"
 
@@ -254,16 +255,17 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
             assert config == {
                 "configurable": {
                     "thread_id": "saved-session",
-                    "actor_id": "saved-session",
+                    "actor_id": "alice",
                 }
             }
             return Snapshot()
 
-    async def fake_create_agent_graph():
+    async def fake_create_agent_graph(actor):
+        assert actor == "alice"
         return FakeAgent()
 
     monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
-    result = await ui._checkpoint_history("saved-session")
+    result = await ui._checkpoint_history("saved-session", "alice")
 
     assert result == {
         "session_id": "saved-session",

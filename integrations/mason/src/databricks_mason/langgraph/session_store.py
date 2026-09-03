@@ -74,15 +74,15 @@ def checkpointer() -> BaseCheckpointSaver:
     return _saver
 
 
-def thread_config(session_id: str) -> dict:
+def thread_config(session_id: str, actor: str | None = None) -> dict:
     """Run config that anchors this request to ``session_id``'s conversation thread.
 
     Includes ``actor_id`` because the durable saver maps it onto the Session's actor; it's ignored by
-    the in-memory default. ``AGENT_SESSION_ACTOR_ID`` selects the actor partition; without it, each
-    session id is its own actor for backward compatibility.
+    the in-memory default. ``actor`` partitions the durable store — the caller supplies it (typically
+    the signed-in user), so each user's threads stay separate; it defaults to ``session_id`` (one
+    actor per conversation).
     """
-    actor_id = os.getenv("AGENT_SESSION_ACTOR_ID") or session_id
-    return {"configurable": {"thread_id": session_id, "actor_id": actor_id}}
+    return {"configurable": {"thread_id": session_id, "actor_id": actor or session_id}}
 
 
 class DatabricksSessionStoreSaver(BaseCheckpointSaver[str]):
