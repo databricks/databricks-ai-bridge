@@ -70,6 +70,17 @@ def status_pill(status: Optional[str]) -> Text:
     return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
 
 
+def hyperlink(text: str, url: Optional[str]) -> Text:
+    """A terminal hyperlink (OSC 8): renders `text`, opens `url` on click; plain text if no url.
+
+    Supported terminals show `text` as clickable so the full URL needn't fit on screen; others
+    fall back to the plain text. Use `-o json` for the raw URL where a terminal lacks OSC 8.
+    """
+    if not url:
+        return Text(text)
+    return Text(text, style=f"{ACCENT} underline link {url}")
+
+
 # --- list view ---------------------------------------------------------------
 
 
