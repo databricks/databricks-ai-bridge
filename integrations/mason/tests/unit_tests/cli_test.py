@@ -69,8 +69,9 @@ def test_tools_remove_help_shows_id_and_project_targeting():
     result = CliRunner().invoke(cli.mason, ["tools", "remove", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Usage: mason tools remove [OPTIONS] TOOL_ID" in result.output
+    assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
     assert "--source DIRECTORY" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
     assert "mason tools remove web_search" in result.output
 
 

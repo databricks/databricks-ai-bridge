@@ -112,7 +112,10 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     ("tools", "add", "mcp"): ("mason tools add mcp system.ai.web_search",),
     ("tools", "add", "uc-function"): ("mason tools add uc-function catalog.schema.lookup_ticket",),
     ("tools", "add", "python"): ("mason tools add python lookup-ticket",),
-    ("tools", "remove"): ("mason tools remove web_search",),
+    ("tools", "remove"): (
+        "mason tools remove mcp system.ai.web_search",
+        "mason tools remove web_search",
+    ),
     ("tools", "list"): ("mason tools list",),
 }
 

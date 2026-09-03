@@ -215,6 +215,35 @@ def test_remove_tool_updates_only_the_manifest(tmp_path: pathlib.Path):
     assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
 
 
+def test_remove_mcp_accepts_the_service_from_the_add_command(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    added = runner.invoke(
+        tools,
+        [
+            "add",
+            "mcp",
+            "system.ai.web_search",
+            "--name",
+            "web",
+            "--source",
+            str(project),
+        ],
+        obj=_Ctx(),
+    )
+    assert added.exit_code == 0, added.output
+
+    result = runner.invoke(
+        tools,
+        ["remove", "mcp", "system.ai.web_search", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Removed web" in result.output
+    assert AgentProject.load(project).tools == []
+
+
 def test_remove_tool_is_idempotent_and_reports_json_changes(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()

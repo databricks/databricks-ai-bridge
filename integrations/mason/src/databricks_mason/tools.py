@@ -345,11 +345,32 @@ def list_tools(obj: Any, source: pathlib.Path) -> None:
 
 @tools.command("remove")
 @click.argument("tool_id")
+@click.argument("mcp_service", required=False)
 @_source_option
 @click.pass_obj
-def remove_tool(obj: Any, tool_id: str, source: pathlib.Path) -> None:
+def remove_tool(
+    obj: Any,
+    tool_id: str,
+    mcp_service: str | None,
+    source: pathlib.Path,
+) -> None:
     """Remove a tool binding from this agent."""
     project = AgentProject.load(source)
+    if mcp_service is not None:
+        if tool_id != "mcp":
+            raise AgentCliError("A second argument is supported only for `tools remove mcp`.")
+        ToolSpec.mcp(_default_id(mcp_service), service=mcp_service)
+        matches = [
+            tool
+            for tool in project.tools
+            if tool.source.kind == "mcp" and tool.source.service == mcp_service
+        ]
+        if len(matches) > 1:
+            raise AgentCliError(
+                f"Multiple bindings use MCP service {mcp_service!r}.",
+                hint="Run `mason tools list`, then remove the intended binding by ID.",
+            )
+        tool_id = matches[0].id if matches else _default_id(mcp_service)
     changed = project.remove_tool(tool_id)
     changed_files = [project.write()] if changed else []
     if getattr(obj, "output", "text") == "json":

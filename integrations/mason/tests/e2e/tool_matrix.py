@@ -389,7 +389,8 @@ class Runner:
                 str(self.mason),
                 "tools",
                 "remove",
-                "broken_mcp",
+                "mcp",
+                "system.ai.missing_service",
                 "--source",
                 str(project),
             ]
