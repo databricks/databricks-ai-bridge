@@ -151,6 +151,15 @@ def test_demo_ui_routes(monkeypatch):
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
+def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "app")
+    monkeypatch.setenv("DATABRICKS_APP_URL", "http://127.0.0.1:8000")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is False
+
+    monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is True
+
+
 def test_unmanaged_local_history_route(monkeypatch):
     client = _client(monkeypatch, history=True, session_id="local-session")
 
