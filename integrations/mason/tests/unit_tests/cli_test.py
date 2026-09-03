@@ -6,6 +6,7 @@ import click
 from click.testing import CliRunner
 
 from databricks_mason import cli
+from databricks_mason import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
@@ -123,3 +124,48 @@ def test_every_command_has_an_example_in_option_help():
         result = runner.invoke(cli.mason, [*path, "--help"])
         assert result.exit_code == 0, (path, result.output)
         assert "Examples:" in result.output, path
+
+
+def test_root_examples_render_inline_comments():
+    # Short commands carry an aligned inline comment so first-time readers know what each does.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "mason init my-agent" in result.output
+    assert "# scaffold a new agent project" in result.output
+    # inline: command and its comment on the same line
+    line = next(ln for ln in result.output.splitlines() if "mason init my-agent" in ln)
+    assert "# scaffold a new agent project" in line
+
+
+def test_inline_comments_are_column_aligned():
+    # Every inline comment in a group starts at the same column (the `#` lines up).
+    result = CliRunner().invoke(cli.mason, ["mcp", "--help"])
+
+    assert result.exit_code == 0, result.output
+    hash_columns = {ln.index("#") for ln in result.output.splitlines() if "  # " in ln}
+    assert len(hash_columns) == 1, result.output
+
+
+def test_long_commands_stack_the_comment_above():
+    # A command too long to inline puts its comment on the preceding line so nothing wraps.
+    epilog = help_mod._example_epilog(
+        (("mason x " + "y" * help_mod._INLINE_COMMENT_MAX, "does a long thing"),)
+    )
+    lines = epilog.splitlines()
+    comment_i = next(i for i, ln in enumerate(lines) if "# does a long thing" in ln)
+    # comment sits on its own line, immediately above the command
+    assert lines[comment_i].strip() == "# does a long thing"
+    assert lines[comment_i + 1].strip().startswith("mason x")
+
+
+def test_group_comment_layout_is_uniform():
+    # If any command in a group must stack, the whole group stacks (no mixed inline/stacked).
+    epilog = help_mod._example_epilog(
+        (
+            ("mason short", "inline-able"),
+            ("mason " + "z" * help_mod._INLINE_COMMENT_MAX, "forces stacking"),
+        )
+    )
+    # no command line carries a trailing inline comment
+    assert not any(ln.strip().startswith("mason") and " # " in ln for ln in epilog.splitlines())
