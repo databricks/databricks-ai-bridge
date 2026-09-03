@@ -267,6 +267,7 @@ h2 {
   min-height: 52px;
   padding: 8px 6px;
   border-bottom: 1px solid var(--line);
+  cursor: help;
 }
 
 .capability-row:last-child {

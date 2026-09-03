@@ -86,11 +86,21 @@ function setBusy(busy, label = "Working") {
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
-function setCapability(element, state) {
-  const degraded = state === "degraded";
-  element.classList.toggle("enabled", state === true);
-  element.classList.toggle("degraded", degraded);
-  element.classList.toggle("disabled", !state);
+// Human-readable name for each orb color, surfaced as a hover tooltip so the
+// green/amber/red states are self-explanatory.
+const CAPABILITY_SUMMARY = { enabled: "Available", degraded: "Limited", disabled: "Unavailable" };
+
+function setCapability(element, state, detail) {
+  const key = state === true ? "enabled" : state === "degraded" ? "degraded" : "disabled";
+  element.classList.toggle("enabled", key === "enabled");
+  element.classList.toggle("degraded", key === "degraded");
+  element.classList.toggle("disabled", key === "disabled");
+  const title = detail ? `${CAPABILITY_SUMMARY[key]} — ${detail}` : CAPABILITY_SUMMARY[key];
+  element.setAttribute("role", "img");
+  element.setAttribute("aria-label", `Status: ${title}`);
+  // Tooltip on the whole row gives a larger, more discoverable hover target than the orb.
+  const row = element.closest(".capability-row");
+  if (row) row.title = title;
 }
 
 function formatJson(value) {
@@ -686,13 +696,34 @@ async function loadConfig() {
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
-    setCapability(elements.streamingStatus, config.streaming.enabled);
-    setCapability(elements.backgroundStatus, config.background.enabled);
+    setCapability(
+      elements.streamingStatus,
+      config.streaming.enabled,
+      config.streaming.enabled
+        ? `Streaming responses over ${config.streaming.transport}.`
+        : "Streaming is disabled for this deployment.",
+    );
+    setCapability(
+      elements.backgroundStatus,
+      config.background.enabled,
+      config.background.enabled
+        ? `Background invocations enabled — ${config.background.durable ? "durable" : "in-process"} run store.`
+        : "Background invocations are disabled.",
+    );
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
+      config.session.managed
+        ? `Connected to Session Store "${config.session.store}" (actor ${config.session.actor}) — durable, shareable session state.`
+        : "Not connected — session state is kept in-process and resets on restart. Connect a Session Store by redeploying with:\nmason deploy --session <name>",
     );
-    setCapability(elements.memoryStatus, config.memory.enabled);
+    setCapability(
+      elements.memoryStatus,
+      config.memory.enabled,
+      config.memory.enabled
+        ? `Connected to ${config.memory.store} (actor ${config.memory.actor}).`
+        : "Not connected — no long-term memory. Connect a Memory Store by redeploying with:\nmason deploy --memory <name>",
+    );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;
