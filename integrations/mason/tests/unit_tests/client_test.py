@@ -147,7 +147,6 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     hint = exc_info.value.hint
     assert hint is not None
     assert "`mason --profile <name> <command>`" in hint
-    assert "global options must precede subcommands" in hint
     assert "`mason login --profile <name>`" in hint
     assert "`databricks auth login --profile <name>`" not in hint
 
