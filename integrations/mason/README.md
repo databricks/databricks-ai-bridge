@@ -38,11 +38,13 @@ mason login --profile <profile>
 mason sessions stores list
 ```
 
-`mason login` does not create credentials; it stores the selected profile in
-`~/.mason/config.json`. `mason logout` forgets that selection without revoking the
-underlying credentials. If Databricks SDK default authentication is already configured,
-you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
-Use `--output json` for scripting.
+`mason login` does not create a missing profile; it validates the selected profile and stores it
+in `~/.mason/config.json`. If an existing Databricks CLI OAuth profile has an invalid refresh
+token, an interactive `mason login` automatically runs `databricks auth login` and retries. In
+non-interactive or JSON mode, it reports the command to run instead of starting a browser flow.
+`mason logout` forgets the selection without revoking the underlying credentials. If Databricks
+SDK default authentication is already configured, you can skip `mason login`. You can also pass
+`--profile/-p` for an individual command. Use `--output json` for scripting.
 
 ## Python SDK
 

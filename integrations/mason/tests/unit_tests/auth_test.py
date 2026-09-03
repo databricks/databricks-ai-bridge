@@ -23,10 +23,22 @@ class _Ctx:
 
 
 def _stub_client(monkeypatch, user="me@example.com", host="https://ws"):
+    fake = _fake_client(user=user, host=host)
+    monkeypatch.setattr(auth, "MasonClient", lambda profile: fake)
+
+
+def _fake_client(user="me@example.com", host="https://ws"):
     fake = mock.Mock()
     fake.current_user = user
     fake.host = host
-    monkeypatch.setattr(auth, "MasonClient", lambda profile: fake)
+    return fake
+
+
+def _stale_profile_error():
+    return auth.AgentCliError(
+        "Could not initialize Databricks auth: cannot get access token: "
+        "the refresh token is invalid."
+    )
 
 
 def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
@@ -68,6 +80,102 @@ def test_login_without_any_profile_errors(tmp_path, monkeypatch):
     result = CliRunner().invoke(auth.login, [], obj=_Ctx(profile=None))
     assert result.exit_code != 0
     assert auth.load_default_profile() is None
+
+
+def test_login_reauthenticates_stale_profile_and_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    clients = mock.Mock(side_effect=[_stale_profile_error(), _fake_client()])
+    monkeypatch.setattr(auth, "MasonClient", clients)
+    monkeypatch.setattr(auth, "_can_auto_reauthenticate", lambda output: True)
+    run = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", run)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "dogfood"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert auth.load_default_profile() == "dogfood"
+    assert clients.call_args_list == [mock.call("dogfood"), mock.call("dogfood")]
+    run.assert_called_once_with(
+        ["databricks", "auth", "login", "--profile", "dogfood"],
+        check=False,
+    )
+
+
+def test_login_does_not_reauthenticate_unrelated_auth_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        auth,
+        "MasonClient",
+        mock.Mock(side_effect=auth.AgentCliError("profile has conflicting auth settings")),
+    )
+    monkeypatch.setattr(auth, "_can_auto_reauthenticate", lambda output: True)
+    run = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", run)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "broken"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert auth.load_default_profile() is None
+    run.assert_not_called()
+
+
+def test_login_noninteractive_stale_profile_keeps_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(auth, "MasonClient", mock.Mock(side_effect=_stale_profile_error()))
+    monkeypatch.setattr(auth, "_can_auto_reauthenticate", lambda output: False)
+    run = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", run)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "dogfood"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "databricks auth login --profile dogfood" in result.output
+    assert auth.load_default_profile() is None
+    run.assert_not_called()
+
+
+def test_auto_reauthentication_requires_text_mode_and_tty(monkeypatch):
+    monkeypatch.setattr(auth.sys.stdin, "isatty", lambda: True)
+    assert auth._can_auto_reauthenticate("text") is True
+    assert auth._can_auto_reauthenticate("json") is False
+
+    monkeypatch.setattr(auth.sys.stdin, "isatty", lambda: False)
+    assert auth._can_auto_reauthenticate("text") is False
+
+
+def test_login_does_not_save_profile_when_reauthentication_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    clients = mock.Mock(side_effect=_stale_profile_error())
+    monkeypatch.setattr(auth, "MasonClient", clients)
+    monkeypatch.setattr(auth, "_can_auto_reauthenticate", lambda output: True)
+    monkeypatch.setattr(
+        auth.subprocess,
+        "run",
+        mock.Mock(return_value=mock.Mock(returncode=1)),
+    )
+
+    result = CliRunner().invoke(auth.login, ["--profile", "dogfood"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "could not reauthenticate" in result.output.lower()
+    assert auth.load_default_profile() is None
+    assert clients.call_count == 1
+
+
+def test_login_retries_only_once_after_reauthentication(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    clients = mock.Mock(side_effect=[_stale_profile_error(), _stale_profile_error()])
+    monkeypatch.setattr(auth, "MasonClient", clients)
+    monkeypatch.setattr(auth, "_can_auto_reauthenticate", lambda output: True)
+    run = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", run)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "dogfood"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert auth.load_default_profile() is None
+    assert clients.call_count == 2
+    assert run.call_count == 1
 
 
 def test_logout_clears_saved_profile(tmp_path, monkeypatch):
