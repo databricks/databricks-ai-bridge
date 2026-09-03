@@ -118,8 +118,10 @@ class MasonClient:
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Check your profile (`databricks auth login --profile <name>`) "
-                "or pass --profile.",
+                hint="Select an existing profile with `mason --profile <name> <command>` "
+                "(global options must precede subcommands), or save it with "
+                "`mason login --profile <name>`. If the profile has no valid credentials, "
+                "run `databricks auth login --profile <name>` first.",
             ) from exc
 
     @property

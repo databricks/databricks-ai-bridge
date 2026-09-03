@@ -41,8 +41,9 @@ mason sessions stores list
 `mason login` does not create credentials; it stores the selected profile in
 `~/.mason/config.json`. `mason logout` forgets that selection without revoking the
 underlying credentials. If Databricks SDK default authentication is already configured,
-you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
-Use `--output json` for scripting.
+you can skip `mason login`. You can also pass the global `--profile/-p` option before an
+individual command, for example `mason --profile <profile> mcp list`. Use `--output json`
+for scripting.
 
 ## Python SDK
 
