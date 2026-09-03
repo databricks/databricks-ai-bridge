@@ -665,7 +665,7 @@ h2 {
   color: var(--danger);
 }
 
-.message.streaming .message-content::after {
+.message.streaming:not(.waiting) .message-content::after {
   content: "";
   display: inline-block;
   width: 7px;
@@ -674,6 +674,25 @@ h2 {
   background: var(--accent);
   vertical-align: -2px;
   animation: blink 0.8s infinite;
+}
+
+.message.waiting .message-content {
+  min-width: 48px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.message.waiting .message-content::before {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  content: "";
+  animation: response-spin 0.8s linear infinite;
 }
 
 .approval-panel {
@@ -996,6 +1015,16 @@ h2 {
 @keyframes blink {
   0%, 45% { opacity: 1; }
   46%, 100% { opacity: 0; }
+}
+
+@keyframes response-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message.waiting .message-content::before {
+    animation: none;
+  }
 }
 
 @media (min-width: 1181px) {

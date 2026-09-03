@@ -121,6 +121,8 @@ def test_demo_ui_routes(monkeypatch):
     assert 'id="session-list"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
+    assert "startDraft({ waiting: true })" in app_script.text
+    assert "Waiting for agent response." in app_script.text
     assert "mason dev --memory <store-name>" in app_script.text
     assert "mason deploy <app-name> --source . --memory <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
@@ -129,6 +131,9 @@ def test_demo_ui_routes(monkeypatch):
     assert "session_id: ensureSessionId()" not in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
+    assert ".message.waiting .message-content::before" in styles
+    assert "@keyframes response-spin" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
     assert "scrollbar-gutter: stable" in styles
 
     config = client.get("/api/demo/config").json()
