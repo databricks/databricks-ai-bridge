@@ -86,11 +86,53 @@ function setBusy(busy, label = "Working") {
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
-function setCapability(element, state) {
-  const degraded = state === "degraded";
-  element.classList.toggle("enabled", state === true);
-  element.classList.toggle("degraded", degraded);
-  element.classList.toggle("disabled", !state);
+// Human-readable name for each orb color, surfaced as a hover tooltip so the
+// green/amber/red states are self-explanatory.
+const CAPABILITY_SUMMARY = { enabled: "Available", degraded: "Limited", disabled: "Unavailable" };
+
+function setCapability(element, state, detail, command) {
+  const key = state === true ? "enabled" : state === "degraded" ? "degraded" : "disabled";
+  element.classList.toggle("enabled", key === "enabled");
+  element.classList.toggle("degraded", key === "degraded");
+  element.classList.toggle("disabled", key === "disabled");
+  element.setAttribute("role", "img");
+  element.setAttribute("aria-label", `Status: ${CAPABILITY_SUMMARY[key]}`);
+  const row = element.closest(".capability-row");
+  if (!row) return;
+
+  let tooltip = row.querySelector(".capability-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("span");
+    tooltip.id = `${element.id}-tooltip`;
+    tooltip.className = "capability-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    row.append(tooltip);
+    row.tabIndex = 0;
+    row.setAttribute("aria-describedby", tooltip.id);
+  }
+  tooltip.dataset.state = key;
+  tooltip.replaceChildren();
+
+  const summary = document.createElement("strong");
+  summary.className = "capability-tooltip-status";
+  summary.textContent = CAPABILITY_SUMMARY[key];
+  tooltip.append(summary);
+
+  if (detail) {
+    const description = document.createElement("span");
+    description.className = "capability-tooltip-detail";
+    description.textContent = detail;
+    tooltip.append(description);
+  }
+  if (command) {
+    const guidance = document.createElement("span");
+    guidance.className = "capability-tooltip-guidance";
+    guidance.textContent = "Connect by redeploying:";
+    const commandText = document.createElement("code");
+    commandText.className = "capability-tooltip-command";
+    commandText.textContent = command;
+    tooltip.append(guidance, commandText);
+  }
 }
 
 function formatJson(value) {
@@ -722,13 +764,36 @@ async function loadConfig() {
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
-    setCapability(elements.streamingStatus, config.streaming.enabled);
-    setCapability(elements.backgroundStatus, config.background.enabled);
+    setCapability(
+      elements.streamingStatus,
+      config.streaming.enabled,
+      config.streaming.enabled
+        ? `Streaming responses over ${config.streaming.transport}.`
+        : "Streaming is disabled for this deployment.",
+    );
+    setCapability(
+      elements.backgroundStatus,
+      config.background.enabled,
+      config.background.enabled
+        ? `Background invocations use a ${config.background.durable ? "durable" : "in-process"} run store.`
+        : "Background invocations are disabled.",
+    );
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
+      config.session.managed
+        ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
+        : "Session state is kept in process and resets when the app restarts.",
+      config.session.managed ? null : "mason deploy <deployment-name> --session <store-name>",
     );
-    setCapability(elements.memoryStatus, config.memory.enabled);
+    setCapability(
+      elements.memoryStatus,
+      config.memory.enabled,
+      config.memory.enabled
+        ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
+        : "No long-term memory is connected.",
+      config.memory.enabled ? null : "mason deploy <deployment-name> --memory <store-name>",
+    );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;

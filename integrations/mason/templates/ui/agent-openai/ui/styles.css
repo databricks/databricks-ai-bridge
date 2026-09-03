@@ -260,6 +260,7 @@ h2 {
 }
 
 .capability-row {
+  position: relative;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 10px;
   align-items: center;
@@ -271,6 +272,84 @@ h2 {
 
 .capability-row:last-child {
   border-bottom: 0;
+}
+
+.capability-row:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.capability-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% - 2px);
+  right: 6px;
+  left: 6px;
+  display: grid;
+  gap: 5px;
+  visibility: hidden;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.capability-row .capability-tooltip-status {
+  margin: 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.capability-tooltip[data-state="enabled"] .capability-tooltip-status {
+  color: var(--success);
+}
+
+.capability-tooltip[data-state="degraded"] .capability-tooltip-status {
+  color: var(--warning);
+}
+
+.capability-tooltip[data-state="disabled"] .capability-tooltip-status {
+  color: var(--danger);
+}
+
+.capability-tooltip-detail,
+.capability-tooltip-guidance {
+  display: block;
+}
+
+.capability-tooltip-guidance {
+  margin-top: 2px;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+}
+
+.capability-tooltip .capability-tooltip-command {
+  display: block;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: 0.65rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.capability-row:last-child .capability-tooltip {
+  top: auto;
+  bottom: calc(100% - 2px);
+}
+
+.capability-row:hover .capability-tooltip,
+.capability-row:focus-visible .capability-tooltip {
+  visibility: visible;
+  opacity: 1;
 }
 
 .capability-icon {
