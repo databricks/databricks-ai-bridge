@@ -116,6 +116,33 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
+def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: calls.append((args, kwargs))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    apps_calls = [call for call in calls if call[0][1] in ("create", "deploy")]
+    assert [call[0][1] for call in apps_calls] == ["create", "deploy"]
+    assert all(
+        call[1]["output_replacement"] == ("App compute", "Agent compute") for call in apps_calls
+    )
+    get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])
+    assert "output_replacement" not in get_call[1]
+
+
 def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
