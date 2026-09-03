@@ -1419,6 +1419,14 @@ def _convert_message_to_dict(message: BaseMessage) -> dict:
     # if (name := message.name or message.additional_kwargs.get("name")) is not None:
     #     message_dict["name"] = name
 
+    # Forward an Anthropic prompt-caching breakpoint placed at the message level.
+    # LangChain stores a message-level `cache_control` in `additional_kwargs`. Without
+    # forwarding it here, the breakpoint reaches the endpoint only when it is nested
+    # inside a typed content block, so prompt caching silently never activates for the
+    # other natural placements.
+    if (cache_control := message.additional_kwargs.get("cache_control")) is not None:
+        message_dict["cache_control"] = cache_control
+
     if isinstance(message, ChatMessage):
         return {"role": message.role, **message_dict}
     elif isinstance(message, HumanMessage):
