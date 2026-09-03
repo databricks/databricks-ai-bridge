@@ -48,6 +48,21 @@ def test_ensure_session_store_reuses_on_already_exists():
     client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
     client.get_session_store.return_value = {"session_store_name": "s"}
     assert deploy_mod._ensure_session_store(client, "s") == {"session_store_name": "s"}
+    client.create_session_store.assert_called_once_with("s", retry_transient=True)
+
+
+def test_ensure_memory_store_reuses_on_already_exists():
+    client = mock.Mock()
+    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    client.list_memory_stores.return_value = {
+        "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
+    }
+
+    assert deploy_mod._ensure_memory_store(client, "mem") == {
+        "name": "memory-stores/mem-id-123",
+        "display_name": "mem",
+    }
+    client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
 
 
 class _FakeClient:
@@ -65,14 +80,14 @@ class _FakeClient:
             "next_page_token": "",
         }
 
-    def create_memory_store(self, display_name):
+    def create_memory_store(self, display_name, *, retry_transient=False):
         # Create-if-not-exists is the deploy default; return the same id resolution would find.
         return {"name": "memory-stores/mem-id-123", "display_name": display_name}
 
     def get_session_store(self, name):
         return {"session_store_name": name}
 
-    def create_session_store(self, name):
+    def create_session_store(self, name, *, retry_transient=False):
         return {"session_store_name": name}
 
 
@@ -415,7 +430,7 @@ def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkey
     )
 
     class _CreatingClient(_FakeClient):
-        def create_memory_store(self, display_name):
+        def create_memory_store(self, display_name, *, retry_transient=False):
             created.append(display_name)
             return {"name": "memory-stores/mem-id-123", "display_name": display_name}
 

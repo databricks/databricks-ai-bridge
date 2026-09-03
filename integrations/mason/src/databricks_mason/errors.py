@@ -16,6 +16,12 @@ from rich.text import Text
 # Error codes indicating that a preview API is unavailable in the workspace.
 _PREVIEW_ERROR_CODES = frozenset({"NOT_IMPLEMENTED", "UNIMPLEMENTED", "FEATURE_DISABLED"})
 
+# gRPC-style status codes the backend returns for transient failures (a cancelled or
+# deadline-exceeded RPC, a briefly unavailable service). Shared with the client, which
+# retries these before surfacing them. `client._do` retries; the hint here covers the
+# case where retries are still exhausted.
+TRANSIENT_ERROR_CODES = frozenset({"CANCELLED", "UNAVAILABLE", "DEADLINE_EXCEEDED", "ABORTED"})
+
 # Process-global output mode, set once by the root CLI group. When "json", errors are
 # emitted as a machine-readable JSON object instead of the styled text one-liner, so a
 # script driving `mason -o json` can parse failures instead of scraping human text.
@@ -32,6 +38,10 @@ _PREVIEW_HINT = (
     "These agents/v1 APIs are in preview and gated per workspace. This handler is "
     "not enabled on the target workspace yet — try a different --profile or contact "
     "your workspace administrator."
+)
+
+_TRANSIENT_HINT = (
+    "This is usually a transient backend issue — re-running the command often succeeds."
 )
 
 
@@ -69,6 +79,24 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     hierarchy or version.
     """
     error_code = getattr(exc, "error_code", None)
-    message = str(exc).strip() or exc.__class__.__name__
-    hint = _PREVIEW_HINT if error_code in _PREVIEW_ERROR_CODES else None
+    # A message-less DatabricksError wraps `IOError(None)`, so `str(exc)` is the literal
+    # "None". Treat that (and an empty string) as "no detail" so we surface the error code
+    # instead of a bare `Error [CANCELLED]: None`.
+    detail = str(exc).strip()
+    if detail == "None":
+        detail = ""
+    message = detail or _no_detail_message(error_code) or exc.__class__.__name__
+    if error_code in _PREVIEW_ERROR_CODES:
+        hint = _PREVIEW_HINT
+    elif error_code in TRANSIENT_ERROR_CODES:
+        hint = _TRANSIENT_HINT
+    else:
+        hint = None
     return AgentCliError(message, error_code=error_code, hint=hint)
+
+
+def _no_detail_message(error_code: Optional[str]) -> Optional[str]:
+    """Fallback message when the server returns an error code but no human-readable detail."""
+    if not error_code:
+        return None
+    return f"The server returned {error_code} with no further detail."
