@@ -37,6 +37,10 @@ _SESSION_ACTOR_ENV = "AGENT_SESSION_ACTOR_ID"
 _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 
+# Mason names every deployment `mason-<name>` so `deployments list` can filter to its own apps.
+_DEPLOYMENT_PREFIX = "mason-"
+_MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
+
 
 # --- databricks CLI plumbing (the deployment runtime) -----------------------
 
@@ -52,6 +56,17 @@ def _app_service_principal(name: str, profile: Optional[str]) -> Optional[str]:
         return None
     try:
         return json.loads(result.stdout).get("service_principal_client_id")
+    except json.JSONDecodeError:
+        return None
+
+
+def _app_url(name: str, profile: Optional[str]) -> Optional[str]:
+    """The deployed app's browsable URL, or None if it can't be read."""
+    result = _databricks(["apps", "get", name, "-o", "json"], profile, capture=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout).get("url") or None
     except json.JSONDecodeError:
         return None
 
@@ -80,7 +95,18 @@ def _validate_deployment_name(name: str) -> str:
             hint="Use a non-empty name of letters, digits, and hyphens "
             "(no slashes, spaces, or '..').",
         )
+    if len(name) > _MAX_DEPLOYMENT_NAME_LEN:
+        raise AgentCliError(
+            f"Deployment name {name!r} is too long ({len(name)} > {_MAX_DEPLOYMENT_NAME_LEN}).",
+            hint=f"Databricks app names cap at {_MAX_DEPLOYMENT_NAME_LEN} characters, including the "
+            f"'{_DEPLOYMENT_PREFIX}' prefix Mason adds on deploy.",
+        )
     return name
+
+
+def _prefixed_name(name: str) -> str:
+    """Mason deployments carry a `mason-` prefix so `deployments list` can find only its own apps."""
+    return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
 
 
 def _confirm_destroy(target: str, *, assume_yes: bool) -> None:
@@ -343,9 +369,7 @@ def _grant_store_access(
     "--pip-index-url",
     default=_DEFAULT_PIP_INDEX_URL,
     show_default=True,
-    help="Package index the Apps build installs from. Defaults to public PyPI as a temporary "
-    "workaround: the Apps build environment currently can't reach the internal proxy. Pass an "
-    "empty string to use the build's default index.",
+    help="Base URL of the Python Package Index. Defaults to public PyPI.",
 )
 @click.option(
     "--workspace-path",
@@ -366,7 +390,12 @@ def deploy(
     pip_index_url,
     workspace_path,
 ) -> None:
-    """Deploy an agent: provision its stores, wire them in, and roll out the deployment."""
+    """Deploy an agent: provision its stores, wire them in, and roll out the deployment.
+
+    The app is named `mason-<name>` (Mason adds the prefix if absent); use that full name with the
+    other `mason deployments` verbs. `deployments list` shows only apps carrying this prefix.
+    """
+    name = _prefixed_name(name)
     _validate_deployment_name(name)
     source_dir = pathlib.Path(source)
     client = obj.client()
@@ -428,10 +457,13 @@ def deploy(
                 name, sp, client.current_user, session_store, memory_database, obj.profile
             )
 
+    app_url = _app_url(name, obj.profile)
+
     if obj.output == "json":
         render.emit_json(
             {
                 "deployment": name,
+                "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
                 "store_grant": "skipped"
@@ -442,7 +474,12 @@ def deploy(
         )
         return
 
-    steps = [f"mason deployments logs {name}", f"mason deployments get {name}"]
+    steps: list[str | tuple[str, str]] = [
+        (f"mason deployments get {name}", "Check its status and URL"),
+        (f"mason deployments logs {name}", "Tail its logs"),
+    ]
+    if app_url:
+        steps.insert(0, (f"open {app_url}", "Open the deployed app"))
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
@@ -456,9 +493,11 @@ def deploy(
         )
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
+    fields = {"URL": app_url} if app_url else {}
+    fields.update({"Workspace path": ws_path, **provisioned})
     render.success(
         f"Deployed agent '{name}'",
-        fields={"Workspace path": ws_path, **provisioned},
+        fields=fields,
         next_steps=steps,
     )
 
@@ -482,25 +521,25 @@ def _deployment_status(a: dict) -> Optional[str]:
 @deployments.command("list")
 @click.pass_obj
 def deployments_list(obj) -> None:
-    """List agent deployments in the workspace."""
+    """List Mason agent deployments (apps named `mason-*`) in the workspace."""
     result = _databricks(["apps", "list", "-o", "json"], obj.profile, capture=True)
     data = json.loads(result.stdout or "[]")
     items = data.get("apps", data) if isinstance(data, dict) else data
+    items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)]
     if obj.output == "json":
         render.emit_json(items)
         return
     rows = [
         [
-            field(a, "name"),
+            render.hyperlink(field(a, "name"), field(a, "url")),
             render.status_pill(_deployment_status(a)),
-            field(a, "url"),
             timefmt.relative(field(a, "update_time")),
         ]
         for a in items
     ]
     render.resource_table(
         "Agent Deployments",
-        [("Name", "left"), ("Status", "left"), ("URL", "left"), ("Updated", "left")],
+        [("Name", "left"), ("Status", "left"), ("Updated", "left")],
         rows,
     )
 
@@ -521,7 +560,7 @@ def deployments_get(obj, name) -> None:
         "Agent Deployment",
         field(data, "name") or name,
         {
-            "URL": url,
+            "URL": render.hyperlink(url, url) if url else None,
             "Description": field(data, "description"),
             "Created": timefmt.absolute(field(data, "create_time")),
             "Updated": timefmt.absolute(field(data, "update_time")),

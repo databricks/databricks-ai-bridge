@@ -10,13 +10,13 @@ CommandPath = tuple[str, ...]
 
 _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     (): (
-        "mason login --profile my-workspace",
+        "mason login --profile <profile>",
         "mason init my-agent",
         "cd my-agent",
         "mason dev",
         "mason deploy my-agent",
     ),
-    ("login",): ("mason login --profile my-workspace",),
+    ("login",): ("mason login --profile <profile>",),
     ("logout",): ("mason logout",),
     ("init",): ("mason init my-agent",),
     ("dev",): ("mason dev",),
@@ -90,11 +90,11 @@ _EXAMPLES: dict[CommandPath, tuple[str, ...]] = {
     ("deploy",): ("mason deploy my-agent",),
     ("deployments",): ("mason deployments list",),
     ("deployments", "list"): ("mason deployments list",),
-    ("deployments", "get"): ("mason deployments get my-agent",),
-    ("deployments", "logs"): ("mason deployments logs my-agent",),
-    ("deployments", "start"): ("mason deployments start my-agent",),
-    ("deployments", "stop"): ("mason deployments stop my-agent",),
-    ("deployments", "delete"): ("mason deployments delete my-agent",),
+    ("deployments", "get"): ("mason deployments get mason-my-agent",),
+    ("deployments", "logs"): ("mason deployments logs mason-my-agent",),
+    ("deployments", "start"): ("mason deployments start mason-my-agent",),
+    ("deployments", "stop"): ("mason deployments stop mason-my-agent",),
+    ("deployments", "delete"): ("mason deployments delete mason-my-agent",),
     ("tools",): (
         "mason tools add --help",
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",

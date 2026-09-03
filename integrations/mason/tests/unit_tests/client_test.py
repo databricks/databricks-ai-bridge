@@ -139,6 +139,18 @@ def test_preview_error_is_mapped_with_hint(workspace_client):
         assert mapped.hint is not None
 
 
+@mock.patch("databricks_mason.client._workspace_client", side_effect=RuntimeError("no auth"))
+def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client):
+    with pytest.raises(AgentCliError) as exc_info:
+        MasonClient()
+
+    hint = exc_info.value.hint
+    assert hint is not None
+    assert "`mason --profile <name> <command>`" in hint
+    assert "`mason login --profile <name>`" in hint
+    assert "`databricks auth login --profile <name>`" not in hint
+
+
 def test_account_routed_profile_uses_configured_host_and_workspace_header():
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"

@@ -228,10 +228,16 @@ def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -
         f"Linked traces for '{exp_name}' to {destination}",
         fields={"Experiment": exp_name, "Destination": destination, "View traces": url},
         next_steps=[
-            f"mason dev --with-traces {destination}{exp_flag}",
-            f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
-            f"mason tracing instrument --destination {destination}",
-            f"mason tracing list --experiment {exp_name}",
+            (f"mason dev --with-traces {destination}{exp_flag}", "Run locally with tracing on"),
+            (
+                f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
+                "Deploy with tracing on",
+            ),
+            (
+                f"mason tracing instrument --destination {destination}",
+                "Print the code snippet to trace your own agent",
+            ),
+            (f"mason tracing list --experiment {exp_name}", "List traces once you have some"),
         ],
     )
 

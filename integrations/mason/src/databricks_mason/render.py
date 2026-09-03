@@ -70,6 +70,17 @@ def status_pill(status: Optional[str]) -> Text:
     return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
 
 
+def hyperlink(text: str, url: Optional[str]) -> Text:
+    """A terminal hyperlink (OSC 8): renders `text`, opens `url` on click; plain text if no url.
+
+    Supported terminals show `text` as clickable so the full URL needn't fit on screen; others
+    fall back to the plain text. Use `-o json` for the raw URL where a terminal lacks OSC 8.
+    """
+    if not url:
+        return Text(text)
+    return Text(text, style=f"{ACCENT} underline link {url}")
+
+
 # --- list view ---------------------------------------------------------------
 
 
@@ -174,10 +185,16 @@ def success(
     title: str,
     *,
     fields: Optional[dict[str, Any]] = None,
-    next_steps: Optional[Sequence[str]] = None,
+    next_steps: "Optional[Sequence[str | tuple[str, str]]]" = None,
     con: Optional[Console] = None,
 ) -> None:
-    """A green success panel with optional details and a Next steps list."""
+    """A green success panel with optional details and a Next steps list.
+
+    Each next step is either a ``(command, description)`` pair — the command is highlighted and
+    the description explains what it does — or a bare string for a non-command instruction (e.g.
+    ``"Open http://localhost:8000"``), rendered as plain prose. Commands are shown so they can be
+    copied and run in a terminal.
+    """
     con = con or _stdout
     body: list[RenderableType] = [Text("✓ ", style="green") + Text(title, style="bold")]
 
@@ -190,9 +207,25 @@ def success(
         body.append(grid)
 
     if next_steps:
-        body.append(Text("Next steps", style=f"bold {MUTED}"))
+        has_command = any(isinstance(step, tuple) for step in next_steps)
+        # When any step is a command, define the `$` marker so the convention is self-explanatory.
+        header = Text("Next steps", style=f"bold {MUTED}")
+        if has_command:
+            header += Text("   ($ = run in your terminal)", style=MUTED)
+        body.append(header)
+        # A two-column grid aligns every command's description at the same offset.
+        steps = Table.grid(padding=(0, 2))
+        steps.add_column()
+        steps.add_column(style=MUTED)
         for step in next_steps:
-            body.append(Text("  → ", style=ACCENT) + Text(step))
+            if isinstance(step, tuple):
+                # A `$ ` prompt prefix marks a runnable command (both in accent).
+                command, description = step
+                steps.add_row(Text("$ ", style=ACCENT) + Text(command, style=ACCENT), description)
+            else:
+                # Prose (e.g. "Open <url>") gets a muted bullet, not a command prompt.
+                steps.add_row(Text("• ", style=MUTED) + Text(step), "")
+        body.append(steps)
 
     con.print()
     con.print(Panel(Group(*body), border_style="green", box=box.ROUNDED))

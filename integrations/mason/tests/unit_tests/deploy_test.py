@@ -105,14 +105,41 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     )
 
     assert result.exit_code == 0, result.output
-    ws = "/Workspace/Users/me@example.com/mason_deployments/myapp"
+    # Mason prefixes the app name with `mason-` so `deployments list` can find its own apps.
+    ws = "/Workspace/Users/me@example.com/mason_deployments/mason-myapp"
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
-    assert ["apps", "deploy", "myapp", "--source-code-path", ws] in calls
+    assert ["apps", "deploy", "mason-myapp", "--source-code-path", ws] in calls
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     # Display name "mem" resolves to store id memory-stores/mem-id-123; the runtime re-adds the
     # `memory-stores/` prefix, so the env var must carry the bare id.
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
+
+
+def test_deploy_reports_app_url(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        deploy_mod, "_app_url", lambda name, p: "https://myapp-123.databricksapps.com"
+    )
+    captured: dict = {}
+    monkeypatch.setattr(deploy_mod.render, "emit_json", lambda data: captured.update(data))
+
+    class _JsonCtx(_FakeCtx):
+        output = "json"
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_JsonCtx())
+
+    assert result.exit_code == 0, result.output
+    assert captured["url"] == "https://myapp-123.databricksapps.com"
 
 
 def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path, monkeypatch):
@@ -136,7 +163,7 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     assert sync[:3] == [
         "sync",
         str(src),
-        "/Workspace/Users/me@example.com/mason_deployments/myapp",
+        "/Workspace/Users/me@example.com/mason_deployments/mason-myapp",
     ]
     excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
     assert "agent.toml" not in excluded
@@ -168,10 +195,10 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert ["apps", "create", "myapp"] in calls
+    assert ["apps", "create", "mason-myapp"] in calls
     assert waited["called"], "must wait for the new app to be running before deploying"
     # the wait happens after create and before sync/deploy
-    create_i = calls.index(["apps", "create", "myapp"])
+    create_i = calls.index(["apps", "create", "mason-myapp"])
     sync_i = next(i for i, a in enumerate(calls) if a[:1] == ["sync"])
     assert create_i < sync_i
 

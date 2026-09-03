@@ -26,23 +26,31 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+## Shell completion
+Add this to `~/.zshrc`:
+```sh
+eval "$(_MASON_COMPLETE=zsh_source mason)"
+```
+
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-If you do not already have credentials, authenticate a named profile first. You can
-then ask Mason to validate and remember that profile:
+Ask Mason to authenticate and remember a named profile:
 
 ```sh
-databricks auth login --profile <profile>
 mason login --profile <profile>
 mason sessions stores list
 ```
 
-`mason login` does not create credentials; it stores the selected profile in
-`~/.mason/config.json`. `mason logout` forgets that selection without revoking the
-underlying credentials. If Databricks SDK default authentication is already configured,
-you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
-Use `--output json` for scripting.
+`mason login` validates existing credentials first. If credentials are missing or rejected in
+an interactive terminal, Mason runs `databricks auth login --profile <profile>`, revalidates the
+profile, and stores the selection in `~/.mason/config.json`. This browser-based setup requires
+the Databricks CLI. In non-interactive environments, authenticate the profile before running
+Mason. `mason logout` forgets the saved selection without revoking the underlying credentials.
+
+If Databricks SDK default authentication is already configured, you can skip `mason login`.
+You can also pass the global `--profile/-p` option before an individual command, for example
+`mason --profile <profile> mcp list`. Use `--output json` for scripting.
 
 ## Python SDK
 
@@ -117,7 +125,7 @@ mason sessions items append --help
 For the shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-mason login --profile my-workspace
+mason login --profile <profile>
 mason init my-agent
 cd my-agent
 mason dev

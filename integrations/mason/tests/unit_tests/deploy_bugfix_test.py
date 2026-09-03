@@ -33,6 +33,40 @@ def test_validate_deployment_name_accepts_good():
     assert deploy_mod._validate_deployment_name("mason-agent-1") == "mason-agent-1"
 
 
+def test_validate_deployment_name_rejects_too_long():
+    with pytest.raises(AgentCliError, match="too long"):
+        deploy_mod._validate_deployment_name("mason-" + "a" * 25)  # 31 chars
+
+
+# --- `mason-` deployment prefix + list filtering -----------------------------
+
+
+def test_prefixed_name_adds_prefix_when_absent():
+    assert deploy_mod._prefixed_name("foo") == "mason-foo"
+
+
+def test_prefixed_name_is_idempotent():
+    assert deploy_mod._prefixed_name("mason-foo") == "mason-foo"
+
+
+def test_deployments_list_shows_only_mason_apps(monkeypatch):
+    apps = {"apps": [{"name": "mason-foo"}, {"name": "someone-else-app"}, {"name": "mason-bar"}]}
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps(apps), stderr=""),
+    )
+
+    class _JsonCtx:
+        profile = "prof"
+        output = "json"
+
+    result = CliRunner().invoke(deploy_mod.deployments_list, [], obj=_JsonCtx())
+    assert result.exit_code == 0, result.output
+    names = {a["name"] for a in json.loads(result.output)}
+    assert names == {"mason-foo", "mason-bar"}
+
+
 def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
     called = []
     monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
