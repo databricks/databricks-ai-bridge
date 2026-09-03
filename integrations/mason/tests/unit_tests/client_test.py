@@ -200,6 +200,19 @@ def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     sleep.assert_not_called()
 
 
+@mock.patch("databricks_mason.client.time.sleep")
+@mock.patch("databricks_mason.client.WorkspaceClient")
+def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
+    c, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError):
+        c.pop_session_item("store1", "sid")
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
+
+
 def test_account_routed_profile_uses_configured_host_and_workspace_header():
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"
