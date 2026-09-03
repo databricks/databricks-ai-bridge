@@ -161,7 +161,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             next_steps=[
                 f"Open {base} to chat with your agent",
                 "Edit agent/agent.py to change the model, prompt, or tools, then reload",
-                (f"mason deploy {deploy_name} --source .", "Deploy it to Databricks"),
+                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
     else:
@@ -175,7 +175,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             fields={"Invoke": f"POST {base}/invocations"},
             next_steps=[
                 (sample, "Send a test request"),
-                (f"mason deploy {deploy_name} --source .", "Deploy it to Databricks"),
+                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )
 

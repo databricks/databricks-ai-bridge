@@ -72,8 +72,8 @@ def test_success_next_steps_render_command_and_description():
         con=con,
     )
     out = buf.getvalue()
-    # The header hints the steps are runnable when at least one is a command.
-    assert "run these in your terminal" in out
+    # The header defines the `$` marker when at least one step is a command.
+    assert "$ = run in your terminal" in out
     # Commands get a `$ ` prompt prefix and show their description.
     assert "$ mason init my-agent" in out
     assert "Scaffold a new agent project" in out
@@ -86,7 +86,7 @@ def test_success_prose_only_next_steps_omit_terminal_hint():
     render.success("Done", next_steps=["Set DATABRICKS_CONFIG_PROFILE in .env"], con=con)
     out = buf.getvalue()
     assert "Next steps" in out
-    assert "run these in your terminal" not in out  # no command -> no runnable hint
+    assert "$ = run in your terminal" not in out  # no command -> no marker legend
     assert "Set DATABRICKS_CONFIG_PROFILE in .env" in out
 
 

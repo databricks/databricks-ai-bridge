@@ -259,5 +259,5 @@ def init(
     steps.append(("mason dev", "Run the agent locally"))
     if chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
-    steps.append((f"mason deploy {dest.name} --source {dest}", "Deploy it to Databricks"))
+    steps.append((f"mason deploy {dest.name}", "Deploy it to Databricks (from the project dir)"))
     render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)

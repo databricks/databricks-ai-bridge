@@ -197,8 +197,11 @@ def success(
 
     if next_steps:
         has_command = any(isinstance(step, tuple) for step in next_steps)
-        header = "Next steps · run these in your terminal" if has_command else "Next steps"
-        body.append(Text(header, style=f"bold {MUTED}"))
+        # When any step is a command, define the `$` marker so the convention is self-explanatory.
+        header = Text("Next steps", style=f"bold {MUTED}")
+        if has_command:
+            header += Text("   ($ = run in your terminal)", style=MUTED)
+        body.append(header)
         # A two-column grid aligns every command's description at the same offset.
         steps = Table.grid(padding=(0, 2))
         steps.add_column()
