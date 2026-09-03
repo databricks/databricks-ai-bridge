@@ -18,6 +18,9 @@ class _Client:
     def get_memory_store(self, name):
         return self._store
 
+    def create_memory_store(self, display_name, description=None):
+        return self._store
+
     def list_memory_stores(self, page_size=None, page_token=None):
         return self._page
 
@@ -59,6 +62,15 @@ def test_store_get_renders_timestamps_from_create_time():
     assert result.exit_code == 0, result.output
     # Timestamps render (year present) instead of the em-dash placeholder.
     assert "2026" in result.output
+
+
+def test_store_create_suggests_deploying_with_memory():
+    store = {"name": "memory-stores/abc123", "display_name": "demo"}
+    result = CliRunner().invoke(
+        stores, ["create", "--display-name", "demo"], obj=_Ctx(_Client(store=store))
+    )
+    assert result.exit_code == 0, result.output
+    assert "mason deploy <agent> --memory demo" in result.output
 
 
 def test_store_list_renders_timestamps_from_create_time():
