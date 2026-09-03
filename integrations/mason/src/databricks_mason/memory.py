@@ -152,6 +152,10 @@ def stores_create(obj, display_name, description) -> None:
                 "Add a memory entry for an actor",
             ),
             (f"mason memory stores get {store_id}", "View this store's details"),
+            (
+                f"mason deploy <agent> --memory {display_name}",
+                "Wire this store into a deployment",
+            ),
         ],
     )
 
