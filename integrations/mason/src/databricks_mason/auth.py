@@ -1,10 +1,14 @@
-"""`mason login` / `logout` — remember an optional Databricks profile.
+"""`mason login` / `logout` — authenticate and remember a Databricks profile.
 
-`login` validates a named profile and persists the selection; the root group falls back
-to it whenever `-p` is omitted. Without a saved profile, the Databricks SDK performs its
-normal default authentication resolution. `logout` removes only Mason's saved selection,
-not the underlying credentials. State lives in a small JSON file under `~/.mason`
-(override the directory with `MASON_CONFIG_HOME`, mainly for tests).
+`login` is the only auth command a user needs: it validates the named profile and, if that
+profile has no usable credentials yet, runs the Databricks OAuth sign-in for it (via the
+`databricks` CLI, already required for `dev`/`deploy`) — so there's no separate
+`databricks auth login` step. It then persists the selection; the root group falls back to
+it whenever `-p` is omitted. Without a saved profile, the Databricks SDK performs its normal
+default authentication resolution. `logout` removes only Mason's saved selection, not the
+underlying credentials. Mason's state lives in a small JSON file under `~/.mason` (override
+the directory with `MASON_CONFIG_HOME`, mainly for tests); credentials live in
+`~/.databrickscfg`, exactly as the Databricks CLI writes them.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import subprocess
 from typing import Optional
 
 import click
@@ -41,6 +46,34 @@ def _save_default_profile(profile: str) -> None:
     path.write_text(json.dumps({"profile": profile}, indent=2) + "\n")
 
 
+def _run_databricks_login(profile: str, host: Optional[str]) -> None:
+    """Run `databricks auth login` for a profile, creating/refreshing its credentials.
+
+    Shelling the Databricks CLI (already required for `dev`/`deploy`) lets `mason login`
+    authenticate a user on its own — the browser sign-in and the saved selection happen from
+    one command. Passing `--profile` writes/updates that profile in `~/.databrickscfg`;
+    `--host` is required only when the profile doesn't exist yet (otherwise the CLI reuses the
+    profile's stored host, or prompts for it).
+    """
+    cmd = ["databricks", "auth", "login", "--profile", profile]
+    if host:
+        cmd += ["--host", host]
+    try:
+        result = subprocess.run(cmd, text=True)
+    except FileNotFoundError as exc:
+        raise AgentCliError(
+            "The Databricks CLI is required to sign in but was not found on PATH.",
+            hint="Install it (https://docs.databricks.com/dev-tools/cli/install.html), "
+            "then re-run `mason login`.",
+        ) from exc
+    if result.returncode != 0:
+        raise AgentCliError(
+            f"Sign-in failed (`{' '.join(cmd)}` exited {result.returncode}).",
+            hint="Re-run `mason login` and complete the browser sign-in, or pass "
+            "--host <workspace-url> if this is a new profile.",
+        )
+
+
 @click.command()
 @click.option(
     "--profile",
@@ -48,17 +81,35 @@ def _save_default_profile(profile: str) -> None:
     default=None,
     help="Profile to authenticate with and remember as the default.",
 )
+@click.option(
+    "--host",
+    default=None,
+    help="Workspace URL (e.g. https://<workspace>.cloud.databricks.com). Only needed when "
+    "first creating the profile; an existing profile already knows its host.",
+)
 @click.pass_obj
-def login(obj, profile) -> None:
-    """Validate a profile's credentials and save it as the default, so later commands can omit -p."""
+def login(obj, profile, host) -> None:
+    """Authenticate a profile and save it as the default, so later commands can omit -p.
+
+    This is the only auth command you need: if the profile has no usable credentials yet, the
+    Databricks OAuth sign-in runs for you (no separate `databricks auth login`). An
+    already-authenticated profile is just validated and remembered.
+    """
     profile = profile or obj.profile
     if not profile:
         raise AgentCliError(
-            "No profile to save.",
-            hint="Pass one to remember, e.g. `mason login --profile my-workspace`.",
+            "No profile to log in.",
+            hint="Pass one, e.g. `mason login --profile my-workspace --host https://<workspace>`.",
         )
-    client = MasonClient(profile)
-    user = client.current_user  # round-trips current_user.me(), so a bad profile fails here
+    try:
+        client = MasonClient(profile)
+        # Round-trips current_user.me(), so missing/invalid credentials fail here.
+        user = client.current_user
+    except AgentCliError:
+        # No usable credentials for this profile yet — run the sign-in flow, then validate once.
+        _run_databricks_login(profile, host)
+        client = MasonClient(profile)
+        user = client.current_user
     _save_default_profile(profile)
     if obj.output == "json":
         render.emit_json({"profile": profile, "user": user, "host": client.host})

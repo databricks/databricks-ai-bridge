@@ -29,20 +29,21 @@ pip install 'databricks-mason[tracing]'
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-If you do not already have credentials, authenticate a named profile first. You can
-then ask Mason to validate and remember that profile:
+`mason login` is the only auth command you need: it authenticates the profile — running the
+browser sign-in for you if that profile has no credentials yet — and remembers it as the
+default so later commands can omit `-p`:
 
 ```sh
-databricks auth login --profile <profile>
-mason login --profile <profile>
+mason login --profile <profile> --host https://<workspace>
 mason sessions stores list
 ```
 
-`mason login` does not create credentials; it stores the selected profile in
-`~/.mason/config.json`. `mason logout` forgets that selection without revoking the
-underlying credentials. If Databricks SDK default authentication is already configured,
-you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
-Use `--output json` for scripting.
+Pass `--host` only when first creating a profile; an existing profile already knows its host.
+`mason login` stores the selected profile name in `~/.mason/config.json`, while credentials
+live in `~/.databrickscfg` exactly as the Databricks CLI writes them. `mason logout` forgets
+that selection without revoking the underlying credentials. If Databricks SDK default
+authentication is already configured, you can skip `mason login`; you can also pass
+`--profile/-p` for an individual command. Use `--output json` for scripting.
 
 ## Python SDK
 
@@ -73,7 +74,7 @@ accessors (`store.name`) while remaining plain dicts underneath — so `store["n
 
 ```text
 mason [-p <profile>] [-o text|json]
-  login        [--profile P]
+  login        [--profile P] [--host URL]
   logout
   init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
