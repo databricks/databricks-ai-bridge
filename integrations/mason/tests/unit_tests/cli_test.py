@@ -171,6 +171,8 @@ def test_group_comment_layout_is_uniform():
     )
     # no command line carries a trailing inline comment
     assert not any(ln.strip().startswith("mason") and " # " in ln for ln in epilog.splitlines())
+
+
 def test_memory_search_uses_canonical_page_size_option():
     entries = cli.memory.commands["entries"]
     assert isinstance(entries, click.Group)

@@ -232,6 +232,89 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     assert "`databricks auth login --profile <name>`" not in hint
 
 
+class _TransientError(RuntimeError):
+    error_code = "CANCELLED"
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
+    client, do = _client(workspace_client)
+    do.side_effect = [_TransientError(None), {"session_store_name": "s"}]
+
+    store = client.create_session_store("s", retry_transient=True)
+
+    assert store["session_store_name"] == "s"
+    assert do.call_count == 2
+    sleep.assert_called_once()
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("create_memory_store", ("m",)),
+        ("create_session_store", ("s",)),
+    ],
+)
+def test_create_store_does_not_retry_transient_error_by_default(
+    workspace_client, sleep, method_name, args
+):
+    client, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError):
+        getattr(client, method_name)(*args)
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_do_stops_after_max_attempts(workspace_client, sleep):
+    client, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError) as exc_info:
+        client.list_memory_stores()
+
+    assert do.call_count == 2
+    assert exc_info.value.error_code == "CANCELLED"
+    assert "None" not in exc_info.value.message
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
+    client, do = _client(workspace_client)
+
+    class NotFoundError(RuntimeError):
+        error_code = "NOT_FOUND"
+
+    do.side_effect = NotFoundError("missing")
+
+    with pytest.raises(AgentCliError):
+        client.list_memory_stores()
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
+    client, do = _client(workspace_client)
+    do.side_effect = _TransientError(None)
+
+    with pytest.raises(AgentCliError):
+        client.pop_session_item("store1", "sid")
+
+    assert do.call_count == 1
+    sleep.assert_not_called()
+
+
 def test_account_routed_profile_uses_configured_host_and_workspace_header():
     resolved = mock.Mock()
     resolved.config.host = "https://workspace.example.com"

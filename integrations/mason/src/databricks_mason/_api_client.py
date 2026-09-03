@@ -11,15 +11,22 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
+import time
 from typing import Any, Optional
 
 from databricks.sdk import WorkspaceClient
 
 from databricks_mason import models
-from databricks_mason.errors import AgentCliError, wrap_api_error
+from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
 
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
+
+# Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
+# requests once before surfacing them. Mutating requests must opt in explicitly: their first
+# attempt may have committed even when its response was lost.
+_MAX_ATTEMPTS = 2
+_RETRY_BASE_DELAY_S = 0.2
 
 
 def _query(**kwargs: Any) -> dict[str, Any]:
@@ -141,12 +148,27 @@ class _MasonApiClient:
         self._w.workspace.mkdirs(path)
 
     def _do(
-        self, method: str, path: str, *, query: Optional[dict] = None, body: Optional[dict] = None
+        self,
+        method: str,
+        path: str,
+        *,
+        query: Optional[dict] = None,
+        body: Optional[dict] = None,
+        safe_to_retry: bool = False,
     ) -> Any:
-        try:
-            return self._w.api_client.do(method, path, query=query, body=body)
-        except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
-            raise wrap_api_error(exc) from exc
+        retry_allowed = method == "GET" or safe_to_retry
+        delay = _RETRY_BASE_DELAY_S
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                return self._w.api_client.do(method, path, query=query, body=body)
+            except Exception as exc:  # noqa: BLE001 - normalized to AgentCliError
+                retryable = (
+                    retry_allowed and getattr(exc, "error_code", None) in TRANSIENT_ERROR_CODES
+                )
+                if not retryable or attempt == _MAX_ATTEMPTS:
+                    raise wrap_api_error(exc) from exc
+                time.sleep(delay)
+                delay *= 2
 
     # --- Unity Catalog MCP Services -----------------------------------------
 
@@ -163,10 +185,22 @@ class _MasonApiClient:
     # --- memory stores -------------------------------------------------------
 
     def create_memory_store(
-        self, display_name: str, description: Optional[str] = None
+        self,
+        display_name: str,
+        description: Optional[str] = None,
+        *,
+        retry_transient: bool = False,
     ) -> models.MemoryStore:
         body = _body(display_name=display_name, description=description)
-        return _as(models.MemoryStore, self._do("POST", f"{_BASE}/memory-stores", body=body))
+        return _as(
+            models.MemoryStore,
+            self._do(
+                "POST",
+                f"{_BASE}/memory-stores",
+                body=body,
+                safe_to_retry=retry_transient,
+            ),
+        )
 
     def get_memory_store(self, name: str) -> models.MemoryStore:
         return _as(models.MemoryStore, self._do("GET", f"{_BASE}/{memory_store_path(name)}"))
@@ -288,7 +322,12 @@ class _MasonApiClient:
         )
         return _as(
             models.MemorySearchResult,
-            self._do("POST", f"{_BASE}/{memory_store_path(store)}/entries:search", body=body),
+            self._do(
+                "POST",
+                f"{_BASE}/{memory_store_path(store)}/entries:search",
+                body=body,
+                safe_to_retry=True,
+            ),
         )
 
     def update_memory_entry(
@@ -312,13 +351,22 @@ class _MasonApiClient:
     # --- session stores ------------------------------------------------------
 
     def create_session_store(
-        self, name: str, description: Optional[str] = None, metadata: Optional[dict] = None
+        self,
+        name: str,
+        description: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        *,
+        retry_transient: bool = False,
     ) -> models.SessionStore:
         body = _body(description=description, metadata=metadata)
         return _as(
             models.SessionStore,
             self._do(
-                "POST", f"{_BASE}/session-stores", query={"session_store_name": name}, body=body
+                "POST",
+                f"{_BASE}/session-stores",
+                query={"session_store_name": name},
+                body=body,
+                safe_to_retry=retry_transient,
             ),
         )
 
