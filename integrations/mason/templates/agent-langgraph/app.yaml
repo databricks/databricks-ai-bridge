@@ -2,7 +2,10 @@ command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
 # No env vars are required by default: the app runs the lean backend (in-process checkpointer,
-# tracing off). To enable tracing, long-term memory, or durable state, add the matching entries
+# tracing off). `mason deploy` separately attaches one Lakebase database for runtime invocation
+# durability and injects its internal endpoint setting. It reuses Session Store first, Memory Store
+# second, or provisions a dedicated <app>-durability project. Do not add that internal setting here.
+# To enable tracing, long-term memory, or durable LangGraph checkpoints, add the matching entries
 # below (literal values):
 #
 # env:
@@ -16,7 +19,8 @@ command: ["uv", "run", "start-server"]
 #   # partitioned per signed-in user automatically (see agent/agent.py `_actor`).
 #   - name: AGENT_MEMORY_STORE
 #     value: "<memory-store-id>"
-#   # Durable state: a managed Session Store name → checkpoints persisted via its REST API
-#   # (durable multi-turn + HITL pauses, no DB connection). Access uses the app's service principal.
+#   # Durable LangGraph checkpoints: a managed Session Store name → checkpoints persisted via its
+#   # REST API (durable multi-turn + HITL pauses). Runtime invocation durability is configured
+#   # separately and may reuse this store's underlying Lakebase database.
 #   - name: AGENT_SESSION_STORE
 #     value: "<session-store-name>"

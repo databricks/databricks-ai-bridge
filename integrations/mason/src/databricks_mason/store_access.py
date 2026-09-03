@@ -9,8 +9,8 @@ user), so giving the deployed app's service principal access takes TWO steps:
 With only (1) the SP connects but hits "permission denied" on the tables; with only (2) it can't
 connect at all. Both are best-effort — deploy proceeds and reports if either step can't be applied.
 
-This module holds the store-agnostic mechanics; `session_store_access` and `memory_store_access`
-supply the per-store project/schema/table specifics.
+This module holds the store-agnostic mechanics. Session, memory, and durability modules supply the
+backend-specific project/schema/table details.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from typing import Optional
 import psycopg
 
 from databricks_mason.errors import AgentCliError
+
+_MASON_POSTGRES_RESOURCE_NAMES = frozenset({"postgres", "postgres-memory"})
 
 
 def _databricks(
@@ -101,21 +103,24 @@ def apply_postgres_resources(
 ) -> Optional[str]:
     """Bind each backend's database as a `postgres` app resource in one update.
 
-    `apps update --json` REPLACES the whole resources array, so we must send the complete set:
-    read the app's current resources, drop the ones we manage (matched by name) so re-deploys
-    update rather than duplicate them, keep every other (user-owned) resource, and append ours.
+    The resources update replaces the whole array, so send the complete set: read the app's current
+    resources, drop the names Mason manages so re-deploys update rather than duplicate them, keep
+    every other resource, and put the selected durability backend first. Databricks Apps maps the
+    first Postgres resource to the standard ``PG*`` environment variables.
     Returns None on success or a human-readable reason on failure.
     """
     ours = [b.postgres_resource() for b in backends]
-    our_names = {r["name"] for r in ours}
     preserved = [
         r
         for r in _current_app_resources(app, profile)
-        if isinstance(r, dict) and r.get("name") not in our_names
+        if isinstance(r, dict) and r.get("name") not in _MASON_POSTGRES_RESOURCE_NAMES
     ]
-    payload = {"resources": preserved + ours}
+    payload = {"update_mask": "resources", "app": {"resources": ours + preserved}}
     result = _databricks(
-        ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
+        ["apps", "create-update", app, "--json", json.dumps(payload)],
+        profile,
+        capture=True,
+        check=False,
     )
     if result.returncode == 0:
         return None

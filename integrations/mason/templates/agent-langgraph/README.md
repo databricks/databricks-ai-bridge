@@ -1,15 +1,16 @@
 # Agent — LangGraph (FastAPI)
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
-served from a **FastAPI app** — no serving framework. It runs locally with **no
-database and no setup** — just an auth profile. It speaks LangGraph's **native** shape on both ends:
-`POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus an
-in-memory `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is
-reshaped into another contract.
+served by `databricks_mason.runtime.DurableAgentApp`. It runs locally with **no database and
+no setup** beyond an auth profile. It speaks LangGraph's **native** shape on both ends:
+`POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus a
+`background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is reshaped
+into another contract.
 
-The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, tracing spans,
-background wiring), so the template shows exactly how the agent is served — request and response
-bodies are plain dicts, no wrapper types.
+The public application is a thin HTTP layer over Mason's internal durable runtime engine. The
+application owns routes, SSE framing, browser sessions, and recovery-hook registration; the engine
+owns persisted execution state, heartbeats, claims, and event replay. Only the application surface
+is public for now, leaving the engine available to expose as a standalone runtime library later.
 
 This template is API-first. Call it with `curl` or use it from your own client.
 
@@ -26,21 +27,19 @@ agent/                 # the agent (reasoning plane) — this is what you edit
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
-runtime/               # the HTTP surface — SDK-agnostic; rarely edited
-  runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
-  main.py              #   entry point: loads config, builds the app, runs uvicorn
+runtime/               # thin generated entry point; rarely edited
+  main.py              #   loads config and runs the SDK-provided application
 tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session checkpointer,
-tracing, MCP tool loading, background store) lives in the `databricks-mason` package —
-framework-neutral pieces under `databricks_mason.runtime`, LangGraph-specific ones under
-`databricks_mason.langgraph` — so the template ships only your agent code. `runtime/runtime.py` is the
-SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
-endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
-package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
-`mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (durable application,
+execution runtime, session checkpointer, tracing, and MCP tool loading) lives in the
+`databricks-mason` package. Framework-neutral pieces are under `databricks_mason.runtime`, while
+LangGraph-specific pieces are under `databricks_mason.langgraph`. `agent/agent.py` registers
+framework-specific `@app.invoke` and `@app.recover` hooks without exposing the internal runtime.
+`tools/` is a drop-in package: add a `*.py` with a `@tool` function and it is auto-collected. `mcps.py`
+exposes `build_mcp_servers()` (empty by default — add servers to offer them).
 
 ## Run locally
 
@@ -130,8 +129,9 @@ curl -s -b "$COOKIE_JAR" "$BASE/invocations/inv_..."
 # -> in_progress, completed + output, or failed + error
 ```
 
-Background runs and polling are in-memory and single-process. The routing cookie is required so the
-poll reaches the same replica, but the run itself does not survive a restart.
+Locally, background runs and polling use the in-memory durability store. After `mason deploy`, they
+use the selected Lakebase database, so polling, event replay, and stale-heartbeat recovery work
+across process replacement and replicas.
 
 ### Chat app state APIs
 
@@ -217,8 +217,8 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
-- **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
-  store itself is `databricks_mason/runtime/background.py`).
+- **Add application routes:** register them on `app.asgi_app`, following the chat overlay's
+  `runtime/ui.py`. Mason's durable application and internal runtime stay package-owned.
 
 ## Test
 
@@ -242,8 +242,9 @@ Add `--memory <name> --session <name>` to wire managed state. Mason provisions o
 stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
 session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
 
-`app.yaml` carries the app's start command and env. By default the deployed app is the same lean
-backend: in-process session state, tracing off.
+`app.yaml` carries the app's start command and env. LangGraph checkpoints remain in-process unless a
+Session Store is configured, and tracing remains off unless configured. Runtime invocation state is
+different: every deployed LangGraph app gets one Lakebase durability database automatically.
 
 ### Enable MLflow tracing (optional)
 
@@ -262,10 +263,29 @@ Set neither half → tracing stays off. Examples:
   binding injects `MLFLOW_EXPERIMENT_ID`).
 
 When both halves are present the agent enables MLflow autolog (`mlflow.langchain.autolog()`) and tags
-each trace with the session id. Otherwise it disables tracing outright, so the per-request span
-`runtime/runtime.py` opens has nothing to export and no traces are created.
+each trace with the session id. Otherwise it disables tracing outright and no traces are exported.
 
-### Enable durable state (optional)
+### Runtime durability
+
+Local execution uses an in-memory durability store, so no database is required. `mason deploy`
+selects exactly one Lakebase database for invocation state, background polling, emitted events,
+heartbeats, and recovery:
+
+1. The configured Session Store's Lakebase database, if present.
+2. Otherwise the configured Memory Store's Lakebase database, if present.
+3. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
+
+Mason creates only the `databricks_mason_runtime` schema and its execution/event tables in that
+database. The managed Session and Memory Store services continue to use their own schemas and REST
+APIs. When both stores are configured, runtime durability uses the Session Store database; the
+Memory Store database is still attached separately because the two managed services currently use
+different service-managed Lakebase projects.
+
+Pass `--no-create-stores` to require every selected managed store or dedicated durability project to
+already exist. Mason attaches the durability database before application startup so the App service
+principal creates and owns the Mason schema on first start.
+
+### Durable LangGraph checkpoints (optional)
 
 By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
@@ -279,9 +299,10 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 
 > The saver is adapted from the first-party `databricks_agent_client.langgraph` prototype, over a
 > small vendored REST client (`databricks_mason/runtime/session_store_client.py`) so the template needs no
-> unpublished dependency. Swap both for the published package when it lands. The store must already
-> exist; access uses the caller's normal Databricks auth (the deployed app's service principal, or
-> your profile locally — whichever the Session Store grants).
+> unpublished dependency. Swap both for the published package when it lands. `mason deploy
+> --session <name>` provisions or resolves the store unless `--no-create-stores` is passed. Access
+> uses the caller's normal Databricks auth (the deployed app's service principal, or your profile
+> locally — whichever the Session Store grants).
 
 ## Configuration
 
@@ -291,6 +312,7 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
+| `DATABRICKS_MASON_RUNTIME_ENDPOINT` | _deployed by Mason_ | Internal Lakebase endpoint selected for runtime durability; do not set manually in generated apps |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
@@ -300,7 +322,7 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 
 - **The event serialization in `agent/agent.py` (`_serialize_events`) is LangGraph-specific** — it
   turns LangGraph's native `astream` events into JSON dicts without reshaping them into another
-  contract. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
-  `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`databricks_mason/runtime/background.py`, wired in `runtime/runtime.py`) —
-  non-durable, single-process; see the note under the client contract.
+  contract. The public `DurableAgentApp` delegates those events to an internal,
+  framework-neutral runtime engine.
+- **Background mode follows the runtime store** — in-memory for local development, Lakebase-backed
+  after `mason deploy`.

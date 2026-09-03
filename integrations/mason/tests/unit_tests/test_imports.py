@@ -26,3 +26,12 @@ def test_public_surface() -> None:
     assert set(databricks_mason.__all__) == eager | lazy
     for name in eager:
         assert hasattr(databricks_mason, name)
+
+
+def test_durable_runtime_public_surface_is_application_only() -> None:
+    import databricks_mason.runtime as runtime
+
+    assert "DurableAgentApp" in runtime.__all__
+    assert "DurableAgentContext" in runtime.__all__
+    assert "DurableRuntime" not in runtime.__all__
+    assert "LakebaseDurabilityStore" not in runtime.__all__
