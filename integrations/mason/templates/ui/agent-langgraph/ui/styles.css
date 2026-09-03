@@ -260,6 +260,7 @@ h2 {
 }
 
 .capability-row {
+  position: relative;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 10px;
   align-items: center;
@@ -267,11 +268,46 @@ h2 {
   min-height: 52px;
   padding: 8px 6px;
   border-bottom: 1px solid var(--line);
-  cursor: help;
 }
 
 .capability-row:last-child {
   border-bottom: 0;
+}
+
+.capability-row:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 34%, transparent);
+  outline-offset: 2px;
+}
+
+.capability-tooltip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% - 2px);
+  right: 6px;
+  left: 6px;
+  visibility: hidden;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  white-space: pre-line;
+}
+
+.capability-row:last-child .capability-tooltip {
+  top: auto;
+  bottom: calc(100% - 2px);
+}
+
+.capability-row:hover .capability-tooltip,
+.capability-row:focus-visible .capability-tooltip {
+  visibility: visible;
+  opacity: 1;
 }
 
 .capability-icon {

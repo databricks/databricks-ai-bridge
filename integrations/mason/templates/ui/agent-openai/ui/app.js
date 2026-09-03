@@ -97,10 +97,21 @@ function setCapability(element, state, detail) {
   element.classList.toggle("disabled", key === "disabled");
   const title = detail ? `${CAPABILITY_SUMMARY[key]} — ${detail}` : CAPABILITY_SUMMARY[key];
   element.setAttribute("role", "img");
-  element.setAttribute("aria-label", `Status: ${title}`);
-  // Tooltip on the whole row gives a larger, more discoverable hover target than the orb.
+  element.setAttribute("aria-label", `Status: ${CAPABILITY_SUMMARY[key]}`);
   const row = element.closest(".capability-row");
-  if (row) row.title = title;
+  if (!row) return;
+
+  let tooltip = row.querySelector(".capability-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("span");
+    tooltip.id = `${element.id}-tooltip`;
+    tooltip.className = "capability-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    row.append(tooltip);
+    row.tabIndex = 0;
+    row.setAttribute("aria-describedby", tooltip.id);
+  }
+  tooltip.textContent = title;
 }
 
 function formatJson(value) {
