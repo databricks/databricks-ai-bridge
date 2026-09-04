@@ -61,6 +61,32 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
         configure()
 
 
+def test_configure_tracing_enables_langchain_autolog(monkeypatch):
+    """`configure_tracing()` must turn on LangChain autologging when tracing is configured.
+
+    Regression: the agent has to import ``configure_tracing`` from ``databricks_mason.langgraph``
+    (which binds ``mlflow.langchain.autolog``), not the neutral top-level ``databricks_mason`` one.
+    With the neutral version, tracing switches on but no framework autolog is bound, so the only span
+    ever emitted is the runtime's per-request span - traces arrive with the whole LangGraph subtree
+    (model + tool calls) missing.
+    """
+    import mlflow
+    from mlflow.utils.autologging_utils import autologging_is_disabled
+
+    from agent.agent import configure_tracing
+
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "databricks")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_ID", "0")
+    mlflow.langchain.autolog(disable=True)  # start from a known-disabled state
+    try:
+        configure_tracing()
+        assert not autologging_is_disabled("langchain"), (
+            "configure_tracing() left LangChain autolog disabled - LangGraph/tool spans won't trace"
+        )
+    finally:
+        mlflow.langchain.autolog(disable=True)  # don't leak autolog state into other tests
+
+
 def test_chat_model_forwards_account_routing_header(monkeypatch):
     from agent.agent import _RoutedChatDatabricks
 
