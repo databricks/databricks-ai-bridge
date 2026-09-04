@@ -70,6 +70,26 @@ class DurableExecutionContext:
 DurableExecutor = Callable[[JsonObject, DurableExecutionContext], Awaitable[JsonObject]]
 
 
+@dataclass(frozen=True)
+class DurableAgentContext:
+    """Invocation metadata and durable event emission for an agent callback."""
+
+    run_id: str
+    session_id: str
+    attempt: int
+    _execution_context: DurableExecutionContext = field(repr=False, compare=False)
+
+    @property
+    def is_recovery(self) -> bool:
+        return self.attempt > 1
+
+    async def emit(self, event: JsonObject) -> int:
+        return await self._execution_context.emit(event)
+
+
+AgentHook = Callable[[JsonObject, DurableAgentContext], Awaitable[JsonObject]]
+
+
 class DurabilityStore(Protocol):
     """Persistence contract used by :class:`DurableRuntime`."""
 

@@ -20,15 +20,12 @@ the only manual capability choice.
 The UI reads local history from the agent's in-process session (`SQLiteSession`) and managed history
 from Session Store items. The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky
 routing key and the application session id; request bodies do not carry `session_id`. Local
-development uses the runtime's `mason-local-session` fallback cookie. TODO: switch to `X-Routing-Key`
-when Apps supports it.
+development uses that same cookie, created by the runtime on the first request.
 
 The Sessions card calls `POST /api/session/new` to replace that routing cookie with a fresh UUID and
-start an empty conversation. With a managed Session Store, `GET /api/demo/sessions` lists the most
-recent sessions for the configured actor and each Open action calls
-`POST /api/demo/sessions/{session_id}/open`. Opening a listed session verifies that it belongs to the
-same actor, replaces the routing cookie, and reloads its transcript. In local in-memory mode only the
-current browser session can be listed because there is no shared session index.
+start an empty conversation. The routing session is also the managed-state actor partition, so
+`GET /api/demo/sessions` exposes only the current routing session. Opening a session verifies that it
+belongs to that same partition before reloading its transcript.
 
 Transcript responses include only user, assistant, tool, system, and human-decision message items;
 non-message items remain in Session Store but are never returned to the chat UI.

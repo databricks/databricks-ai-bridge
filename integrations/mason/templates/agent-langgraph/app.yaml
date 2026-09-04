@@ -14,7 +14,7 @@ command: ["uv", "run", "start-server"]
 #   - name: MLFLOW_EXPERIMENT_ID
 #     value: "<experiment-id>"
 #   # Long-term memory tools: a managed memory store ID (registers remember/recall). Memory is
-#   # partitioned per signed-in user automatically (see agent/agent.py `_actor`).
+#   # partitioned by the Apps routing session.
 #   - name: AGENT_MEMORY_STORE
 #     value: "<memory-store-id>"
 #   # Durable LangGraph checkpoints: a managed Session Store name → checkpoints persisted via its

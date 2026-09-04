@@ -17,5 +17,5 @@ def test_invocation_routes_support_local_and_deployed_app_auth_paths() -> None:
     assert paths["/invocations/{run_id}/events"]["get"]
     assert paths["/api/invocations/{run_id}/events"]["get"]
     assert paths["/health"]["get"]
-    assert paths["/api/health"]["get"]
-    assert paths["/api/session/new"]["post"]
+    assert paths["/api/healthz"]["get"]
+    assert "/api/session/new" not in paths

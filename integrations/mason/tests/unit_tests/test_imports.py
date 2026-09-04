@@ -31,8 +31,9 @@ def test_public_surface() -> None:
 
     from databricks_mason import DurableAgentApp
     from databricks_mason.runtime import DurableAgentApp as RuntimeDurableAgentApp
+    from databricks_mason.runtime.app import DurableAgentApp as ModuleDurableAgentApp
 
-    assert DurableAgentApp is RuntimeDurableAgentApp
+    assert DurableAgentApp is RuntimeDurableAgentApp is ModuleDurableAgentApp
 
 
 def test_durable_runtime_public_surface_is_application_only() -> None:

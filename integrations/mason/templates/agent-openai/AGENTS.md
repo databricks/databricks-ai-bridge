@@ -18,11 +18,11 @@ No database needed — conversation state uses an in-process session (`SQLiteSes
 
 ## Sample requests
 
-`input` is a list of message dicts; the reply is `{ "output": [...], "session_id": "..." }` where
-`output` is normalized message dicts (`{role, content, tool_calls?}`). The
-`__Host-databricks-app-router` cookie is both the Apps routing key and application session id; never
-send `session_id` in the JSON body. Use a cookie jar locally so the server's `mason-local-session`
-fallback is reused.
+`input` is a list of message dicts; the reply is `{ "output": [...] }`, where `output` is normalized
+message dictionaries (`{role, content, tool_calls?}`). Every request supplies an idempotency `id`;
+reuse an `id` only when retrying the exact same request. The `__Host-databricks-app-router` cookie is
+both the Apps routing key and application session id; never send `session_id` in the JSON body.
+Local development uses the same cookie, so keep a cookie jar.
 
 The examples below use local `/invocations` routes. Deployed Databricks Apps also expose the same
 handlers under `/api/invocations` so OAuth Bearer-token calls pass through the Apps API gateway.
@@ -34,41 +34,41 @@ curl -s -c "$COOKIE_JAR" http://localhost:8000/health
 # Sync — run a turn to completion
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
+  -d '{"id":"inv_sync_1","input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
 
-# Streaming — SSE frames ending with `data: [DONE]`
+# Streaming — SSE frames end when the connection closes
 curl -sNb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "Count to 3."}], "stream": true}'
+  -d '{"id":"inv_stream_1","input": [{"role": "user", "content": "Count to 3."}], "stream": true}'
 # frames: {"type":"message","message":{...}} (completed) and {"type":"delta","content":"...","id":"..."}
 
-# Background — returns an inv_ id immediately; poll it
+# Background — accepts your id immediately; poll it
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "Do something slow."}], "background": true}'
-# -> {"id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "in_progress"}
-curl -sb "$COOKIE_JAR" http://localhost:8000/invocations/inv_1a2b3c4d5e6f7g8h9i0j1k2l
-# -> {"id": "inv_1a2b3c4d5e6f7g8h9i0j1k2l", "status": "completed", "output": [...], "session_id": "..."}
+  -d '{"id":"inv_background_1","input": [{"role": "user", "content": "Do something slow."}], "background": true}'
+# -> {"id":"inv_background_1","status":"queued","attempt":0}
+curl -sb "$COOKIE_JAR" http://localhost:8000/invocations/inv_background_1
+# -> queued, active, completed + output, or failed + error
 
 # Human-in-the-loop — the gated send_message tool pauses for approval
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
-# -> {"output": [..., {"type":"interrupt","id":"call_...","value":{"action_requests":[...]}}], "session_id":"S", "status":"interrupted"}
+  -d '{"id":"inv_hitl_1","input": [{"role": "user", "content": "Send a message to alice@x.com saying hi. Use send_message."}]}'
+# -> {"output": [..., {"type":"interrupt","id":"call_...","value":{"action_requests":[...]}}], "status":"interrupted"}
 # Resume with the same cookie and a decision (approve | reject):
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"resume": {"decisions": [{"type": "approve"}]}}'
-# -> {"output": [...], "session_id": "S", "status": "completed"}
+  -d '{"id":"inv_hitl_resume_1","resume": {"decisions": [{"type": "approve"}]}}'
+# -> {"output": [...], "status": "completed"}
 # NOTE: paused runs are in-process only — resume on the same process (see README HITL note).
 
 # Multi-turn — reuse the same cookie jar (same process; in-memory session)
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "My name is Alice."}]}'
+  -d '{"id":"inv_turn_1","input": [{"role": "user", "content": "My name is Alice."}]}'
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "What is my name?"}]}'
+  -d '{"id":"inv_turn_2","input": [{"role": "user", "content": "What is my name?"}]}'
 ```
 
 ## Where things live
@@ -104,14 +104,13 @@ add a file to `agent/tools/`.
 - Default: `databricks_mason/openai/sessions.py`'s `session_store()` returns an in-process
   `SQLiteSession` (`:memory:`), cached per session id — no database, multi-turn works in-process.
 - The `__Host-databricks-app-router` cookie is both the Apps routing key and the session id. The
-  runtime injects it into the internal handler request; body `session_id` values are ignored.
-- TODO: replace the cookie with `X-Routing-Key` when Databricks Apps supports it.
+  runtime injects it into the internal handler request; body `session_id` values are rejected.
 - For durable history, set `AGENT_SESSION_STORE` to a managed Session Store name: `session_store()`
   returns a `DatabricksSessionStore` — an Agents SDK `Session` that stores each Responses item via the
   Session Store REST API (no DB connection), so the transcript survives restarts/replicas. Over a
   vendored REST client (`session_store_client.py`); swap for the published package when it lands.
-  `session_store(session_id, actor)` partitions by actor — the handler passes the signed-in user
-  (`_actor`), so each user's threads stay separate.
+  The handler uses the routing session for both `session_id` and `actor_id`, so state is isolated to
+  the current routing session without forwarded-user headers.
 - Runtime invocation state is in-memory locally. `mason deploy` stores it in exactly one Lakebase
   database: Session Store first, otherwise Memory Store, otherwise a dedicated `<app>-durability`
   project. Mason adds only its own schema and tables to the selected database.

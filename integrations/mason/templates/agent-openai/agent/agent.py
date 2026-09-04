@@ -4,19 +4,18 @@ import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agents import Agent, RunResultStreaming, Runner, RunState
+from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.items import ToolApprovalItem
 from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
-from databricks_mason import DurableAgentContext, tag_session, workspace_client
-from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
-
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
+from databricks_mason import DurableAgentContext, tag_session, workspace_client
+from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +70,17 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(actor: str, mcp=None) -> Agent:
+def create_agent(session_id: str, mcp=None) -> Agent:
     """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
 
-    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
-    memory tools' closures (never exposed to the model). See ``_actor``.
+    The Apps routing cookie is the session and memory partition key. It is captured in the memory
+    tools' closures and never exposed to the model.
     """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
         model=MODEL,
-        tools=[*all_tools(), *memory_tools(actor)],
+        tools=[*all_tools(), *memory_tools(session_id)],
         mcp_servers=mcp or [],
     )
 
@@ -105,7 +104,6 @@ async def _run_agent(request: dict, context: DurableAgentContext) -> dict:
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": context.session_id,
         "status": "interrupted" if interrupted else "completed",
     }
 
@@ -146,7 +144,7 @@ async def _agent_events(
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(context.actor, mcp)
+        agent = create_agent(context.session_id, mcp)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
@@ -159,7 +157,7 @@ async def _agent_events(
             result = Runner.run_streamed(
                 agent,
                 request.get("input") or [],
-                session=session_store(context.session_id, context.actor),
+                session=session_store(context.session_id, context.session_id),
             )
 
         async for event in _serialize_events(result, context.session_id):
@@ -180,7 +178,7 @@ def _apply_decisions(session_id: str, resume: dict) -> RunState:
             "different replica loses them; retry the turn."
         )
     decisions = resume.get("decisions") or []
-    for decision, item in zip(decisions, state.get_interruptions()):
+    for decision, item in zip(decisions, state.get_interruptions(), strict=False):
         if decision.get("type") == "approve":
             state.approve(item)
         else:
