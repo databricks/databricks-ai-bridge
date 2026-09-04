@@ -224,6 +224,36 @@ def test_list_falls_back_to_dev_experiment(tmp_path: pathlib.Path):
     assert fake.search_traces.call_args.kwargs["locations"] == ["e-dev"]
 
 
+def test_list_uses_warehouse_only_for_uc_location(tmp_path: pathlib.Path):
+    # Project has a UC schema + warehouse configured. Listing the UC schema uses the warehouse;
+    # listing a managed experiment (the [dev] case) must NOT, or it cold-starts the warehouse.
+    _project(tmp_path, schema="cat.schema", warehouse="wh-1")
+    captured: dict = {}
+
+    def run(args):
+        captured.clear()
+        fake = _fake_mlflow([])
+        fake.get_experiment_by_name.return_value = types.SimpleNamespace(experiment_id="e-dev")
+        with (
+            mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+            mock.patch.object(
+                tracing_mod,
+                "_configure",
+                side_effect=lambda m, p, w: captured.update(warehouse=w),
+            ),
+        ):
+            res = CliRunner().invoke(tracing_mod.tracing_list, args, obj=_Ctx(output="json"))
+        assert res.exit_code == 0, res.output
+
+    # UC schema (the project default) -> warehouse applied
+    run(["--source", str(tmp_path)])
+    assert captured["warehouse"] == "wh-1"
+
+    # managed [dev] experiment via flag -> no warehouse
+    run(["--trace-location", "/Users/me/mason-traces/[dev] app", "--source", str(tmp_path)])
+    assert captured["warehouse"] is None
+
+
 # --- helpers -----------------------------------------------------------------
 
 

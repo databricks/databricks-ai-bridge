@@ -276,10 +276,15 @@ def tracing_list(obj, trace_location, warehouse_id, limit, source) -> None:
         app = pathlib.Path(source).resolve().name
         location = dev_experiment_name(obj.client().current_user, app)
 
+    # A UC schema is queried through a SQL warehouse; a managed experiment (the [dev] case) is not,
+    # so only supply a warehouse for a UC location - otherwise listing dev traces would needlessly
+    # pull in the project's warehouse and cold-start it.
+    warehouse = None
+    if _UC_SCHEMA.match(location):
+        warehouse = warehouse_id or configured_warehouse or os.getenv(TRACES_WAREHOUSE_ENV)
+
     mlflow = _mlflow()
-    _configure(
-        mlflow, obj.profile, warehouse_id or configured_warehouse or os.getenv(TRACES_WAREHOUSE_ENV)
-    )
+    _configure(mlflow, obj.profile, warehouse)
     traces = mlflow.search_traces(
         locations=[_resolve_location(mlflow, location)], max_results=limit, return_type="list"
     )
