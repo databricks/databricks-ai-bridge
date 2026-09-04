@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from enum import Enum
@@ -91,6 +92,11 @@ class SequencePrivilege(str, Enum):
 def _is_branch_resource_path(branch: str) -> bool:
     """Check if branch is a full resource path like 'projects/{id}/branches/{id}'."""
     return branch.startswith("projects/") and "/branches/" in branch
+
+
+def _configured_database() -> str:
+    """Use the database selected by a Databricks App resource when available."""
+    return os.getenv("PGDATABASE") or DEFAULT_DATABASE
 
 
 class _LakebaseBase:
@@ -366,7 +372,7 @@ class _LakebaseBase:
     def _conninfo(self) -> str:
         """Build the connection info string."""
         return (
-            f"dbname={DEFAULT_DATABASE} user={self.username} "
+            f"dbname={_configured_database()} user={self.username} "
             f"host={self.host} port={DEFAULT_PORT} sslmode={DEFAULT_SSLMODE}"
         )
 
@@ -1332,7 +1338,7 @@ class AsyncLakebaseSQLAlchemy(_LakebaseBase):
             username=self.username,
             host=self.host,
             port=DEFAULT_PORT,
-            database=DEFAULT_DATABASE,
+            database=_configured_database(),
         )
 
     def _create_engine(self, **engine_kwargs) -> "AsyncEngine":

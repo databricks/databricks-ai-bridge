@@ -1,0 +1,9 @@
+command: ["python", "-m", "openai_sdk_agent_shared.app"]
+
+env:
+  - name: OPENAI_API_KEY
+    valueFrom: openai-api-key
+  - name: OPENAI_MODEL
+    value: gpt-4.1-mini
+  - name: LAKEBASE_AUTOSCALING_ENDPOINT
+    valueFrom: postgres

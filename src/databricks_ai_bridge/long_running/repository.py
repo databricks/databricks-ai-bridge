@@ -17,6 +17,7 @@ async def create_response(
     *,
     durable: bool = False,
     original_request: dict[str, Any] | None = None,
+    is_streaming: bool = False,
 ) -> None:
     """Insert a new response row.
 
@@ -33,6 +34,7 @@ async def create_response(
                 original_request=(
                     json.dumps(original_request) if original_request is not None else None
                 ),
+                is_streaming=is_streaming,
             )
         )
         await session.commit()
@@ -44,6 +46,7 @@ async def update_response_status(
     *,
     expected_current_status: str | None = None,
     expected_attempt_number: int | None = None,
+    terminal_response: dict[str, Any] | None = None,
 ) -> bool:
     """Update response status. Returns True if a row was updated.
 
@@ -56,6 +59,9 @@ async def update_response_status(
     prevents a stale background task (e.g. a deferred-fail timer that fired
     after another pod claimed the row for resume) from clobbering the new
     owner's in-progress state.
+
+    A *terminal_response* is stored on the response row so polling returns the
+    exact Responses payload without reconstructing it from stream events.
     """
     async with session_scope() as session:
         stmt = update(Response).where(Response.response_id == response_id)
@@ -63,7 +69,10 @@ async def update_response_status(
             stmt = stmt.where(Response.status == expected_current_status)
         if expected_attempt_number is not None:
             stmt = stmt.where(Response.attempt_number == expected_attempt_number)
-        stmt = stmt.values(status=status)
+        values: dict[str, Any] = {"status": status}
+        if terminal_response is not None:
+            values["terminal_response"] = json.dumps(terminal_response)
+        stmt = stmt.values(**values)
         result = await session.execute(stmt)
         await session.commit()
         return result.rowcount > 0
@@ -232,6 +241,8 @@ class ResponseInfo(NamedTuple):
     heartbeat_at: datetime | None
     attempt_number: int
     original_request: dict[str, Any] | None
+    terminal_response: dict[str, Any] | None
+    is_streaming: bool
 
 
 async def get_response(response_id: str) -> ResponseInfo | None:
@@ -248,5 +259,7 @@ async def get_response(response_id: str) -> ResponseInfo | None:
                 row.heartbeat_at,
                 row.attempt_number,
                 json.loads(row.original_request) if row.original_request else None,
+                json.loads(row.terminal_response) if row.terminal_response else None,
+                row.is_streaming,
             )
         return None

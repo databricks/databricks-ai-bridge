@@ -1,0 +1,68 @@
+bundle:
+  name: open_ai_sdk_agent_recovery
+
+variables:
+  lakebase_branch:
+    description: Lakebase branch resource used by the selected recovery target
+  lakebase_database:
+    description: Lakebase database resource used by the selected recovery target
+  openai_secret_scope:
+    description: Secret scope containing the OpenAI API key
+  openai_secret_key:
+    description: Secret key containing the OpenAI API key
+  app_name:
+    description: App name selected by the recovery target
+  app_description:
+    description: App description selected by the recovery target
+  resume_strategy:
+    description: Long-running recovery strategy selected by the bundle target
+  session_schema:
+    description: OpenAI SDK session schema selected by the recovery target
+
+resources:
+  apps:
+    recovery:
+      name: ${var.app_name}
+      description: ${var.app_description}
+      source_code_path: .
+      config:
+        command: ["python", "-m", "openai_sdk_agent_shared.app"]
+        env:
+          - name: RESUME_STRATEGY
+            value: ${var.resume_strategy}
+          - name: OPENAI_API_KEY
+            value_from: openai-api-key
+          - name: OPENAI_MODEL
+            value: gpt-4.1-mini
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: postgres
+          - name: LAKEBASE_SESSION_SCHEMA
+            value: ${var.session_schema}
+      resources:
+        - name: openai-api-key
+          secret:
+            scope: ${var.openai_secret_scope}
+            key: ${var.openai_secret_key}
+            permission: READ
+        - name: postgres
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+targets:
+  event_log:
+    mode: development
+    default: true
+    variables:
+      app_name: openai-event-log-recovery
+      app_description: OpenAI agent with event-log recovery
+      resume_strategy: event_log
+      session_schema: openai_event_log_sessions
+  agent_session:
+    mode: development
+    variables:
+      app_name: openai-agent-session
+      app_description: OpenAI agent with SDK-session recovery
+      resume_strategy: agent_session
+      session_schema: openai_agent_session_sessions

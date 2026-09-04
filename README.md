@@ -24,6 +24,25 @@ For frameworks without dedicated integration packages:
 pip install databricks-ai-bridge
 ```
 
+## Long-running agents
+
+`LongRunningAgentServer` adds Lakebase-backed background execution, heartbeat
+recovery, result persistence, and cursor-based SSE replay to MLflow
+`ResponsesAgent` handlers. `ResumeStrategy.EVENT_LOG` reconstructs recovery
+context from durable events on a fresh agent session;
+`ResumeStrategy.AGENT_SESSION` reopens the same SDK session or checkpoint and
+lets the SDK restore its persistent state. Applications keep normal `@invoke()`
+and `@stream()` handlers and may register an optional `@on_resume()` request
+transformer.
+
+See the recovery cookbooks for the same small durable agent implemented with
+the [OpenAI Agents SDK](./cookbooks/openai-sdk-agent/README.md) and
+[LangGraph](./cookbooks/langgraph-agent/README.md).
+
+```sh
+pip install 'databricks-ai-bridge[agent-server]'
+```
+
 ### Install from source
 
 With https:

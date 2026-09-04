@@ -9,6 +9,7 @@
 
 ### Improvements
 - databricks-openai: `DatabricksOpenAI` and `AsyncDatabricksOpenAI` clients now follow HTTP redirects by default, configurable via the new `follow_redirects` parameter (#445)
+- databricks-ai-bridge: Add event-log and agent-session resume strategies, an optional `@on_resume()` hook, and durable terminal responses to `LongRunningAgentServer`
 
 ### Bug Fixes
 - databricks-ai-bridge: Genie now returns the full answer text aggregated from all text attachments (#432)

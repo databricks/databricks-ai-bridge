@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +15,9 @@ if __import__("sys").version_info < (3, 11):
 pytest.importorskip("fastapi")
 pytest.importorskip("psycopg")
 
+from databricks_ai_bridge.long_running import ResumeContext, ResumeStrategy, on_resume
 from databricks_ai_bridge.long_running.repository import ResponseInfo
+from databricks_ai_bridge.long_running.resume import get_on_resume_function
 from databricks_ai_bridge.long_running.server import (
     LongRunningAgentServer,
     _build_prose_recovery_message,
@@ -29,6 +32,13 @@ from databricks_ai_bridge.long_running.settings import LongRunningSettings
 # ---------------------------------------------------------------------------
 
 MODULE = "databricks_ai_bridge.long_running.server"
+RESUME_MODULE = "databricks_ai_bridge.long_running.resume"
+
+
+@pytest.fixture(autouse=True)
+def reset_on_resume_handler():
+    with patch(f"{RESUME_MODULE}._on_resume_function", None):
+        yield
 
 
 def _make_server(**kwargs):
@@ -45,6 +55,8 @@ def _resp_info(
     heartbeat_at=None,
     attempt_number: int = 1,
     original_request: dict | None = None,
+    terminal_response: dict | None = None,
+    is_streaming: bool = True,
 ) -> ResponseInfo:
     """Build a ResponseInfo with sensible defaults for tests.
 
@@ -61,6 +73,8 @@ def _resp_info(
         heartbeat_at=heartbeat_at,
         attempt_number=attempt_number,
         original_request=original_request,
+        terminal_response=terminal_response,
+        is_streaming=is_streaming,
     )
 
 
@@ -84,6 +98,7 @@ def _mock_span():
 def _mock_validator(server):
     """Patch the server's validator to pass through dicts unchanged."""
     server.validator = MagicMock()
+    server.validator.validate_and_convert_request = MagicMock(side_effect=lambda x: x)
     server.validator.validate_and_convert_result = MagicMock(side_effect=lambda x, **kw: x)
 
 
@@ -237,6 +252,136 @@ class TestStartingAfterValidation:
             assert resp.status_code == 200
 
 
+class TestResumeStrategyValidation:
+    def test_invalid_resume_strategy_is_rejected(self):
+        with pytest.raises(ValueError, match="resume_strategy must be one of"):
+            _make_server(resume_strategy="unknown")
+
+    def test_event_log_recovery_requires_stream_handler(self):
+        from starlette.testclient import TestClient
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch(f"{MODULE}.get_stream_function", return_value=None),
+        ):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                resume_strategy=ResumeStrategy.EVENT_LOG,
+            )
+            response = TestClient(server.app, raise_server_exceptions=False).post(
+                "/responses",
+                json={
+                    "background": True,
+                    "stream": False,
+                    "input": [{"role": "user", "content": "hello"}],
+                },
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Event-log recovery requires a registered @stream() handler."
+        )
+
+    @pytest.mark.asyncio
+    async def test_event_log_recovery_allows_polling_client(self):
+        server = _make_server(resume_strategy=ResumeStrategy.EVENT_LOG)
+        _mock_validator(server)
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "stream": False,
+                "input": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+        async def fake_stream(request_data):
+            yield {"type": "response.output_item.done", "item": {"text": "done"}}
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch(f"{MODULE}.get_stream_function", return_value=fake_stream),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
+        assert mock_background.await_args is not None
+        assert mock_background.await_args.args[1] is False
+
+
+class TestAgentSessionRouting:
+    @pytest.mark.asyncio
+    async def test_background_request_allows_generated_session_key(self):
+        server = _make_server(resume_strategy=ResumeStrategy.AGENT_SESSION)
+        _mock_validator(server)
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "input": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "session_key",
+        [
+            {"context": {"conversation_id": "conversation-1"}},
+            {"custom_inputs": {"session_id": "session-1"}},
+            {"custom_inputs": {"thread_id": "thread-1"}},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_background_request_accepts_supported_session_key(self, session_key):
+        server = _make_server(resume_strategy=ResumeStrategy.AGENT_SESSION)
+        _mock_validator(server)
+
+        request = MagicMock()
+        request.headers = {}
+        request.json = AsyncMock(
+            return_value={
+                "background": True,
+                "input": [{"role": "user", "content": "hello"}],
+                **session_key,
+            }
+        )
+        with (
+            patch(f"{MODULE}.is_db_configured", return_value=True),
+            patch.object(
+                server,
+                "_handle_background_request",
+                new_callable=AsyncMock,
+                return_value={"id": "resp_1", "status": "in_progress"},
+            ) as mock_background,
+        ):
+            response = await server._handle_invocations_request(request)
+
+        assert response == {"id": "resp_1", "status": "in_progress"}
+        mock_background.assert_awaited_once()
+
+
 class TestDeferredMarkFailed:
     @pytest.mark.asyncio
     async def test_marks_response_failed(self):
@@ -270,7 +415,12 @@ class TestDeferredMarkFailed:
             stream_event = args[1]["stream_event"]
             assert stream_event["type"] == "error"
             assert stream_event["error"]["code"] == "task_timeout"
-            mock_update.assert_awaited_once_with("resp_123", "failed", expected_attempt_number=None)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] is None
+            assert (
+                mock_update.await_args.kwargs["terminal_response"]["error"]["code"]
+                == "task_timeout"
+            )
 
     @pytest.mark.asyncio
     async def test_handles_db_error_gracefully(self):
@@ -364,6 +514,30 @@ class TestRetrieveRequest:
             assert result["metadata"] == {"trace_id": "trace_abc"}
 
     @pytest.mark.asyncio
+    async def test_completed_returns_authoritative_terminal_response(self):
+        server = _make_server()
+        persisted = {
+            "id": "resp_123",
+            "status": "completed",
+            "attempt_number": 2,
+            "output": [{"text": "done"}],
+        }
+        with (
+            patch(
+                f"{MODULE}.get_response",
+                new_callable=AsyncMock,
+                return_value=_resp_info("resp_123", "completed", terminal_response=persisted),
+            ),
+            patch(f"{MODULE}.get_messages", new_callable=AsyncMock) as mock_get_messages,
+        ):
+            result = await server._handle_retrieve_request(
+                "resp_123", stream=False, starting_after=0
+            )
+
+        assert result == persisted
+        mock_get_messages.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_stale_run_detection(self):
         with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent", task_timeout_seconds=10.0)
@@ -425,6 +599,42 @@ class TestRetrieveRequest:
 
 
 class TestStreamRetrieve:
+    @pytest.mark.asyncio
+    async def test_in_progress_sequence_zero_is_not_replayed(self):
+        with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
+            server = LongRunningAgentServer("ResponsesAgent", poll_interval_seconds=0.01)
+
+        with (
+            patch(
+                "databricks_ai_bridge.long_running.server.get_response",
+                new_callable=AsyncMock,
+                side_effect=[
+                    _resp_info("resp_123", "in_progress"),
+                    _resp_info("resp_123", "completed"),
+                ],
+            ),
+            patch(
+                "databricks_ai_bridge.long_running.server.get_messages",
+                new_callable=AsyncMock,
+                side_effect=[
+                    [_msg(0, None, {"type": "response.output_item.done", "item": {}})],
+                    [],
+                ],
+            ) as mock_get_messages,
+            patch.object(server, "_try_claim_and_resume", new_callable=AsyncMock),
+        ):
+            events = []
+            async for chunk in server._stream_retrieve("resp_123", starting_after=0):
+                events.append(chunk)
+
+        assert len(events) == 2
+        assert "response.output_item.done" in events[0]
+        assert events[1] == "data: [DONE]\n\n"
+        assert [call.kwargs["after_sequence"] for call in mock_get_messages.await_args_list] == [
+            -1,
+            0,
+        ]
+
     @pytest.mark.asyncio
     async def test_completed_stream(self):
         with patch("databricks_ai_bridge.long_running.server.is_db_configured", return_value=False):
@@ -524,7 +734,14 @@ class TestDoBackgroundStream:
             assert seqs == [0, 1, 2]
             # Verify state tracks final seq
             assert state["seq"] == 3
-            mock_update.assert_awaited_once_with("resp_1", "completed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["terminal_response"] == {
+                "id": "resp_1",
+                "status": "completed",
+                "attempt_number": 1,
+                "output": [],
+            }
 
     @pytest.mark.asyncio
     async def test_calls_transform_stream_event(self):
@@ -652,7 +869,13 @@ class TestDoBackgroundInvoke:
                 assert evt["type"] == "response.output_item.done"
                 assert "item" in evt
             assert state["seq"] == 2
-            mock_update.assert_awaited_once_with("resp_inv", "completed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["terminal_response"]["id"] == "resp_inv"
+            assert mock_update.await_args.kwargs["terminal_response"]["output"] == [
+                {"type": "message", "content": "hello"},
+                {"type": "message", "content": "world"},
+            ]
 
     @pytest.mark.asyncio
     async def test_trace_id_persisted_when_requested(self):
@@ -716,9 +939,10 @@ class TestDoBackgroundInvoke:
             await server._do_background_invoke("resp_sync", {"input": "hi"}, False, state)
 
             assert mock_append.await_count == 1
-            mock_update.assert_awaited_once_with(
-                "resp_sync", "completed", expected_attempt_number=1
-            )
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.args == ("resp_sync", "completed")
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["terminal_response"]["id"] == "resp_sync"
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +1003,13 @@ class TestTaskScope:
             assert evt["error"]["message"] == "something broke"
             assert evt["error"]["code"] == "task_failed"
             assert mock_append.call_args.args[1] == 2  # next_seq
-            mock_update.assert_awaited_once_with("resp_err", "failed", expected_attempt_number=1)
+            assert mock_update.await_args is not None
+            assert mock_update.await_args.kwargs["expected_attempt_number"] == 1
+            assert mock_update.await_args.kwargs["terminal_response"]["error"] == {
+                "message": "something broke",
+                "type": "server_error",
+                "code": "task_failed",
+            }
 
     @pytest.mark.asyncio
     async def test_exception_falls_back_to_deferred_on_db_failure(self):
@@ -904,6 +1134,19 @@ class TestConstructorParams:
         assert server._db_project is None
         assert server._db_branch is None
 
+    def test_resume_strategy_defaults_to_event_log(self):
+        server = _make_server()
+        assert server.resume_strategy is ResumeStrategy.EVENT_LOG
+
+    @pytest.mark.parametrize("strategy", list(ResumeStrategy))
+    def test_accepts_resume_strategy_enum(self, strategy):
+        server = _make_server(resume_strategy=strategy)
+        assert server.resume_strategy is strategy
+
+    def test_accepts_resume_strategy_string(self):
+        server = _make_server(resume_strategy="agent_session")
+        assert server.resume_strategy is ResumeStrategy.AGENT_SESSION
+
 
 class TestLifespanPlumbing:
     @pytest.mark.asyncio
@@ -1026,6 +1269,174 @@ class TestBuildProseRecoveryMessage:
         assert "Events:\n[]" in out["content"]
 
 
+class TestOnResume:
+    @pytest.mark.asyncio
+    async def test_agent_session_recovery_generates_missing_session_key(self, caplog):
+        server = _make_server(resume_strategy=ResumeStrategy.AGENT_SESSION)
+
+        with caplog.at_level(logging.WARNING):
+            resumed = await server._build_resume_request(
+                {"input": [{"role": "user", "content": "original"}]},
+                response_id="resp_1",
+                new_attempt_number=2,
+                prior_messages=[],
+            )
+        resumed = resumed.model_dump(exclude_none=True)
+
+        assert resumed["context"]["conversation_id"] == "resp_1"
+        assert resumed["input"][0]["content"] == (
+            "[RECOVERY] The previous attempt was interrupted. Continue the task using "
+            "the transcript already persisted by the agent's session store. Inspect "
+            "external side effects and safely repeat any interrupted operation."
+        )
+        assert "using response_id=resp_1 as context.conversation_id" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_agent_session_recovery_keeps_session_and_uses_recovery_prompt(self):
+        server = _make_server(resume_strategy=ResumeStrategy.AGENT_SESSION)
+        original_request = {
+            "input": [{"role": "user", "content": "original"}],
+            "custom_inputs": {"session_id": "session-1", "other": "value"},
+            "context": {"conversation_id": "conversation-1"},
+        }
+
+        resumed = await server._build_resume_request(
+            original_request,
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[],
+        )
+        resumed = resumed.model_dump(exclude_none=True)
+
+        assert resumed["custom_inputs"] == {
+            "session_id": "session-1",
+            "other": "value",
+        }
+        assert resumed["context"]["conversation_id"] == "conversation-1"
+        assert resumed["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": (
+                    "[RECOVERY] The previous attempt was interrupted. Continue the task using "
+                    "the transcript already persisted by the agent's session store. Inspect "
+                    "external side effects and safely repeat any interrupted operation."
+                ),
+            }
+        ]
+        assert original_request["input"][0]["content"] == "original"
+
+    @pytest.mark.asyncio
+    async def test_event_log_recovery_uses_events_and_rotates_session(self):
+        server = _make_server(resume_strategy=ResumeStrategy.EVENT_LOG)
+        resumed = await server._build_resume_request(
+            {
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[
+                _msg(
+                    0,
+                    evt={"type": "response.output_item.done", "item": {"text": "prior"}},
+                )
+            ],
+        )
+        resumed = resumed.model_dump()
+
+        assert len(resumed["input"]) == 2
+        assert '"text": "prior"' in resumed["input"][1]["content"]
+        assert resumed["context"]["conversation_id"] == "session-1::attempt-2"
+        assert "session_id" not in resumed["custom_inputs"]
+
+    @pytest.mark.asyncio
+    async def test_decorated_handler_can_delegate_to_default_and_customize_request(self):
+        captured = {}
+
+        @on_resume()
+        async def resume_request(request, context: ResumeContext):
+            captured["request"] = request
+            captured["response_id"] = context.response_id
+            captured["attempt_number"] = context.attempt_number
+            captured["previous_attempt_number"] = context.previous_attempt_number
+            captured["resume_strategy"] = context.resume_strategy
+            captured["previous_attempt_events"] = context.previous_attempt_events
+            resumed = await context.default_resume_request(request)
+            resumed_dict = resumed.model_dump()
+            resumed_dict["custom_inputs"]["resume_policy"] = "custom"
+            return resumed_dict
+
+        server = _make_server(resume_strategy=ResumeStrategy.EVENT_LOG)
+        resumed = await server._build_resume_request(
+            {
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[
+                _msg(0, evt={"type": "prior"}, attempt=1),
+                _msg(1, evt={"type": "current"}, attempt=2),
+            ],
+        )
+        resumed = resumed.model_dump()
+
+        assert captured["request"].input[0].content == "original"
+        assert captured["response_id"] == "resp_1"
+        assert captured["attempt_number"] == 2
+        assert captured["previous_attempt_number"] == 1
+        assert captured["resume_strategy"] is ResumeStrategy.EVENT_LOG
+        assert captured["previous_attempt_events"] == ({"type": "prior"},)
+        assert resumed["custom_inputs"]["resume_policy"] == "custom"
+        assert resumed["context"]["conversation_id"] == "session-1::attempt-2"
+
+    @pytest.mark.asyncio
+    async def test_decorated_handler_replaces_default_request(self):
+        @on_resume()
+        def resume_request(request, context):
+            request_dict = request.model_dump()
+            request_dict["input"] = [{"role": "user", "content": "custom recovery"}]
+            return request_dict
+
+        server = _make_server(resume_strategy=ResumeStrategy.EVENT_LOG)
+        resumed = await server._build_resume_request(
+            {"input": [{"role": "user", "content": "original"}]},
+            response_id="resp_1",
+            new_attempt_number=2,
+            prior_messages=[],
+        )
+        resumed = resumed.model_dump()
+
+        assert len(resumed["input"]) == 1
+        assert resumed["input"][0]["content"] == "custom recovery"
+
+
+class TestOnResumeDecorator:
+    def test_registers_handler_and_preserves_metadata(self):
+        @on_resume()
+        def custom_resume(request, context):
+            """Custom resume handler."""
+            return request
+
+        registered = get_on_resume_function()
+
+        assert registered is not None
+        assert custom_resume.__name__ == "custom_resume"
+        assert custom_resume.__doc__ == "Custom resume handler."
+
+    def test_rejects_multiple_handlers(self):
+        @on_resume()
+        def first(request, context):
+            return request
+
+        with pytest.raises(ValueError, match="can only be used once"):
+
+            @on_resume()
+            def second(request, context):
+                return request
+
+
 class TestRotateConversationId:
     def test_rotate_drops_thread_id_and_sets_rotated_context(self):
         r = {"custom_inputs": {"thread_id": "t1", "user_id": "u"}, "context": {}}
@@ -1062,20 +1473,29 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
     full original_request body so resume can recover full prior-turn history."""
 
     @pytest.mark.asyncio
-    async def test_persists_durable_flag_and_original_request(self):
+    async def test_event_log_recovery_polling_uses_stream_handler(self):
         with patch(f"{MODULE}.is_db_configured", return_value=True):
-            server = LongRunningAgentServer("ResponsesAgent")
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                resume_strategy=ResumeStrategy.EVENT_LOG,
+            )
         _mock_validator(server)
 
         captured: dict = {}
 
         async def fake_create_response(
-            response_id, status, *, durable=False, original_request=None
+            response_id,
+            status,
+            *,
+            durable=False,
+            original_request=None,
+            is_streaming=False,
         ):
             captured["response_id"] = response_id
             captured["status"] = status
             captured["durable"] = durable
             captured["original_request"] = original_request
+            captured["is_streaming"] = is_streaming
 
         with (
             patch(f"{MODULE}.create_response", side_effect=fake_create_response),
@@ -1089,6 +1509,7 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
 
         assert captured["status"] == "in_progress"
         assert captured["durable"] is True
+        assert captured["is_streaming"] is True
         # original_request preserves the input the client sent (no
         # conversation_id injection — the client owns that decision).
         orig = captured["original_request"]
@@ -1097,6 +1518,50 @@ class TestHandleBackgroundRequestPersistsDurabilityState:
         assert result["id"] == captured["response_id"]
         assert result["status"] == "in_progress"
         mock_create_task.assert_called_once()
+        background_coro = mock_create_task.call_args.args[0]
+        assert background_coro.cr_code.co_name == "_run_background_stream"
+        background_coro.close()
+
+    @pytest.mark.asyncio
+    async def test_agent_session_request_persists_generated_session_key(self, caplog):
+        with patch(f"{MODULE}.is_db_configured", return_value=True):
+            server = LongRunningAgentServer(
+                "ResponsesAgent",
+                resume_strategy=ResumeStrategy.AGENT_SESSION,
+            )
+        _mock_validator(server)
+
+        captured: dict = {}
+
+        async def fake_create_response(
+            response_id,
+            status,
+            *,
+            durable=False,
+            original_request=None,
+            is_streaming=False,
+        ):
+            captured["response_id"] = response_id
+            captured["original_request"] = original_request
+            captured["is_streaming"] = is_streaming
+
+        with (
+            patch(f"{MODULE}.create_response", side_effect=fake_create_response),
+            patch("asyncio.create_task") as mock_create_task,
+            caplog.at_level(logging.WARNING),
+        ):
+            await server._handle_background_request(
+                {"input": [{"role": "user", "content": "hi"}]},
+                is_streaming=False,
+                return_trace_id=False,
+            )
+
+        assert captured["original_request"]["context"]["conversation_id"] == captured["response_id"]
+        assert captured["is_streaming"] is False
+        assert "as context.conversation_id" in caplog.text
+        background_coro = mock_create_task.call_args.args[0]
+        assert background_coro.cr_code.co_name == "_run_background_invoke"
+        background_coro.close()
 
 
 class TestTryClaimAndResume:
@@ -1218,11 +1683,65 @@ class TestTryClaimAndResume:
         mock_create_task.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_agent_session_recovery_reuses_invoke_handler_and_logs_sentinel(self):
+        from datetime import timedelta
+
+        server = _make_server(resume_strategy=ResumeStrategy.AGENT_SESSION)
+        resp = _resp_info(
+            status="in_progress",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=300),
+            heartbeat_at=datetime.now(timezone.utc) - timedelta(seconds=100),
+            original_request={
+                "input": [{"role": "user", "content": "original"}],
+                "custom_inputs": {"session_id": "session-1"},
+            },
+            is_streaming=False,
+        )
+
+        captured_tasks = []
+
+        def capture_task(coro, *, name=None):
+            captured_tasks.append(coro)
+
+            class FakeTask:
+                def add_done_callback(self, callback):
+                    pass
+
+            return FakeTask()
+
+        with (
+            patch(f"{MODULE}.claim_stale_response", new_callable=AsyncMock, return_value=2),
+            patch(
+                f"{MODULE}.get_messages", new_callable=AsyncMock, return_value=[]
+            ) as mock_get_messages,
+            patch(f"{MODULE}.append_message", new_callable=AsyncMock) as mock_append,
+            patch("asyncio.create_task", side_effect=capture_task),
+            patch.object(server, "_run_background_invoke", new_callable=AsyncMock) as mock_run,
+        ):
+            attempt = await server._try_claim_and_resume("resp_1", resp)
+
+        assert attempt == 2
+        mock_get_messages.assert_awaited_once_with("resp_1", after_sequence=None)
+        mock_append.assert_awaited_once()
+        assert mock_append.await_args is not None
+        assert mock_append.await_args.kwargs["stream_event"]["type"] == "response.resumed"
+        await captured_tasks[0]
+        assert mock_run.await_args is not None
+        resumed_request = mock_run.await_args.args[1]
+        dumped = (
+            resumed_request.model_dump()
+            if hasattr(resumed_request, "model_dump")
+            else resumed_request
+        )
+        assert dumped["custom_inputs"]["session_id"] == "session-1"
+        assert len(dumped["input"]) == 1
+        assert "session store" in dumped["input"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_resume_replays_input_and_rotates_conversation_id(self):
         """Resume must replay original_request.input (not blank it) and rotate
-        the conversation anchor so the handler resolves to a fresh thread /
-        session for the new attempt. Prevents the LangGraph stream-event
-        attempt-boundary orphan artifact (rotation-findings.md)."""
+        the agent session key so the handler resolves to a fresh thread /
+        session for the new attempt."""
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
@@ -1282,14 +1801,14 @@ class TestTryClaimAndResume:
         assert "thread_id" not in (dumped["custom_inputs"] or {})
         # Other custom_inputs keys are preserved.
         assert dumped["custom_inputs"]["user_id"] == "u"
-        # conversation_id is rotated to a per-attempt value anchored on t1.
+        # conversation_id is rotated to a per-attempt value based on t1.
         assert dumped["context"]["conversation_id"] == "t1::attempt-2"
         assert kwargs.get("attempt_number") == 2
 
     @pytest.mark.asyncio
-    async def test_resume_rotation_anchors_on_context_conversation_id(self):
+    async def test_resume_rotation_uses_context_conversation_id(self):
         """When the client didn't pin a thread_id/session_id, rotation uses
-        the injected context.conversation_id as the base anchor."""
+        the injected context.conversation_id as the base session key."""
         with patch(f"{MODULE}.is_db_configured", return_value=False):
             server = LongRunningAgentServer("ResponsesAgent")
         from datetime import timedelta
@@ -1337,9 +1856,9 @@ class TestTryClaimAndResume:
         dumped = (
             resume_request.model_dump() if hasattr(resume_request, "model_dump") else resume_request
         )
-        # Rotation anchors on the stored context.conversation_id (priority 2).
-        # Note: re-rotating in a subsequent attempt would re-anchor on the
-        # ORIGINAL stored value, not the previous rotation — no stacking.
+        # Rotation uses the stored context.conversation_id (priority 2).
+        # A subsequent attempt uses the original stored value, not the prior
+        # attempt's rotated value, so suffixes do not stack.
         assert dumped["context"]["conversation_id"] == "resp_x::attempt-3"
 
 

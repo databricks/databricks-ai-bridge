@@ -76,6 +76,25 @@ async def test_update_response_status(mock_session):
 
 
 @pytest.mark.asyncio
+async def test_update_response_status_persists_terminal_response(mock_session):
+    result_mock = MagicMock()
+    result_mock.rowcount = 1
+    mock_session.execute.return_value = result_mock
+
+    terminal_response = {"id": "resp_abc123", "status": "completed", "output": []}
+    updated = await update_response_status(
+        "resp_abc123",
+        "completed",
+        expected_attempt_number=2,
+        terminal_response=terminal_response,
+    )
+
+    assert updated is True
+    statement = mock_session.execute.await_args.args[0]
+    assert json.loads(statement.compile().params["terminal_response"]) == terminal_response
+
+
+@pytest.mark.asyncio
 async def test_update_response_status_not_found(mock_session):
     result_mock = MagicMock()
     result_mock.rowcount = 0
@@ -180,6 +199,8 @@ async def test_get_response(mock_session):
     row.heartbeat_at = None
     row.attempt_number = 1
     row.original_request = None
+    row.terminal_response = json.dumps({"id": "resp_abc123", "status": "completed", "output": []})
+    row.is_streaming = False
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = row
     mock_session.execute.return_value = result_mock
@@ -193,6 +214,8 @@ async def test_get_response(mock_session):
         None,  # heartbeat_at
         1,  # attempt_number
         None,  # original_request
+        {"id": "resp_abc123", "status": "completed", "output": []},
+        False,
     )
 
 
@@ -299,6 +322,8 @@ class TestInitDb:
         assert "ADD COLUMN IF NOT EXISTS heartbeat_at" in all_sql
         assert "ADD COLUMN IF NOT EXISTS attempt_number" in all_sql
         assert "ADD COLUMN IF NOT EXISTS original_request" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS terminal_response" in all_sql
+        assert "ADD COLUMN IF NOT EXISTS is_streaming" in all_sql
         assert "idx_responses_stale" in all_sql
         mock_conn.run_sync.assert_awaited_once()
 
@@ -378,11 +403,13 @@ async def test_create_response_durable_stamps_heartbeat_and_original_request(moc
         "in_progress",
         durable=True,
         original_request={"input": [{"role": "user", "content": "hi"}]},
+        is_streaming=True,
     )
     added = mock_session.add.call_args[0][0]
     assert added.heartbeat_at is not None
     # original_request is JSON-encoded for Text storage.
     assert '"role": "user"' in added.original_request
+    assert added.is_streaming is True
 
 
 @pytest.mark.asyncio

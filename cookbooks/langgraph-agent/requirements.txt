@@ -1,0 +1,4 @@
+databricks-langchain[memory]>=0.20.0
+databricks-ai-bridge[agent-server]>=0.21.0
+langgraph>=1.1.0,<2
+mlflow>=3.10.1

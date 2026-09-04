@@ -1,0 +1,60 @@
+bundle:
+  name: langgraph_agent_recovery
+
+variables:
+  model_endpoint:
+    description: Databricks model serving endpoint used by the LangGraph agent
+    default: databricks-gpt-5-2
+  lakebase_branch:
+    description: Lakebase branch resource used by the selected recovery target
+  lakebase_database:
+    description: Lakebase database resource used by the selected recovery target
+  app_name:
+    description: App name selected by the recovery target
+  app_description:
+    description: App description selected by the recovery target
+  resume_strategy:
+    description: Long-running recovery strategy selected by the bundle target
+  checkpoint_schema:
+    description: LangGraph checkpoint schema selected by the recovery target
+
+resources:
+  apps:
+    recovery:
+      name: ${var.app_name}
+      description: ${var.app_description}
+      source_code_path: .
+      config:
+        command: ["python", "-m", "langgraph_agent_shared.app"]
+        env:
+          - name: RESUME_STRATEGY
+            value: ${var.resume_strategy}
+          - name: DATABRICKS_MODEL
+            value: ${var.model_endpoint}
+          - name: LAKEBASE_AUTOSCALING_ENDPOINT
+            value_from: postgres
+          - name: LAKEBASE_CHECKPOINT_SCHEMA
+            value: ${var.checkpoint_schema}
+      resources:
+        - name: postgres
+          postgres:
+            branch: ${var.lakebase_branch}
+            database: ${var.lakebase_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+targets:
+  event_log:
+    mode: development
+    default: true
+    variables:
+      app_name: langgraph-event-recovery
+      app_description: LangGraph agent with event-log recovery
+      resume_strategy: event_log
+      checkpoint_schema: langgraph_event_log_checkpoints
+  agent_session:
+    mode: development
+    variables:
+      app_name: langgraph-session-recovery
+      app_description: LangGraph agent with checkpoint recovery
+      resume_strategy: agent_session
+      checkpoint_schema: langgraph_agent_session_checkpoints

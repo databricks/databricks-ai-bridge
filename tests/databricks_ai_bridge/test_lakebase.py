@@ -93,6 +93,19 @@ def test_lakebase_pool_configures_connection_pool(monkeypatch):
     assert issubclass(test_pool.connection_class, lakebase.psycopg.Connection)
 
 
+def test_lakebase_pool_uses_app_database(monkeypatch):
+    TestConnectionPool = _make_connection_pool_class()
+    monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
+    monkeypatch.setenv("PGDATABASE", "app_database")
+
+    pool = LakebasePool(
+        instance_name="lake-instance",
+        workspace_client=_make_workspace(),
+    )
+
+    assert pool.pool.conninfo.startswith("dbname=app_database ")
+
+
 def test_lakebase_pool_logs_cache_seconds(monkeypatch, caplog):
     TestConnectionPool = _make_connection_pool_class()
     monkeypatch.setattr("databricks_ai_bridge.lakebase.ConnectionPool", TestConnectionPool)
@@ -1207,6 +1220,31 @@ def test_async_lakebase_sqlalchemy_creates_engine_with_correct_url():
     assert url.host == "db.host"
     assert url.port == 5432
     assert url.database == "databricks_postgres"
+
+
+def test_async_lakebase_sqlalchemy_uses_app_database(monkeypatch):
+    """The Apps postgres resource selects its database through PGDATABASE."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("PGDATABASE", "app_database")
+    mock_engine = MagicMock(sync_engine=MagicMock())
+
+    with (
+        patch(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            return_value=mock_engine,
+        ) as mock_create,
+        patch(
+            "sqlalchemy.event.listens_for",
+            return_value=lambda f: f,
+        ),
+    ):
+        AsyncLakebaseSQLAlchemy(
+            instance_name="lake-instance",
+            workspace_client=_make_workspace(),
+        )
+
+    assert mock_create.call_args[0][0].database == "app_database"
 
 
 def test_async_lakebase_sqlalchemy_passes_extra_engine_kwargs():
