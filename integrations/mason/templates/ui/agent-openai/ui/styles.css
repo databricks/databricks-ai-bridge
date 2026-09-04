@@ -462,6 +462,34 @@ h2 {
   border-bottom: 1px solid var(--line);
 }
 
+.chat-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.model-picker {
+  display: inline-flex;
+  align-items: center;
+}
+
+.model-picker select {
+  max-width: 220px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.model-picker select:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .run-status {
   min-height: 26px;
   padding: 4px 10px;
