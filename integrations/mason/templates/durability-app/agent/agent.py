@@ -3,8 +3,9 @@
 import asyncio
 from typing import NotRequired, TypedDict
 
-from databricks_mason import DurableAgentContext
 from langgraph.graph import END, START, StateGraph
+
+from databricks_mason import DurableAgentContext
 
 
 class AgentState(TypedDict):
@@ -26,8 +27,12 @@ graph = builder.compile()
 
 
 async def run_agent(payload: dict, context: DurableAgentContext) -> dict:
-    message = payload.get("message", "hello")
-    delay_seconds = payload.get("delay_seconds", 0)
+    agent_input = payload.get("input", {})
+    if not isinstance(agent_input, dict):
+        raise ValueError("input must be an object")
+
+    message = agent_input.get("message", "hello")
+    delay_seconds = agent_input.get("delay_seconds", 0)
     if not isinstance(message, str):
         raise ValueError("message must be a string")
     if isinstance(delay_seconds, bool) or not isinstance(delay_seconds, (int, float)):
@@ -42,12 +47,8 @@ async def run_agent(payload: dict, context: DurableAgentContext) -> dict:
             "attempt": context.attempt,
         }
     )
-    result = await graph.ainvoke(
-        {"message": message, "delay_seconds": float(delay_seconds)}
-    )
-    await context.emit(
-        {"type": "progress", "stage": "completed", "attempt": context.attempt}
-    )
+    result = await graph.ainvoke({"message": message, "delay_seconds": float(delay_seconds)})
+    await context.emit({"type": "progress", "stage": "completed", "attempt": context.attempt})
     return {
         "result": result["result"],
         "attempt": context.attempt,

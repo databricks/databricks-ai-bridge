@@ -13,7 +13,10 @@ async def test_langgraph_agent_emits_progress_and_marks_recovery() -> None:
         return len(events)
 
     context = SimpleNamespace(attempt=2, is_recovery=True, emit=emit)
-    result = await run_agent({"message": "hello", "delay_seconds": 0}, context)
+    result = await run_agent(
+        {"input": {"message": "hello", "delay_seconds": 0}},
+        context,
+    )
 
     assert result == {"result": "Processed: hello", "attempt": 2, "recovered": True}
     assert events == [
