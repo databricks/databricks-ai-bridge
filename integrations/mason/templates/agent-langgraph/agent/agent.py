@@ -10,12 +10,17 @@ from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_mason import (
-    configure_tracing,
     tag_session,
     workspace_client,
     workspace_headers,
 )
-from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
+from databricks_mason.langgraph import (
+    checkpointer,
+    configure_tracing,
+    mcp_tools,
+    memory_tools,
+    thread_config,
+)
 
 from agent.mcps import build_mcp_servers
 
