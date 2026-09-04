@@ -15,7 +15,7 @@ def test_backend_uses_one_deterministic_autoscaling_project() -> None:
     assert backend.project == "mason-my-app-durability"
     assert backend.branch == "production"
     assert backend.endpoint_id == "primary"
-    assert backend.database == "databricks_postgres"
+    assert backend.database == "databricks-postgres"
     assert backend.resource_name == "postgres"
 
 
