@@ -155,8 +155,13 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     assert result.exit_code == 0, result.output
     apps_calls = [call for call in calls if call[0][1] in ("create", "deploy")]
     assert [call[0][1] for call in apps_calls] == ["create", "deploy"]
-    assert apps_calls[0][1] == {"capture": True}
-    assert apps_calls[1][1] == {}
+    # create is still captured (to relabel its output); both carry an `action` so a failure is
+    # reported in Mason's terms instead of echoing the raw `databricks apps` command.
+    assert apps_calls[0][1] == {
+        "capture": True,
+        "action": "Could not create deployment 'mason-myapp'.",
+    }
+    assert apps_calls[1][1] == {"action": "Could not deploy 'mason-myapp'."}
     assert "Agent compute is starting" in result.output
     assert "App compute" not in result.output
     get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])

@@ -147,7 +147,12 @@ def dev(
     _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
 
     # Run in the project dir so run-local finds the app; stream output (no capture).
-    _databricks(args, obj.profile, cwd=str(source_dir))
+    _databricks(
+        args,
+        obj.profile,
+        cwd=str(source_dir),
+        action="Could not start the agent locally.",
+    )
 
 
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
