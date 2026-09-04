@@ -132,6 +132,103 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert "AGENT_MEMORY_STORE" not in env
 
 
+def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: calls.append((args, kwargs))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        [
+            "apps",
+            "create",
+            "mason-myapp",
+            "--compute-min-instances",
+            "2",
+            "--compute-max-instances",
+            "2",
+        ],
+        {
+            "capture": True,
+            "action": "Could not create deployment 'mason-myapp'.",
+        },
+    ) in calls
+
+
+def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: calls.append((args, kwargs))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    update_args, update_kwargs = next(
+        call for call in calls if call[0][:3] == ["apps", "create-update", "mason-myapp"]
+    )
+    assert update_kwargs == {
+        "capture": True,
+        "action": "Could not update deployment 'mason-myapp'.",
+    }
+    payload = json.loads(update_args[update_args.index("--json") + 1])
+    assert payload == {
+        "app": {"compute_min_instances": 2, "compute_max_instances": 2},
+        "update_mask": "compute_min_instances,compute_max_instances",
+    }
+
+
+def test_deploy_rejects_instance_count_above_platform_limit():
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--instances", "6"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "6 is not in the range 1<=x<=5" in result.output
+
+
+def test_deploy_help_exposes_instances_and_sticky_routing():
+    result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--instances" in result.output
+    assert "--min-instances" not in result.output
+    assert "--max-instances" not in result.output
+    assert "sticky routing" in result.output
+    assert "__Host-databricks-app-router" in result.output
+    assert "Databricks Apps instances" not in result.output
+
+
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
