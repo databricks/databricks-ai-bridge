@@ -15,8 +15,8 @@ class _Ctx:
         self.output = output
         self.profile = profile
 
-    def client(self):  # only used when --with-* flags are passed
-        return mock.Mock()
+    def client(self):  # current_user is read to name the local [dev] experiment
+        return mock.Mock(current_user="me@example.com")
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -90,7 +90,9 @@ def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
     dev_yaml = tmp_path / ".mason-dev.app.yaml"
     assert str(dev_yaml) in cmd
     names = {e["name"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
-    assert names == {"AGENT_SESSION_STORE"}  # index vars stripped, app env kept
+    assert "PIP_INDEX_URL" not in names and "UV_INDEX_URL" not in names  # index vars stripped
+    assert "AGENT_SESSION_STORE" in names  # app env kept
+    assert "MLFLOW_EXPERIMENT_NAME" in names  # dev tracing wired
 
 
 def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
@@ -129,11 +131,13 @@ def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
     env = {
         e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
     }
-    assert env == {"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"}  # patched before run
+    assert env["AGENT_SESSION_STORE"] == "s"  # patched before run
+    assert env["AGENT_MEMORY_STORE"] == "abc"
+    assert "[dev]" in env["MLFLOW_EXPERIMENT_NAME"]  # dev tracing wired alongside stores
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
-def test_dev_without_flags_does_not_touch_app_yaml(tmp_path: pathlib.Path):
+def test_dev_without_store_flags_wires_only_the_dev_experiment(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
     with (
@@ -142,7 +146,16 @@ def test_dev_without_flags_does_not_touch_app_yaml(tmp_path: pathlib.Path):
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    resolve.assert_not_called()  # no --with-* -> no store resolution, app.yaml untouched
+    resolve.assert_not_called()  # no --memory/--session -> no store resolution
+    import yaml
+
+    env = {
+        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    }
+    # tracing is on by default: the managed [dev] experiment is wired, but no store env
+    assert env["MLFLOW_TRACKING_URI"] == "databricks"
+    assert "[dev]" in env["MLFLOW_EXPERIMENT_NAME"]
+    assert not any(k.startswith("AGENT_") for k in env)
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

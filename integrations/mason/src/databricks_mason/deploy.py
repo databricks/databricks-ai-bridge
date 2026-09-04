@@ -23,7 +23,13 @@ from databricks_mason import memory_store_access, render, session_store_access, 
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
-from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
+from databricks_mason.tracing import (
+    TRACES_EXPERIMENT_ENV,
+    TRACES_TRACKING_URI_ENV,
+    TRACES_WAREHOUSE_ENV,
+    ensure_uc_experiment,
+    prod_experiment_name,
+)
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
@@ -225,20 +231,17 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
 def resolve_store_env(
     client,
     *,
-    app: Optional[str],
     memory_store: Optional[str],
     session_store: Optional[str],
-    traces_destination: Optional[str],
-    traces_experiment: Optional[str],
     create_stores: bool,
 ) -> dict[str, str]:
-    """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
+    """Resolve store references to the AGENT_* env vars that wire them in.
 
     Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
     way. With `create_stores` (the default), missing stores are created (idempotent); when it is off
     they must already exist. The memory store resolves to its bare id (the runtime re-adds the
-    `memory-stores/` prefix when building the entries URL); the session store and trace destination
-    are used verbatim.
+    `memory-stores/` prefix when building the entries URL); the session store is used verbatim.
+    Trace destinations are handled separately (see `provision_trace_experiment`).
     """
     env: dict[str, str] = {}
     if memory_store:
@@ -269,17 +272,40 @@ def resolve_store_env(
                     error_code=exc.error_code,
                 ) from exc
         env[_SESSION_ENV] = session_store
-    if traces_destination:
-        env[TRACES_DEST_ENV] = traces_destination
-        # The agent enables tracing only when BOTH a destination and an experiment are set, so
-        # default the experiment to this agent's per-app path (matching `mason tracing setup --app`),
-        # otherwise --with-traces alone would ship a half-config that silently disables tracing.
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(
-            client.current_user, app
-        )
-    elif traces_experiment:
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment
     return env
+
+
+def provision_trace_experiment(
+    source: pathlib.Path, app: str, user: str, profile
+) -> tuple[str, str]:
+    """Gate the deploy on UC tracing, create the UC-linked experiment, and wire it into app.yaml.
+
+    Deploying to production requires Unity Catalog tracing (`mason tracing setup`): a personal
+    ``[dev]`` experiment isn't a suitable home for a deployed service principal's traces. This reads
+    the configured UC schema from agent.toml (raising if absent), creates+links the per-agent prod
+    experiment, and writes MLFLOW_TRACKING_URI/EXPERIMENT_NAME into app.yaml. Returns
+    ``(experiment_name, catalog_schema)``.
+    """
+    from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
+
+    try:
+        project = AgentProject.load(source)
+        schema, warehouse = project.trace_location, project.trace_warehouse
+    except AgentCliError:
+        schema, warehouse = None, None
+    if not schema:
+        raise AgentCliError(
+            "Deploying requires Unity Catalog tracing, which isn't configured for this project.",
+            hint="Run `mason tracing setup --trace-location <catalog.schema>` first, then deploy.",
+        )
+
+    experiment = prod_experiment_name(user, app)
+    ensure_uc_experiment(profile, experiment, schema, warehouse)
+    env = {TRACES_TRACKING_URI_ENV: "databricks", TRACES_EXPERIMENT_ENV: experiment}
+    if warehouse:
+        env[TRACES_WAREHOUSE_ENV] = warehouse
+    _upsert_manifest_env(source, env)
+    return experiment, schema
 
 
 def _grant_store_access(
@@ -341,18 +367,6 @@ def _grant_store_access(
     help="Session store name to wire in via AGENT_SESSION_STORE.",
 )
 @click.option(
-    "--with-traces",
-    "traces_destination",
-    default=None,
-    help="UC trace destination 'catalog.schema' to wire in via MLFLOW_TRACING_DESTINATION "
-    "(link it first with `mason tracing setup`).",
-)
-@click.option(
-    "--traces-experiment",
-    default=None,
-    help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
-)
-@click.option(
     "--no-create-stores",
     is_flag=True,
     help="Require referenced stores to already exist. By default missing stores are created "
@@ -376,8 +390,6 @@ def deploy(
     source,
     memory_store,
     session_store,
-    traces_destination,
-    traces_experiment,
     no_create_stores,
     pip_index_url,
     workspace_path,
@@ -392,23 +404,24 @@ def deploy(
     source_dir = pathlib.Path(source)
     client = obj.client()
 
-    # 1. Provision / resolve stores and build the env to inject.
+    # 1. Gate on UC tracing and create the UC-linked experiment first, so a project without UC
+    #    tracing configured fails fast (before any stores or the app are created).
+    trace_experiment, trace_schema = provision_trace_experiment(
+        source_dir, source_dir.resolve().name, client.current_user, obj.profile
+    )
+
+    # 2. Provision / resolve stores and build the env to inject.
     env_updates = resolve_store_env(
         client,
-        app=name,
         memory_store=memory_store,
         session_store=session_store,
-        traces_destination=traces_destination,
-        traces_experiment=traces_experiment,
         create_stores=not no_create_stores,
     )
-    provisioned: dict[str, Any] = {}
+    provisioned: dict[str, Any] = {"Traces": f"{trace_experiment} ({trace_schema})"}
     if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if _SESSION_ENV in env_updates:
         provisioned["Session store"] = env_updates[_SESSION_ENV]
-    if traces_destination:
-        provisioned["Traces"] = traces_destination
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -458,6 +471,8 @@ def deploy(
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
+                "trace_experiment": trace_experiment,
+                "trace_location": trace_schema,
                 "store_grant": "skipped"
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
@@ -469,6 +484,10 @@ def deploy(
     steps: list[str | tuple[str, str]] = [
         (f"mason deployments get {name}", "Check its status and URL"),
         (f"mason deployments logs {name}", "Tail its logs"),
+        # The UC experiment is created, but the app's SP needs write access to the schema's tables
+        # to actually log traces; granting it requires schema ownership, so surface it as a step.
+        f"Grant the app's service principal USE CATALOG + USE SCHEMA + MODIFY/SELECT on "
+        f"{trace_schema} so it can write traces.",
     ]
     if app_url:
         steps.insert(0, (f"open {app_url}", "Open the deployed app"))

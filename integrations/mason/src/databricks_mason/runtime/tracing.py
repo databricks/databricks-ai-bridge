@@ -1,13 +1,16 @@
-"""MLflow tracing setup — opt-in, enabled when MLflow has both a destination and an experiment.
+"""MLflow tracing setup - opt-in, enabled when a trace destination is configured.
 
-Tracing turns on only when a full config is present: a destination (``MLFLOW_TRACKING_URI`` or
-``MLFLOW_TRACING_DESTINATION``) AND an experiment (``MLFLOW_EXPERIMENT_ID`` or
-``MLFLOW_EXPERIMENT_NAME``) — whichever pair the user or the Apps resource binding provides. MLflow
-resolves the specific value itself; this only decides on/off. Requiring both halves avoids the
-half-configured case where traces silently export to a local file store instead of the workspace.
-When unconfigured, tracing is disabled outright so the per-request span ``runtime/runtime.py`` opens
-has nothing to export to. No user decision lives here — it's all driven by env — so this whole module
-is a candidate to move behind an SDK helper.
+Tracing turns on when the environment names where traces go. Two equivalent forms are accepted:
+
+* ``MLFLOW_TRACING_DESTINATION`` alone - a Unity Catalog ``catalog.schema`` or an experiment id.
+  This is what ``mason tracing setup`` writes into app.yaml; MLflow points its own tracking at
+  Databricks from it, so no separate experiment is needed.
+* ``MLFLOW_TRACKING_URI`` **and** an experiment (``MLFLOW_EXPERIMENT_ID`` / ``MLFLOW_EXPERIMENT_NAME``)
+  - the classic pair, still honored for hand-configured setups.
+
+MLflow resolves the specific value itself; this only decides on/off. When neither form is present,
+tracing is disabled outright so the per-request span ``runtime/runtime.py`` opens has nothing to
+export to. No user decision lives here - it's all driven by env.
 """
 
 import os
@@ -15,9 +18,11 @@ from collections.abc import Callable
 
 import mlflow
 
-# Destination and experiment can each be named more than one way; accept any combination MLflow
-# understands (see mlflow.tracking.fluent._get_experiment_id_from_env for the experiment resolution).
-_DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
+# The self-sufficient destination (mason's `tracing setup`), and the classic tracking-uri+experiment
+# pair. Either turns tracing on. Experiment can be named more than one way (see
+# mlflow.tracking.fluent._get_experiment_id_from_env for the resolution).
+_TRACE_DESTINATION_VAR = "MLFLOW_TRACING_DESTINATION"
+_TRACKING_URI_VAR = "MLFLOW_TRACKING_URI"
 _EXPERIMENT_VARS = ("MLFLOW_EXPERIMENT_ID", "MLFLOW_EXPERIMENT_NAME")
 
 # Snapshotted once by configure_tracing() at startup (after .env is loaded) rather than at import, so
@@ -28,15 +33,17 @@ _enabled = False
 def configure_tracing(autolog: Callable[[], None] | None = None) -> None:
     """Enable MLflow tracing for the agent. Call once at startup.
 
-    Reads the MLflow destination/experiment from the environment and no-ops (disables tracing) when
-    they are absent, so it is safe to call unconditionally. ``autolog`` is the framework's MLflow
-    autolog entry point (e.g. ``mlflow.langchain.autolog``), called only when tracing is enabled;
-    framework adapters bind it so callers get a zero-arg ``configure_tracing()``.
+    Reads the MLflow trace destination from the environment and no-ops (disables tracing) when it is
+    absent, so it is safe to call unconditionally. ``autolog`` is the framework's MLflow autolog
+    entry point (e.g. ``mlflow.langchain.autolog``), called only when tracing is enabled; framework
+    adapters bind it so callers get a zero-arg ``configure_tracing()``.
     """
     global _enabled
-    has_destination = any(os.getenv(v) for v in _DESTINATION_VARS)
-    has_experiment = any(os.getenv(v) for v in _EXPERIMENT_VARS)
-    _enabled = has_destination and has_experiment
+    has_trace_destination = bool(os.getenv(_TRACE_DESTINATION_VAR))
+    has_classic_pair = bool(os.getenv(_TRACKING_URI_VAR)) and any(
+        os.getenv(v) for v in _EXPERIMENT_VARS
+    )
+    _enabled = has_trace_destination or has_classic_pair
     if _enabled:
         if autolog is not None:
             autolog()

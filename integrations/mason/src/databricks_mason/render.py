@@ -132,7 +132,9 @@ def _cell(value: Any) -> Any:
         return value
     if value is None:
         return Text("—", style=MUTED)
-    return str(value)
+    # Wrap in Text so values are shown literally: Rich treats "[...]" in a bare str as console
+    # markup, which would silently eat things like a "[dev]" experiment name.
+    return Text(str(value))
 
 
 # --- detail view (aig-endpoint.png) ------------------------------------------

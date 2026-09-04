@@ -111,11 +111,8 @@ def test_resolve_store_env_validates_session_store_on_non_create_path():
     with pytest.raises(AgentCliError) as exc:
         deploy_mod.resolve_store_env(
             client,
-            app="a",
             memory_store=None,
             session_store="ghost",
-            traces_destination=None,
-            traces_experiment=None,
             create_stores=False,
         )
     assert "does not exist" in str(exc.value)

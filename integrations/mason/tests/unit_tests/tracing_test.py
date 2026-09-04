@@ -1,208 +1,239 @@
-"""Unit tests for `mason tracing`: instrument snippet, destination parsing, mlflow guard.
+"""Unit tests for `mason tracing`: UC-schema validation, setup persistence, list resolution, and
+the deploy-time UC-experiment provisioning.
 
-The pure-Python surface (instrument, destination parsing) is covered directly. The
-mlflow-backed commands are exercised only for their "mlflow not installed" guard, since the
-hermetic test env does not carry mlflow on the deptree.
+MLflow-backed paths (`list`, `ensure_uc_experiment`) are exercised with a mocked `_mlflow`/UC symbols
+(the hermetic test env carries no mlflow); the pure surface is tested directly.
 """
 
 from __future__ import annotations
 
 import json
+import pathlib
+import types
+from unittest import mock
 
+import pytest
 from click.testing import CliRunner
 
 from databricks_mason import tracing as tracing_mod
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
+
+_AGENT_TOML = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
 
 
 class _Ctx:
-    """Stand-in for CliContext: tracing commands read only .profile and .output."""
+    """Stand-in for CliContext: tracing reads .profile / .output, and .client() for the dev default."""
 
-    def __init__(self, output: str = "text", profile=None):
+    def __init__(self, output: str = "text", profile=None, user="me@example.com"):
         self.output = output
         self.profile = profile
+        self._user = user
+
+    def client(self):
+        return mock.Mock(current_user=self._user)
 
 
-def test_instrument_text_runs():
-    result = CliRunner().invoke(
-        tracing_mod.tracing_instrument,
-        ["--destination", "cat.schema", "--experiment", "/Shared/x"],
-        obj=_Ctx(),
+def _project(tmp_path: pathlib.Path, *, schema: str | None = None, warehouse: str | None = None):
+    binding = ""
+    if schema:
+        binding = f'\n[trace_location]\nname = "{schema}"\n'
+        if warehouse:
+            binding += f'warehouse_id = "{warehouse}"\n'
+    (tmp_path / "agent.toml").write_text(_AGENT_TOML + binding)
+    return tmp_path
+
+
+# --- validation --------------------------------------------------------------
+
+
+def test_validate_uc_schema_accepts_catalog_dot_schema():
+    assert tracing_mod.validate_uc_schema("catalog.schema") == "catalog.schema"
+    assert tracing_mod.validate_uc_schema("  cat.sch  ") == "cat.sch"
+
+
+def test_validate_uc_schema_rejects_bad_values():
+    for bad in ("nodot", "cat.schema.table", "12345", "", "   ", "cat/schema"):
+        with pytest.raises(AgentCliError):
+            tracing_mod.validate_uc_schema(bad)
+
+
+# --- experiment naming -------------------------------------------------------
+
+
+def test_experiment_names():
+    assert (
+        tracing_mod.dev_experiment_name("me@x.com", "app")
+        == "/Users/me@x.com/mason-traces/[dev] app"
     )
-    assert result.exit_code == 0, result.output
-    assert "Agent Tracing" in result.output
+    assert tracing_mod.prod_experiment_name("me@x.com", "app") == "/Users/me@x.com/mason-traces/app"
 
 
-def test_instrument_json_snippet_contents():
+# --- setup -------------------------------------------------------------------
+
+
+def test_setup_persists_schema_and_warehouse_in_agent_toml(tmp_path: pathlib.Path):
+    _project(tmp_path)
     result = CliRunner().invoke(
-        tracing_mod.tracing_instrument,
-        ["--destination", "cat.schema", "--experiment", "/Shared/x"],
+        tracing_mod.tracing_setup,
+        ["--trace-location", "cat.schema", "--warehouse-id", "wh1", "--source", str(tmp_path)],
         obj=_Ctx(output="json"),
     )
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    assert payload["destination"] == "cat.schema"
-    assert payload["experiment"] == "/Shared/x"
-    snippet = payload["snippet"]
-    assert 'catalog_name="cat"' in snippet
-    assert 'schema_name="schema"' in snippet
-    assert "mlflow.openai.autolog" in snippet
-    assert 'mlflow.set_experiment("/Shared/x")' in snippet
+    assert json.loads(result.output) == {"trace_location": "cat.schema", "warehouse_id": "wh1"}
+    project = AgentProject.load(tmp_path)
+    assert project.trace_location == "cat.schema"
+    assert project.trace_warehouse == "wh1"
 
 
-def test_instrument_defaults_to_placeholders_and_default_experiment():
-    result = CliRunner().invoke(tracing_mod.tracing_instrument, [], obj=_Ctx(output="json"))
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    assert payload["experiment"] == tracing_mod._DEFAULT_EXPERIMENT
-    assert "<catalog>" in payload["snippet"] and "<schema>" in payload["snippet"]
-
-
-def test_split_destination_valid():
-    assert tracing_mod._split_destination("my_cat.my_schema") == ("my_cat", "my_schema")
-
-
-def test_split_destination_invalid_raises():
-    for bad in ("nodot", ".schema", "catalog."):
-        try:
-            tracing_mod._split_destination(bad)
-            raise AssertionError(f"expected AgentCliError for {bad!r}")
-        except AgentCliError:
-            pass
-
-
-def test_ensure_experiment_creates_parent_dir_for_nested_path():
-    from unittest import mock
-
-    mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = None  # doesn't exist yet
-    mlflow.create_experiment.return_value = "eid-1"
-    client = mock.Mock()
-
-    eid = tracing_mod._ensure_experiment(mlflow, client, "/Users/me@x.com/mason-traces/demo")
-
-    assert eid == "eid-1"
-    # the intermediate workspace folder is created before the experiment (mlflow won't make it)
-    client.ensure_workspace_dir.assert_called_once_with("/Users/me@x.com/mason-traces")
-
-
-def test_ensure_experiment_reuses_existing_without_mkdir():
-    from unittest import mock
-
-    mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2")
-    client = mock.Mock()
-
-    assert tracing_mod._ensure_experiment(mlflow, client, "/Shared/x") == "eid-2"
-    client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
-    mlflow.create_experiment.assert_not_called()
-
-
-def test_default_experiment_is_per_app_under_user_home():
-    assert (
-        tracing_mod.default_experiment("me@x.com", "my-agent")
-        == "/Users/me@x.com/mason-traces/my-agent"
-    )
-
-
-def test_default_experiment_falls_back_to_shared_without_app():
-    assert tracing_mod.default_experiment("me@x.com", None) == tracing_mod._DEFAULT_EXPERIMENT
-
-
-def test_experiment_url_builds_traces_tab_link():
-    url = tracing_mod._experiment_url("https://ws.databricks.com/", "123")
-    assert url == "https://ws.databricks.com/ml/experiments/123?compareRunsMode=TRACES"
-
-
-def test_link_trace_location_reports_already_linked_without_relink():
-    def set_location(location, experiment_id):
-        raise RuntimeError("experiment is already linked to a storage location")
-
-    try:
-        tracing_mod._link_trace_location(
-            set_location, lambda **k: None, object(), "e1", relink=False
-        )
-        raise AssertionError("expected AgentCliError")
-    except AgentCliError as exc:
-        assert "--relink" in (exc.hint or "")
-
-
-def test_link_trace_location_relinks_when_requested():
-    calls = []
-
-    def set_location(location, experiment_id):
-        calls.append("set")
-        if calls.count("set") == 1:  # first attempt fails as already-linked
-            raise RuntimeError("already linked")
-
-    def unset_location(location, experiment_id):
-        calls.append("unset")
-
-    tracing_mod._link_trace_location(set_location, unset_location, object(), "e1", relink=True)
-    assert calls == ["set", "unset", "set"]  # try, unset existing, re-link
-
-
-def test_link_trace_location_propagates_unrelated_errors():
-    def set_location(location, experiment_id):
-        raise RuntimeError("permission denied on catalog")
-
-    try:
-        tracing_mod._link_trace_location(
-            set_location, lambda **k: None, object(), "e1", relink=True
-        )
-        raise AssertionError("expected the original error")
-    except RuntimeError as exc:
-        assert "permission denied" in str(exc)  # not swallowed as an already-linked case
-
-
-def test_setup_requires_mlflow_when_absent():
-    # mlflow is not on the hermetic test deptree, so setup should surface a clean CLI error
-    # (non-zero exit) rather than a traceback.
+def test_setup_rejects_invalid_schema(tmp_path: pathlib.Path):
+    _project(tmp_path)
     result = CliRunner().invoke(
-        tracing_mod.tracing_setup, ["--catalog", "c", "--schema", "s"], obj=_Ctx()
+        tracing_mod.tracing_setup,
+        ["--trace-location", "cat.schema.table", "--source", str(tmp_path)],
+        obj=_Ctx(),
     )
     assert result.exit_code != 0
+    assert AgentProject.load(tmp_path).trace_location is None  # nothing persisted
 
 
-def test_list_resolves_experiment_name_to_id_for_search():
-    # search_traces selects by experiment_ids, not names, so list must resolve the name first.
-    from unittest import mock
+# --- ensure_uc_experiment ----------------------------------------------------
 
+
+def _fake_uc(mlflow, existing=None, create_id="e1"):
+    mlflow.get_experiment_by_name.return_value = (
+        types.SimpleNamespace(experiment_id=existing) if existing else None
+    )
+    mlflow.create_experiment.return_value = create_id
+
+
+def test_ensure_uc_experiment_creates_and_links():
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-9")
-    mlflow.search_traces.return_value = []
+    _fake_uc(mlflow)
+    set_location = mock.Mock()
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(
+            tracing_mod, "_uc_trace_symbols", return_value=(mock.Mock(), set_location)
+        ),
     ):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list, ["--experiment", "/Shared/x", "--limit", "7"], obj=_Ctx()
-        )
-
-    assert result.exit_code == 0, result.output
-    mlflow.get_experiment_by_name.assert_called_once_with("/Shared/x")
-    _, kwargs = mlflow.search_traces.call_args
-    assert kwargs["experiment_ids"] == ["eid-9"]
-    assert kwargs["max_results"] == 7
+        name = tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", "wh1")
+    assert name == "/Users/me/x"
+    mlflow.create_experiment.assert_called_once_with("/Users/me/x")
+    assert set_location.call_args.kwargs["experiment_id"] == "e1"
 
 
-def test_list_returns_empty_when_experiment_absent():
-    # A not-yet-created experiment has no traces; list should show none, not error.
-    from unittest import mock
-
+def test_ensure_uc_experiment_idempotent_when_already_linked():
     mlflow = mock.Mock()
-    mlflow.get_experiment_by_name.return_value = None
+    _fake_uc(mlflow, existing="e9")
+    set_location = mock.Mock(side_effect=RuntimeError("experiment is already linked to a location"))
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(
+            tracing_mod, "_uc_trace_symbols", return_value=(mock.Mock(), set_location)
+        ),
     ):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list, ["--experiment", "/Shared/missing"], obj=_Ctx(output="json")
+        # a re-deploy of an already-linked experiment is a no-op, not an error
+        assert (
+            tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", None)
+            == "/Users/me/x"
         )
 
+
+def test_ensure_uc_experiment_errors_on_existing_traces():
+    mlflow = mock.Mock()
+    _fake_uc(mlflow, existing="e9")
+    set_location = mock.Mock(side_effect=RuntimeError("Experiment already contains traces."))
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(
+            tracing_mod, "_uc_trace_symbols", return_value=(mock.Mock(), set_location)
+        ),
+    ):
+        with pytest.raises(AgentCliError) as exc:
+            tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", None)
+    assert "migrate" in (exc.value.hint or "").lower()
+
+
+# --- list resolution ---------------------------------------------------------
+
+
+def _fake_mlflow(traces):
+    fake = mock.Mock()
+    fake.search_traces.return_value = traces
+    return fake
+
+
+def _trace(trace_id):
+    return types.SimpleNamespace(
+        info=types.SimpleNamespace(
+            trace_id=trace_id, status="OK", execution_time_ms=5, timestamp_ms=1
+        )
+    )
+
+
+def test_list_uses_configured_uc_schema(tmp_path: pathlib.Path):
+    _project(tmp_path, schema="proj.schema")
+    fake = _fake_mlflow([_trace("tr-1")])
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == []
-    mlflow.search_traces.assert_not_called()
+    assert fake.search_traces.call_args.kwargs["locations"] == ["proj.schema"]
+    assert json.loads(result.output)[0]["trace_id"] == "tr-1"
+
+
+def test_list_flag_overrides_project(tmp_path: pathlib.Path):
+    _project(tmp_path, schema="proj.schema")
+    fake = _fake_mlflow([])
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list,
+            ["--trace-location", "flag.schema", "--source", str(tmp_path)],
+            obj=_Ctx(output="json"),
+        )
+    assert result.exit_code == 0, result.output
+    assert fake.search_traces.call_args.kwargs["locations"] == ["flag.schema"]
+
+
+def test_list_falls_back_to_dev_experiment(tmp_path: pathlib.Path):
+    _project(tmp_path)  # no UC schema configured
+    fake = _fake_mlflow([])
+    fake.get_experiment_by_name.return_value = types.SimpleNamespace(experiment_id="e-dev")
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert result.exit_code == 0, result.output
+    # the [dev] experiment path is resolved to its id, then queried by location
+    resolved = fake.get_experiment_by_name.call_args.args[0]
+    assert resolved.endswith(f"[dev] {tmp_path.resolve().name}")
+    assert fake.search_traces.call_args.kwargs["locations"] == ["e-dev"]
+
+
+# --- helpers -----------------------------------------------------------------
+
+
+def test_project_trace_location_reads_schema_and_warehouse(tmp_path: pathlib.Path):
+    _project(tmp_path, schema="cat.schema", warehouse="wh1")
+    assert tracing_mod._project_trace_location(str(tmp_path)) == ("cat.schema", "wh1")
+
+
+def test_project_trace_location_none_without_project(tmp_path: pathlib.Path):
+    assert tracing_mod._project_trace_location(str(tmp_path)) == (None, None)
 
 
 def test_status_str_handles_enum_like_and_none():

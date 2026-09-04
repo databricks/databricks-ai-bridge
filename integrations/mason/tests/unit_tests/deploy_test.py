@@ -7,11 +7,33 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
+
+# Deploy gates on UC tracing and creates a UC experiment (a live mlflow/workspace op). Tests that
+# aren't about tracing bypass that provisioning via this autouse fixture; the tracing-specific tests
+# below are listed here so the real `provision_trace_experiment` runs for them.
+_TRACING_TESTS = {
+    "test_deploy_gated_on_uc_tracing_when_unconfigured",
+    "test_deploy_provisions_uc_experiment_when_configured",
+    "test_provision_trace_experiment_gates_without_uc",
+    "test_provision_trace_experiment_creates_and_wires",
+}
+
+
+@pytest.fixture(autouse=True)
+def _bypass_tracing_provision(request, monkeypatch):
+    if request.function.__name__ in _TRACING_TESTS:
+        return
+    monkeypatch.setattr(
+        deploy_mod,
+        "provision_trace_experiment",
+        lambda source, app, user, profile: ("/Users/me@example.com/mason-traces/app", "cat.schema"),
+    )
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -295,10 +317,16 @@ def test_deploy_injects_store_env_without_actor(tmp_path: pathlib.Path, monkeypa
     assert "AGENT_SESSION_ACTOR_ID" not in env
 
 
-def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypatch):
+_AGENT_TOML_WITH_TRACES = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n[trace_location]\nname = "cat.schema"\n'
+_AGENT_TOML_NO_TRACES = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+
+
+def test_deploy_gated_on_uc_tracing_when_unconfigured(tmp_path: pathlib.Path, monkeypatch):
+    # Deploy requires UC tracing: no [trace_location] binding -> blocked, pointing at `tracing setup`.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(_AGENT_TOML_NO_TRACES)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -307,25 +335,43 @@ def test_deploy_with_traces_injects_tracing_env(tmp_path: pathlib.Path, monkeypa
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        [
-            "myapp",
-            "--source",
-            str(src),
-            "--with-traces",
-            "cat.schema",
-            "--traces-experiment",
-            "/Shared/x",
-        ],
-        obj=_FakeCtx(),
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code != 0
+    assert "mason tracing setup" in result.output
+
+
+def test_deploy_provisions_uc_experiment_when_configured(tmp_path: pathlib.Path, monkeypatch):
+    # With UC configured, deploy creates+links the UC experiment and wires it into app.yaml.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(_AGENT_TOML_WITH_TRACES)
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    linked: dict = {}
+    monkeypatch.setattr(
+        deploy_mod,
+        "ensure_uc_experiment",
+        lambda profile, experiment, schema, warehouse: linked.update(
+            experiment=experiment, schema=schema
+        )
+        or experiment,
     )
 
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
     assert result.exit_code == 0, result.output
-    doc = yaml.safe_load((src / "app.yaml").read_text())
-    env = {e["name"]: e["value"] for e in doc["env"]}
-    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
-    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/x"
+    assert linked["schema"] == "cat.schema"
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert env["MLFLOW_TRACKING_URI"] == "databricks"
+    assert env["MLFLOW_EXPERIMENT_NAME"] == linked["experiment"]
+    assert "MLFLOW_TRACING_DESTINATION" not in env  # experiment-centric, not a raw destination
 
 
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():
@@ -461,34 +507,42 @@ def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
     assert env["AGENT_SESSION_STORE"] == "s"
 
 
-def test_with_traces_defaults_the_experiment_per_app():
-    # --with-traces alone must still set the experiment, or the agent ships tracing half-configured
-    # (destination set, experiment missing) and silently disables it. The default is per-app, so
-    # each agent's traces are isolated instead of piling into one shared experiment.
-    env = deploy_mod.resolve_store_env(
-        _FakeClient(),
-        app="my-agent",
-        memory_store=None,
-        session_store=None,
-        traces_destination="cat.schema",
-        traces_experiment=None,
-        create_stores=False,
-    )
-    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
-    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Users/me@example.com/mason-traces/my-agent"
+def test_provision_trace_experiment_gates_without_uc(tmp_path: pathlib.Path):
+    # No UC schema configured -> raise, pointing the user at `mason tracing setup`.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / "agent.toml").write_text(_AGENT_TOML_NO_TRACES)
+
+    with pytest.raises(AgentCliError) as exc:
+        deploy_mod.provision_trace_experiment(tmp_path, "app", "me@example.com", None)
+    assert "mason tracing setup" in (exc.value.hint or "")
 
 
-def test_with_traces_explicit_experiment_wins_over_per_app():
-    env = deploy_mod.resolve_store_env(
-        _FakeClient(),
-        app="my-agent",
-        memory_store=None,
-        session_store=None,
-        traces_destination="cat.schema",
-        traces_experiment="/Shared/custom",
-        create_stores=False,
+def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, monkeypatch):
+    # With UC configured: create+link the per-agent experiment and wire it into app.yaml.
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / "agent.toml").write_text(_AGENT_TOML_WITH_TRACES)
+    calls: dict = {}
+    monkeypatch.setattr(
+        deploy_mod,
+        "ensure_uc_experiment",
+        lambda profile, experiment, schema, warehouse: calls.update(
+            experiment=experiment, schema=schema
+        )
+        or experiment,
     )
-    assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/custom"
+
+    experiment, schema = deploy_mod.provision_trace_experiment(
+        tmp_path, "myagent", "me@example.com", None
+    )
+
+    assert schema == "cat.schema"
+    assert experiment == "/Users/me@example.com/mason-traces/myagent"
+    assert calls["schema"] == "cat.schema"
+    env = {
+        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    }
+    assert env["MLFLOW_EXPERIMENT_NAME"] == experiment
+    assert env["MLFLOW_TRACKING_URI"] == "databricks"
 
 
 def _run_deploy(src, monkeypatch, extra_args):
