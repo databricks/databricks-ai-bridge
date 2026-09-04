@@ -38,7 +38,74 @@ _ORDER_BY = "create_time asc"
 
 # One in-process Session per session id, built lazily and shared — that's what makes multi-turn work
 # in-process (the durable store needs no cache; each call resolves the same REST-backed session).
-_local_sessions: dict[str, SQLiteSession] = {}
+_local_sessions: dict[str, _SanitizingSession] = {}
+
+
+def _prune_dangling_tool_calls(
+    items: list[TResponseInputItem],
+) -> list[TResponseInputItem]:
+    """Drop tool-call items that would replay with an unmatched ``call_id``.
+
+    When a run interrupts for human approval, the Agents SDK persists the ``function_call`` item
+    immediately but writes its matching ``function_call_output`` only once the run resumes. If that
+    resume never lands cleanly — the user declines, or the paused (in-process) ``RunState`` is lost to
+    a restart or another replica so the next prompt starts a fresh turn — the transcript keeps the
+    ``function_call`` with no output. Replaying that makes the Responses API reject the whole request
+    with BAD_REQUEST for the dangling ``call_id``. So keep a ``function_call`` only if its output was
+    also stored, and a ``function_call_output`` only if its call was — every other item passes
+    through untouched. (A plain tool exception does NOT trigger this: the SDK stores an error output
+    as a matched pair.)
+    """
+    call_ids = {
+        item["call_id"]
+        for item in items
+        if isinstance(item, dict) and item.get("type") == "function_call" and item.get("call_id")
+    }
+    output_ids = {
+        item["call_id"]
+        for item in items
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("call_id")
+    }
+    kept: list[TResponseInputItem] = []
+    for item in items:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            if item.get("call_id") not in output_ids:
+                continue
+        elif isinstance(item, dict) and item.get("type") == "function_call_output":
+            if item.get("call_id") not in call_ids:
+                continue
+        kept.append(item)
+    return kept
+
+
+class _SanitizingSession(SessionABC):
+    """Wrap an Agents SDK ``Session`` and prune dangling tool calls when its history is replayed.
+
+    ``get_items`` is the only read the SDK makes when rebuilding a run's input, so pruning there keeps
+    a transcript left inconsistent by an earlier failed run (see ``_prune_dangling_tool_calls``) from
+    poisoning the next turn. Writes and rollback pass straight through to the wrapped session.
+    """
+
+    def __init__(self, inner: SessionABC) -> None:
+        self._inner = inner
+        self.session_id = getattr(inner, "session_id", None)
+
+    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+        # Prune before applying `limit` so a dropped call/output can't leave a partial pair at the
+        # window edge, then take the last `limit` items in write order.
+        items = _prune_dangling_tool_calls(await self._inner.get_items())
+        return items[-limit:] if limit is not None else items
+
+    async def add_items(self, items: list[TResponseInputItem]) -> None:
+        await self._inner.add_items(items)
+
+    async def pop_item(self) -> TResponseInputItem | None:
+        return await self._inner.pop_item()
+
+    async def clear_session(self) -> None:
+        await self._inner.clear_session()
 
 
 def session_store(
@@ -56,10 +123,13 @@ def session_store(
 
     store = resolve_session_store(store)
     if store:
-        return DatabricksSessionStore(session_id, store, actor_id=actor or session_id)
+        durable = DatabricksSessionStore(session_id, store, actor_id=actor or session_id)
+        return _SanitizingSession(durable)
     cached = _local_sessions.get(session_id)
     if cached is None:
-        cached = SQLiteSession(session_id)  # ":memory:" — process-local, non-durable
+        # ":memory:" — process-local, non-durable; wrapped so a failed run's dangling tool call can't
+        # break the next turn within the process either.
+        cached = _SanitizingSession(SQLiteSession(session_id))
         _local_sessions[session_id] = cached
     return cached
 

@@ -9,9 +9,9 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agents import FunctionTool
 from agent.agent import _apply_decisions, _normalize_item, _serialize_events, _session_id
 from agent.tools import all_tools
+from agents import FunctionTool
 
 
 def test_tools_autoregister():
@@ -139,7 +139,11 @@ async def test_serialize_events_relays_interrupt_as_native_event():
         {
             "type": "interrupt",
             "id": "call-1",
-            "value": {"action_requests": [{"name": "send_message", "args": {"recipient": "x", "body": "y"}}]},
+            "value": {
+                "action_requests": [
+                    {"name": "send_message", "args": {"recipient": "x", "body": "y"}}
+                ]
+            },
         }
     ]
     # The paused run is stashed in-process, keyed by session id, for a later resume.
@@ -198,7 +202,10 @@ def test_session_store_selects_durable_store(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_STORE", "my-store")
     monkeypatch.setattr(ss, "SessionStoreClient", lambda *a, **k: _FakeStoreClient())
     store = ss.session_store("abc-123")
-    assert isinstance(store, ss.DatabricksSessionStore)
+    # Sessions are wrapped so a failed run's dangling tool call can't poison the next turn; the
+    # durable store is the wrapped inner.
+    assert isinstance(store, ss._SanitizingSession)
+    assert isinstance(store._inner, ss.DatabricksSessionStore)
 
 
 class _FakeStoreClient:
@@ -216,6 +223,97 @@ def test_session_id_is_required_from_runtime():
         _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
+def test_prune_dangling_tool_calls_drops_call_without_output():
+    import databricks_mason.openai.sessions as ss
+
+    items = [
+        {"role": "user", "content": "hi"},
+        {"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"},
+        # no function_call_output for c1 — an approval interrupt persisted the call but the resume
+        # (which writes the output) never landed.
+    ]
+    assert ss._prune_dangling_tool_calls(items) == [{"role": "user", "content": "hi"}]
+
+
+def test_prune_dangling_tool_calls_keeps_matched_pair():
+    import databricks_mason.openai.sessions as ss
+
+    items = [
+        {"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+    ]
+    assert ss._prune_dangling_tool_calls(items) == items
+
+
+def test_prune_dangling_tool_calls_drops_orphan_output():
+    import databricks_mason.openai.sessions as ss
+
+    items = [
+        {"role": "user", "content": "hi"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},  # no matching call
+    ]
+    assert ss._prune_dangling_tool_calls(items) == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_sanitizing_session_prunes_on_get_items():
+    import databricks_mason.openai.sessions as ss
+
+    inner = ss.SQLiteSession("prune-test")
+    await inner.add_items(
+        [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"},
+        ]
+    )
+    session = ss._SanitizingSession(inner)
+    # The dangling function_call is gone, so replaying this history won't 400 on the next turn.
+    assert await session.get_items() == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_hitl_interrupt_leaves_dangling_call_that_wrapper_prunes():
+    # End-to-end: an approval-gated tool interrupts the run, and the SDK persists the function_call
+    # with no output (the output is only written on resume). This is the real source of the dangling
+    # call_id — verify the raw session is left dangling and the wrapper prunes it on replay.
+    import json
+
+    from agents import Agent, Runner, function_tool
+    from agents.testing import ModelStep, ScriptedModel
+    from openai.types.responses import ResponseFunctionToolCall
+
+    import databricks_mason.openai.sessions as ss
+
+    @function_tool
+    def transfer(amount: str) -> str:
+        """Transfer money (needs approval)."""
+        return f"transferred {amount}"
+
+    transfer.needs_approval = True
+
+    inner = ss.SQLiteSession("hitl-e2e")
+    call = ResponseFunctionToolCall(
+        type="function_call",
+        call_id="call_hitl",
+        name="transfer",
+        arguments=json.dumps({"amount": "100"}),
+        id="fc_1",
+    )
+    agent = Agent(name="t", tools=[transfer], model=ScriptedModel([ModelStep(output=[call])]))
+    result = await Runner.run(agent, [{"role": "user", "content": "send 100"}], session=inner)
+    assert result.interruptions, "expected an approval interrupt"
+
+    # The raw session now holds a function_call with no matching output — the exact BAD_REQUEST cause.
+    raw = await inner.get_items()
+    raw_calls = {i.get("call_id") for i in raw if i.get("type") == "function_call"}
+    raw_outputs = {i.get("call_id") for i in raw if i.get("type") == "function_call_output"}
+    assert raw_calls - raw_outputs == {"call_hitl"}
+
+    # The wrapper drops it on replay, so the next turn's input is well-formed.
+    replayed = await ss._SanitizingSession(inner).get_items()
+    assert not any(i.get("type") == "function_call" for i in replayed)
+
+
 def _has_workspace_auth() -> bool:
     return bool(
         os.getenv("DATABRICKS_CONFIG_PROFILE")
@@ -229,9 +327,9 @@ def _has_workspace_auth() -> bool:
 )
 @pytest.mark.asyncio
 async def test_agent_responds_end_to_end():
+    from agent.agent import configure, create_agent
     from agents import Runner
 
-    from agent.agent import configure, create_agent
     from databricks_mason.openai import session_store
 
     configure()
