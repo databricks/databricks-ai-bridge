@@ -430,20 +430,24 @@ def deploy(
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime).
+    # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    #
+    #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
+    #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
+    #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
     if not _deployment_exists(name, obj.profile):
-        result = _databricks(
-            ["apps", "create", name, *instance_args],
-            obj.profile,
-            capture=True,
-            action=f"Could not create deployment '{name}'.",
-        )
+        with render.progress(
+            "Creating the agent and starting its compute (this can take a few minutes)…"
+        ):
+            result = _databricks(
+                ["apps", "create", name, *instance_args],
+                obj.profile,
+                capture=True,
+                action=f"Could not create deployment '{name}'.",
+            )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-        # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
-        # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
-        with render.status("Waiting for app compute to start (this can take a few minutes)…"):
-            _wait_for_running(name, obj.profile)
     elif instance_args:
         update = {
             "app": {
@@ -460,6 +464,11 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
+    # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
+    # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
+    # compute is already ACTIVE.
+    with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
+        _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
@@ -515,7 +524,7 @@ def deploy(
         (f"mason deployments logs {name}", "Tail its logs"),
     ]
     if app_url:
-        steps.insert(0, (f"open {app_url}", "Open the deployed app"))
+        steps.insert(0, f"Open the deployed agent: {app_url}")
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
