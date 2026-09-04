@@ -75,7 +75,7 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    Stores bound with ``mason memory/sessions bind`` are provisioned here and read from agent.toml at
+    Stores bound with ``mason memory/sessions bind`` are validated here and read from agent.toml at
     runtime (not written to app.yaml); the ``--with-traces`` flag wires tracing env into app.yaml,
     exactly as ``mason deploy`` does. Locally the store owner (you) already has access, so no
     service-principal grant is needed here; that grant happens at ``mason deploy`` time.
