@@ -92,8 +92,9 @@ def test_delete_proceeds_with_yes(monkeypatch):
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **k: called.append(args)
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **k: (
+            called.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -103,20 +104,19 @@ def test_delete_proceeds_with_yes(monkeypatch):
 # --- ML-69248: session store pre-validation ----------------------------------
 
 
-def test_resolve_store_env_validates_session_store_on_non_create_path():
+def test_validate_stores_raises_when_session_store_missing():
     client = mock.Mock()
     client.get_session_store.side_effect = AgentCliError(
         "session store not found", error_code="NOT_FOUND"
     )
     with pytest.raises(AgentCliError) as exc:
-        deploy_mod.resolve_store_env(
+        deploy_mod.validate_stores_and_trace_env(
             client,
             app="a",
             memory_store=None,
             session_store="ghost",
             traces_destination=None,
             traces_experiment=None,
-            create_stores=False,
         )
     assert "does not exist" in str(exc.value)
     client.get_session_store.assert_called_once_with("ghost")

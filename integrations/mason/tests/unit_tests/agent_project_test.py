@@ -136,6 +136,26 @@ def test_rebinding_replaces_the_store_name(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).memory_store == "second"
 
 
+def test_bind_memory_store_records_id(tmp_path: pathlib.Path):
+    # The runtime needs the store id (not the display name) for the entries API, so bind writes both.
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    assert project.bind_memory_store("mem", "mem-id-123") is True
+    project.write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store == "mem"
+    assert reloaded.memory_store_id == "mem-id-123"
+    assert 'id = "mem-id-123"' in (tmp_path / "agent.toml").read_text(encoding="utf-8")
+
+    # Unbinding clears both name and id.
+    assert reloaded.unbind_memory_store() is True
+    reloaded.write()
+    final = AgentProject.load(tmp_path)
+    assert final.memory_store is None
+    assert final.memory_store_id is None
+
+
 def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,

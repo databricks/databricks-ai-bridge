@@ -115,8 +115,7 @@ def test_demo_ui_routes(monkeypatch):
     assert 'id="session-list"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
-    assert "mason dev --memory <store-name>" in app_script.text
-    assert "mason deploy <app-name> --source . --memory <store-name>" in app_script.text
+    assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text

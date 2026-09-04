@@ -211,11 +211,11 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
   `REQUIRE_APPROVAL` in `agent/agent.py` (see the human-in-the-loop section above); empty the set to
   disable gating.
 - **Add an MCP server:** append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make history durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the session
+- **Make history durable:** run `mason sessions bind <store>` (see "Enable durable state" below); the session
   store lives in `databricks_mason/openai/sessions.py`.
-- **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent()`
+- **Add long-term memory:** run `mason memory bind <store>`; `create_agent()`
   then includes the `remember`/`recall` tools from `databricks_mason/openai/memory.py` (persist/search
-  facts across conversations). Unset → the model isn't offered them.
+  facts across conversations). Unbound → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
 
@@ -269,7 +269,8 @@ each trace with the session id. Otherwise it disables tracing outright, so the p
 By default the agent uses an in-process session (`SQLiteSession` backed by `:memory:`) — multi-turn
 history works within a running process but does not survive restarts or span replicas.
 
-Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
+Bind a managed [Session Store](../../README.md) with **`mason sessions bind <store>`** (recorded in
+`agent.toml`; `AGENT_SESSION_STORE` still overrides it if set) and
 `databricks_mason/openai/sessions.py` returns a `DatabricksSessionStore` instead. It's an Agents
 SDK `Session` that stores each Responses item as an ordered **session item** through the managed
 Session Store **REST API** — no database the app connects to directly. The conversation transcript is

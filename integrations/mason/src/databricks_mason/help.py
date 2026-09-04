@@ -27,7 +27,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
-        ("mason deploy <agent> --memory agent-memory", "wire it into a deployment"),
+        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev/deploy)"),
     ),
     ("memory", "bind"): (
         ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
