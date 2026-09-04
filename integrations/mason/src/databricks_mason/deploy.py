@@ -524,7 +524,7 @@ def deploy(
         (f"mason deployments logs {name}", "Tail its logs"),
     ]
     if app_url:
-        steps.insert(0, f"Open the deployed app: {app_url}")
+        steps.insert(0, f"Open the deployed agent: {app_url}")
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
