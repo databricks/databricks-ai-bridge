@@ -47,8 +47,15 @@ def test_ensure_session_store_reuses_on_already_exists():
     client = mock.Mock()
     client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
     client.get_session_store.return_value = {"session_store_name": "s"}
-    assert deploy_mod._ensure_session_store(client, "s") == {"session_store_name": "s"}
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, False)
     client.create_session_store.assert_called_once_with("s", retry_transient=True)
+
+
+def test_ensure_session_store_reports_created():
+    client = mock.Mock()
+    client.create_session_store.return_value = {"session_store_name": "s"}
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, True)
 
 
 def test_ensure_memory_store_reuses_on_already_exists():
@@ -58,11 +65,21 @@ def test_ensure_memory_store_reuses_on_already_exists():
         "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
     }
 
-    assert deploy_mod._ensure_memory_store(client, "mem") == {
-        "name": "memory-stores/mem-id-123",
-        "display_name": "mem",
-    }
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123", "display_name": "mem"},
+        False,
+    )
     client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
+
+
+def test_ensure_memory_store_reports_created():
+    client = mock.Mock()
+    client.create_memory_store.return_value = {"name": "memory-stores/mem-id-123"}
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123"},
+        True,
+    )
 
 
 class _FakeClient:
@@ -489,6 +506,67 @@ def test_with_traces_explicit_experiment_wins_over_per_app():
         create_stores=False,
     )
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/custom"
+
+
+def test_store_label_marks_created_vs_existing():
+    assert deploy_mod._store_label("id", True) == "id  (created)"
+    assert deploy_mod._store_label("id", False) == "id  (existing)"
+    assert deploy_mod._store_label("id", None) == "id"
+
+
+def test_resolve_store_env_reports_created_stores():
+    # On the create path (_FakeClient's create_* succeed), both stores are reported as created.
+    created: dict[str, bool] = {}
+    deploy_mod.resolve_store_env(
+        _FakeClient(),
+        app="a",
+        memory_store="mem",
+        session_store="s",
+        traces_destination=None,
+        traces_experiment=None,
+        create_stores=True,
+        created=created,
+    )
+    assert created == {"memory": True, "session": True}
+
+
+def test_resolve_store_env_reports_existing_stores_on_no_create():
+    # With --no-create-stores the stores are resolved (already exist), so created is False.
+    created: dict[str, bool] = {}
+    deploy_mod.resolve_store_env(
+        _FakeClient(),
+        app="a",
+        memory_store="mem",
+        session_store="s",
+        traces_destination=None,
+        traces_experiment=None,
+        create_stores=False,
+        created=created,
+    )
+    assert created == {"memory": False, "session": False}
+
+
+def test_deploy_summary_marks_a_created_store(tmp_path: pathlib.Path, monkeypatch):
+    # The deploy summary must tell the user a store was created (vs reused). _FakeClient creates on
+    # the default path, so the Memory/Session store fields carry the "(created)" marker.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(deploy_mod, "_app_url", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
+        obj=_FakeCtx(),
+    )
+    assert result.exit_code == 0, result.output
+    assert "(created)" in result.output
 
 
 def _run_deploy(src, monkeypatch, extra_args):

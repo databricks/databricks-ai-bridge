@@ -189,25 +189,34 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
             return None
 
 
-def _ensure_memory_store(client, display_name: str) -> dict:
+def _ensure_memory_store(client, display_name: str) -> tuple[dict, bool]:
+    """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_memory_store(display_name, retry_transient=True)
+        return client.create_memory_store(display_name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
     store = _resolve_memory_store(client, display_name)
     if store is None:
         raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
-    return store
+    return store, False
 
 
-def _ensure_session_store(client, name: str) -> dict:
+def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
+    """Create the session store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_session_store(name, retry_transient=True)
+        return client.create_session_store(name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    return client.get_session_store(name)
+    return client.get_session_store(name), False
+
+
+def _store_label(identifier: str, created: Optional[bool]) -> str:
+    """Annotate a provisioned store id with whether deploy created it or reused an existing one."""
+    if created is None:
+        return identifier
+    return f"{identifier}  (created)" if created else f"{identifier}  (existing)"
 
 
 def _memory_store_database(client, memory_store: str) -> Optional[str]:
@@ -231,6 +240,7 @@ def resolve_store_env(
     traces_destination: Optional[str],
     traces_experiment: Optional[str],
     create_stores: bool,
+    created: Optional[dict[str, bool]] = None,
 ) -> dict[str, str]:
     """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
 
@@ -239,13 +249,17 @@ def resolve_store_env(
     they must already exist. The memory store resolves to its bare id (the runtime re-adds the
     `memory-stores/` prefix when building the entries URL); the session store and trace destination
     are used verbatim.
+
+    Pass `created` (a dict) to learn which stores this call newly created: it's populated with
+    `"memory"`/`"session"` -> True when created, False when an existing store was reused. Lets the
+    caller tell the user it provisioned a store rather than reused one.
     """
     env: dict[str, str] = {}
     if memory_store:
         # Resolve by display name (what users pass) in both cases: get_memory_store looks up by
         # resource id, so it can't resolve a display name on the non-create path.
         if create_stores:
-            store = _ensure_memory_store(client, memory_store)
+            store, was_created = _ensure_memory_store(client, memory_store)
         else:
             store = _resolve_memory_store(client, memory_store)
             if store is None:
@@ -253,11 +267,14 @@ def resolve_store_env(
                     f"Memory store '{memory_store}' does not exist "
                     "(drop --no-create-stores to create it)."
                 )
+            was_created = False
+        if created is not None:
+            created["memory"] = was_created
         store_name = field(store, "name") or memory_store
         env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
     if session_store:
         if create_stores:
-            _ensure_session_store(client, session_store)
+            _, was_created = _ensure_session_store(client, session_store)
         else:
             # Validate existence up front so a typo fails at deploy time, not at runtime.
             try:
@@ -268,6 +285,9 @@ def resolve_store_env(
                     "(drop --no-create-stores to create it).",
                     error_code=exc.error_code,
                 ) from exc
+            was_created = False
+        if created is not None:
+            created["session"] = was_created
         env[_SESSION_ENV] = session_store
     if traces_destination:
         env[TRACES_DEST_ENV] = traces_destination
@@ -392,7 +412,9 @@ def deploy(
     source_dir = pathlib.Path(source)
     client = obj.client()
 
-    # 1. Provision / resolve stores and build the env to inject.
+    # 1. Provision / resolve stores and build the env to inject. `created` records which stores this
+    #    deploy newly created (vs reused) so the summary can say so.
+    created_stores: dict[str, bool] = {}
     env_updates = resolve_store_env(
         client,
         app=name,
@@ -401,12 +423,17 @@ def deploy(
         traces_destination=traces_destination,
         traces_experiment=traces_experiment,
         create_stores=not no_create_stores,
+        created=created_stores,
     )
     provisioned: dict[str, Any] = {}
     if _MEMORY_ENV in env_updates:
-        provisioned["Memory store"] = env_updates[_MEMORY_ENV]
+        provisioned["Memory store"] = _store_label(
+            env_updates[_MEMORY_ENV], created_stores.get("memory")
+        )
     if _SESSION_ENV in env_updates:
-        provisioned["Session store"] = env_updates[_SESSION_ENV]
+        provisioned["Session store"] = _store_label(
+            env_updates[_SESSION_ENV], created_stores.get("session")
+        )
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
