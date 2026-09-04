@@ -114,37 +114,37 @@ the existing CLI commands remain separate.
 
 ## Durable agent application
 
-`databricks_mason.runtime` publicly exposes the application/server layer used by the LangGraph
-template. Its durable execution engine and stores remain internal so the runtime can become a
-separate public embedding API later without coupling applications to today's implementation:
+`DurableAgentApp` is the supported server surface. Import it directly from `databricks_mason`
+(the `databricks_mason.runtime` alias is also supported). The transport-neutral runtime remains a
+separate package layer so it can be exposed as a standalone embedding API later:
 
 ```python
-from databricks_mason.runtime import DurableAgentApp, DurableAgentContext
+from databricks_mason import DurableAgentApp, DurableAgentContext
+from databricks_mason.runtime.store import InMemoryDurabilityStore
 
-app = DurableAgentApp()
-
-
-@app.invoke
 async def invoke(payload: dict, context: DurableAgentContext) -> dict:
     return await run_agent(payload, session_id=context.session_id)
 
-
-@app.recover
 async def recover(payload: dict, context: DurableAgentContext) -> dict:
     return await resume_agent(payload, session_id=context.session_id)
 
-
-app.run()
+server = DurableAgentApp(
+    invoke,
+    on_resume=recover,
+    durability_store=InMemoryDurabilityStore(),
+)
+app = server.app
 ```
 
 The application exposes `POST /invocations`, `GET /invocations/{run_id}`, and
 `GET /invocations/{run_id}/events?after={cursor}`. `run_id`, `background`, and `stream` are
 transport parameters; the Apps routing cookie is the session identifier, so a body `session_id` is
-ignored. All other JSON fields reach the registered hook unchanged. The internal runtime persists
+ignored. All other JSON fields reach the callback unchanged. The internal runtime persists
 the payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
 
-Local execution defaults to an in-memory durability store. `mason deploy` gives every generated
-LangGraph application one Lakebase database for runtime durability, chosen in this order:
+Generated templates select an in-memory durability store locally. `mason deploy` gives every
+generated LangGraph or OpenAI application one Lakebase database for runtime durability, chosen in
+this order:
 
 1. Reuse the configured Session Store's Lakebase database.
 2. Otherwise reuse the configured Memory Store's Lakebase database.
@@ -154,7 +154,7 @@ Mason adds only its `databricks_mason_runtime` schema and tables to the selected
 managed stores are configured, runtime durability still uses only the Session Store database; the
 Memory Store database remains a separate app resource only because the managed stores themselves
 currently live in different service-managed Lakebase projects. A replacement worker claims a stale
-heartbeat and calls `recover`; agent checkpoint restoration and idempotent external side effects
+heartbeat and calls `on_resume`; agent checkpoint restoration and idempotent external side effects
 remain the developer's responsibility.
 
 ## Commands

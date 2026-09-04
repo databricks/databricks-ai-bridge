@@ -1,7 +1,8 @@
 import pytest
+from databricks_mason import DurableAgentApp
+from databricks_mason.runtime.store import InMemoryDurabilityStore
 from fastapi.testclient import TestClient
 from runtime import ui
-from runtime.runtime import build_app
 
 
 class _FakeStateClient:
@@ -88,16 +89,12 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     if history:
         monkeypatch.setattr(ui, "_local_history", _session_history)
 
-    async def invoke_handler(request):
-        return {"output": [], "session_id": request["session_id"]}
+    async def invoke(request, context):
+        return {"output": [], "session_id": context.session_id}
 
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    app = build_app(invoke_handler, stream_handler)
-    ui.install_ui(app)
-    client = TestClient(app, base_url="https://testserver")
+    server = DurableAgentApp(invoke, durability_store=InMemoryDurabilityStore())
+    ui.install_ui(server.app)
+    client = TestClient(server.app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);

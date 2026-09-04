@@ -1,15 +1,15 @@
 # Agent — OpenAI Agents SDK (FastAPI)
 
 An [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) agent **backend** for
-Databricks Apps, served from a **FastAPI app** — no serving framework. It runs locally with **no
-database and no setup** — just an auth profile. The model runs on Databricks (via
-`databricks-openai`), and `POST /invocations` takes an `input` list of message dicts (streaming via
-SSE, plus an in-memory `background` mode with `GET /invocations/{id}`).
+Databricks Apps, served by `databricks_mason.DurableAgentApp`. It runs locally with **no database
+and no setup** beyond an auth profile. The model runs on Databricks (via `databricks-openai`), and
+`POST /invocations` takes an `input` list of message dicts (streaming via SSE, plus a `background`
+mode with `GET /invocations/{id}`).
 
-The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, tracing spans,
-background wiring), so the template shows exactly how the agent is served — request and response
-bodies are plain dicts, no wrapper types. The agent translates the Agents SDK's native run events
-into that generic contract in `agent/agent.py`, so the serving layer stays SDK-agnostic.
+The public application is a thin HTTP layer over Mason's durable runtime engine. The application
+owns routes, SSE framing, and browser sessions; the engine owns persisted execution state,
+heartbeats, claims, and event replay. The agent translates the Agents SDK's native run events into
+that generic contract in `agent/agent.py`.
 
 This template is API-first. Call it with `curl` or use it from your own client.
 
@@ -21,24 +21,22 @@ programmatic token authentication. Polling and health checks likewise have `/api
 
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
-  agent.py             #   invoke / stream handlers + create_agent() + event serialization
+  agent.py             #   invoke / recover callbacks + create_agent() + event serialization
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@function_tool)
     send_message.py    #     a side-effecting tool gated by human approval (needs_approval=True)
   mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
-runtime/               # the HTTP surface — SDK-agnostic; rarely edited
-  runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
-  main.py              #   entry point: loads config, builds the app, runs uvicorn
+runtime/               # thin generated entry point; rarely edited
+  main.py              #   loads config and runs the SDK-provided application
 tests/
   test_agent.py        #   hermetic smoke tests + one gated live model call
 ```
 
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session store, tracing,
-MCP server construction, background store) lives in the `databricks-mason` package —
-framework-neutral pieces under `databricks_mason.runtime`, OpenAI-specific ones under
-`databricks_mason.openai` — so the template ships only your agent code. `runtime/runtime.py` is the
-SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
-endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
+You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (durable application,
+execution runtime, session store, tracing, and MCP server construction) lives in the
+`databricks-mason` package. Framework-neutral pieces are under `databricks_mason.runtime`, while
+OpenAI-specific pieces are under `databricks_mason.openai`. `runtime/main.py` passes the plain
+`invoke` and `recover` callbacks from `agent/agent.py` to `DurableAgentApp`. `tools/` is a drop-in
 package: add a `*.py` with a `@function_tool` function and it's auto-collected (no edits to existing
 code). `mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
 
@@ -131,8 +129,9 @@ curl -s -b "$COOKIE_JAR" "$BASE/invocations/inv_..."
 # -> in_progress, completed + output, or failed + error
 ```
 
-Background runs and polling are in-memory and single-process. The routing cookie is required so the
-poll reaches the same replica, but the run itself does not survive a restart.
+Locally, background runs and polling use the in-memory durability store. After `mason deploy`, they
+use the selected Lakebase database, so polling, event replay, and stale-heartbeat recovery work
+across restarts and replicas.
 
 ### Chat app state APIs
 
@@ -216,8 +215,8 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent()`
   then includes the `remember`/`recall` tools from `databricks_mason/openai/memory.py` (persist/search
   facts across conversations). Unset → the model isn't offered them.
-- **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
-  store itself is `databricks_mason/runtime/background.py`).
+- **Add application routes:** register them on the FastAPI `app` in `runtime/main.py`, following the
+  chat overlay's `runtime/ui.py`. Mason's durable server and runtime stay package-owned.
 
 ## Test
 
@@ -261,10 +260,23 @@ Set neither half → tracing stays off. Examples:
   binding injects `MLFLOW_EXPERIMENT_ID`).
 
 When both halves are present the agent enables MLflow autolog (`mlflow.openai.autolog()`) and tags
-each trace with the session id. Otherwise it disables tracing outright, so the per-request span
-`runtime/runtime.py` opens has nothing to export and no traces are created.
+each trace with the session id. Otherwise tracing remains disabled.
 
-### Enable durable state (optional)
+### Runtime durability
+
+Local development uses an in-memory durability store. `mason deploy` selects exactly one Lakebase
+database for invocation state, background polling, emitted events, heartbeats, and recovery:
+
+1. The configured Session Store's Lakebase database, if present.
+2. Otherwise the configured Memory Store's Lakebase database, if present.
+3. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
+
+Mason creates only the `databricks_mason_runtime` schema and its tables in that database. Runtime
+recovery replays the persisted input against the same OpenAI session. This gives at-least-once
+execution, so tools with external side effects must still be idempotent. Paused Agents SDK
+`RunState` remains process-local, as described below.
+
+### Enable durable conversation history (optional)
 
 By default the agent uses an in-process session (`SQLiteSession` backed by `:memory:`) — multi-turn
 history works within a running process but does not survive restarts or span replicas.
@@ -294,6 +306,7 @@ only difference.
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable transcript (REST-backed); unset = in-process `SQLiteSession` |
+| `DATABRICKS_MASON_RUNTIME_ENDPOINT` | _deployed by Mason_ | Internal Lakebase endpoint selected for runtime durability; do not set manually in generated apps |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
@@ -304,7 +317,6 @@ only difference.
 - **The event serialization in `agent/agent.py` (`_serialize_events`) is Agents-SDK-specific** — it
   turns the SDK's native run events into the runtime's generic JSON contract (normalizing message
   items to `{role, content, tool_calls?}`), which is why the browser UI is identical across
-  frameworks. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
-  `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`databricks_mason/runtime/background.py`, wired in
-  `runtime/runtime.py`) — non-durable, single-process; see the note under the client contract.
+  frameworks. The package-owned runtime and server remain framework-neutral.
+- **Background mode follows the runtime store** — in-memory for local development, Lakebase-backed
+  after `mason deploy`.

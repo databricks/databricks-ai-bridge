@@ -1,16 +1,16 @@
 """Tests for the SDK-provided durable agent application."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import httpx
 import pytest
 
-from databricks_mason.runtime import DurableAgentApp
-from databricks_mason.runtime.app import RUN_ID_HEADER, SESSION_ID_HEADER
-from databricks_mason.runtime.memory_store import InMemoryDurabilityStore
+from databricks_mason import DurableAgentApp
+from databricks_mason.durable_server.app import RUN_ID_HEADER, SESSION_ID_HEADER
+from databricks_mason.runtime.store import InMemoryDurabilityStore
 from databricks_mason.runtime.types import (
     DurableExecution,
     DurableExecutionContext,
@@ -18,8 +18,14 @@ from databricks_mason.runtime.types import (
 )
 
 
-def make_app() -> DurableAgentApp:
+async def echo(payload, context):
+    return {"output": payload}
+
+
+def make_app(invoke=echo, *, on_resume=None) -> DurableAgentApp:
     return DurableAgentApp(
+        invoke,
+        on_resume=on_resume,
         durability_store=InMemoryDurabilityStore(),
         heartbeat_seconds=0.01,
         stale_seconds=0.05,
@@ -29,23 +35,20 @@ def make_app() -> DurableAgentApp:
 
 
 @asynccontextmanager
-async def running_client(app: DurableAgentApp):
-    await app._runtime.start()
+async def running_client(server: DurableAgentApp) -> AsyncIterator[httpx.AsyncClient]:
+    await server._runtime.start()
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
+            transport=httpx.ASGITransport(app=server.app),
             base_url="http://testserver",
         ) as client:
             yield client
     finally:
-        await app._runtime.stop()
+        await server._runtime.stop()
 
 
 @pytest.mark.asyncio
-async def test_body_runtime_parameters_are_removed_and_session_id_is_ignored() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
+async def test_body_transport_parameters_are_removed_and_session_id_is_ignored() -> None:
     async def invoke(payload, context):
         return {
             "received": payload,
@@ -53,12 +56,14 @@ async def test_body_runtime_parameters_are_removed_and_session_id_is_ignored() -
             "is_recovery": context.is_recovery,
         }
 
-    async with running_client(durable_app) as client:
+    server = make_app(invoke)
+    async with running_client(server) as client:
         response = await client.post(
             "/invocations",
             json={
                 "run_id": "run-1",
                 "session_id": "session-1",
+                "actor": "body-actor",
                 "background": False,
                 "stream": False,
                 "input": "hello",
@@ -77,21 +82,19 @@ async def test_body_runtime_parameters_are_removed_and_session_id_is_ignored() -
 
 
 @pytest.mark.asyncio
-async def test_recovery_attempt_uses_registered_recovery_hook() -> None:
-    durable_app = make_app()
+async def test_recovery_attempt_uses_on_resume_hook() -> None:
     calls = []
 
-    @durable_app.invoke
     async def invoke(payload, context):
         calls.append("invoke")
         return payload
 
-    @durable_app.recover
     async def recover(payload, context):
         calls.append("recover")
         return {"attempt": context.attempt, "session_id": context.session_id}
 
-    result = await durable_app._execute(
+    server = make_app(invoke, on_resume=recover)
+    result = await server._execute(
         {
             "payload": {"input": "hello"},
             "session_id": "session-1",
@@ -105,22 +108,32 @@ async def test_recovery_attempt_uses_registered_recovery_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_invocation_can_be_polled() -> None:
-    durable_app = make_app()
+async def test_recovery_without_on_resume_reuses_invoke_hook() -> None:
+    attempts = []
 
-    @durable_app.invoke
+    async def invoke(payload, context):
+        attempts.append(context.attempt)
+        return payload
+
+    server = make_app(invoke)
+    await server._execute(
+        {"payload": {}, "session_id": "session-1", "actor": "agent"},
+        DurableExecutionContext("run-1", 2),
+    )
+
+    assert attempts == [2]
+
+
+@pytest.mark.asyncio
+async def test_background_invocation_can_be_polled() -> None:
     async def invoke(payload, context):
         return {"output": payload["input"]}
 
-    async with running_client(durable_app) as client:
+    server = make_app(invoke)
+    async with running_client(server) as client:
         submitted = await client.post(
             "/invocations",
-            json={
-                "run_id": "run-bg",
-                "session_id": "session-bg",
-                "input": "hello",
-                "background": True,
-            },
+            json={"run_id": "run-bg", "input": "hello", "background": True},
         )
         session_id = submitted.json()["session_id"]
         assert submitted.status_code == 202
@@ -140,19 +153,14 @@ async def test_background_invocation_can_be_polled() -> None:
         "id": "run-bg",
         "session_id": session_id,
         "status": "completed",
-        "result": {"output": "hello"},
+        "output": "hello",
     }
 
 
 @pytest.mark.asyncio
-async def test_background_stream_returns_events_url() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
-    async def invoke(payload, context):
-        return {"output": payload}
-
-    async with running_client(durable_app) as client:
+async def test_background_stream_returns_api_events_url() -> None:
+    server = make_app()
+    async with running_client(server) as client:
         response = await client.post(
             "/api/invocations",
             json={"run_id": "run-bg", "input": "hello", "background": True, "stream": True},
@@ -164,14 +172,9 @@ async def test_background_stream_returns_events_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_without_session_id_reuses_the_generated_session() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
-    async def invoke(payload, context):
-        return {"output": payload}
-
-    async with running_client(durable_app) as client:
+async def test_retry_reuses_cookie_derived_session() -> None:
+    server = make_app()
+    async with running_client(server) as client:
         first = await client.post(
             "/invocations",
             json={"run_id": "run-retry", "input": "hello", "background": True},
@@ -189,19 +192,17 @@ async def test_retry_without_session_id_reuses_the_generated_session() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_replays_persisted_events_and_ends_with_done() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
     async def invoke(payload, context):
         await context.emit({"type": "delta", "content": "hel"})
         await context.emit({"type": "delta", "content": "lo"})
         return {"output": "hello"}
 
-    async with running_client(durable_app) as client:
+    server = make_app(invoke)
+    async with running_client(server) as client:
         async with client.stream(
             "POST",
             "/invocations",
-            json={"run_id": "run-stream", "session_id": "session-stream", "stream": True},
+            json={"run_id": "run-stream", "stream": True},
         ) as response:
             body = "".join([chunk async for chunk in response.aiter_text()])
 
@@ -213,19 +214,10 @@ async def test_stream_replays_persisted_events_and_ends_with_done() -> None:
 
 @pytest.mark.asyncio
 async def test_reusing_run_id_with_different_payload_returns_conflict() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
-    async def invoke(payload, context):
-        return {"output": payload}
-
-    async with running_client(durable_app) as client:
-        first = await client.post(
-            "/invocations", json={"run_id": "run-1", "session_id": "session-1", "input": "one"}
-        )
-        conflict = await client.post(
-            "/invocations", json={"run_id": "run-1", "session_id": "session-1", "input": "two"}
-        )
+    server = make_app()
+    async with running_client(server) as client:
+        first = await client.post("/invocations", json={"run_id": "run-1", "input": "one"})
+        conflict = await client.post("/invocations", json={"run_id": "run-1", "input": "two"})
 
     assert first.status_code == 200
     assert conflict.status_code == 409
@@ -233,140 +225,87 @@ async def test_reusing_run_id_with_different_payload_returns_conflict() -> None:
 
 @pytest.mark.asyncio
 async def test_transport_mode_does_not_change_idempotent_request() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
-    async def invoke(payload, context):
-        return {"output": payload}
-
-    async with running_client(durable_app) as client:
-        first = await client.post(
-            "/invocations", json={"run_id": "run-1", "session_id": "session-1", "input": "one"}
-        )
+    server = make_app()
+    async with running_client(server) as client:
+        first = await client.post("/invocations", json={"run_id": "run-1", "input": "one"})
         second = await client.post(
             "/invocations",
-            json={
-                "run_id": "run-1",
-                "session_id": "session-1",
-                "input": "one",
-                "background": True,
-            },
+            json={"run_id": "run-1", "input": "one", "background": True},
         )
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert second.json()["result"] == {"output": {"input": "one"}}
+    assert second.json()["output"] == {"input": "one"}
 
 
-def test_local_default_uses_in_memory_store(monkeypatch) -> None:
-    for name in (
-        "AGENT_SESSION_STORE",
-        "DATABRICKS_MASON_RUNTIME_ENDPOINT",
-        "PGHOST",
-        "PGPORT",
-        "PGDATABASE",
-        "PGUSER",
-        "LAKEBASE_AUTOSCALING_ENDPOINT",
-        "LAKEBASE_AUTOSCALING_PROJECT",
-        "LAKEBASE_AUTOSCALING_BRANCH",
-    ):
-        monkeypatch.delenv(name, raising=False)
+@pytest.mark.asyncio
+async def test_forwarded_actor_is_passed_to_agent_context() -> None:
+    async def invoke(payload, context):
+        return {"actor": context.actor}
 
-    durable_app = DurableAgentApp()
+    server = make_app(invoke)
+    async with running_client(server) as client:
+        response = await client.post(
+            "/invocations",
+            json={},
+            headers={"X-Forwarded-Email": "alice@example.com"},
+        )
 
-    assert isinstance(durable_app._runtime.durability_store, InMemoryDurabilityStore)
+    assert response.json() == {"actor": "alice@example.com"}
 
 
-def test_managed_session_store_alone_keeps_runtime_in_memory(monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
+@pytest.mark.asyncio
+async def test_run_id_is_generated_with_invocation_prefix() -> None:
+    server = make_app()
+    async with running_client(server) as client:
+        response = await client.post("/invocations", json={})
 
-    durable_app = DurableAgentApp()
-
-    assert isinstance(durable_app._runtime.durability_store, InMemoryDurabilityStore)
-
-
-def test_apps_postgres_resource_selects_lakebase(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "DATABRICKS_MASON_RUNTIME_ENDPOINT",
-        "projects/session-store/branches/production/endpoints/primary",
-    )
-    monkeypatch.setenv("PGHOST", "session-store.example.com")
-    monkeypatch.setenv("PGPORT", "5432")
-    monkeypatch.setenv("PGDATABASE", "sessions")
-    monkeypatch.setenv("PGUSER", "app-service-principal")
-    monkeypatch.setenv("PGSSLMODE", "verify-full")
-    store = AsyncMock()
-
-    with patch(
-        "databricks_mason.runtime.app.LakebaseDurabilityStore.from_app_resource",
-        return_value=store,
-    ) as lakebase:
-        durable_app = DurableAgentApp()
-
-    assert durable_app._runtime.durability_store is store
-    lakebase.assert_called_once_with(
-        endpoint="projects/session-store/branches/production/endpoints/primary",
-        host="session-store.example.com",
-        port=5432,
-        database="sessions",
-        username="app-service-principal",
-        sslmode="verify-full",
-        workspace_client=None,
-        schema="databricks_mason_runtime",
-    )
+    assert response.headers[RUN_ID_HEADER].startswith("inv_")
 
 
-def test_partial_apps_postgres_resource_fails_fast(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "DATABRICKS_MASON_RUNTIME_ENDPOINT",
-        "projects/session-store/branches/production/endpoints/primary",
-    )
-    monkeypatch.setenv("PGHOST", "session-store.example.com")
-    monkeypatch.delenv("PGPORT", raising=False)
-    monkeypatch.delenv("PGDATABASE", raising=False)
-    monkeypatch.delenv("PGUSER", raising=False)
+@pytest.mark.asyncio
+async def test_new_session_rotates_local_cookie() -> None:
+    server = make_app()
+    async with running_client(server) as client:
+        health = await client.get("/health")
+        previous_session_id = health.cookies["mason-local-session"]
+        response = await client.post("/api/session/new")
 
-    with pytest.raises(RuntimeError, match="PGPORT, PGDATABASE, PGUSER"):
-        DurableAgentApp()
-
-
-def test_hooks_can_only_be_registered_once() -> None:
-    durable_app = make_app()
-
-    @durable_app.invoke
-    async def first_invoke(payload, context):
-        return payload
-
-    with pytest.raises(RuntimeError, match="one invoke hook"):
-
-        @durable_app.invoke
-        async def second_invoke(payload, context):
-            return payload
-
-    @durable_app.recover
-    async def first_recover(payload, context):
-        return payload
-
-    with pytest.raises(RuntimeError, match="one recovery hook"):
-
-        @durable_app.recover
-        async def second_recover(payload, context):
-            return payload
+    assert response.json()["previous_session_id"] == previous_session_id
+    assert response.json()["session_id"] != previous_session_id
+    assert response.cookies["mason-local-session"] == response.json()["session_id"]
 
 
-def test_state_payload_keeps_application_result_opaque() -> None:
+def test_app_exposes_only_fastapi_surface() -> None:
+    server = make_app()
+    paths = server.app.openapi()["paths"]
+
+    assert "/invocations" in paths
+    assert "/api/invocations" in paths
+    assert "/api/session/new" in paths
+    assert not hasattr(server, "asgi_app")
+    assert not hasattr(server, "run")
+
+
+def test_durability_store_is_required() -> None:
+    with pytest.raises(TypeError, match="durability_store"):
+        DurableAgentApp(echo)  # type: ignore[call-arg]
+
+
+def test_state_payload_flattens_completed_application_response() -> None:
     state = DurableExecution(
         execution_id="run-1",
         status=DurableExecutionStatus.COMPLETED,
         attempt=1,
         heartbeat_at=None,
         request={"payload": {}, "session_id": "session-1"},
-        response={"status": "interrupted", "output": []},
+        response={"output": [], "custom": "value"},
     )
 
     assert DurableAgentApp._state_payload(state, session_id="session-1") == {
         "id": "run-1",
         "session_id": "session-1",
         "status": "completed",
-        "result": {"status": "interrupted", "output": []},
+        "output": [],
+        "custom": "value",
     }

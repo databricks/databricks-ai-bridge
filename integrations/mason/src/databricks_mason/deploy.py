@@ -324,9 +324,9 @@ def _durability_resources(
 
 
 def _uses_durable_application(source: pathlib.Path) -> bool:
-    """Whether this Mason project uses the LangGraph durable application template."""
+    """Whether this Mason project uses a durable application template."""
     try:
-        return load_project_metadata(source).framework == "langgraph"
+        return load_project_metadata(source).framework in {"langgraph", "openai"}
     except AgentCliError:
         return False
 

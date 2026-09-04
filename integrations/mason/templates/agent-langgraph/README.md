@@ -1,14 +1,14 @@
 # Agent — LangGraph (FastAPI)
 
 A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
-served by `databricks_mason.runtime.DurableAgentApp`. It runs locally with **no database and
+served by `databricks_mason.DurableAgentApp`. It runs locally with **no database and
 no setup** beyond an auth profile. It speaks LangGraph's **native** shape on both ends:
 `POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus a
 `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is reshaped
 into another contract.
 
-The public application is a thin HTTP layer over Mason's internal durable runtime engine. The
-application owns routes, SSE framing, browser sessions, and recovery-hook registration; the engine
+The public application is a thin HTTP layer over Mason's durable runtime engine. The application
+owns routes, SSE framing, and browser sessions; the engine
 owns persisted execution state, heartbeats, claims, and event replay. Only the application surface
 is public for now, leaving the engine available to expose as a standalone runtime library later.
 
@@ -22,7 +22,7 @@ programmatic token authentication. Polling and health checks likewise have `/api
 
 ```
 agent/                 # the agent (reasoning plane) — this is what you edit
-  agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
+  agent.py             #   invoke / recover callbacks + create_agent_graph() + event serialization
   tools/               #   function tools — drop a *.py file here to add one (auto-collected)
     sample_tool.py     #     get_current_time — a working example (@tool)
     send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
@@ -36,8 +36,8 @@ tests/
 You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (durable application,
 execution runtime, session checkpointer, tracing, and MCP tool loading) lives in the
 `databricks-mason` package. Framework-neutral pieces are under `databricks_mason.runtime`, while
-LangGraph-specific pieces are under `databricks_mason.langgraph`. `agent/agent.py` registers
-framework-specific `@app.invoke` and `@app.recover` hooks without exposing the internal runtime.
+LangGraph-specific pieces are under `databricks_mason.langgraph`. `runtime/main.py` passes the plain
+`invoke` and `recover` callbacks from `agent/agent.py` to `DurableAgentApp`.
 `tools/` is a drop-in package: add a `*.py` with a `@tool` function and it is auto-collected. `mcps.py`
 exposes `build_mcp_servers()` (empty by default — add servers to offer them).
 
@@ -217,8 +217,8 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
   conversations). Unset → the model isn't offered them.
-- **Add application routes:** register them on `app.asgi_app`, following the chat overlay's
-  `runtime/ui.py`. Mason's durable application and internal runtime stay package-owned.
+- **Add application routes:** register them on the FastAPI `app` in `runtime/main.py`, following the
+  chat overlay's `runtime/ui.py`. Mason's durable server and runtime stay package-owned.
 
 ## Test
 

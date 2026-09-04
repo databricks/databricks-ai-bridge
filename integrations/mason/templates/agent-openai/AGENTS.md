@@ -79,15 +79,14 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Add a function tool | new `*.py` in `agent/tools/` with a `@function_tool` function (auto-collected) |
 | Require human approval for a tool | `needs_approval=True` on the tool + its name in `REQUIRE_APPROVAL` (`agent/agent.py`) |
 | Add an MCP server | append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py` |
-| Change how a request maps to a run | `agent/agent.py` (`invoke_handler` / `stream_handler`) |
+| Change how a request maps to a run | `agent/agent.py` (`invoke` / `recover`) |
 | Change the conversation session | `databricks_mason/openai/sessions.py` |
-| Change the HTTP surface (routes, SSE, background wiring) | `runtime/runtime.py` |
-| Change the background-run store (make it durable) | `databricks_mason/runtime/background.py` |
+| Add application-specific HTTP routes | register them on the FastAPI `app` in `runtime/main.py` |
 | Add a test | `tests/` (hermetic; gate model calls on a workspace profile — see `test_agent.py`) |
 
-`runtime/runtime.py` is **SDK-agnostic** — it wires two generic handlers (`invoke_handler`/`stream_handler`,
-plain `dict -> dict` / `dict -> AsyncGenerator[dict]`) to the endpoints. The agent SDK lives entirely
-behind those handlers in `agent/agent.py`, so the serving layer is the same regardless of SDK.
+`DurableAgentApp` is the public server layer. It delegates execution, heartbeats, claims, and event
+replay to the framework-neutral runtime. The OpenAI adapter lives behind the plain `invoke` and
+`recover` callbacks in `agent/agent.py`.
 
 `databricks_mason.runtime` (from the `databricks-mason` package) holds framework-neutral plumbing
 (tracing, workspace client, background store), and `databricks_mason.openai` holds the OpenAI-specific
@@ -113,9 +112,9 @@ add a file to `agent/tools/`.
   vendored REST client (`session_store_client.py`); swap for the published package when it lands.
   `session_store(session_id, actor)` partitions by actor — the handler passes the signed-in user
   (`_actor`), so each user's threads stay separate.
-- Background mode is in-memory / single-process — non-durable. The store is
-  `databricks_mason/runtime/background.py` (wired in `runtime/runtime.py`); swap it for a durable
-  backend for cross-restart/replica recovery.
+- Runtime invocation state is in-memory locally. `mason deploy` stores it in exactly one Lakebase
+  database: Session Store first, otherwise Memory Store, otherwise a dedicated `<app>-durability`
+  project. Mason adds only its own schema and tables to the selected database.
 - Human-in-the-loop: tools with `needs_approval=True` (and listed in `REQUIRE_APPROVAL`,
   `agent/agent.py`) pause via the Agents SDK. The paused `RunState` is stashed **in-process** keyed by
   session id and resumed by sending `resume` with the same cookie. Unlike the transcript, a paused run
@@ -127,7 +126,7 @@ add a file to `agent/tools/`.
 
 Optional. Set both a destination (`MLFLOW_TRACKING_URI` or `MLFLOW_TRACING_DESTINATION`) and an
 experiment (`MLFLOW_EXPERIMENT_ID` or `MLFLOW_EXPERIMENT_NAME`) to enable (`mlflow.openai.autolog()`);
-leave either half unset to skip. `runtime/runtime.py` opens a per-request span regardless.
+leave either half unset to skip.
 
 ## Quick commands
 
@@ -142,6 +141,7 @@ leave either half unset to skip. `runtime/runtime.py` opens a per-request span r
 - The event serialization in `agent/agent.py` (`_serialize_events`) is Agents-SDK-specific: it turns
   the SDK's `raw_response_event`/`run_item_stream_event` stream into the runtime's generic JSON
   contract (token `delta`s, normalized `message` dicts, and an `interrupt` for a pending approval),
-  without leaking SDK item types to the client. `runtime/runtime.py` is SDK-agnostic.
+  without leaking SDK item types to the client. The package-owned runtime and server are
+  framework-neutral.
 - Message normalization (`_normalize_item`) maps Agents SDK run items to `{role, content, tool_calls?}`
   so the browser UI — shared in shape with the LangGraph template — renders them unchanged.

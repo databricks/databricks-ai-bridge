@@ -79,7 +79,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
 | Change how a request maps to a run | `agent/agent.py` (`invoke` / `recover`) |
 | Change the session checkpointer | `databricks_mason/langgraph/session_store.py` |
-| Add application-specific HTTP routes | register them on `app.asgi_app` |
+| Add application-specific HTTP routes | register them on the FastAPI `app` in `runtime/main.py` |
 | Add a test | `tests/` (hermetic; gate model calls on a workspace profile — see `test_agent.py`) |
 
 `DurableAgentApp` is the public server layer. It delegates execution, heartbeats, claims,

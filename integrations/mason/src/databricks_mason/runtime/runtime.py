@@ -7,9 +7,7 @@ import copy
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
-from databricks_mason.runtime.store import DEFAULT_DURABILITY_SCHEMA, LakebaseDurabilityStore
 from databricks_mason.runtime.types import (
     DurabilityStore,
     DurableEvent,
@@ -21,9 +19,6 @@ from databricks_mason.runtime.types import (
     DurableExecutor,
     JsonObject,
 )
-
-if TYPE_CHECKING:
-    from databricks.sdk import WorkspaceClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +43,7 @@ class DurableRuntime:
         self,
         executor: DurableExecutor | None = None,
         *,
-        durability_store: DurabilityStore | None = None,
-        autoscaling_endpoint: str | None = None,
-        project: str | None = None,
-        branch: str | None = None,
-        workspace_client: WorkspaceClient | None = None,
-        schema: str = DEFAULT_DURABILITY_SCHEMA,
+        durability_store: DurabilityStore,
         heartbeat_seconds: float = 3.0,
         stale_seconds: float = 10.0,
         scan_seconds: float = 3.0,
@@ -69,17 +59,7 @@ class DurableRuntime:
             raise ValueError("poll_seconds must be positive")
 
         self._executor = executor
-        self.durability_store = (
-            durability_store
-            if durability_store is not None
-            else LakebaseDurabilityStore(
-                autoscaling_endpoint=autoscaling_endpoint,
-                project=project,
-                branch=branch,
-                workspace_client=workspace_client,
-                schema=schema,
-            )
-        )
+        self.durability_store = durability_store
         self.heartbeat_seconds = heartbeat_seconds
         self.stale_seconds = stale_seconds
         self.scan_seconds = scan_seconds

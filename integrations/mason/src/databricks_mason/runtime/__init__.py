@@ -1,8 +1,7 @@
-"""Framework-neutral helpers and the public durable application surface.
+"""Framework-neutral runtime helpers for agents deployed with Mason.
 
-The durable execution engine remains an internal implementation detail for now. Applications use
-:class:`DurableAgentApp`, which provides the HTTP server and delegates execution to that
-engine. Imports resolve lazily so callers pay only for the features they use.
+The transport-neutral durable runtime remains internal for now. ``DurableAgentApp`` is re-exported
+here and from :mod:`databricks_mason` as the supported application surface.
 """
 
 from __future__ import annotations
@@ -10,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from databricks_mason.runtime.app import (
+    from databricks_mason.durable_server import (
         DurableAgentApp,
         DurableAgentContext,
     )
@@ -18,8 +17,6 @@ if TYPE_CHECKING:
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 _MODULE_BY_NAME = {
-    "DurableAgentApp": "app",
-    "DurableAgentContext": "app",
     "configure_tracing": "tracing",
     "tag_session": "tracing",
     "workspace_client": "workspace",
@@ -28,6 +25,10 @@ _MODULE_BY_NAME = {
 
 
 def __getattr__(name: str) -> Any:
+    if name in {"DurableAgentApp", "DurableAgentContext"}:
+        from databricks_mason import durable_server
+
+        return getattr(durable_server, name)
     if module_name := _MODULE_BY_NAME.get(name):
         from importlib import import_module
 

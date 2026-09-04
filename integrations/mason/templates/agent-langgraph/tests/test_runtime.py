@@ -1,22 +1,14 @@
-from databricks_mason.runtime import DurableAgentApp
+from databricks_mason import DurableAgentApp
+from databricks_mason.runtime.store import InMemoryDurabilityStore
 
 
-def _app() -> DurableAgentApp:
-    app = DurableAgentApp()
-
-    @app.invoke
-    async def invoke(request, context):
-        return request
-
-    @app.recover
-    async def recover(request, context):
-        return request
-
-    return app
+async def _invoke(request, context):
+    return request
 
 
 def test_invocation_routes_support_local_and_deployed_app_auth_paths() -> None:
-    paths = _app().asgi_app.openapi()["paths"]
+    server = DurableAgentApp(_invoke, durability_store=InMemoryDurabilityStore())
+    paths = server.app.openapi()["paths"]
 
     assert paths["/invocations"]["post"]
     assert paths["/api/invocations"]["post"]
@@ -26,3 +18,4 @@ def test_invocation_routes_support_local_and_deployed_app_auth_paths() -> None:
     assert paths["/api/invocations/{run_id}/events"]["get"]
     assert paths["/health"]["get"]
     assert paths["/api/health"]["get"]
+    assert paths["/api/session/new"]["post"]

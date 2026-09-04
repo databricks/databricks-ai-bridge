@@ -11,15 +11,16 @@ from pathlib import Path
 from typing import Any
 
 from databricks_mason import workspace_client
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/agents/v1"
+_ROUTING_COOKIE = "__Host-databricks-app-router"
+_LOCAL_SESSION_COOKIE = "mason-local-session"
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -46,6 +47,27 @@ class MemorySearchRequest(BaseModel):
 
 class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
+
+
+def _rotate_session_cookie(request: Request, response: Response, session_id: str) -> None:
+    if request.cookies.get(_ROUTING_COOKIE):
+        response.set_cookie(
+            _ROUTING_COOKIE,
+            session_id,
+            secure=True,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(_LOCAL_SESSION_COOKIE, path="/")
+    elif request.cookies.get(_LOCAL_SESSION_COOKIE):
+        response.set_cookie(
+            _LOCAL_SESSION_COOKIE,
+            session_id,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
 
 
 _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
@@ -371,7 +393,7 @@ def install_ui(app: FastAPI) -> None:
                 "managed": True,
             }
         )
-        rotate_session_cookie(request, response, session_id)
+        _rotate_session_cookie(request, response, session_id)
         return response
 
     @app.get("/api/demo/session", include_in_schema=False)
