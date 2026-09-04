@@ -16,14 +16,15 @@ import click
 import yaml
 
 from databricks_mason import render
-from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
+from databricks_mason.deploy import (
+    _TRACING_OFF_HINT,
+    _upsert_manifest_env,
+    provision_trace_experiment,
+    resolve_store_env,
+)
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
-from databricks_mason.tracing import (
-    TRACES_EXPERIMENT_ENV,
-    TRACES_TRACKING_URI_ENV,
-    dev_experiment_name,
-)
+from databricks_mason.tracing import project_trace_location
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -110,12 +111,17 @@ def dev(
         )
         if env_updates:
             _upsert_manifest_env(source_dir, env_updates)
-    # Local dev traces go to a managed "[dev] <app>" experiment (no Unity Catalog needed); the
-    # runtime auto-creates it on first trace. UC tracing is a deploy-time concern (`mason deploy`).
-    dev_experiment = dev_experiment_name(obj.client().current_user, source_dir.resolve().name)
-    _upsert_manifest_env(
-        source_dir, {TRACES_TRACKING_URI_ENV: "databricks", TRACES_EXPERIMENT_ENV: dev_experiment}
-    )
+    # Tracing is UC-only and opt-in: wire it into app.yaml iff `mason tracing setup` configured a
+    # catalog.schema for this project (the exact same path `mason deploy` takes). Check the config
+    # first via a cheap agent.toml read, so a plain unconfigured `mason dev` never constructs the
+    # workspace client or makes an auth/`me()` call - local iteration stays offline-friendly. When
+    # unconfigured, dev doesn't block; the startup panel nudges instead.
+    traced = None
+    trace_schema, _ = project_trace_location(source)
+    if trace_schema:
+        traced = provision_trace_experiment(
+            source_dir, source_dir.resolve().name, obj.client().current_user, obj.profile
+        )
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.
@@ -137,29 +143,34 @@ def dev(
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT, dev_experiment)
+    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT, traced)
 
     # Run in the project dir so run-local finds the app; stream output (no capture).
     _databricks(args, obj.profile, cwd=str(source_dir))
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int, dev_experiment: str) -> None:
+def _announce_local_url(
+    source_dir: pathlib.Path, port: int, traced: Optional[tuple[str, str]]
+) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request.
 
-    Also names the managed ``[dev]`` experiment traces flow to, so where they land is never a
-    surprise.
+    Also states where traces go: the configured UC schema, or a one-line hint that tracing is off.
     """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
+    # traced is (experiment, catalog_schema) when `mason tracing setup` ran, else None.
+    trace_field = {"Traces": traced[1]} if traced else {}
+    trace_step: list[str | tuple[str, str]] = [] if traced else [_TRACING_OFF_HINT]
     if (source_dir / "runtime" / "ui.py").is_file():
         render.success(
             "Starting agent",
-            fields={"Chat UI": base, "Dev traces": dev_experiment},
+            fields={"Chat UI": base, **trace_field},
             next_steps=[
                 f"Open {base} to chat with your agent",
                 ("mason tools add mcp <service>", "Give the agent a tool"),
                 ("mason dev -m <store> -s <store>", "Attach a memory / session store"),
-                (f"mason deploy {deploy_name}", "Deploy it (configure UC tracing first)"),
+                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                *trace_step,
             ],
         )
     else:
@@ -170,11 +181,12 @@ def _announce_local_url(source_dir: pathlib.Path, port: int, dev_experiment: str
         )
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {base}/invocations", "Dev traces": dev_experiment},
+            fields={"Invoke": f"POST {base}/invocations", **trace_field},
             next_steps=[
                 (sample, "Send a test request"),
                 ("mason tools add mcp <service>", "Give the agent a tool"),
-                (f"mason deploy {deploy_name}", "Deploy it (configure UC tracing first)"),
+                (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                *trace_step,
             ],
         )
 

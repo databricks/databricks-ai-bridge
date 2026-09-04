@@ -19,7 +19,7 @@ from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_S
 
 # The UC trace destination binding (`mason tracing setup`): a "catalog.schema" (+ optional
 # warehouse id). The runtime doesn't read this from agent.toml - `mason deploy` uses it to create a
-# UC-linked experiment and wires MLFLOW_EXPERIMENT_NAME into app.yaml, which the agent reads.
+# UC-linked experiment and wires MLFLOW_TRACING_DESTINATION into app.yaml, which the agent reads.
 TRACE_LOCATION_TABLE = "trace_location"
 
 _SCHEMA_VERSION = 1

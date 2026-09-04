@@ -24,11 +24,12 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import (
+    TRACES_DESTINATION_ENV,
     TRACES_EXPERIMENT_ENV,
     TRACES_TRACKING_URI_ENV,
     TRACES_WAREHOUSE_ENV,
     ensure_uc_experiment,
-    prod_experiment_name,
+    experiment_name,
 )
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
@@ -277,14 +278,16 @@ def resolve_store_env(
 
 def provision_trace_experiment(
     source: pathlib.Path, app: str, user: str, profile
-) -> tuple[str, str]:
-    """Gate the deploy on UC tracing, create the UC-linked experiment, and wire it into app.yaml.
+) -> Optional[tuple[str, str]]:
+    """Wire Unity Catalog tracing into app.yaml if it's configured, else no-op. Shared by dev+deploy.
 
-    Deploying to production requires Unity Catalog tracing (`mason tracing setup`): a personal
-    ``[dev]`` experiment isn't a suitable home for a deployed service principal's traces. This reads
-    the configured UC schema from agent.toml (raising if absent), creates+links the per-agent prod
-    experiment, and writes MLFLOW_TRACKING_URI/EXPERIMENT_NAME into app.yaml. Returns
-    ``(experiment_name, catalog_schema)``.
+    Tracing is UC-only and opt-in: it's on iff the project ran ``mason tracing setup`` (a
+    ``catalog.schema`` bound in agent.toml). When configured, this creates+links the per-agent
+    UC experiment and writes ``MLFLOW_TRACKING_URI`` + ``MLFLOW_EXPERIMENT_NAME`` (the agent
+    runtime's enable-gate keys on the experiment) + ``MLFLOW_TRACING_DESTINATION`` (the UC schema,
+    which routes export to governed storage and blocks any ambient ``OTEL_EXPORTER_OTLP_*`` hijack).
+    Returns ``(experiment_name, catalog_schema)``, or ``None`` when tracing isn't configured - the
+    caller decides how to nudge the user (dev/deploy both just print a hint, never block).
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -294,18 +297,25 @@ def provision_trace_experiment(
     except AgentCliError:
         schema, warehouse = None, None
     if not schema:
-        raise AgentCliError(
-            "Deploying requires Unity Catalog tracing, which isn't configured for this project.",
-            hint="Run `mason tracing setup --trace-location <catalog.schema>` first, then deploy.",
-        )
+        return None
 
-    experiment = prod_experiment_name(user, app)
+    experiment = experiment_name(user, app)
     ensure_uc_experiment(profile, experiment, schema, warehouse)
-    env = {TRACES_TRACKING_URI_ENV: "databricks", TRACES_EXPERIMENT_ENV: experiment}
+    env = {
+        TRACES_TRACKING_URI_ENV: "databricks",
+        TRACES_EXPERIMENT_ENV: experiment,
+        TRACES_DESTINATION_ENV: schema,
+    }
     if warehouse:
         env[TRACES_WAREHOUSE_ENV] = warehouse
     _upsert_manifest_env(source, env)
     return experiment, schema
+
+
+# One-line nudge shown by dev/deploy when tracing isn't configured (never blocks).
+_TRACING_OFF_HINT = (
+    "Tracing is off. Run `mason tracing setup --trace-location <catalog.schema>` to enable it."
+)
 
 
 def _grant_store_access(
@@ -404,11 +414,12 @@ def deploy(
     source_dir = pathlib.Path(source)
     client = obj.client()
 
-    # 1. Gate on UC tracing and create the UC-linked experiment first, so a project without UC
-    #    tracing configured fails fast (before any stores or the app are created).
-    trace_experiment, trace_schema = provision_trace_experiment(
+    # 1. Wire UC tracing first (if configured), so its experiment is created before the app. Tracing
+    #    is opt-in and never blocks a deploy: an unconfigured project just deploys without it.
+    traced = provision_trace_experiment(
         source_dir, source_dir.resolve().name, client.current_user, obj.profile
     )
+    trace_experiment, trace_schema = traced if traced else (None, None)
 
     # 2. Provision / resolve stores and build the env to inject.
     env_updates = resolve_store_env(
@@ -417,7 +428,9 @@ def deploy(
         session_store=session_store,
         create_stores=not no_create_stores,
     )
-    provisioned: dict[str, Any] = {"Traces": f"{trace_experiment} ({trace_schema})"}
+    provisioned: dict[str, Any] = {}
+    if traced:
+        provisioned["Traces"] = f"{trace_experiment} ({trace_schema})"
     if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if _SESSION_ENV in env_updates:
@@ -484,11 +497,17 @@ def deploy(
     steps: list[str | tuple[str, str]] = [
         (f"mason deployments get {name}", "Check its status and URL"),
         (f"mason deployments logs {name}", "Tail its logs"),
+    ]
+    if traced:
         # The UC experiment is created, but the app's SP needs write access to the schema's tables
         # to actually log traces; granting it requires schema ownership, so surface it as a step.
-        f"Grant the app's service principal USE CATALOG + USE SCHEMA + MODIFY/SELECT on "
-        f"{trace_schema} so it can write traces.",
-    ]
+        steps.append(
+            f"Grant the app's service principal USE CATALOG + USE SCHEMA + MODIFY/SELECT on "
+            f"{trace_schema} so it can write traces."
+        )
+    else:
+        # Tracing is opt-in and wasn't configured - deploy still succeeded; nudge, don't block.
+        steps.append(_TRACING_OFF_HINT)
     if app_url:
         steps.insert(0, (f"open {app_url}", "Open the deployed app"))
     if scaffolded:

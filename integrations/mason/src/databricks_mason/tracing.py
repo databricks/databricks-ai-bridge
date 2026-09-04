@@ -1,16 +1,13 @@
 """`mason tracing` - configure where an agent's MLflow traces go, and inspect them.
 
-One experiment-centric model, two backends:
-
-* `mason dev` logs to a managed ``[dev] <app>`` experiment under your workspace home - on by
-  default, no Unity Catalog access needed (traces live in the workspace tracking store). The
-  ``[dev]`` marker makes these obviously throwaway in the MLflow UI.
-* `mason tracing setup --trace-location <catalog.schema>` records a UC schema for production.
-  ``mason deploy`` is gated on this, and creates a UC-linked experiment there so a deployed agent's
-  traces land in governed, durable Unity Catalog storage.
+Tracing is Unity Catalog-only and opt-in. ``mason tracing setup --trace-location <catalog.schema>``
+records a UC schema in ``agent.toml``; from then on both ``mason dev`` and ``mason deploy`` send the
+agent's traces there (creating a per-app UC-linked experiment that surfaces them in the MLflow UI).
+Until setup is run, tracing is simply off - neither ``dev`` nor ``deploy`` blocks on it, so a
+developer without a catalog/schema is never stuck.
 
 ``list`` / ``get`` read traces back. MLflow is an optional dependency: ``list`` / ``get`` and the
-deploy-time UC provisioning need ``mlflow[databricks]>=3.9.0`` and import it lazily; ``setup`` is
+UC experiment provisioning need ``mlflow[databricks]>=3.9.0`` and import it lazily; ``setup`` is
 pure and needs nothing.
 """
 
@@ -32,8 +29,13 @@ _BREADCRUMB = "Agent Tracing"
 TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
 TRACES_WAREHOUSE_ENV = "MLFLOW_TRACING_SQL_WAREHOUSE_ID"
+# The trace-destination pin: a bare experiment id, or a "catalog.schema" UC location. Wired
+# ALONGSIDE the experiment (not instead of it): the experiment var is what the agent runtime's
+# enable-gate keys on, while this pin makes MLflow export to exactly this location and ignore any
+# ambient OTEL_EXPORTER_OTLP_* exporter in the shell that would otherwise hijack the agent's traces.
+TRACES_DESTINATION_ENV = "MLFLOW_TRACING_DESTINATION"
 
-# Per-user experiment folder; dev traces carry a visible "[dev]" prefix to mark them throwaway.
+# Per-user workspace folder that holds each app's UC-linked tracing experiment.
 _TRACES_DIR = "mason-traces"
 
 # A UC trace location is "catalog.schema" (no dots-in-names, no path separators, exactly one dot).
@@ -42,13 +44,8 @@ _UC_SCHEMA = re.compile(r"^[^.\s/]+\.[^.\s/]+$")
 _MIGRATE_DOCS = "https://docs.databricks.com/aws/en/mlflow3/genai/tracing/migrate-traces-to-uc"
 
 
-def dev_experiment_name(user: str, app: str) -> str:
-    """Managed (non-UC) experiment for local `mason dev`, marked [dev] so it reads as throwaway."""
-    return f"/Users/{user}/{_TRACES_DIR}/[dev] {app}"
-
-
-def prod_experiment_name(user: str, app: str) -> str:
-    """UC-linked experiment for a deployed agent (no [dev] marker)."""
+def experiment_name(user: str, app: str) -> str:
+    """The per-app UC-linked experiment that surfaces its traces (shared by dev and deploy)."""
     return f"/Users/{user}/{_TRACES_DIR}/{app}"
 
 
@@ -137,8 +134,12 @@ def ensure_uc_experiment(
     return experiment_name
 
 
-def _project_trace_location(source: str) -> tuple[Optional[str], Optional[str]]:
-    """The (UC schema, warehouse id) bound in the project's agent.toml, or (None, None)."""
+def project_trace_location(source: str) -> tuple[Optional[str], Optional[str]]:
+    """The (UC schema, warehouse id) bound in the project's agent.toml, or (None, None).
+
+    Cheap (a small TOML read, no workspace call), so callers can decide whether tracing is even
+    configured before touching the client - `mason dev` uses it to stay auth-free when it isn't.
+    """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
     try:
@@ -208,11 +209,11 @@ def tracing() -> None:
 )
 @click.pass_obj
 def tracing_setup(obj, trace_location, warehouse_id, source) -> None:
-    """Configure Unity Catalog tracing for deployment by recording a UC schema in agent.toml.
+    """Turn on Unity Catalog tracing by recording a UC schema in agent.toml.
 
-    Records the ``catalog.schema`` (and optional warehouse) in agent.toml. ``mason deploy`` then
-    creates a UC-linked experiment there. Local ``mason dev`` keeps using its own ``[dev]``
-    experiment and needs no UC access.
+    Records the ``catalog.schema`` (and optional warehouse). From then on both ``mason dev`` and
+    ``mason deploy`` send the agent's traces to that schema, creating a per-app UC-linked experiment
+    there. Until this is run, tracing is off (neither command blocks on it).
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
 
@@ -246,7 +247,7 @@ def tracing_setup(obj, trace_location, warehouse_id, source) -> None:
     "trace_location",
     default=None,
     help="Trace location to read: a UC 'catalog.schema', or an experiment id/path. Defaults to the "
-    "project's configured UC schema, else its local [dev] experiment.",
+    "project's configured UC schema (from `mason tracing setup`).",
 )
 @click.option(
     "--warehouse-id",
@@ -266,23 +267,19 @@ def tracing_list(obj, trace_location, warehouse_id, limit, source) -> None:
     """List recent agent traces at a trace location.
 
     Resolution order: ``--trace-location`` (works standalone), else the project's configured UC
-    schema (``mason tracing setup``), else the project's local ``[dev]`` experiment. Queries by
-    location, so it works for both UC schemas and experiments.
+    schema (``mason tracing setup``). Tracing is UC-only, so a UC schema is queried through a SQL
+    warehouse.
     """
-    configured_location, configured_warehouse = _project_trace_location(source)
+    configured_location, configured_warehouse = project_trace_location(source)
     location = trace_location or configured_location
     if not location:
-        # Fall back to the local [dev] experiment for this project.
-        app = pathlib.Path(source).resolve().name
-        location = dev_experiment_name(obj.client().current_user, app)
+        raise AgentCliError(
+            "No trace location configured for this project.",
+            hint="Run `mason tracing setup --trace-location <catalog.schema>` first, or pass "
+            "--trace-location.",
+        )
 
-    # A UC schema is queried through a SQL warehouse; a managed experiment (the [dev] case) is not,
-    # so only supply a warehouse for a UC location - otherwise listing dev traces would needlessly
-    # pull in the project's warehouse and cold-start it.
-    warehouse = None
-    if _UC_SCHEMA.match(location):
-        warehouse = warehouse_id or configured_warehouse or os.getenv(TRACES_WAREHOUSE_ENV)
-
+    warehouse = warehouse_id or configured_warehouse or os.getenv(TRACES_WAREHOUSE_ENV)
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, warehouse)
     traces = mlflow.search_traces(

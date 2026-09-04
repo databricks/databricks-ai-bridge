@@ -14,13 +14,12 @@ from click.testing import CliRunner
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
-# Deploy gates on UC tracing and creates a UC experiment (a live mlflow/workspace op). Tests that
-# aren't about tracing bypass that provisioning via this autouse fixture; the tracing-specific tests
-# below are listed here so the real `provision_trace_experiment` runs for them.
+# Deploy wires UC tracing when configured, creating a UC experiment (a live mlflow/workspace op).
+# Tests that aren't about tracing bypass that provisioning via this autouse fixture; the
+# tracing-specific tests below are listed here so the real `provision_trace_experiment` runs.
 _TRACING_TESTS = {
-    "test_deploy_gated_on_uc_tracing_when_unconfigured",
     "test_deploy_provisions_uc_experiment_when_configured",
-    "test_provision_trace_experiment_gates_without_uc",
+    "test_provision_trace_experiment_returns_none_without_uc",
     "test_provision_trace_experiment_creates_and_wires",
 }
 
@@ -321,24 +320,22 @@ _AGENT_TOML_WITH_TRACES = 'schema_version = 1\n\n[agent]\nframework = "langgraph
 _AGENT_TOML_NO_TRACES = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
 
 
-def test_deploy_gated_on_uc_tracing_when_unconfigured(tmp_path: pathlib.Path, monkeypatch):
-    # Deploy requires UC tracing: no [trace_location] binding -> blocked, pointing at `tracing setup`.
+def test_deploy_proceeds_without_tracing_when_unconfigured(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing is opt-in and UC-only: an unconfigured project deploys fine (no gate) - it just gets a
+    # one-line hint instead of being blocked.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     (src / "agent.toml").write_text(_AGENT_TOML_NO_TRACES)
+    # Unconfigured tracing -> provision returns None (override the autouse tuple bypass).
+    monkeypatch.setattr(deploy_mod, "provision_trace_experiment", lambda *a: None)
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    result = _run_deploy(src, monkeypatch, [])
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
-
-    assert result.exit_code != 0
-    assert "mason tracing setup" in result.output
+    assert result.exit_code == 0, result.output
+    assert "mason tracing setup" in result.output  # soft hint, not a block
+    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
+    assert not any(k.startswith("MLFLOW") for k in env)  # nothing tracing-related wired
 
 
 def test_deploy_provisions_uc_experiment_when_configured(tmp_path: pathlib.Path, monkeypatch):
@@ -370,8 +367,10 @@ def test_deploy_provisions_uc_experiment_when_configured(tmp_path: pathlib.Path,
     assert linked["schema"] == "cat.schema"
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
+    # Both wired: the experiment name (the agent runtime's tracing enable-gate keys on it) and the
+    # destination pinned to the UC schema (routes to governed storage + blocks ambient OTLP hijack).
     assert env["MLFLOW_EXPERIMENT_NAME"] == linked["experiment"]
-    assert "MLFLOW_TRACING_DESTINATION" not in env  # experiment-centric, not a raw destination
+    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
 
 
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():
@@ -507,14 +506,12 @@ def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
     assert env["AGENT_SESSION_STORE"] == "s"
 
 
-def test_provision_trace_experiment_gates_without_uc(tmp_path: pathlib.Path):
-    # No UC schema configured -> raise, pointing the user at `mason tracing setup`.
+def test_provision_trace_experiment_returns_none_without_uc(tmp_path: pathlib.Path):
+    # No UC schema configured -> no-op (returns None), so the caller can proceed without tracing.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     (tmp_path / "agent.toml").write_text(_AGENT_TOML_NO_TRACES)
 
-    with pytest.raises(AgentCliError) as exc:
-        deploy_mod.provision_trace_experiment(tmp_path, "app", "me@example.com", None)
-    assert "mason tracing setup" in (exc.value.hint or "")
+    assert deploy_mod.provision_trace_experiment(tmp_path, "app", "me@example.com", None) is None
 
 
 def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, monkeypatch):
@@ -541,7 +538,9 @@ def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, mo
     env = {
         e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
     }
+    # Both the experiment name (runtime enable-gate) and the UC-schema destination pin are wired.
     assert env["MLFLOW_EXPERIMENT_NAME"] == experiment
+    assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
 
 

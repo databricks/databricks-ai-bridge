@@ -35,6 +35,7 @@ runtime = [
     "mlflow>=3.10.1",
     "uuid-utils>=0.10.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.25.0",
     "databricks-agents>=1.9.3",
 ]
 runtime-openai = [
@@ -44,6 +45,7 @@ runtime-openai = [
     "mlflow>=3.10.1",
     "uuid-utils>=0.10.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.25.0",
     "databricks-agents>=1.9.3",
 ]
 

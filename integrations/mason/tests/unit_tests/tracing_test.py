@@ -61,12 +61,8 @@ def test_validate_uc_schema_rejects_bad_values():
 # --- experiment naming -------------------------------------------------------
 
 
-def test_experiment_names():
-    assert (
-        tracing_mod.dev_experiment_name("me@x.com", "app")
-        == "/Users/me@x.com/mason-traces/[dev] app"
-    )
-    assert tracing_mod.prod_experiment_name("me@x.com", "app") == "/Users/me@x.com/mason-traces/app"
+def test_experiment_name():
+    assert tracing_mod.experiment_name("me@x.com", "app") == "/Users/me@x.com/mason-traces/app"
 
 
 # --- setup -------------------------------------------------------------------
@@ -206,52 +202,34 @@ def test_list_flag_overrides_project(tmp_path: pathlib.Path):
     assert fake.search_traces.call_args.kwargs["locations"] == ["flag.schema"]
 
 
-def test_list_falls_back_to_dev_experiment(tmp_path: pathlib.Path):
+def test_list_errors_without_configured_location(tmp_path: pathlib.Path):
+    # Tracing is UC-only + opt-in: with nothing configured and no flag, list refuses (no silent
+    # fallback), pointing the user at `mason tracing setup`.
     _project(tmp_path)  # no UC schema configured
-    fake = _fake_mlflow([])
-    fake.get_experiment_by_name.return_value = types.SimpleNamespace(experiment_id="e-dev")
-    with (
-        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
-        mock.patch.object(tracing_mod, "_configure"),
-    ):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
-        )
-    assert result.exit_code == 0, result.output
-    # the [dev] experiment path is resolved to its id, then queried by location
-    resolved = fake.get_experiment_by_name.call_args.args[0]
-    assert resolved.endswith(f"[dev] {tmp_path.resolve().name}")
-    assert fake.search_traces.call_args.kwargs["locations"] == ["e-dev"]
+    result = CliRunner().invoke(
+        tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+    )
+    assert result.exit_code != 0
+    assert "mason tracing setup" in result.output
 
 
-def test_list_uses_warehouse_only_for_uc_location(tmp_path: pathlib.Path):
-    # Project has a UC schema + warehouse configured. Listing the UC schema uses the warehouse;
-    # listing a managed experiment (the [dev] case) must NOT, or it cold-starts the warehouse.
+def test_list_applies_configured_warehouse(tmp_path: pathlib.Path):
+    # A UC schema is queried through the project's configured SQL warehouse.
     _project(tmp_path, schema="cat.schema", warehouse="wh-1")
     captured: dict = {}
-
-    def run(args):
-        captured.clear()
-        fake = _fake_mlflow([])
-        fake.get_experiment_by_name.return_value = types.SimpleNamespace(experiment_id="e-dev")
-        with (
-            mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
-            mock.patch.object(
-                tracing_mod,
-                "_configure",
-                side_effect=lambda m, p, w: captured.update(warehouse=w),
-            ),
-        ):
-            res = CliRunner().invoke(tracing_mod.tracing_list, args, obj=_Ctx(output="json"))
-        assert res.exit_code == 0, res.output
-
-    # UC schema (the project default) -> warehouse applied
-    run(["--source", str(tmp_path)])
+    fake = _fake_mlflow([])
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+        mock.patch.object(
+            tracing_mod, "_configure", side_effect=lambda m, p, w: captured.update(warehouse=w)
+        ),
+    ):
+        res = CliRunner().invoke(
+            tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert res.exit_code == 0, res.output
     assert captured["warehouse"] == "wh-1"
-
-    # managed [dev] experiment via flag -> no warehouse
-    run(["--trace-location", "/Users/me/mason-traces/[dev] app", "--source", str(tmp_path)])
-    assert captured["warehouse"] is None
+    assert fake.search_traces.call_args.kwargs["locations"] == ["cat.schema"]
 
 
 # --- helpers -----------------------------------------------------------------
@@ -259,11 +237,11 @@ def test_list_uses_warehouse_only_for_uc_location(tmp_path: pathlib.Path):
 
 def test_project_trace_location_reads_schema_and_warehouse(tmp_path: pathlib.Path):
     _project(tmp_path, schema="cat.schema", warehouse="wh1")
-    assert tracing_mod._project_trace_location(str(tmp_path)) == ("cat.schema", "wh1")
+    assert tracing_mod.project_trace_location(str(tmp_path)) == ("cat.schema", "wh1")
 
 
 def test_project_trace_location_none_without_project(tmp_path: pathlib.Path):
-    assert tracing_mod._project_trace_location(str(tmp_path)) == (None, None)
+    assert tracing_mod.project_trace_location(str(tmp_path)) == (None, None)
 
 
 def test_status_str_handles_enum_like_and_none():
