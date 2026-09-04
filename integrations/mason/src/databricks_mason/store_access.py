@@ -16,36 +16,12 @@ supply the per-store project/schema/table specifics.
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
 import psycopg
 
-from databricks_mason.errors import AgentCliError
-
-
-def _databricks(
-    args: list[str],
-    profile: Optional[str],
-    *,
-    capture: bool = False,
-    check: bool = True,
-    cwd: Optional[str] = None,
-    action: Optional[str] = None,
-) -> subprocess.CompletedProcess:
-    cmd = ["databricks", *args]
-    if profile:
-        cmd += ["--profile", profile]
-    result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
-    if check and result.returncode != 0:
-        # Mason drives the `databricks apps` CLI as an implementation detail; surface a failure in
-        # Mason's own terms (`action`) rather than echoing the raw subcommand and --profile, which
-        # leaks the underlying tool at the customer. The captured stderr still rides along as the
-        # hint so debugging isn't lost.
-        detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(action or "A Databricks CLI command failed.", hint=detail)
-    return result
+from databricks_mason.databricks_cli import _databricks
 
 
 @dataclass(frozen=True)
