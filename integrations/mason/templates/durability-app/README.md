@@ -11,12 +11,14 @@ uv sync
 uv run start-server
 ```
 
-Submit a background run and keep the routing cookie for polling:
+Submit a background run with one stable routing cookie for polling. Databricks
+Apps supplies this cookie in deployment; for plain-HTTP localhost `curl`, set it
+explicitly because the SDK correctly marks it `Secure`:
 
 ```bash
-COOKIE_JAR=/tmp/mason-durability.cookies
+ROUTING_COOKIE='__Host-databricks-app-router=local-durability-session'
 
-curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
+curl -sS -H "Cookie: $ROUTING_COOKIE" \
   -X POST http://localhost:8000/invocations \
   -H 'content-type: application/json' \
   -d '{
@@ -25,8 +27,10 @@ curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" \
     "input": {"message": "hello", "delay_seconds": 2}
   }'
 
-curl -sS -b "$COOKIE_JAR" http://localhost:8000/invocations/run-1
-curl -N -b "$COOKIE_JAR" http://localhost:8000/invocations/run-1/events
+curl -sS -H "Cookie: $ROUTING_COOKIE" \
+  http://localhost:8000/invocations/run-1
+curl -N -H "Cookie: $ROUTING_COOKIE" \
+  http://localhost:8000/invocations/run-1/events
 ```
 
 The client owns the invocation `id`. Retrying the same request with the same ID
