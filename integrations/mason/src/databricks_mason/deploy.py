@@ -30,6 +30,7 @@ from databricks_mason.tracing import (
     TRACES_WAREHOUSE_ENV,
     ensure_uc_experiment,
     experiment_name,
+    experiment_ui_url,
 )
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
@@ -286,8 +287,9 @@ def provision_trace_experiment(
     UC experiment and writes ``MLFLOW_TRACKING_URI`` + ``MLFLOW_EXPERIMENT_NAME`` (the agent
     runtime's enable-gate keys on the experiment) + ``MLFLOW_TRACING_DESTINATION`` (the UC schema,
     which routes export to governed storage and blocks any ambient ``OTEL_EXPORTER_OTLP_*`` hijack).
-    Returns ``(experiment_name, catalog_schema)``, or ``None`` when tracing isn't configured - the
-    caller decides how to nudge the user (dev/deploy both just print a hint, never block).
+    Returns ``(experiment_id, catalog_schema)``, or ``None`` when tracing isn't configured - the
+    caller decides how to nudge the user (dev/deploy both just print a hint, never block). The
+    experiment id lets the caller build the MLflow experiment UI link.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -300,7 +302,7 @@ def provision_trace_experiment(
         return None
 
     experiment = experiment_name(user, app)
-    ensure_uc_experiment(profile, experiment, schema, warehouse)
+    experiment_id = ensure_uc_experiment(profile, experiment, schema, warehouse)
     env = {
         TRACES_TRACKING_URI_ENV: "databricks",
         TRACES_EXPERIMENT_ENV: experiment,
@@ -309,7 +311,7 @@ def provision_trace_experiment(
     if warehouse:
         env[TRACES_WAREHOUSE_ENV] = warehouse
     _upsert_manifest_env(source, env)
-    return experiment, schema
+    return experiment_id, schema
 
 
 # One-line nudge shown by dev/deploy when tracing isn't configured (never blocks).
@@ -419,7 +421,12 @@ def deploy(
     traced = provision_trace_experiment(
         source_dir, source_dir.resolve().name, client.current_user, obj.profile
     )
-    trace_experiment, trace_schema = traced if traced else (None, None)
+    trace_experiment_id: Optional[str] = None
+    trace_schema: Optional[str] = None
+    trace_url: Optional[str] = None
+    if traced:
+        trace_experiment_id, trace_schema = traced
+        trace_url = experiment_ui_url(client.host, trace_experiment_id)
 
     # 2. Provision / resolve stores and build the env to inject.
     env_updates = resolve_store_env(
@@ -430,7 +437,10 @@ def deploy(
     )
     provisioned: dict[str, Any] = {}
     if traced:
-        provisioned["Traces"] = f"{trace_experiment} ({trace_schema})"
+        # Show the experiment id and a direct link to its MLflow traces page (not the raw name).
+        provisioned["Experiment"] = f"{trace_experiment_id} ({trace_schema})"
+        if trace_url:
+            provisioned["Traces"] = trace_url
     if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
     if _SESSION_ENV in env_updates:
@@ -484,8 +494,9 @@ def deploy(
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
-                "trace_experiment": trace_experiment,
+                "trace_experiment_id": trace_experiment_id,
                 "trace_location": trace_schema,
+                "trace_url": trace_url,
                 "store_grant": "skipped"
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),

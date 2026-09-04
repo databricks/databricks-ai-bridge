@@ -65,6 +65,20 @@ def test_experiment_name():
     assert tracing_mod.experiment_name("me@x.com", "app") == "/Users/me@x.com/mason-traces/app"
 
 
+def test_experiment_ui_url():
+    assert (
+        tracing_mod.experiment_ui_url("https://x.databricks.com", "123")
+        == "https://x.databricks.com/ml/experiments/123/traces"
+    )
+    # trailing slash on the host is normalized; a missing/unknown host yields no link
+    assert (
+        tracing_mod.experiment_ui_url("https://x.databricks.com/", "123")
+        == "https://x.databricks.com/ml/experiments/123/traces"
+    )
+    assert tracing_mod.experiment_ui_url(None, "123") is None
+    assert tracing_mod.experiment_ui_url("unknown", "123") is None
+
+
 # --- setup -------------------------------------------------------------------
 
 
@@ -114,8 +128,8 @@ def test_ensure_uc_experiment_creates_and_links():
             tracing_mod, "_uc_trace_symbols", return_value=(mock.Mock(), set_location)
         ),
     ):
-        name = tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", "wh1")
-    assert name == "/Users/me/x"
+        experiment_id = tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", "wh1")
+    assert experiment_id == "e1"  # returns the id (for the experiment UI link), not the name
     mlflow.create_experiment.assert_called_once_with("/Users/me/x")
     assert set_location.call_args.kwargs["experiment_id"] == "e1"
 
@@ -131,11 +145,8 @@ def test_ensure_uc_experiment_idempotent_when_already_linked():
             tracing_mod, "_uc_trace_symbols", return_value=(mock.Mock(), set_location)
         ),
     ):
-        # a re-deploy of an already-linked experiment is a no-op, not an error
-        assert (
-            tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", None)
-            == "/Users/me/x"
-        )
+        # a re-deploy of an already-linked experiment is a no-op, not an error (returns the id)
+        assert tracing_mod.ensure_uc_experiment(None, "/Users/me/x", "cat.schema", None) == "e9"
 
 
 def test_ensure_uc_experiment_errors_on_existing_traces():

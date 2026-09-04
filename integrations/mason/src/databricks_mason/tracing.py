@@ -49,6 +49,17 @@ def experiment_name(user: str, app: str) -> str:
     return f"/Users/{user}/{_TRACES_DIR}/{app}"
 
 
+def experiment_ui_url(host: Optional[str], experiment_id: str) -> Optional[str]:
+    """The workspace MLflow experiment traces page for ``experiment_id`` (from the profile's host).
+
+    ``host`` is the workspace URL (``MasonClient.host`` / the profile's config host); returns None if
+    it's unavailable so callers can just omit the link.
+    """
+    if not host or host == "unknown":
+        return None
+    return f"{host.rstrip('/')}/ml/experiments/{experiment_id}/traces"
+
+
 def validate_uc_schema(location: str) -> str:
     """Accept a Unity Catalog 'catalog.schema'; reject anything else."""
     loc = location.strip()
@@ -102,7 +113,7 @@ def ensure_uc_experiment(
     A UC destination can only be linked to an experiment with no existing traces, so this links a
     freshly created experiment; a re-deploy (experiment already linked) is a no-op, and an experiment
     that already holds non-UC traces raises a clear error pointing at the migration docs. Returns the
-    experiment name (what gets wired into app.yaml).
+    experiment **id** (used to build the MLflow experiment UI link shown by dev/deploy).
     """
     mlflow = _mlflow()
     _configure(mlflow, profile, warehouse_id)
@@ -127,11 +138,11 @@ def ensure_uc_experiment(
                 hint=f"Migrate the existing traces to UC: {_MIGRATE_DOCS}",
             ) from exc
         if "already" in text:
-            return experiment_name  # already linked (re-deploy) - idempotent
+            return experiment_id  # already linked (re-deploy) - idempotent
         raise AgentCliError(
             f"Could not link {experiment_name!r} to {catalog_schema}: {exc}"
         ) from exc
-    return experiment_name
+    return experiment_id
 
 
 def project_trace_location(source: str) -> tuple[Optional[str], Optional[str]]:

@@ -24,7 +24,7 @@ from databricks_mason.deploy import (
 )
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
-from databricks_mason.tracing import project_trace_location
+from databricks_mason.tracing import experiment_ui_url, project_trace_location
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -117,11 +117,15 @@ def dev(
     # workspace client or makes an auth/`me()` call - local iteration stays offline-friendly. When
     # unconfigured, dev doesn't block; the startup panel nudges instead.
     traced = None
+    trace_url = None
     trace_schema, _ = project_trace_location(source)
     if trace_schema:
+        client = obj.client()
         traced = provision_trace_experiment(
-            source_dir, source_dir.resolve().name, obj.client().current_user, obj.profile
+            source_dir, source_dir.resolve().name, client.current_user, obj.profile
         )
+        if traced:
+            trace_url = experiment_ui_url(client.host, traced[0])
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.
@@ -143,24 +147,34 @@ def dev(
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT, traced)
+    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT, traced, trace_url)
 
     # Run in the project dir so run-local finds the app; stream output (no capture).
     _databricks(args, obj.profile, cwd=str(source_dir))
 
 
 def _announce_local_url(
-    source_dir: pathlib.Path, port: int, traced: Optional[tuple[str, str]]
+    source_dir: pathlib.Path,
+    port: int,
+    traced: Optional[tuple[str, str]],
+    trace_url: Optional[str],
 ) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request.
 
-    Also states where traces go: the configured UC schema, or a one-line hint that tracing is off.
+    Also states where traces go: the experiment id + a link to its MLflow traces page when tracing
+    is configured, or a one-line hint that tracing is off.
     """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
-    # traced is (experiment, catalog_schema) when `mason tracing setup` ran, else None.
-    trace_field = {"Traces": traced[1]} if traced else {}
-    trace_step: list[str | tuple[str, str]] = [] if traced else [_TRACING_OFF_HINT]
+    # traced is (experiment_id, catalog_schema) when `mason tracing setup` ran, else None.
+    trace_field: dict[str, str] = {}
+    trace_step: list[str | tuple[str, str]] = [_TRACING_OFF_HINT]
+    if traced:
+        experiment_id, schema = traced
+        trace_field["Experiment"] = f"{experiment_id} ({schema})"
+        if trace_url:
+            trace_field["Traces"] = trace_url
+        trace_step = []
     if (source_dir / "runtime" / "ui.py").is_file():
         render.success(
             "Starting agent",
