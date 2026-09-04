@@ -7,6 +7,7 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -137,13 +138,13 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
-def test_deploy_existing_template_does_not_provision_runtime_store(
+def test_deploy_unknown_template_does_not_provision_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "agent-langgraph")
+    _mark_template(src, "custom-template")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -171,13 +172,14 @@ def test_deploy_existing_template_does_not_provision_runtime_store(
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
 
 
-def test_deploy_durability_app_reuses_session_store_before_startup(
-    tmp_path: pathlib.Path, monkeypatch
+@pytest.mark.parametrize("template", sorted(deploy_mod._DURABILITY_TEMPLATES))
+def test_deploy_durable_template_reuses_session_store_before_startup(
+    template: str, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durability-app")
+    _mark_template(src, template)
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -218,13 +220,14 @@ def test_deploy_durability_app_reuses_session_store_before_startup(
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
 
 
-def test_deploy_durability_app_provisions_backend_before_startup(
-    tmp_path: pathlib.Path, monkeypatch
+@pytest.mark.parametrize("template", sorted(deploy_mod._DURABILITY_TEMPLATES))
+def test_deploy_durable_template_provisions_backend_before_startup(
+    template: str, tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durability-app")
+    _mark_template(src, template)
     selected = deploy_mod.agent_durability_store.backend("mason-myapp")
     events = []
 

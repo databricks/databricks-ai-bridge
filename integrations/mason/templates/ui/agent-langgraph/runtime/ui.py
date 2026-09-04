@@ -10,15 +10,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from databricks_mason import workspace_client
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from runtime.runtime import rotate_session_cookie
+
+from databricks_mason import workspace_client
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
+_ROUTING_COOKIE = "__Host-databricks-app-router"
 _AGENTS_API = "/api/agents/v1"
 _MESSAGE_ROLES = {
     "ai",
@@ -48,7 +49,15 @@ class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
 
 
-_USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
+def _rotate_session_cookie(response: Response, session_id: str) -> None:
+    response.set_cookie(
+        _ROUTING_COOKIE,
+        session_id,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
 
 
 def _memory_store() -> str:
@@ -66,16 +75,8 @@ def _session_store() -> str:
 
 
 def _request_actor(request: Request) -> str:
-    """The actor for a demo request — the signed-in user, so the panels show that user's own data.
-
-    Mirrors how the agent resolves its actor (same forwarded-identity headers), so the memory and
-    session views here list exactly what the agent reads/writes for the current user. Falls back to
-    ``"agent"`` locally / when unauthenticated.
-    """
-    for header in _USER_HEADERS:
-        if value := request.headers.get(header):
-            return value
-    return "agent"
+    """Use the routing session as the managed-state partition key."""
+    return str(request.state.session_id)
 
 
 def _is_deployed() -> bool:
@@ -220,6 +221,7 @@ def _require_session() -> None:
 
 async def _checkpoint_history(session_id: str, actor: str) -> dict[str, Any]:
     from agent.agent import create_agent_graph
+
     from databricks_mason.langgraph.session_store import thread_config
 
     graph = await create_agent_graph(actor)
@@ -276,6 +278,17 @@ def install_ui(app: FastAPI) -> None:
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(_UI_ROOT / "index.html")
+
+    @app.post("/api/session/new", include_in_schema=False)
+    async def new_session(request: Request) -> JSONResponse:
+        previous_session_id = request.state.session_id
+        session_id = str(uuid.uuid4())
+        request.state.session_id = session_id
+        response = JSONResponse(
+            {"session_id": session_id, "previous_session_id": previous_session_id}
+        )
+        _rotate_session_cookie(response, session_id)
+        return response
 
     @app.get("/api/demo/config", include_in_schema=False)
     async def demo_config(request: Request) -> dict:
@@ -377,7 +390,7 @@ def install_ui(app: FastAPI) -> None:
                 "managed": True,
             }
         )
-        rotate_session_cookie(request, response, session_id)
+        _rotate_session_cookie(response, session_id)
         return response
 
     @app.get("/api/demo/session", include_in_schema=False)

@@ -34,7 +34,7 @@ from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, def
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
-_DURABILITY_TEMPLATE = "durability-app"
+_DURABILITY_TEMPLATES = frozenset({"durability-app", "agent-langgraph", "agent-openai"})
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -318,10 +318,10 @@ def _grant_store_access(
 
 
 def _uses_durable_runtime(source_dir: pathlib.Path) -> bool:
-    """Whether this project was scaffolded from Mason's durability template."""
+    """Whether this project uses Mason's durable application runtime."""
     if not (source_dir / ".mason" / "project.toml").is_file():
         return False
-    return load_project_metadata(source_dir).template == _DURABILITY_TEMPLATE
+    return load_project_metadata(source_dir).template in _DURABILITY_TEMPLATES
 
 
 # --- mason deploy -----------------------------------------------------------
