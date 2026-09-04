@@ -784,7 +784,7 @@ async function loadConfig() {
       config.session.managed
         ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
         : "Session state is kept in process and resets when the app restarts.",
-      config.session.managed ? null : "mason deploy <deployment-name> --session <store-name>",
+      config.session.managed ? null : "mason sessions bind <store-name>",
     );
     setCapability(
       elements.memoryStatus,
@@ -792,7 +792,7 @@ async function loadConfig() {
       config.memory.enabled
         ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
         : "No long-term memory is connected.",
-      config.memory.enabled ? null : "mason deploy <deployment-name> --memory <store-name>",
+      config.memory.enabled ? null : "mason memory bind <store-name>",
     );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
@@ -801,9 +801,7 @@ async function loadConfig() {
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
       ? `${config.memory.store} · actor ${config.memory.actor}`
-      : config.deployed
-        ? "Run from the project directory: mason deploy <app-name> --source . --memory <store-name>. Mason creates the store if needed."
-        : "Run from the project directory: mason dev --memory <store-name>. Mason creates the store if needed.";
+      : "Run from the project directory: mason memory bind <store-name>. Mason creates the store if needed.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history

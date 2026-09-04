@@ -63,8 +63,8 @@ def _source_option(function):
 def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
     """Bind session STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
 
-    `mason dev` / `mason deploy` sync the bound store into the deployment's app.yaml env and grant the
-    app access. Pass --no-create-stores to require the store to already exist.
+    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
+    service principal access to it. Pass --no-create-stores to require the store to already exist.
     """
     from databricks_mason.agent_project import AgentProject
     from databricks_mason.deploy import _ensure_session_store
@@ -92,7 +92,10 @@ def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool)
     render.success(
         f"Bound session store '{store}'",
         fields={"agent.toml": str(project.path)},
-        next_steps=["mason dev", "mason deploy <name>"],
+        next_steps=[
+            ("mason dev", "Re-run to pick up the store locally"),
+            ("mason deploy <name>", "Redeploy to grant the app access"),
+        ],
     )
 
 
@@ -161,7 +164,10 @@ def stores_create(obj, name, description, metadata) -> None:
                 "Start a session for an actor",
             ),
             (f"mason sessions stores get {name}", "View this store's details"),
-            (f"mason deploy <agent> --session {name}", "Wire this store into a deployment"),
+            (
+                f"mason sessions bind {name}",
+                "Bind this store to the agent (wired in on dev/deploy)",
+            ),
         ],
     )
 

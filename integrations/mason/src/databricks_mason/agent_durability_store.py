@@ -42,8 +42,7 @@ def ensure_backend(app: str, profile: Optional[str], *, create: bool) -> Lakebas
     if not create:
         raise AgentCliError(
             f"Durability store '{selected.project}' does not exist.",
-            hint="Drop --no-create-stores, or deploy with --session to reuse that store's Lakebase "
-            "database.",
+            hint="Bind a Session or Memory Store to reuse its Lakebase database.",
         )
 
     payload = {"spec": {"display_name": f"Mason durability for {app}"}}
