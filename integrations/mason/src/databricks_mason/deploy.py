@@ -2,8 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. The stores are read from `agent.toml` at runtime, so they are not written
-into `app.yaml`. `mason deployments` covers the lifecycle verbs
+the deployment. Durable agents reuse one of those Lakebase databases, or provision a dedicated
+database when neither is bound. The managed stores are read from `agent.toml` at runtime, so they
+are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -20,12 +21,20 @@ from typing import Any, Optional
 import click
 import yaml
 
-from databricks_mason import memory_store_access, render, session_store_access, timefmt
+from databricks_mason import (
+    agent_durability_store,
+    memory_store_access,
+    render,
+    session_store_access,
+    timefmt,
+)
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
+_AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -304,12 +313,7 @@ def _grant_store_access(
     memory_database: Optional[str],
     profile: Optional[str],
 ) -> Optional[str]:
-    """Give the app's SP access to the deployed stores (best-effort, two steps).
-
-    Binds every store's database as a `postgres` app resource in one update (the update replaces the
-    whole resource array, so they must be applied together), then GRANTs the SP read/write on each
-    store's tables. Returns None on success or a human-readable reason on the first failure.
-    """
+    """Bind managed-store databases and grant the app service principal table access."""
     backends = []
     if session_store:
         backends.append(session_store_access.backend(session_store))
@@ -326,6 +330,13 @@ def _grant_store_access(
         if error:
             return error
     return None
+
+
+def _has_durability_binding(source_dir: pathlib.Path) -> bool:
+    """Whether agent.toml opts this project into durable invocation storage."""
+    if not (source_dir / "agent.toml").is_file():
+        return False
+    return AgentProject.load(source_dir).durability_enabled
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -416,6 +427,20 @@ def deploy(
         provisioned["Memory store"] = memory_store
     if session_store:
         provisioned["Session store"] = session_store
+
+    memory_database = _memory_store_database(client, memory_store) if memory_store else None
+    durability_backend = None
+    if _has_durability_binding(source_dir):
+        if session_store:
+            durability_backend = session_store_access.backend(session_store)
+        elif memory_database:
+            durability_backend = memory_store_access.backend(memory_database)
+        else:
+            durability_backend = agent_durability_store.ensure_backend(
+                name, obj.profile, create=True
+            )
+        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
@@ -430,7 +455,7 @@ def deploy(
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime).
+    # 3. Create the app if needed, then attach Postgres resources before application startup.
     if not _deployment_exists(name, obj.profile):
         result = _databricks(
             ["apps", "create", name, *instance_args],
@@ -460,6 +485,16 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
+
+    if durability_backend is not None:
+        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for durable execution.",
+                hint=resource_error,
+            )
+
+    # 4. Roll out the deployment (Databricks Apps runtime).
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
@@ -475,9 +510,7 @@ def deploy(
         action=f"Could not deploy '{name}'.",
     )
 
-    # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
-    #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
-    #    both, the app runs but the durable store path fails (can't connect, or can't read tables).
+    # 5. Grant the app's service principal access to managed store tables.
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
@@ -486,9 +519,6 @@ def deploy(
             if sp is None:
                 grant_error = "could not resolve the app's service principal."
             else:
-                memory_database = (
-                    _memory_store_database(client, memory_store) if memory_store else None
-                )
                 grant_error = _grant_store_access(
                     name, sp, client.current_user, session_store, memory_database, obj.profile
                 )

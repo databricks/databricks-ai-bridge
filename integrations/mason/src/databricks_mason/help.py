@@ -25,6 +25,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("logout",): (("mason logout", "forget the saved default profile"),),
     ("init",): (("mason init my-agent", "scaffold a new agent project"),),
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
+    ("durability",): (("mason durability bind --source .", "enable durable invocation storage"),),
+    ("durability", "bind"): (
+        ("mason durability bind --source .", "declare durability in agent.toml"),
+    ),
+    ("durability", "unbind"): (
+        ("mason durability unbind --source .", "remove durability from agent.toml"),
+    ),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
         ("mason memory bind agent-memory", "bind it to the agent (wired in on dev/deploy)"),

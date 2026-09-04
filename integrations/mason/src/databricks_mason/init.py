@@ -4,9 +4,9 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-`--framework` selects which template to lay down; each framework knows its own repo, ref, and
-path (see `_TEMPLATES`). `--repo` / `--ref` override those, e.g. to pull from a fork or branch
-before a template has merged to its canonical repo.
+With no framework override, Mason scaffolds the minimal LangGraph durability app. `--framework`
+keeps the existing framework templates available. `--repo` / `--ref` override the source, e.g. to
+pull from a fork or branch before a template has merged to its canonical repo.
 """
 
 from __future__ import annotations
@@ -30,6 +30,11 @@ from databricks_mason.project_config import write_project_metadata
 # Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
 _MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
+_DEFAULT_TEMPLATE = {
+    "repo": _MASON_REPO,
+    "ref": "main",
+    "path": "integrations/mason/templates/durability-app",
+}
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {
         "repo": _MASON_REPO,
@@ -155,9 +160,8 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 @click.option(
     "--framework",
     type=click.Choice(sorted(_TEMPLATES)),
-    default="langgraph",
-    show_default=True,
-    help="Which basic agent template to scaffold.",
+    default=None,
+    help="Scaffold an existing framework template instead of the default durability app.",
 )
 @click.option(
     "--profile",
@@ -182,7 +186,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 def init(
     obj,
     directory: Optional[str],
-    framework: str,
+    framework: Optional[str],
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -198,11 +202,11 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
-    # The chat app is included by default for frameworks that have one; --disable-chat-app opts out.
-    # (--enable-chat-app is a deprecated no-op kept for back-compat.)
+    selected_framework = framework or "langgraph"
+    spec = _DEFAULT_TEMPLATE if framework is None else _TEMPLATES[framework]
+    # Existing framework templates retain their chat overlay behavior. The default durability app
+    # is deliberately API-only so the new SDK surface stays easy to inspect.
     chat_app_enabled = framework in _CHAT_APP_TEMPLATES and not disable_chat_app
-
-    spec = _TEMPLATES[framework]
     template_path = spec["path"]
     dest = (
         pathlib.Path(directory)
@@ -216,25 +220,28 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled else ()
+    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled and framework else ()
     _fetch_template(
         repo or spec["repo"],
-        ref or _template_ref(framework),
+        ref or _template_ref(selected_framework),
         template_path,
         dest,
         overlay_dirs,
     )
 
     template_name = pathlib.PurePosixPath(template_path).name
-    write_project_metadata(dest, framework=framework, template=template_name)
-    AgentProject.create(dest, framework=framework).write()
+    write_project_metadata(dest, framework=selected_framework, template=template_name)
+    project = AgentProject.create(dest, framework=selected_framework)
+    if framework is None:
+        project.bind_durability()
+    project.write()
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 
     if obj.output == "json":
         render.emit_json(
             {
-                "framework": framework,
+                "framework": selected_framework,
                 "template": template_name,
                 "directory": str(dest),
                 "chat_app_enabled": chat_app_enabled,
@@ -243,7 +250,7 @@ def init(
         )
         return
 
-    fields = {"Framework": framework, "Directory": str(dest)}
+    fields = {"Framework": selected_framework, "Directory": str(dest)}
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
