@@ -16,10 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from databricks_mason import workspace_client
-from databricks_mason.runtime.app import ROUTING_COOKIE
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
+_ROUTING_COOKIE = "__Host-databricks-app-router"
 _AGENTS_API = "/api/agents/v1"
 _MESSAGE_ROLES = {
     "ai",
@@ -51,7 +51,7 @@ class SessionItemsRequest(BaseModel):
 
 def _rotate_session_cookie(response: Response, session_id: str) -> None:
     response.set_cookie(
-        ROUTING_COOKIE,
+        _ROUTING_COOKIE,
         session_id,
         secure=True,
         httponly=True,

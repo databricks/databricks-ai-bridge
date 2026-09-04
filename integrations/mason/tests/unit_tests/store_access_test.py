@@ -78,9 +78,7 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
     backends = [session_store_access.backend("s"), memory_store_access.backend("memory-x")]
     assert sa.apply_postgres_resources("app", backends, "prof") is None
     payload = json.loads(captured["args"][captured["args"].index("--json") + 1])
-    assert captured["args"][:2] == ["apps", "create-update"]
-    assert payload["update_mask"] == "resources"
-    names = {r["name"] for r in payload["app"]["resources"]}
+    names = {r["name"] for r in payload["resources"]}
     assert names == {"postgres", "postgres-memory"}  # one update carries both
 
 

@@ -87,7 +87,7 @@ The examples below use a localhost cookie jar so every request addresses the sam
 ```bash
 BASE=http://localhost:8000
 COOKIE_JAR=/tmp/mason-agent.cookies
-curl -s -c "$COOKIE_JAR" "$BASE/health"
+curl -s -c "$COOKIE_JAR" "$BASE/api/healthz"
 ```
 
 When the chat app is enabled, `GET /api/demo/config` returns the resolved `session_id`, process
@@ -270,14 +270,11 @@ selects exactly one Lakebase database for invocation state, background polling, 
 heartbeats, and recovery:
 
 1. The configured Session Store's Lakebase database, if present.
-2. Otherwise the configured Memory Store's Lakebase database, if present.
-3. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
+2. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
 
 Mason creates only the `databricks_mason_runtime` schema and its execution/event tables in that
 database. The managed Session and Memory Store services continue to use their own schemas and REST
-APIs. When both stores are configured, runtime durability uses the Session Store database; the
-Memory Store database is still attached separately because the two managed services currently use
-different service-managed Lakebase projects.
+APIs.
 
 Pass `--no-create-stores` to require every selected managed store or dedicated durability project to
 already exist. Mason attaches the durability database before application startup so the App service

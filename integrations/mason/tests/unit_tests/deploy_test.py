@@ -7,6 +7,7 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -113,10 +114,19 @@ class _FakeCtx:
         return _FakeClient()
 
 
-def _write_langgraph_metadata(source: pathlib.Path) -> None:
-    config = source / ".mason" / "project.toml"
-    config.parent.mkdir()
-    config.write_text('schema_version = 1\nframework = "langgraph"\ntemplate = "agent-langgraph"\n')
+@pytest.fixture(autouse=True)
+def _agent_durability_store(monkeypatch):
+    selected = deploy_mod.agent_durability_store.backend("mason-myapp")
+    monkeypatch.setattr(
+        deploy_mod.agent_durability_store,
+        "ensure_backend",
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: None,
+    )
 
 
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
@@ -156,31 +166,19 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
-def test_durability_resources_reuse_session_backend_and_keep_memory_access() -> None:
-    session = deploy_mod.session_store_access.backend("sessions")
-    memory = deploy_mod.memory_store_access.backend("memory-123")
-
-    resources = deploy_mod._durability_resources(session, [session, memory])
-
-    assert [backend.resource_name for backend in resources] == ["postgres", "postgres-memory"]
-    assert resources[0].database_path == session.database_path
-    assert resources[1].database_path == memory.database_path
-
-
-def test_deploy_langgraph_reuses_memory_lakebase_for_durability(
+def test_deploy_reuses_session_store_for_durability_and_keeps_memory_access(
     tmp_path: pathlib.Path, monkeypatch
-):
+) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_langgraph_metadata(src)
     attached = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.durability_store_access,
+        deploy_mod.agent_durability_store,
         "ensure_backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse memory")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse session")),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -188,7 +186,7 @@ def test_deploy_langgraph_reuses_memory_lakebase_for_durability(
         lambda app, backends, profile: attached.extend(backends) or None,
     )
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
-    monkeypatch.setattr(deploy_mod, "_grant_store_tables", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -197,32 +195,30 @@ def test_deploy_langgraph_reuses_memory_lakebase_for_durability(
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--memory", "mem"],
+        ["myapp", "--source", str(src), "--session", "sessions", "--memory", "mem"],
         obj=_FakeCtx(),
     )
 
     assert result.exit_code == 0, result.output
-    assert len(attached) == 1
-    assert attached[0].project == "databricks-internal-agent-memory-store"
-    assert attached[0].database == "memory-123"
-    assert attached[0].resource_name == "postgres"
+    assert [backend.resource_name for backend in attached] == ["postgres", "postgres-memory"]
+    assert attached[0].database == "sessions"
+    assert attached[1].database == "memory-123"
     env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == attached[0].endpoint_path
 
 
-def test_deploy_langgraph_provisions_and_attaches_one_durability_backend_before_startup(
+def test_deploy_provisions_and_attaches_one_durability_backend_before_startup(
     tmp_path: pathlib.Path, monkeypatch
-):
+) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_langgraph_metadata(src)
-    selected = deploy_mod.durability_store_access.backend("mason-myapp")
+    selected = deploy_mod.agent_durability_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.durability_store_access,
+        deploy_mod.agent_durability_store,
         "ensure_backend",
         lambda app, profile, create: selected,
     )

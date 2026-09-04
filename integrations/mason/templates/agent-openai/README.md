@@ -86,7 +86,7 @@ The examples below use a localhost cookie jar so every request addresses the sam
 ```bash
 BASE=http://localhost:8000
 COOKIE_JAR=/tmp/mason-agent.cookies
-curl -s -c "$COOKIE_JAR" "$BASE/health"
+curl -s -c "$COOKIE_JAR" "$BASE/api/healthz"
 ```
 
 When the chat app is enabled, `GET /api/demo/config` returns the resolved `session_id`, process
@@ -266,8 +266,7 @@ Local development uses an in-memory durability store. `mason deploy` selects exa
 database for invocation state, background polling, emitted events, heartbeats, and recovery:
 
 1. The configured Session Store's Lakebase database, if present.
-2. Otherwise the configured Memory Store's Lakebase database, if present.
-3. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
+2. Otherwise a dedicated `<app>-durability` Lakebase project, reused or provisioned by Mason.
 
 Mason creates only the `databricks_mason_runtime` schema and its tables in that database. Runtime
 recovery replays the persisted input against the same OpenAI session. This gives at-least-once

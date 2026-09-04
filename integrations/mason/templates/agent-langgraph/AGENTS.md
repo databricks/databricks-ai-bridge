@@ -29,7 +29,7 @@ handlers under `/api/invocations` so OAuth Bearer-token calls pass through the A
 
 ```bash
 COOKIE_JAR=/tmp/mason-agent.cookies
-curl -s -c "$COOKIE_JAR" http://localhost:8000/health
+curl -s -c "$COOKIE_JAR" http://localhost:8000/api/healthz
 
 # Sync — run a turn to completion
 curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
@@ -113,8 +113,8 @@ a file to `agent/tools/`.
   the handler uses the routing session for both, so state is isolated to the current routing session
   without forwarded-user headers.
 - Runtime invocation state is in-memory locally. `mason deploy` stores it in exactly one Lakebase
-  database: Session Store first, otherwise Memory Store, otherwise a dedicated `<app>-durability`
-  project. Mason adds only its own schema and tables to the selected database.
+  database: Session Store when configured, otherwise a dedicated `<app>-durability` project. Mason
+  adds only its own schema and tables to the selected database.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's
   `HumanInTheLoopMiddleware`. The pause is checkpointed on the session thread and resumed by sending
   `resume` with the same cookie. Runtime recovery is Lakebase-backed after deployment, while the
