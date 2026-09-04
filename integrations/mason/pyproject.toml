@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1",
-    "databricks-sdk>=0.49",
+    "databricks-sdk>=0.94.0",
     "psycopg[binary]>=3.1",
     "PyYAML>=6.0",
     "rich>=13.7",
@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tracing = [
-    "mlflow[databricks]>=3.9.0",
+    "mlflow[databricks]>=3.10.1",
 ]
 # The agent-side runtime helpers a deployed agent imports. Kept as extras so a plain
 # `pip install databricks-mason` (the CLI) stays light; each template depends on the extra for its

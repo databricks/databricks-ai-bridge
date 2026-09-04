@@ -457,7 +457,12 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
-        result = _databricks(["apps", "create", name], obj.profile, capture=True)
+        result = _databricks(
+            ["apps", "create", name],
+            obj.profile,
+            capture=True,
+            action=f"Could not create deployment '{name}'.",
+        )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
@@ -467,8 +472,16 @@ def deploy(
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-    _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
-    _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
+    _databricks(
+        ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+        obj.profile,
+        action=f"Could not upload the agent source for '{name}'.",
+    )
+    _databricks(
+        ["apps", "deploy", name, "--source-code-path", ws_path],
+        obj.profile,
+        action=f"Could not deploy '{name}'.",
+    )
 
     # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
     #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
@@ -563,7 +576,12 @@ def _deployment_status(a: dict) -> Optional[str]:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Mason agent deployments (apps named `mason-*`) in the workspace."""
-    result = _databricks(["apps", "list", "-o", "json"], obj.profile, capture=True)
+    result = _databricks(
+        ["apps", "list", "-o", "json"],
+        obj.profile,
+        capture=True,
+        action="Could not list agent deployments.",
+    )
     data = json.loads(result.stdout or "[]")
     items = data.get("apps", data) if isinstance(data, dict) else data
     items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)]
@@ -591,7 +609,12 @@ def deployments_list(obj) -> None:
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
     _validate_deployment_name(name)
-    result = _databricks(["apps", "get", name, "-o", "json"], obj.profile, capture=True)
+    result = _databricks(
+        ["apps", "get", name, "-o", "json"],
+        obj.profile,
+        capture=True,
+        action=f"Could not read deployment '{name}'.",
+    )
     data = json.loads(result.stdout or "{}")
     if obj.output == "json":
         render.emit_json(data)
@@ -617,7 +640,7 @@ def deployments_get(obj, name) -> None:
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
     _validate_deployment_name(name)
-    _databricks(["apps", "logs", name], obj.profile)
+    _databricks(["apps", "logs", name], obj.profile, action=f"Could not read logs for '{name}'.")
 
 
 @deployments.command("start")
@@ -626,7 +649,9 @@ def deployments_logs(obj, name) -> None:
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
     _validate_deployment_name(name)
-    _databricks(["apps", "start", name], obj.profile)
+    _databricks(
+        ["apps", "start", name], obj.profile, action=f"Could not start deployment '{name}'."
+    )
     if obj.output == "json":
         render.emit_json({"started": name})
         return
@@ -641,7 +666,7 @@ def deployments_stop(obj, name, yes) -> None:
     """Stop a deployment."""
     _validate_deployment_name(name)
     _confirm_destroy(f"Stop deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "stop", name], obj.profile)
+    _databricks(["apps", "stop", name], obj.profile, action=f"Could not stop deployment '{name}'.")
     if obj.output == "json":
         render.emit_json({"stopped": name})
         return
@@ -656,7 +681,9 @@ def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment."""
     _validate_deployment_name(name)
     _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "delete", name], obj.profile)
+    _databricks(
+        ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
+    )
     if obj.output == "json":
         render.emit_json({"deleted": name})
         return

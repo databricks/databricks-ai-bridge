@@ -7,7 +7,7 @@ Until setup is run, tracing is simply off - neither ``dev`` nor ``deploy`` block
 developer without a catalog/schema is never stuck.
 
 ``list`` / ``get`` read traces back. MLflow is an optional dependency: ``list`` / ``get`` and the
-UC experiment provisioning need ``mlflow[databricks]>=3.9.0`` and import it lazily; ``setup`` is
+UC experiment provisioning need ``mlflow[databricks]>=3.10.1`` and import it lazily; ``setup`` is
 pure and needs nothing.
 """
 
@@ -71,6 +71,12 @@ def validate_uc_schema(location: str) -> str:
     )
 
 
+# Installing the `tracing` extra (rather than a bare mlflow) is what actually resolves both the
+# missing- and too-old-mlflow cases: the extra carries the version floor `mason tracing` needs, so
+# a stale mlflow already in the venv gets upgraded to a compatible one.
+_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
+
+
 def _mlflow():
     """Import mlflow lazily so the core CLI (and offline wheel) don't depend on it."""
     try:
@@ -79,8 +85,8 @@ def _mlflow():
         return mlflow
     except ImportError as exc:
         raise AgentCliError(
-            "MLflow is required for this command.",
-            hint="Install it: pip install 'mlflow[databricks]>=3.9.0'",
+            "MLflow is required for `mason tracing` setup/list/get.",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -93,8 +99,8 @@ def _uc_trace_symbols():
         return UCSchemaLocation, set_experiment_trace_location
     except ImportError as exc:
         raise AgentCliError(
-            "This MLflow version is too old for UC trace destinations.",
-            hint="Upgrade it: pip install 'mlflow[databricks]>=3.9.0'",
+            "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
+            hint=_INSTALL_HINT,
         ) from exc
 
 

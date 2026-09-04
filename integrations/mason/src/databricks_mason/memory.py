@@ -433,15 +433,25 @@ def entries_list(obj, store, actor_id, path_prefix, session_id, page_size, page_
 @click.option("--store", required=True)
 @click.option("--actor-id", required=True)
 @click.option("--query", required=True)
-@click.option("--limit", type=int, default=None)
+@click.option("--page-size", type=int, default=None)
 @click.pass_obj
-def entries_search(obj, store, actor_id, query, limit) -> None:
+def entries_search(obj, store, actor_id, query, page_size) -> None:
     """Full-text search an actor's entries, ranked (includes content)."""
-    data = obj.client().search_memory_entries(store, actor_id, query, limit)
+    data = obj.client().search_memory_entries(
+        store,
+        actor_id,
+        query,
+        page_size=page_size,
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
-    items = field(data, "managed_memory_entries") or []
+    results = field(data, "results")
+    items = (
+        [field(result, "managed_memory_entry") for result in results]
+        if results is not None
+        else field(data, "managed_memory_entries") or []
+    )
     rows = [
         [
             field(e, "path"),

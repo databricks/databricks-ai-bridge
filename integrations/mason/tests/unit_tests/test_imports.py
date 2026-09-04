@@ -7,13 +7,22 @@ def test_package_import() -> None:
 def test_public_surface() -> None:
     import databricks_mason
 
-    for name in ("MasonClient", "AgentCliError", "memory_store_path", "memory_entry_path"):
-        assert name in databricks_mason.__all__
+    eager = {
+        "MasonClient",
+        "Memory",
+        "MemorySearchResult",
+        "MemoryStore",
+        "Session",
+        "SessionItem",
+        "SessionStore",
+    }
+    lazy = {
+        "configure_tracing",
+        "tag_session",
+        "workspace_client",
+        "workspace_headers",
+    }
+
+    assert set(databricks_mason.__all__) == eager | lazy
+    for name in eager:
         assert hasattr(databricks_mason, name)
-
-
-def test_agentapiclient_alias() -> None:
-    from databricks_mason import MasonClient
-    from databricks_mason.client import AgentApiClient
-
-    assert AgentApiClient is MasonClient
