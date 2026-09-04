@@ -46,6 +46,12 @@ TRACES_DEST_ENV = "MLFLOW_TRACING_DESTINATION"
 TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
 
 
+# Installing the `tracing` extra (rather than a bare mlflow) is what actually resolves both the
+# missing- and too-old-mlflow cases: the extra carries the version floor `mason tracing` needs, so
+# a stale mlflow already in the venv gets upgraded to a compatible one.
+_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
+
+
 def _mlflow():
     """Import mlflow lazily so the core CLI (and offline wheel) don't depend on it."""
     try:
@@ -55,7 +61,7 @@ def _mlflow():
     except ImportError as exc:
         raise AgentCliError(
             "MLflow is required for `mason tracing` setup/list/get.",
-            hint="Install it: pip install 'mlflow[databricks]>=3.10.1'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -77,7 +83,7 @@ def _uc_trace_symbols():
     except ImportError as exc:
         raise AgentCliError(
             "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
-            hint="Upgrade it: pip install 'mlflow[databricks]>=3.10.1'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
