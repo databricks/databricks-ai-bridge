@@ -110,13 +110,10 @@ def test_validate_stores_raises_when_session_store_missing():
         "session store not found", error_code="NOT_FOUND"
     )
     with pytest.raises(AgentCliError) as exc:
-        deploy_mod.validate_stores_and_trace_env(
+        deploy_mod.validate_stores(
             client,
-            app="a",
             memory_store=None,
             session_store="ghost",
-            traces_destination=None,
-            traces_experiment=None,
         )
     assert "does not exist" in str(exc.value)
     client.get_session_store.assert_called_once_with("ghost")

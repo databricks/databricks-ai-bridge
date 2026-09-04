@@ -14,9 +14,13 @@ class _Ctx:
     def __init__(self, output: str = "text", profile=None):
         self.output = output
         self.profile = profile
+        self.client_calls = 0  # so tests can assert dev stays auth-free when nothing needs it
 
-    def client(self):  # only used when --with-* flags are passed
-        return mock.Mock()
+    def client(self):
+        # Constructing the client / reading current_user is a workspace (auth) call; dev must only
+        # do it when tracing or a store is actually configured.
+        self.client_calls += 1
+        return mock.Mock(current_user="me@example.com")
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -90,7 +94,9 @@ def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
     dev_yaml = tmp_path / ".mason-dev.app.yaml"
     assert str(dev_yaml) in cmd
     names = {e["name"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
-    assert names == {"AGENT_SESSION_STORE"}  # index vars stripped, app env kept
+    assert "PIP_INDEX_URL" not in names and "UV_INDEX_URL" not in names  # index vars stripped
+    assert "AGENT_SESSION_STORE" in names  # app env kept
+    assert not any(n.startswith("MLFLOW") for n in names)  # tracing not configured -> not wired
 
 
 def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
@@ -118,7 +124,7 @@ def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks") as db,
-        mock.patch.object(dev_mod, "validate_stores_and_trace_env", return_value={}) as validate,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -129,17 +135,51 @@ def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
-def test_dev_without_bindings_does_not_validate(tmp_path: pathlib.Path):
-    # No agent.toml store bindings (and no --with-* traces) -> nothing to validate.
+def test_dev_without_bindings_stays_offline(tmp_path: pathlib.Path):
+    # No store bindings and no `mason tracing setup`: dev validates nothing, wires no MLFLOW/AGENT
+    # env, and never touches the workspace client (no auth/`me()` call), so offline local dev works.
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
+    ctx = _Ctx()
     with (
         mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "validate_stores_and_trace_env") as validate,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
+    assert result.exit_code == 0, result.output
+    validate.assert_not_called()  # no bindings -> nothing to validate
+    assert ctx.client_calls == 0  # unconfigured dev makes no workspace/auth call
+    import yaml
+
+    doc = yaml.safe_load((tmp_path / "app.yaml").read_text()) or {}
+    env = {e["name"]: e["value"] for e in (doc.get("env") or [])}
+    assert not any(k.startswith("MLFLOW") for k in env)
+    assert not any(k.startswith("AGENT_") for k in env)
+
+
+def test_dev_wires_tracing_through_shared_provision(tmp_path: pathlib.Path):
+    # When tracing IS configured (agent.toml trace_location), dev wires it via the exact same
+    # provision_trace_experiment path as deploy (the actual UC work is covered by deploy_test).
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[trace_location]\nname = "cat.schema"\n'
+    )
+    with (
+        mock.patch.object(dev_mod, "_databricks"),
+        mock.patch.object(
+            dev_mod,
+            "provision_trace_experiment",
+            return_value=("/Users/me@example.com/mason-traces/x", "cat.schema"),
+        ) as prov,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    validate.assert_not_called()
+    prov.assert_called_once()  # configured -> tracing wired through the shared path
+    assert prov.call_args.args[1] == tmp_path.resolve().name  # app name
+    assert (
+        prov.call_args.args[2].current_user == "me@example.com"
+    )  # the client (read once configured)
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

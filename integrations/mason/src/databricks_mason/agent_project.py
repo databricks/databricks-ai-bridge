@@ -17,6 +17,11 @@ from tomlkit.exceptions import ParseError
 from databricks_mason.errors import AgentCliError
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
+# The UC trace destination binding (`mason tracing setup`): a "catalog.schema" (+ optional
+# warehouse id). The runtime doesn't read this from agent.toml - `mason deploy` uses it to create a
+# UC-linked experiment and wires MLFLOW_TRACING_DESTINATION into app.yaml, which the agent reads.
+TRACE_LOCATION_TABLE = "trace_location"
+
 _SCHEMA_VERSION = 1
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
@@ -193,12 +198,16 @@ def _required_string(value: object, description: str) -> str:
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:
-    """Read the ``name`` from a ``[memory_store]`` / ``[session_store]`` table, or None if absent."""
+    """Read the ``name`` from a ``[memory_store]`` / ``[session_store]`` table, or None if absent.
+
+    Coerced to a plain ``str``: tomlkit hands back a ``String`` subclass, which yaml's type-keyed
+    dumper (used to materialize app.yaml) can't represent, so return a bare str.
+    """
     if value is None:
         return None
     if not isinstance(value, Mapping):
         raise AgentCliError(f"agent.toml [{table}] must be a table.")
-    return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
+    return str(_required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name"))
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -296,6 +305,8 @@ class AgentProject:
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
+        trace_location: str | None = None,
+        trace_warehouse: str | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -307,6 +318,9 @@ class AgentProject:
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
+        # UC trace destination ("catalog.schema") + optional SQL warehouse; None = not configured.
+        self.trace_location = trace_location
+        self.trace_warehouse = trace_warehouse
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -347,6 +361,16 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
+        trace_location = _store_name_from_manifest(
+            document.get(TRACE_LOCATION_TABLE), TRACE_LOCATION_TABLE
+        )
+        trace_table = document.get(TRACE_LOCATION_TABLE)
+        raw_warehouse = (
+            trace_table.get("warehouse_id") if isinstance(trace_table, Mapping) else None
+        )
+        trace_warehouse = (
+            str(raw_warehouse) if isinstance(raw_warehouse, str) and raw_warehouse else None
+        )
         return cls(
             project_root,
             document,
@@ -355,6 +379,8 @@ class AgentProject:
             memory_store,
             session_store,
             memory_store_id,
+            trace_location,
+            trace_warehouse,
         )
 
     @classmethod
@@ -428,6 +454,33 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
+
+    def bind_trace_location(self, location: str, warehouse_id: str | None = None) -> bool:
+        """Declare the UC trace destination (``catalog.schema``) + optional SQL warehouse.
+
+        Stored as ``[trace_location] name = "<catalog.schema>"`` with an optional ``warehouse_id``.
+        Returns True if anything changed.
+        """
+        location = _required_string(location, f"[{TRACE_LOCATION_TABLE}] name")
+        if self.trace_location == location and self.trace_warehouse == warehouse_id:
+            return False
+        existing = self._document.get(TRACE_LOCATION_TABLE)
+        table = existing if isinstance(existing, Mapping) else tomlkit.table()
+        table["name"] = location
+        if warehouse_id:
+            table["warehouse_id"] = warehouse_id
+        elif "warehouse_id" in table:
+            del table["warehouse_id"]
+        if not isinstance(existing, Mapping):
+            self._document.append(TRACE_LOCATION_TABLE, table)
+        self.trace_location = location
+        self.trace_warehouse = warehouse_id
+        return True
+
+    def unbind_trace_location(self) -> bool:
+        """Remove the trace destination from agent.toml. Returns True if it was present."""
+        self.trace_warehouse = None
+        return self._clear_store(TRACE_LOCATION_TABLE)
 
     def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
         name = _required_string(name, f"[{table}] name")

@@ -17,12 +17,14 @@ import yaml
 
 from databricks_mason import render
 from databricks_mason.deploy import (
-    _upsert_manifest_env,
+    _TRACING_OFF_HINT,
+    provision_trace_experiment,
     store_bindings,
-    validate_stores_and_trace_env,
+    validate_stores,
 )
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
+from databricks_mason.tracing import experiment_ui_url, project_trace_location
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -48,25 +50,12 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     "exists yet, and reuse it otherwise. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
-@click.option(
-    "--with-traces",
-    "traces_destination",
-    default=None,
-    help="UC trace destination 'catalog.schema' to wire in via MLFLOW_TRACING_DESTINATION.",
-)
-@click.option(
-    "--traces-experiment",
-    default=None,
-    help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
-)
 @click.pass_obj
 def dev(
     obj,
     source: str,
     prepare_environment: Optional[bool],
     app_port: Optional[int],
-    traces_destination: Optional[str],
-    traces_experiment: Optional[str],
 ) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
@@ -75,10 +64,11 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    Stores bound with ``mason memory/sessions bind`` are validated here and read from agent.toml at
-    runtime (not written to app.yaml); the ``--with-traces`` flag wires tracing env into app.yaml,
-    exactly as ``mason deploy`` does. Locally the store owner (you) already has access, so no
-    service-principal grant is needed here; that grant happens at ``mason deploy`` time.
+    Stores bound with ``mason memory/sessions bind`` and tracing configured with ``mason tracing
+    setup`` are both recorded in ``agent.toml`` and picked up here (dev validates the bound stores
+    exist and wires the trace experiment, exactly as ``mason deploy`` does). Locally the store owner
+    (you) already has access, so no service-principal grant is needed; that grant happens at ``mason
+    deploy`` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -88,24 +78,28 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
-    # Validate the agent.toml store bindings exist and wire any traces into app.yaml. The stores are
-    # read from agent.toml at runtime, so they aren't written to app.yaml — set them (and create them)
-    # with `mason memory/sessions bind`.
+    # Stores are bound via `mason memory/sessions bind` (recorded in agent.toml) and read at runtime,
+    # so dev only validates that the bound stores still exist - a client/auth call made only when some
+    # are bound. Tracing is wired separately below (also read from agent.toml).
     memory_store, session_store = store_bindings(source_dir)
-    if memory_store or session_store or traces_destination or traces_experiment:
-        # The agent name defaults to the project dir name, so a per-app trace experiment here matches
-        # what `mason deploy <that-name>` derives.
+    if memory_store or session_store:
         with render.status("Checking stores…"):
-            env_updates = validate_stores_and_trace_env(
-                obj.client(),
-                app=source_dir.resolve().name,
-                memory_store=memory_store,
-                session_store=session_store,
-                traces_destination=traces_destination,
-                traces_experiment=traces_experiment,
-            )
-        if env_updates:
-            _upsert_manifest_env(source_dir, env_updates)
+            validate_stores(obj.client(), memory_store=memory_store, session_store=session_store)
+    # Tracing is UC-only and opt-in: wire it into app.yaml iff `mason tracing setup` configured a
+    # catalog.schema for this project (the exact same path `mason deploy` takes). Check the config
+    # first via a cheap agent.toml read, so a plain unconfigured `mason dev` never constructs the
+    # workspace client or makes an auth/`me()` call - local iteration stays offline-friendly. When
+    # unconfigured, dev doesn't block; the startup panel nudges instead.
+    traced = None
+    trace_url = None
+    trace_schema, _ = project_trace_location(source)
+    if trace_schema:
+        client = obj.client()
+        traced = provision_trace_experiment(
+            source_dir, source_dir.resolve().name, client, obj.profile
+        )
+        if traced:
+            trace_url = experiment_ui_url(client.host, traced[0])
 
     # Default: prepare only when there's no venv yet, so repeat runs don't rebuild. Explicit
     # --prepare-environment / --no-prepare-environment overrides the auto-detect.
@@ -127,7 +121,7 @@ def dev(
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
+    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT, traced, trace_url)
 
     # Run in the project dir so run-local finds the app; stream output (no capture).
     _databricks(
@@ -138,19 +132,38 @@ def dev(
     )
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
-    """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
+def _announce_local_url(
+    source_dir: pathlib.Path,
+    port: int,
+    traced: Optional[tuple[str, str]],
+    trace_url: Optional[str],
+) -> None:
+    """Print how to reach the running app: the chat UI if present, else a sample invoke request.
+
+    Also states where traces go: the experiment id + a link to its MLflow traces page when tracing
+    is configured, or a one-line hint that tracing is off.
+    """
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
+    # traced is (experiment_id, catalog_schema) when `mason tracing setup` ran, else None.
+    trace_field: dict[str, str] = {}
+    trace_step: list[str | tuple[str, str]] = [_TRACING_OFF_HINT]
+    if traced:
+        experiment_id, schema = traced
+        trace_field["Experiment"] = f"{experiment_id} ({schema})"
+        if trace_url:
+            trace_field["Traces"] = trace_url
+        trace_step = []
     if (source_dir / "runtime" / "ui.py").is_file():
         render.success(
             "Starting agent",
-            fields={"Chat UI": base},
+            fields={"Chat UI": base, **trace_field},
             next_steps=[
                 f"Open {base} to chat with your agent",
                 ("mason tools add mcp <service>", "Give the agent a tool"),
                 ("mason memory bind <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                *trace_step,
             ],
         )
     else:
@@ -161,11 +174,12 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {base}/invocations"},
+            fields={"Invoke": f"POST {base}/invocations", **trace_field},
             next_steps=[
                 (sample, "Send a test request"),
                 ("mason tools add mcp <service>", "Give the agent a tool"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
+                *trace_step,
             ],
         )
 
