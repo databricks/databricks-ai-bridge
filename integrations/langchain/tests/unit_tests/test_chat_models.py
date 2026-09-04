@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import mlflow  # noqa: F401
 import pytest
 from databricks import sdk
+from langchain_core.load import load
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -69,6 +70,99 @@ def test_dict(llm: ChatDatabricks) -> None:
     assert d["model"] == "databricks-meta-llama-3-3-70b-instruct"
     # workspace_client is excluded from serialization
     assert "workspace_client" not in d
+
+
+def test_langchain_serialization_redacts_explicit_credentials() -> None:
+    with patch("databricks_langchain.chat_models.sdk.WorkspaceClient") as workspace_client:
+        llm = ChatDatabricks(
+            model="test-model",
+            databricks_host="https://example.cloud.databricks.com",
+            databricks_token="test-token",
+        )
+
+    serialized = llm.to_json()
+    assert serialized["type"] == "constructor"
+    assert serialized["id"] == [
+        "databricks_langchain",
+        "chat_models",
+        "ChatDatabricks",
+    ]
+    assert serialized["kwargs"]["databricks_host"] == ("https://example.cloud.databricks.com")
+    assert serialized["kwargs"]["databricks_token"] == {
+        "lc": 1,
+        "type": "secret",
+        "id": ["DATABRICKS_TOKEN"],
+    }
+    assert "workspace_client" not in serialized["kwargs"]
+    assert "test-token" not in json.dumps(serialized)
+    workspace_client.assert_called_once_with(
+        host="https://example.cloud.databricks.com", token="test-token"
+    )
+
+
+def test_langchain_serialization_round_trip() -> None:
+    with patch("databricks_langchain.chat_models.sdk.WorkspaceClient"):
+        llm = ChatDatabricks(
+            model="test-model",
+            databricks_host="https://example.cloud.databricks.com",
+            databricks_token="test-token",
+        )
+        restored = load(
+            llm.to_json(),
+            secrets_map={"DATABRICKS_TOKEN": "restored-token"},
+            valid_namespaces=["databricks_langchain"],
+            allowed_objects=[ChatDatabricks],
+        )
+
+    assert isinstance(restored, ChatDatabricks)
+    assert restored.model == "test-model"
+    assert restored.databricks_host == "https://example.cloud.databricks.com"
+    assert restored.databricks_token is not None
+    assert restored.databricks_token.get_secret_value() == "restored-token"
+
+
+def test_invocation_params_include_safe_playground_configuration() -> None:
+    workspace_client = Mock(spec=sdk.WorkspaceClient)
+    workspace_client.config.host = "https://example.cloud.databricks.com"
+    llm = ChatDatabricks(
+        model="system.ai.claude-sonnet-5",
+        workspace_client=workspace_client,
+        temperature=0.2,
+        max_tokens=512,
+        timeout=30,
+        max_retries=4,
+        use_ai_gateway=True,
+    )
+
+    params = llm._get_invocation_params(stop=["DONE"])
+
+    assert params["model"] == "system.ai.claude-sonnet-5"
+    assert params["databricks_host"] == "https://example.cloud.databricks.com"
+    assert params["temperature"] == 0.2
+    assert params["max_tokens"] == 512
+    assert params["timeout"] == 30
+    assert params["max_retries"] == 4
+    assert params["use_ai_gateway"] is True
+    assert "use_responses_api" not in params
+    assert params["stop"] == ["DONE"]
+    assert "databricks_token" not in params
+    assert "workspace_client" not in params
+
+    ls_params = llm._get_ls_params(stop=["DONE"])
+    assert ls_params["ls_provider"] == "databricks"
+    assert ls_params["ls_model_name"] == "system.ai.claude-sonnet-5"
+    assert ls_params["ls_temperature"] == 0.2
+    assert ls_params["ls_max_tokens"] == 512
+    assert ls_params["ls_stop"] == ["DONE"]
+
+
+@pytest.mark.parametrize("mode", ["use_ai_gateway_native_api", "use_responses_api"])
+def test_invocation_params_include_enabled_api_mode(mode: str) -> None:
+    llm = ChatDatabricks(model="test-model", **{mode: True})
+
+    params = llm._get_invocation_params()
+
+    assert params[mode] is True
 
 
 def test_workspace_client_parameter() -> None:
