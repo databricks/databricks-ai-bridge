@@ -85,9 +85,8 @@ async def test_missing_routing_cookie_is_initialized_once() -> None:
 
     server = make_app(invoke)
     async with running_client(server) as client:
-        health = await client.get("/api/healthz")
-        session_id = health.cookies[_ROUTING_COOKIE]
         response = await client.post("/invocations", json={"id": "run-1"})
+        session_id = response.cookies[_ROUTING_COOKIE]
 
     assert UUID(session_id)
     assert seen_sessions == [session_id]
@@ -225,7 +224,6 @@ def test_app_exposes_local_and_deployed_invocation_routes() -> None:
     assert "/api/invocations/{run_id}" in paths
     assert "/invocations/{run_id}/events" in paths
     assert "/api/invocations/{run_id}/events" in paths
-    assert "/api/healthz" in paths
     assert "/api/session/new" not in paths
     assert not hasattr(server, "asgi_app")
     assert not hasattr(server, "run")

@@ -26,6 +26,7 @@ from databricks_mason import (
     timefmt,
 )
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import load_project_metadata
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
@@ -33,6 +34,7 @@ from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, def
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_DURABILITY_TEMPLATE = "durability-app"
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -296,17 +298,30 @@ def _grant_store_access(
     memory_database: Optional[str],
     profile: Optional[str],
 ) -> Optional[str]:
-    """Grant the app service principal read/write access to its managed-store tables."""
+    """Bind managed-store databases and grant the app service principal table access."""
     backends = []
     if session_store:
         backends.append(session_store_access.backend(session_store))
     if memory_database:
         backends.append(memory_store_access.backend(memory_database))
+    if not backends:
+        return None
+
+    error = apply_postgres_resources(app, backends, profile)
+    if error:
+        return error
     for backend in backends:
         error = grant_tables(backend, sp, owner, profile)
         if error:
             return error
     return None
+
+
+def _uses_durable_runtime(source_dir: pathlib.Path) -> bool:
+    """Whether this project was scaffolded from Mason's durability template."""
+    if not (source_dir / ".mason" / "project.toml").is_file():
+        return False
+    return load_project_metadata(source_dir).template == _DURABILITY_TEMPLATE
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -403,18 +418,17 @@ def deploy(
     if _SESSION_ENV in env_updates:
         provisioned["Session store"] = env_updates[_SESSION_ENV]
 
-    durability_backend = (
-        session_store_access.backend(session_store)
-        if session_store
-        else agent_durability_store.ensure_backend(name, obj.profile, create=not no_create_stores)
-    )
-    env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
-    provisioned["Agent durability store"] = durability_backend.database_path
-
-    memory_database = _memory_store_database(client, memory_store) if memory_store else None
-    resource_backends = [durability_backend]
-    if memory_database:
-        resource_backends.append(memory_store_access.backend(memory_database))
+    durability_backend = None
+    if _uses_durable_runtime(source_dir):
+        durability_backend = (
+            session_store_access.backend(session_store)
+            if session_store
+            else agent_durability_store.ensure_backend(
+                name, obj.profile, create=not no_create_stores
+            )
+        )
+        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
@@ -436,12 +450,13 @@ def deploy(
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         _wait_for_running(name, obj.profile)
 
-    resource_error = apply_postgres_resources(name, resource_backends, obj.profile)
-    if resource_error:
-        raise AgentCliError(
-            "Could not attach the Lakebase resource required for durable execution.",
-            hint=resource_error,
-        )
+    if durability_backend is not None:
+        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for durable execution.",
+                hint=resource_error,
+            )
 
     # 4. Roll out the deployment (Databricks Apps runtime).
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -459,6 +474,7 @@ def deploy(
         if sp is None:
             grant_error = "could not resolve the app's service principal."
         else:
+            memory_database = _memory_store_database(client, memory_store) if memory_store else None
             grant_error = _grant_store_access(
                 name, sp, client.current_user, session_store, memory_database, obj.profile
             )

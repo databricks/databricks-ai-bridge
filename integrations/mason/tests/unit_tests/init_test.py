@@ -27,6 +27,7 @@ class _Ctx:
 
 
 def test_framework_specs_have_repo_ref_path():
+    assert init_mod._DEFAULT_TEMPLATE["path"] == "integrations/mason/templates/durability-app"
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
@@ -83,13 +84,20 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai" in result.output
 
 
-def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
+def test_init_defaults_to_api_only_durability_app(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())  # no --framework
     assert result.exit_code == 0, result.output
-    # omitting --framework scaffolds the langgraph template
-    assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+    assert f.call_args.args[2] == init_mod._DEFAULT_TEMPLATE["path"]
+    assert f.call_args.args[4] == ()
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "durability-app",
+    }
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):

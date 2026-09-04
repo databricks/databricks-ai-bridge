@@ -4,18 +4,19 @@ import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agents import Agent, Runner, RunResultStreaming, RunState
+from agents import Agent, RunResultStreaming, Runner, RunState
 from agents.items import ToolApprovalItem
 from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
+from databricks_mason import tag_session, workspace_client
+from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
+
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
-from databricks_mason import DurableAgentContext, tag_session, workspace_client
-from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
 
 logger = logging.getLogger(__name__)
 
@@ -70,57 +71,69 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(session_id: str, mcp=None) -> Agent:
+def create_agent(actor: str, mcp=None) -> Agent:
     """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
 
-    The Apps routing cookie is the session and memory partition key. It is captured in the memory
-    tools' closures and never exposed to the model.
+    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
+    memory tools' closures (never exposed to the model). See ``_actor``.
     """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
         model=MODEL,
-        tools=[*all_tools(), *memory_tools(session_id)],
+        tools=[*all_tools(), *memory_tools(actor)],
         mcp_servers=mcp or [],
     )
 
 
-async def invoke(request: dict, context: DurableAgentContext) -> dict:
-    """Run one OpenAI Agents SDK turn through the durable runtime."""
-    return await _run_agent(request, context)
+def _session_id(request: dict) -> str:
+    """Return the session id derived by the runtime from the Apps routing cookie.
+
+    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
+    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
+    """
+    return str(request["session_id"])
 
 
-async def recover(request: dict, context: DurableAgentContext) -> dict:
-    """Replay the persisted input against the same session after worker loss."""
-    return await _run_agent(request, context)
+def _actor(request: dict) -> str:
+    """The identity that owns this request's memory and session data.
+
+    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
+    deployment platform sets); it partitions long-term memory and the durable session store so each
+    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
+    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
+    """
+    return str(request.get("actor") or "agent")
 
 
-async def _run_agent(request: dict, context: DurableAgentContext) -> dict:
+async def invoke_handler(request: dict) -> dict:
+    """Run one turn to completion. Called by the runtime for POST /invocations.
+
+    ``request`` is a dict with an ``input`` list of Responses message dicts; the returned dict carries
+    the run's new items (normalized message shape) and the ``session_id`` to pass back next turn. If a
+    gated tool needs approval the run pauses: ``output`` then ends with an ``interrupt`` event and
+    ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
+    payload.
+    """
+    request = {**request, "session_id": _session_id(request)}
     outputs = [
         event
-        async for event in _persisted_agent_events(request, context)
+        async for event in stream_handler(request)
         if event.get("type") in ("message", "interrupt")
     ]
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
+        "session_id": request["session_id"],
         "status": "interrupted" if interrupted else "completed",
     }
 
 
-async def _persisted_agent_events(
-    request: dict, context: DurableAgentContext
-) -> AsyncGenerator[dict, None]:
-    async for event in _agent_events(request, context):
-        await context.emit(event)
-        yield event
-
-
-async def _agent_events(
-    request: dict, context: DurableAgentContext
-) -> AsyncGenerator[dict, None]:
-    """Translate one Agents SDK run into the server's JSON event contract."""
-    tag_session(context.session_id)
+async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
+    """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
+    session_id = _session_id(request)
+    actor = _actor(request)
+    tag_session(session_id)
 
     servers = await mcp_servers(build_mcp_servers())
     async with MCPServerManager(servers) as manager:
@@ -144,23 +157,23 @@ async def _agent_events(
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(context.session_id, mcp)
+        agent = create_agent(actor, mcp)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
         # turn passes the messages plus the session store so prior history is loaded automatically.
         resume = request.get("resume")
         if resume is not None:
-            run_input: Any = _apply_decisions(context.session_id, resume)
+            run_input: Any = _apply_decisions(session_id, resume)
             result = Runner.run_streamed(agent, run_input)
         else:
             result = Runner.run_streamed(
                 agent,
                 request.get("input") or [],
-                session=session_store(context.session_id, context.session_id),
+                session=session_store(session_id, actor),
             )
 
-        async for event in _serialize_events(result, context.session_id):
+        async for event in _serialize_events(result, session_id):
             yield event
 
 
@@ -178,7 +191,7 @@ def _apply_decisions(session_id: str, resume: dict) -> RunState:
             "different replica loses them; retry the turn."
         )
     decisions = resume.get("decisions") or []
-    for decision, item in zip(decisions, state.get_interruptions(), strict=False):
+    for decision, item in zip(decisions, state.get_interruptions()):
         if decision.get("type") == "approve":
             state.approve(item)
         else:
