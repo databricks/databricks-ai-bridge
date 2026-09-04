@@ -393,15 +393,16 @@ def deploy(
     client = obj.client()
 
     # 1. Provision / resolve stores and build the env to inject.
-    env_updates = resolve_store_env(
-        client,
-        app=name,
-        memory_store=memory_store,
-        session_store=session_store,
-        traces_destination=traces_destination,
-        traces_experiment=traces_experiment,
-        create_stores=not no_create_stores,
-    )
+    with render.status("Provisioning stores…"):
+        env_updates = resolve_store_env(
+            client,
+            app=name,
+            memory_store=memory_store,
+            session_store=session_store,
+            traces_destination=traces_destination,
+            traces_experiment=traces_experiment,
+            create_stores=not no_create_stores,
+        )
     provisioned: dict[str, Any] = {}
     if _MEMORY_ENV in env_updates:
         provisioned["Memory store"] = env_updates[_MEMORY_ENV]
@@ -426,7 +427,8 @@ def deploy(
         click.echo((result.stdout or "").replace(old, new), nl=False)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
-        _wait_for_running(name, obj.profile)
+        with render.status("Waiting for agent compute to start…"):
+            _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
@@ -440,14 +442,17 @@ def deploy(
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
-        sp = _app_service_principal(name, obj.profile)
-        if sp is None:
-            grant_error = "could not resolve the app's service principal."
-        else:
-            memory_database = _memory_store_database(client, memory_store) if memory_store else None
-            grant_error = _grant_store_access(
-                name, sp, client.current_user, session_store, memory_database, obj.profile
-            )
+        with render.status("Granting the agent access to its stores…"):
+            sp = _app_service_principal(name, obj.profile)
+            if sp is None:
+                grant_error = "could not resolve the app's service principal."
+            else:
+                memory_database = (
+                    _memory_store_database(client, memory_store) if memory_store else None
+                )
+                grant_error = _grant_store_access(
+                    name, sp, client.current_user, session_store, memory_database, obj.profile
+                )
 
     app_url = _app_url(name, obj.profile)
 
