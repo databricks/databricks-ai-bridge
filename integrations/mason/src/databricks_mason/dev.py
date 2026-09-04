@@ -18,9 +18,9 @@ import yaml
 from databricks_mason import render
 from databricks_mason.deploy import (
     _TRACING_OFF_HINT,
-    _upsert_manifest_env,
     provision_trace_experiment,
-    resolve_store_env,
+    store_bindings,
+    validate_stores,
 )
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
@@ -50,35 +50,12 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     "exists yet, and reuse it otherwise. Requires uv.",
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
-@click.option(
-    "--memory",
-    "-m",
-    "memory_store",
-    default=None,
-    help="Memory store display name to wire in via AGENT_MEMORY_STORE (same as `mason deploy`).",
-)
-@click.option(
-    "--session",
-    "-s",
-    "session_store",
-    default=None,
-    help="Session store name to wire in via AGENT_SESSION_STORE (same as `mason deploy`).",
-)
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require referenced stores to already exist. By default missing stores are created "
-    "(idempotent).",
-)
 @click.pass_obj
 def dev(
     obj,
     source: str,
     prepare_environment: Optional[bool],
     app_port: Optional[int],
-    memory_store: Optional[str],
-    session_store: Optional[str],
-    no_create_stores: bool,
 ) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
@@ -87,11 +64,11 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    The ``--memory`` / ``--session`` flags wire an agent's stores into ``app.yaml`` before running,
-    exactly as ``mason deploy`` does - so you can iterate locally against a real store without
-    hand-editing env. Tracing is configured separately via ``mason tracing setup`` and picked up
-    from ``agent.toml`` here. Locally the store owner (you) already has access, so no
-    service-principal grant is needed; that grant happens at ``mason deploy`` time.
+    Stores bound with ``mason memory/sessions bind`` and tracing configured with ``mason tracing
+    setup`` are both recorded in ``agent.toml`` and picked up here (dev validates the bound stores
+    exist and wires the trace experiment, exactly as ``mason deploy`` does). Locally the store owner
+    (you) already has access, so no service-principal grant is needed; that grant happens at ``mason
+    deploy`` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -101,16 +78,13 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
-    # Wire any requested stores into app.yaml first, so run-local reads the updated env.
+    # Stores are bound via `mason memory/sessions bind` (recorded in agent.toml) and read at runtime,
+    # so dev only validates that the bound stores still exist - a client/auth call made only when some
+    # are bound. Tracing is wired separately below (also read from agent.toml).
+    memory_store, session_store = store_bindings(source_dir)
     if memory_store or session_store:
-        env_updates = resolve_store_env(
-            obj.client(),
-            memory_store=memory_store,
-            session_store=session_store,
-            create_stores=not no_create_stores,
-        )
-        if env_updates:
-            _upsert_manifest_env(source_dir, env_updates)
+        with render.status("Checking stores…"):
+            validate_stores(obj.client(), memory_store=memory_store, session_store=session_store)
     # Tracing is UC-only and opt-in: wire it into app.yaml iff `mason tracing setup` configured a
     # catalog.schema for this project (the exact same path `mason deploy` takes). Check the config
     # first via a cheap agent.toml read, so a plain unconfigured `mason dev` never constructs the
@@ -187,7 +161,7 @@ def _announce_local_url(
             next_steps=[
                 f"Open {base} to chat with your agent",
                 ("mason tools add mcp <service>", "Give the agent a tool"),
-                ("mason dev -m <store> -s <store>", "Attach a memory / session store"),
+                ("mason memory bind <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
                 *trace_step,
             ],

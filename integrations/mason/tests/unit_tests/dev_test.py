@@ -112,48 +112,42 @@ def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
     assert not (tmp_path / ".mason-dev.app.yaml").exists()
 
 
-def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
+def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.Path):
     import yaml
 
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+        '\n[memory_store]\nname = "m"\n\n[session_store]\nname = "s"\n',
+        encoding="utf-8",
+    )
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks") as db,
-        mock.patch.object(
-            dev_mod,
-            "resolve_store_env",
-            return_value={"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"},
-        ) as resolve,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
     ):
-        result = CliRunner().invoke(
-            dev_mod.dev,
-            ["--source", str(tmp_path), "--session", "s", "--memory", "m"],
-            obj=_Ctx(),
-        )
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    resolve.assert_called_once()  # same resolution path as deploy
-    env = {
-        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
-    }
-    assert env["AGENT_SESSION_STORE"] == "s"  # patched before run
-    assert env["AGENT_MEMORY_STORE"] == "abc"
-    assert not any(k.startswith("MLFLOW") for k in env)  # tracing not configured here
+    validate.assert_called_once()  # bound stores are validated, same path as deploy
+    # Stores are read from agent.toml at runtime, so no store env is written into app.yaml.
+    env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
+    assert {e["name"] for e in env_entries} == set()
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
-def test_dev_wires_no_tracing_when_unconfigured(tmp_path: pathlib.Path):
-    # Tracing is opt-in + UC-only: with no `mason tracing setup`, dev wires no MLFLOW env at all -
-    # AND never touches the workspace client (no auth/`me()` call), so offline local dev works.
+def test_dev_without_bindings_stays_offline(tmp_path: pathlib.Path):
+    # No store bindings and no `mason tracing setup`: dev validates nothing, wires no MLFLOW/AGENT
+    # env, and never touches the workspace client (no auth/`me()` call), so offline local dev works.
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
     ctx = _Ctx()
     with (
         mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "resolve_store_env") as resolve,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
     assert result.exit_code == 0, result.output
-    resolve.assert_not_called()  # no --memory/--session -> no store resolution
+    validate.assert_not_called()  # no bindings -> nothing to validate
     assert ctx.client_calls == 0  # unconfigured dev makes no workspace/auth call
     import yaml
 

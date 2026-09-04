@@ -212,11 +212,11 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
   human-in-the-loop section above); empty the dict to disable gating.
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
+- **Make state durable:** run `mason sessions bind <store>` (see "Enable durable state" below); the
   checkpointer lives in `databricks_mason/langgraph/session_store.py`.
-- **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
+- **Add long-term memory:** run `mason memory bind <store>`; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
-  conversations). Unset → the model isn't offered them.
+  conversations). Unbound → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
 
@@ -270,7 +270,8 @@ each trace with the session id. Otherwise it disables tracing outright, so the p
 By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
-Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
+Bind a managed [Session Store](../../README.md) with **`mason sessions bind <store>`** (recorded in
+`agent.toml`; `AGENT_SESSION_STORE` still overrides it if set) and
 `databricks_mason/langgraph/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
 `BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
 through the managed Session Store **REST API** — no database the app connects to directly. Full graph

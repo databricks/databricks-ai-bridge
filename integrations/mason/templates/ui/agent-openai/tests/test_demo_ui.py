@@ -87,6 +87,8 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
     if history:
         monkeypatch.setattr(ui, "_local_history", _session_history)
+    # Keep model discovery deterministic and offline (no serving_endpoints.list() call).
+    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["databricks-gpt-5-2"])
 
     async def invoke_handler(request):
         return {"output": [], "session_id": request["session_id"]}
@@ -113,11 +115,12 @@ def test_demo_ui_routes(monkeypatch):
     assert index.status_code == 200
     assert 'id="new-session"' in index.text
     assert 'id="session-list"' in index.text
+    assert 'id="model-select"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
-    assert "mason dev --memory <store-name>" in app_script.text
-    assert "mason deploy <app-name> --source . --memory <store-name>" in app_script.text
+    assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
+    assert "function renderModels(" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
@@ -128,6 +131,10 @@ def test_demo_ui_routes(monkeypatch):
     config = client.get("/api/demo/config").json()
     assert config["session_id"] == "routing-session"
     assert config["deployed"] is False
+    assert config["models"] == {
+        "default": "databricks-gpt-5-2",
+        "available": ["databricks-gpt-5-2"],
+    }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
     assert config["memory"]["enabled"] is False
@@ -223,6 +230,82 @@ def test_chat_session_items_exclude_non_message_items():
         ],
         "next_page_token": "next",
     }
+
+
+def _endpoint(name, task="llm/v1/chat", ready="READY"):
+    state = type("State", (), {"ready": type("Ready", (), {"value": ready})()})()
+    return type("Endpoint", (), {"name": name, "task": task, "state": state})()
+
+
+def test_discover_chat_models_filters_pins_default_and_dedups(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+    endpoints = [
+        _endpoint("databricks-claude-sonnet-4"),
+        _endpoint("an-embedding-model", task="llm/v1/embeddings"),  # dropped: wrong task
+        _endpoint("half-ready", ready="NOT_READY"),  # dropped: not ready
+        _endpoint("databricks-gpt-5-2"),  # the default, surfaced again by discovery
+    ]
+    fake_wc = type(
+        "WC", (), {"serving_endpoints": type("SE", (), {"list": lambda self: endpoints})()}
+    )()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    # Default pinned first, chat endpoints only, no duplicate of the default.
+    assert ui._discover_chat_models() == ["databricks-gpt-5-2", "databricks-claude-sonnet-4"]
+
+
+def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+
+    def _boom():
+        raise PermissionError("no listing permission")
+
+    fake_wc = type(
+        "WC", (), {"serving_endpoints": type("SE", (), {"list": lambda self: _boom()})()}
+    )()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    assert ui._discover_chat_models() == ["databricks-gpt-5-2"]
+
+
+def test_discover_chat_models_ranks_foundation_first_and_caps(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+    # A big workspace: many custom endpoints plus a few foundation models. The cap must keep the
+    # default and the databricks-* foundation models, not an arbitrary alphabetical slice of customs.
+    endpoints = [_endpoint(f"zz-custom-{i:03d}") for i in range(30)]
+    endpoints += [_endpoint("databricks-gpt-5-5"), _endpoint("databricks-claude-sonnet-4")]
+    fake_wc = type(
+        "WC", (), {"serving_endpoints": type("SE", (), {"list": lambda self: endpoints})()}
+    )()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    result = ui._discover_chat_models()
+    assert len(result) == 20  # capped
+    assert result[0] == "databricks-gpt-5-2"  # default pinned
+    # Foundation models win slots ahead of any custom endpoint.
+    assert result[1:3] == ["databricks-claude-sonnet-4", "databricks-gpt-5-5"]
+    assert all(name.startswith(("databricks-", "zz-custom-")) for name in result)
+
+
+def test_discover_chat_models_retries_transient_list_error(monkeypatch):
+    import time
+
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
+    monkeypatch.setattr(time, "sleep", lambda _s: None)  # don't actually wait between retries
+    calls = {"n": 0}
+
+    def _list(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient 500")
+        return [_endpoint("databricks-gpt-5-5")]
+
+    fake_wc = type("WC", (), {"serving_endpoints": type("SE", (), {"list": _list})()})()
+    monkeypatch.setattr(ui, "workspace_client", lambda: fake_wc)
+
+    # First attempt fails, second succeeds -> the endpoint is discovered, not lost.
+    assert ui._discover_chat_models() == ["databricks-gpt-5-2", "databricks-gpt-5-5"]
+    assert calls["n"] == 2
 
 
 @pytest.mark.asyncio

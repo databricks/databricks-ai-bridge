@@ -84,6 +84,83 @@ def _is_deployed() -> bool:
     return bool(os.getenv("DATABRICKS_APP_NAME")) and not is_local
 
 
+# The task string the Model Serving API reports for chat/completions endpoints; only these can back
+# a conversational agent, so the picker filters the workspace's endpoints down to them.
+_CHAT_TASK = "llm/v1/chat"
+# Cap the picker: a big workspace exposes thousands of endpoints, far too many for a dropdown.
+_MODEL_LIMIT = 20
+# The list API ignores page_size and returns every endpoint in one large, occasionally-failing
+# response; retry a few times before giving up so a transient error doesn't blank the picker.
+_LIST_ATTEMPTS = 3
+
+
+def _default_model() -> str:
+    """The agent's configured default endpoint (``agent.agent.MODEL``), imported lazily.
+
+    Imported inside the function, not at module load, so the light UI import path doesn't pull in the
+    agent stack (matching ``_checkpoint_history`` below).
+    """
+    from agent.agent import MODEL
+
+    return MODEL
+
+
+def _list_chat_endpoints() -> list[str]:
+    """Names of the workspace's ready chat serving endpoints, retrying the flaky list call.
+
+    The `/api/2.0/serving-endpoints` list is unpaginated and can intermittently 500 on large
+    workspaces, so retry a few times. Raises the last error if every attempt fails.
+    """
+    import time
+
+    last_error: Exception | None = None
+    for attempt in range(_LIST_ATTEMPTS):
+        try:
+            names = []
+            for endpoint in workspace_client().serving_endpoints.list():
+                if endpoint.task != _CHAT_TASK:
+                    continue
+                state = getattr(endpoint.state, "ready", None)
+                if state is not None and getattr(state, "value", state) != "READY":
+                    continue
+                if endpoint.name:
+                    names.append(endpoint.name)
+            return names
+        except Exception as exc:  # noqa: BLE001 - retry any list failure, then surface the last one
+            last_error = exc
+            if attempt < _LIST_ATTEMPTS - 1:
+                time.sleep(0.5)
+    raise last_error if last_error else RuntimeError("serving-endpoints list returned nothing")
+
+
+def _rank_models(default: str, names: list[str]) -> list[str]:
+    """Order the picker so its capped slots stay useful, and drop duplicates.
+
+    The default is pinned first; then Databricks foundation models (``databricks-*``), which are the
+    canonical choices; then any other custom/external chat endpoints. Truncation therefore sheds the
+    least-canonical endpoints first, not an arbitrary alphabetical slice.
+    """
+    foundation = sorted(n for n in names if n.startswith("databricks-") and n != default)
+    other = sorted(n for n in names if not n.startswith("databricks-") and n != default)
+    ordered = [default, *foundation, *other]
+    seen: set[str] = set()
+    return [n for n in ordered if not (n in seen or seen.add(n))]
+
+
+def _discover_chat_models() -> list[str]:
+    """The chat serving endpoints for the picker: default first, foundation models next, capped.
+
+    Best-effort: if listing fails (missing permission, repeated transient errors), fall back to just
+    the default so the picker still works. The default is always present and first.
+    """
+    default = _default_model()
+    try:
+        names = _list_chat_endpoints()
+    except Exception:  # noqa: BLE001 - a broken listing must not break the whole config endpoint
+        names = []
+    return _rank_models(default, names)[:_MODEL_LIMIT]
+
+
 class _ManagedStateClient:
     def __init__(self) -> None:
         self._workspace = workspace_client()
@@ -282,11 +359,14 @@ def install_ui(app: FastAPI) -> None:
         actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
+        # Off-thread: serving_endpoints.list() is a blocking SDK call.
+        available_models = await asyncio.to_thread(_discover_chat_models)
         return {
             "session_id": request.state.session_id,
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
+            "models": {"default": _default_model(), "available": available_models},
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": False},
             "session": {

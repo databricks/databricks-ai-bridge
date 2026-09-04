@@ -116,3 +116,27 @@ def test_detail_renders_breadcrumb_status_and_snippet():
     assert "Agent Memory" in out and "acme" in out
     assert "Active" in out
     assert "Starter code" in out
+
+
+def test_status_skips_spinner_in_json_mode(monkeypatch):
+    # Under -o json the spinner must not render, so no control chars pollute machine output.
+    from databricks_mason import errors
+
+    con, buf = _console()
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    with render.status("working…", con=con):
+        pass
+    assert buf.getvalue() == ""  # nothing emitted in json mode
+
+
+def test_status_renders_spinner_in_text_mode(monkeypatch):
+    from databricks_mason import errors
+
+    # A TTY-backed console renders the spinner; a plain StringIO console is not a terminal, so
+    # assert the body still runs and the call is a no-op-safe context manager.
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, buf = _console()
+    ran = []
+    with render.status("working…", con=con):
+        ran.append(True)
+    assert ran == [True]  # body runs whether or not the spinner is visible

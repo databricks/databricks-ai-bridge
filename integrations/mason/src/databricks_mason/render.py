@@ -34,9 +34,15 @@ def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
     """Show an animated spinner with ``message`` while a slow call runs, then clear it.
 
     Wraps ``rich``'s console status; a no-op spinner (no TTY) still runs the body. Use around
-    network work like store provisioning so the CLI doesn't look hung.
+    network work like store provisioning so the CLI doesn't look hung. Under ``-o json`` the spinner
+    is skipped so no control characters leak into machine-readable output.
     """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
     con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
     with con.status(message, spinner="dots"):
         yield
 

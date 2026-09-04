@@ -115,12 +115,15 @@ mason [-p <profile>] [-o text|json]
   init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-               [--memory/-m N] [--session/-s N]
-               [--with-traces C.S] [--no-create-stores]
+               [--with-traces C.S]
   memory
+    bind         STORE [--source PATH] [--no-create-stores]
+    unbind       [--source PATH]
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
   sessions     create | list | get | update | delete | fork
+    bind         STORE [--source PATH] [--no-create-stores]
+    unbind       [--source PATH]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
   tracing
@@ -134,9 +137,7 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
-  deploy       <name> --source PATH [--memory/-m N]
-               [--session/-s N] [--actor-id ID]
-               [--with-traces C.S] [--no-create-stores]
+  deploy       <name> --source PATH [--with-traces C.S]
   deployments  list | get | logs | start | stop | delete
 ```
 
@@ -222,16 +223,17 @@ The chat app includes synchronous, SSE streaming, background polling, Session St
 and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, the UI-enabled
 `runtime/main.py`, and UI tests.
 
-For the full deployed demo, connect both managed stores:
+For the full deployed demo, bind both managed stores, then deploy:
 
 ```sh
-mason --profile <profile> deploy mason-agent-demo --source . \
-  --session mason-demo-sessions \
-  --memory mason-demo-memory \
-  --actor-id alice
+mason sessions bind mason-demo-sessions
+mason memory bind mason-demo-memory
+mason --profile <profile> deploy mason-agent-demo --source .
 ```
 
-(Missing stores are created automatically; pass `--no-create-stores` to require they already exist.)
+(Binding creates a missing store automatically; pass `--no-create-stores` to require it already
+exists. The agent reads the bound stores from `agent.toml` at runtime; `deploy` grants the app's
+service principal access to them.)
 
 The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
 application session id. The browser sends it automatically; API clients must reuse it as a cookie.

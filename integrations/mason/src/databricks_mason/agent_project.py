@@ -210,6 +210,14 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return str(_required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name"))
 
 
+def _store_id_from_manifest(value: object) -> str | None:
+    """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
+    if not isinstance(value, Mapping):
+        return None
+    store_id = cast(Mapping[str, Any], value).get("id")
+    return store_id if isinstance(store_id, str) and store_id else None
+
+
 def _scope_from_manifest(value: object) -> Scope:
     if not isinstance(value, Mapping):
         raise AgentCliError("Sandbox downscope entries must be TOML tables.")
@@ -296,6 +304,7 @@ class AgentProject:
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
+        memory_store_id: str | None = None,
         trace_location: str | None = None,
         trace_warehouse: str | None = None,
     ) -> None:
@@ -304,9 +313,11 @@ class AgentProject:
         self._document = document
         self.framework = framework
         self.tools = tools
-        # Managed store bindings declared in agent.toml; None = unbound.
+        # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
+        # store id the runtime needs for the entries API (the display name can't be used there).
         self.memory_store = memory_store
         self.session_store = session_store
+        self.memory_store_id = memory_store_id
         # UC trace destination ("catalog.schema") + optional SQL warehouse; None = not configured.
         self.trace_location = trace_location
         self.trace_warehouse = trace_warehouse
@@ -346,6 +357,7 @@ class AgentProject:
         memory_store = _store_name_from_manifest(
             document.get(MEMORY_STORE_TABLE), MEMORY_STORE_TABLE
         )
+        memory_store_id = _store_id_from_manifest(document.get(MEMORY_STORE_TABLE))
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
@@ -366,6 +378,7 @@ class AgentProject:
             tools,
             memory_store,
             session_store,
+            memory_store_id,
             trace_location,
             trace_warehouse,
         )
@@ -421,9 +434,14 @@ class AgentProject:
         del self.tools[index]
         return True
 
-    def bind_memory_store(self, name: str) -> bool:
-        """Declare the memory store binding in agent.toml. Returns True if it changed."""
-        return self._set_store(MEMORY_STORE_TABLE, name)
+    def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
+        """Declare the memory store binding in agent.toml. Returns True if it changed.
+
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). The runtime needs
+        the id, not the display name, to build the entries API path, so we record it alongside the
+        name to keep resolution a pure agent.toml read.
+        """
+        return self._set_store(MEMORY_STORE_TABLE, name, store_id)
 
     def bind_session_store(self, name: str) -> bool:
         """Declare the session store binding in agent.toml. Returns True if it changed."""
@@ -464,18 +482,26 @@ class AgentProject:
         self.trace_warehouse = None
         return self._clear_store(TRACE_LOCATION_TABLE)
 
-    def _set_store(self, table: str, name: str) -> bool:
+    def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
         name = _required_string(name, f"[{table}] name")
-        if getattr(self, table) == name:
+        if getattr(self, table) == name and getattr(self, f"{table}_id", None) == store_id:
             return False
         existing = self._document.get(table)
         if isinstance(existing, Mapping):
             existing["name"] = name
+            if store_id:
+                existing["id"] = store_id
+            elif "id" in existing:
+                del existing["id"]
         else:
             store_table = tomlkit.table()
             store_table.add("name", name)
+            if store_id:
+                store_table.add("id", store_id)
             self._document.append(table, store_table)
         setattr(self, table, name)
+        if hasattr(self, f"{table}_id"):
+            setattr(self, f"{table}_id", store_id)
         return True
 
     def _clear_store(self, table: str) -> bool:
@@ -484,6 +510,8 @@ class AgentProject:
         if table in self._document:
             del self._document[table]
         setattr(self, table, None)
+        if hasattr(self, f"{table}_id"):
+            setattr(self, f"{table}_id", None)
         return True
 
     def write(self) -> pathlib.Path:

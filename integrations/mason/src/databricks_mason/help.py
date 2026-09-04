@@ -27,7 +27,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
-        ("mason deploy <agent> --memory agent-memory", "wire it into a deployment"),
+        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev/deploy)"),
     ),
     ("memory", "bind"): (
         ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
@@ -186,7 +186,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tracing list --trace-location main.agent_traces", "list recent traces"),
     ),
     ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
-    ("deploy",): (("mason deploy my-agent", "deploy the agent to Databricks Apps"),),
+    ("deploy",): (
+        ("mason deploy my-agent", "deploy the agent to Databricks Apps"),
+        ("mason deploy my-agent --instances 2", "deploy with two instances"),
+    ),
     ("deployments",): (("mason deployments list", "list agent deployments"),),
     ("deployments", "list"): (("mason deployments list", "list agent deployments"),),
     ("deployments", "get"): (("mason deployments get mason-my-agent", "show one deployment"),),

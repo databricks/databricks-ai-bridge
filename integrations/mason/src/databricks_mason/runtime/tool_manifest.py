@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 try:
     import tomllib  # ty: ignore[unresolved-import]
@@ -142,13 +142,14 @@ def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
     return tools
 
 
-def store_binding(table: str) -> str | None:
-    """The store ``name`` declared in agent.toml's ``[memory_store]`` / ``[session_store]``, or None.
+def store_binding(table: str, prefer: Literal["name", "id"] = "name") -> str | None:
+    """The store binding declared in agent.toml's ``[memory_store]`` / ``[session_store]``, or None.
 
     Read at runtime so `mason memory/sessions bind` (which writes these tables) takes effect without
-    any env plumbing. Returns None when the project has no agent.toml, no such table, or no name — the
-    adapters treat that as "unbound" and fall back to their default. Never raises: a malformed or
-    missing manifest just means "no binding here".
+    any env plumbing. With ``prefer="id"`` the table's ``id`` is returned when present, falling back
+    to ``name``; otherwise the ``name`` is returned. Returns None when the project has no agent.toml,
+    no such table, or no value — the adapters treat that as "unbound" and fall back to their default.
+    Never raises: a malformed or missing manifest just means "no binding here".
     """
     try:
         path = project_root() / "agent.toml"
@@ -157,20 +158,32 @@ def store_binding(table: str) -> str | None:
     except (RuntimeError, OSError, tomllib.TOMLDecodeError):
         return None
     section = document.get(table)
-    if isinstance(section, dict):
-        name = section.get("name")
-        if isinstance(name, str) and name:
-            return name
+    if not isinstance(section, dict):
+        return None
+    keys = ("id", "name") if prefer == "id" else ("name",)
+    for key in keys:
+        value = section.get(key)
+        if isinstance(value, str) and value:
+            return value
     return None
 
 
 def resolve_memory_store(explicit: str | None = None) -> str | None:
-    """The memory store name: ``explicit`` arg → ``AGENT_MEMORY_STORE`` env → agent.toml binding.
+    """The memory store id: ``explicit`` arg → ``AGENT_MEMORY_STORE`` env → agent.toml ``[memory_store]``.
 
     The one place the store-resolution precedence lives, shared by the framework adapters and the
     chat-app UI so they always agree on which store is in effect. None means "no memory store".
+
+    The entries API is keyed by store id, not display name, so the binding's ``id`` is preferred
+    (`mason memory bind` records it); the display ``name`` is only a fallback for a hand-written
+    binding without an id.
     """
-    return explicit or os.getenv(MEMORY_STORE_ENV) or store_binding(MEMORY_STORE_TABLE)
+    if explicit:
+        return explicit
+    env = os.getenv(MEMORY_STORE_ENV)
+    if env:
+        return env
+    return store_binding(MEMORY_STORE_TABLE, prefer="id")
 
 
 def resolve_session_store(explicit: str | None = None) -> str | None:
