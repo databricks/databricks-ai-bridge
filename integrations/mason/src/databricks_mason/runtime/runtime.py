@@ -66,12 +66,8 @@ class DurableRuntime:
         self.poll_seconds = poll_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._scanner: asyncio.Task[None] | None = None
+        self._recover = False
         self._started = False
-
-    @property
-    def is_durable(self) -> bool:
-        """Whether execution state survives process replacement."""
-        return bool(getattr(self.durability_store, "persistent", True))
 
     async def execute(
         self,
@@ -83,16 +79,18 @@ class DurableRuntime:
             raise NotImplementedError("provide an executor or override execute()")
         return await self._executor(request, context)
 
-    async def start(self) -> None:
-        """Initialize storage and start proactive recovery scanning."""
+    async def start(self, *, recover: bool = True) -> None:
+        """Initialize storage and optionally start proactive recovery scanning."""
         if self._started:
             return
         await self.durability_store.initialize()
+        self._recover = recover
         self._started = True
-        self._scanner = asyncio.create_task(
-            self._scan_loop(),
-            name="databricks-durable-runtime-scanner",
-        )
+        if recover:
+            self._scanner = asyncio.create_task(
+                self._scan_loop(),
+                name="databricks-durable-runtime-scanner",
+            )
 
     async def stop(self) -> None:
         """Stop local work, leaving active rows recoverable by another process."""
@@ -110,6 +108,7 @@ class DurableRuntime:
         )
         self._tasks.clear()
         self._scanner = None
+        self._recover = False
         self._started = False
         await self.durability_store.close()
 
@@ -201,7 +200,7 @@ class DurableRuntime:
     def _is_recoverable(self, state: DurableExecution) -> bool:
         if state.status == DurableExecutionStatus.QUEUED:
             return True
-        if state.status != DurableExecutionStatus.ACTIVE:
+        if state.status != DurableExecutionStatus.ACTIVE or not self._recover:
             return False
         if state.heartbeat_at is None:
             return True

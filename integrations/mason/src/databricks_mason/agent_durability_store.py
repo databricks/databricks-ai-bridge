@@ -1,4 +1,4 @@
-"""Lakebase backend selection and fallback provisioning for durable execution state."""
+"""Lakebase provisioning for Mason agent durability."""
 
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ def ensure_backend(app: str, profile: Optional[str], *, create: bool) -> Lakebas
     if not create:
         raise AgentCliError(
             f"Durability store '{selected.project}' does not exist.",
-            hint="Drop --no-create-stores, or deploy with --session/--memory to reuse that store's "
-            "Lakebase database.",
+            hint="Drop --no-create-stores, or deploy with --session to reuse that store's Lakebase "
+            "database.",
         )
 
     payload = {"spec": {"display_name": f"Mason durability for {app}"}}

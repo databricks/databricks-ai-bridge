@@ -133,8 +133,6 @@ class _AppsPostgresLakebase:
 class LakebaseDurabilityStore:
     """Store durable execution state and events in one Lakebase schema."""
 
-    persistent = True
-
     def __init__(
         self,
         *,
@@ -548,8 +546,6 @@ class LakebaseDurabilityStore:
 
 class InMemoryDurabilityStore:
     """Process-local durability store for development and tests."""
-
-    persistent = False
 
     def __init__(self) -> None:
         self.states: dict[str, DurableExecution] = {}

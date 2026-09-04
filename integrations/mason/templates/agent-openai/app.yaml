@@ -2,9 +2,9 @@ command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
 # No env vars are required by default: local development uses in-process state. `mason deploy`
-# attaches one Lakebase database for runtime durability, reusing Session Store first, Memory Store
-# second, or provisioning a dedicated <app>-durability project. To enable tracing, long-term memory,
-# or managed session history, add the matching entries below (literal values):
+# attaches one Lakebase database for runtime durability, reusing Session Store when configured or
+# provisioning a dedicated <app>-durability project. To enable tracing, long-term memory, or managed
+# session history, add the matching entries below (literal values):
 #
 # env:
 #   # Tracing (set a destination + an experiment). Destination: MLFLOW_TRACKING_URI or

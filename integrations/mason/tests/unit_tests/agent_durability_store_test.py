@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from databricks_mason import durability_store_access as durability
+from databricks_mason import agent_durability_store as durability
 from databricks_mason.errors import AgentCliError
 
 

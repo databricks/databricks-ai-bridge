@@ -93,8 +93,6 @@ AgentHook = Callable[[JsonObject, DurableAgentContext], Awaitable[JsonObject]]
 class DurabilityStore(Protocol):
     """Persistence contract used by :class:`DurableRuntime`."""
 
-    persistent: bool
-
     async def initialize(self) -> None: ...
 
     async def close(self) -> None: ...

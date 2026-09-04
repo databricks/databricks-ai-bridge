@@ -9,13 +9,14 @@ import httpx
 import pytest
 
 from databricks_mason import DurableAgentApp
-from databricks_mason.runtime.app import ROUTING_COOKIE
 from databricks_mason.runtime.store import RUNTIME_ENDPOINT_ENV, InMemoryDurabilityStore
 from databricks_mason.runtime.types import (
     DurableExecution,
     DurableExecutionContext,
     DurableExecutionStatus,
 )
+
+_ROUTING_COOKIE = "__Host-databricks-app-router"
 
 
 async def echo(payload, context):
@@ -27,16 +28,12 @@ def make_app(invoke=echo, *, on_resume=None) -> DurableAgentApp:
         invoke,
         on_resume=on_resume,
         durability_store=InMemoryDurabilityStore(),
-        heartbeat_seconds=0.01,
-        stale_seconds=0.05,
-        scan_seconds=0.01,
-        poll_seconds=0.005,
     )
 
 
 @asynccontextmanager
 async def running_client(server: DurableAgentApp) -> AsyncIterator[httpx.AsyncClient]:
-    await server._runtime.start()
+    await server._runtime.start(recover=server._on_resume is not None)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
@@ -60,7 +57,7 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
 
     server = make_app(invoke)
     async with running_client(server) as client:
-        client.cookies.set(ROUTING_COOKIE, "session-1")
+        client.cookies.set(_ROUTING_COOKIE, "session-1")
         response = await client.post(
             "/invocations",
             json={"id": "run-1", "input": "hello"},
@@ -88,8 +85,8 @@ async def test_missing_routing_cookie_is_initialized_once() -> None:
 
     server = make_app(invoke)
     async with running_client(server) as client:
-        health = await client.get("/health")
-        session_id = health.cookies[ROUTING_COOKIE]
+        health = await client.get("/api/healthz")
+        session_id = health.cookies[_ROUTING_COOKIE]
         response = await client.post("/invocations", json={"id": "run-1"})
 
     assert UUID(session_id)
@@ -132,20 +129,18 @@ async def test_recovery_attempt_uses_on_resume_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_without_on_resume_reuses_invoke_hook() -> None:
-    attempts = []
-
-    async def invoke(payload, context):
-        attempts.append(context.attempt)
-        return payload
-
-    server = make_app(invoke)
-    await server._execute(
-        {"input": {}, "session_id": "session-1"},
-        DurableExecutionContext("run-1", 2),
-    )
-
-    assert attempts == [2]
+async def test_recovery_without_on_resume_is_disabled() -> None:
+    server = make_app()
+    await server._runtime.start(recover=False)
+    try:
+        assert server._runtime._scanner is None
+        with pytest.raises(RuntimeError, match="on_resume"):
+            await server._execute(
+                {"input": {}, "session_id": "session-1"},
+                DurableExecutionContext("run-1", 2),
+            )
+    finally:
+        await server._runtime.stop()
 
 
 @pytest.mark.asyncio
@@ -230,7 +225,6 @@ def test_app_exposes_local_and_deployed_invocation_routes() -> None:
     assert "/api/invocations/{run_id}" in paths
     assert "/invocations/{run_id}/events" in paths
     assert "/api/invocations/{run_id}/events" in paths
-    assert "/health" in paths
     assert "/api/healthz" in paths
     assert "/api/session/new" not in paths
     assert not hasattr(server, "asgi_app")

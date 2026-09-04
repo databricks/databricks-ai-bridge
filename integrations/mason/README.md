@@ -120,7 +120,6 @@ separate package layer so it can be exposed as a standalone embedding API later:
 
 ```python
 from databricks_mason import DurableAgentApp, DurableAgentContext
-from databricks_mason.runtime.store import InMemoryDurabilityStore
 
 async def invoke(payload: dict, context: DurableAgentContext) -> dict:
     return await run_agent(payload, session_id=context.session_id)
@@ -131,30 +130,26 @@ async def recover(payload: dict, context: DurableAgentContext) -> dict:
 server = DurableAgentApp(
     invoke,
     on_resume=recover,
-    durability_store=InMemoryDurabilityStore(),
 )
 app = server.app
 ```
 
 The application exposes `POST /invocations`, `GET /invocations/{run_id}`, and
-`GET /invocations/{run_id}/events?after={cursor}`. `run_id`, `background`, and `stream` are
-transport parameters; the Apps routing cookie is the session identifier, so a body `session_id` is
-ignored. All other JSON fields reach the callback unchanged. The internal runtime persists
-the payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
+`GET /invocations/{run_id}/events?after={cursor}`. `id`, `background`, and `stream` are transport
+parameters; the Apps routing cookie is the session identifier, so body `session_id` is rejected.
+The callback receives `input` and an optional `resume` payload. The internal runtime persists the
+payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
 
 Generated templates select an in-memory durability store locally. `mason deploy` gives every
 generated LangGraph or OpenAI application one Lakebase database for runtime durability, chosen in
-this order:
+this way:
 
 1. Reuse the configured Session Store's Lakebase database.
-2. Otherwise reuse the configured Memory Store's Lakebase database.
-3. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
+2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
 
-Mason adds only its `databricks_mason_runtime` schema and tables to the selected database. If both
-managed stores are configured, runtime durability still uses only the Session Store database; the
-Memory Store database remains a separate app resource only because the managed stores themselves
-currently live in different service-managed Lakebase projects. A replacement worker claims a stale
-heartbeat and calls `on_resume`; agent checkpoint restoration and idempotent external side effects
+Mason adds only its `databricks_mason_runtime` schema and tables to the selected database. A
+replacement worker claims a stale heartbeat and calls `on_resume`; if `on_resume` is omitted,
+automatic recovery is disabled. Agent checkpoint restoration and idempotent external side effects
 remain the developer's responsibility.
 
 ## Commands
@@ -283,8 +278,8 @@ mason --profile <profile> deploy mason-agent-demo --source . \
 
 (Missing stores are created automatically; pass `--no-create-stores` to require they already exist.)
 
-The browser and programmatic clients preserve the Databricks Apps routing cookie, or a local
-fallback cookie, to keep their session selected. Invocation request bodies do not select sessions.
+The browser and programmatic clients preserve the `__Host-databricks-app-router` cookie to keep
+their session selected. Invocation request bodies do not select sessions.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory

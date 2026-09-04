@@ -18,8 +18,6 @@ from databricks_mason.runtime.types import (
 
 
 class MemoryDurabilityStore:
-    persistent = True
-
     def __init__(self) -> None:
         self.states: dict[str, DurableExecution] = {}
         self.initialized = False

@@ -28,25 +28,19 @@ from databricks_mason.runtime.types import (
     JsonObject,
 )
 
-ROUTING_COOKIE = "__Host-databricks-app-router"
+_ROUTING_COOKIE = "__Host-databricks-app-router"
 
 
-class InvocationRequest(BaseModel):
+class _InvocationRequest(BaseModel):
     """The fixed HTTP request accepted by :class:`DurableAgentApp`."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
     input: Any = Field(default_factory=list)
     resume: JsonObject | None = None
     background: bool = False
     stream: bool = False
-
-    def payload(self) -> JsonObject:
-        payload: JsonObject = {"input": copy.deepcopy(self.input)}
-        if "resume" in self.model_fields_set:
-            payload["resume"] = copy.deepcopy(self.resume)
-        return payload
 
 
 class DurableAgentApp:
@@ -58,10 +52,6 @@ class DurableAgentApp:
         *,
         on_resume: AgentHook | None = None,
         durability_store: DurabilityStore | None = None,
-        heartbeat_seconds: float = 3.0,
-        stale_seconds: float = 10.0,
-        scan_seconds: float = 3.0,
-        poll_seconds: float = 0.1,
     ) -> None:
         self._invoke = invoke
         self._on_resume = on_resume
@@ -70,15 +60,11 @@ class DurableAgentApp:
             durability_store=(
                 durability_store if durability_store is not None else default_durability_store()
             ),
-            heartbeat_seconds=heartbeat_seconds,
-            stale_seconds=stale_seconds,
-            scan_seconds=scan_seconds,
-            poll_seconds=poll_seconds,
         )
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
-            await self._runtime.start()
+            await self._runtime.start(recover=self._on_resume is not None)
             try:
                 yield
             finally:
@@ -94,18 +80,17 @@ class DurableAgentApp:
             self.app.add_api_route(
                 f"{prefix}/invocations/{{run_id}}/events", self._events, methods=["GET"]
             )
-        self.app.add_api_route("/health", self._health, methods=["GET"])
         self.app.add_api_route("/api/healthz", self._health, methods=["GET"])
 
     async def _bind_session(self, request: Request, call_next) -> Response:
-        session_id = request.cookies.get(ROUTING_COOKIE)
+        session_id = request.cookies.get(_ROUTING_COOKIE)
         if session_id is None:
             session_id = str(uuid.uuid4())
         request.state.session_id = session_id
         response = await call_next(request)
-        if ROUTING_COOKIE not in request.cookies:
+        if _ROUTING_COOKIE not in request.cookies:
             response.set_cookie(
-                ROUTING_COOKIE,
+                _ROUTING_COOKIE,
                 session_id,
                 secure=True,
                 httponly=True,
@@ -130,18 +115,19 @@ class DurableAgentApp:
             attempt=execution_context.attempt,
             _execution_context=execution_context,
         )
-        hook = self._on_resume if context.is_recovery and self._on_resume else self._invoke
-        response = await hook(copy.deepcopy(payload), context)
-        if not isinstance(response, dict):
-            raise TypeError(
-                f"agent callback must return a JSON object, got {type(response).__name__}"
-            )
-        return response
+        if context.is_recovery:
+            if self._on_resume is None:
+                raise RuntimeError("recovery requires an on_resume callback")
+            return await self._on_resume(copy.deepcopy(payload), context)
+        return await self._invoke(copy.deepcopy(payload), context)
 
-    async def _invoke_request(self, request: Request, body: InvocationRequest) -> Response:
+    async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
+        payload: JsonObject = {"input": body.input}
+        if body.resume is not None:
+            payload["resume"] = body.resume
         persisted_request: JsonObject = {
             "session_id": request.state.session_id,
-            "input": body.payload(),
+            "input": payload,
         }
         try:
             if body.stream:
