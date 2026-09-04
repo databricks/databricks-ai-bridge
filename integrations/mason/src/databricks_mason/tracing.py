@@ -6,7 +6,7 @@ read traces back, and `instrument` prints the wiring snippet (the "Starter code"
 `mason deploy --with-traces` injects the destination into a deployment's app.yaml, exactly as
 `--memory` / `--session` inject their stores.
 
-MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.9.0`
+MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.10.1`
 installed and lazily import it; `instrument` (and the deploy wiring) are pure and need nothing.
 """
 
@@ -55,7 +55,7 @@ def _mlflow():
     except ImportError as exc:
         raise AgentCliError(
             "MLflow is required for `mason tracing` setup/list/get.",
-            hint="Install it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint="Install it: pip install 'mlflow[databricks]>=3.10.1'",
         ) from exc
 
 
@@ -77,7 +77,7 @@ def _uc_trace_symbols():
     except ImportError as exc:
         raise AgentCliError(
             "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
-            hint="Upgrade it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint="Upgrade it: pip install 'mlflow[databricks]>=3.10.1'",
         ) from exc
 
 
@@ -355,7 +355,7 @@ def tracing_instrument(obj, destination, experiment) -> None:
     render.detail(
         _BREADCRUMB,
         dest,
-        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.9.0"},
+        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.10.1"},
         status="ACTIVE",
         snippets=[("python", "python", code)],
     )
