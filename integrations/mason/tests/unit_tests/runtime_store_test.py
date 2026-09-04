@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from databricks_mason.runtime.store import LakebaseDurabilityStore
+from databricks_mason.runtime.store import (
+    RUNTIME_ENDPOINT_ENV,
+    InMemoryDurabilityStore,
+    LakebaseDurabilityStore,
+    default_durability_store,
+)
 from databricks_mason.runtime.types import (
     DurableExecutionStatus,
     DurableRequestConflictError,
@@ -39,6 +44,26 @@ def mapping_result(value):
     result.mappings.return_value.one_or_none.return_value = value
     result.mappings.return_value.all.return_value = value if isinstance(value, list) else [value]
     return result
+
+
+def test_default_store_is_local_without_an_attached_resource(monkeypatch):
+    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
+
+    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
+
+
+def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
+    expected = MagicMock()
+    monkeypatch.setenv(
+        RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
+    )
+    from_app_resource = MagicMock(return_value=expected)
+    monkeypatch.setattr(LakebaseDurabilityStore, "from_app_resource", from_app_resource)
+
+    assert default_durability_store() is expected
+    from_app_resource.assert_called_once_with(
+        endpoint="projects/project/branches/production/endpoints/primary"
+    )
 
 
 def execution_row(**overrides):

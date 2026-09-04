@@ -9,6 +9,10 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
+from agent.mcps import build_mcp_servers
+
+# Importing the tools package auto-registers every tool module.
+from agent.tools import all_tools
 from databricks_mason import (
     DurableAgentContext,
     configure_tracing,
@@ -17,11 +21,6 @@ from databricks_mason import (
     workspace_headers,
 )
 from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
-
-from agent.mcps import build_mcp_servers
-
-# Importing the tools package auto-registers every tool module.
-from agent.tools import all_tools
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +74,16 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-async def create_agent_graph(actor: str):
+async def create_agent_graph(session_id: str):
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools.
 
-    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
-    memory tools' closures (never exposed to the model). See ``_actor``.
+    The Apps routing cookie is the session and memory partition key. It is captured in the memory
+    tools' closures and never exposed to the model.
     """
     # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones (mcps.py),
     # then fetch their tools. Edit build_mcp_servers in agent/mcps.py to add servers.
     mcp = await mcp_tools(build_mcp_servers())
-    tools = [*all_tools(), *memory_tools(actor), *mcp]
+    tools = [*all_tools(), *memory_tools(session_id), *mcp]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
@@ -104,7 +103,7 @@ async def invoke(request: dict, context: DurableAgentContext) -> dict:
 async def recover(request: dict, context: DurableAgentContext) -> dict:
     """Resume the same LangGraph session after the runtime replaces a failed worker."""
     saver = checkpointer()
-    checkpoint = await saver.aget_tuple(thread_config(context.session_id, context.actor))
+    checkpoint = await saver.aget_tuple(thread_config(context.session_id))
     current_run_checkpointed = bool(
         checkpoint and checkpoint.metadata.get(_RUN_METADATA_KEY) == context.run_id
     )
@@ -131,7 +130,6 @@ async def _run_agent(agent_input: Any, context: DurableAgentContext) -> dict:
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": context.session_id,
         "status": "interrupted" if interrupted else "completed",
     }
 
@@ -149,12 +147,12 @@ async def _agent_events(
     agent_input: Any, context: DurableAgentContext
 ) -> AsyncGenerator[dict, None]:
     """Translate one LangGraph event stream into the server's JSON event contract."""
-    agent = await create_agent_graph(context.actor)
+    agent = await create_agent_graph(context.session_id)
     async for event in _serialize_events(
         agent.astream(
             input=agent_input,
             config={
-                **thread_config(context.session_id, context.actor),
+                **thread_config(context.session_id),
                 "metadata": {_RUN_METADATA_KEY: context.run_id},
             },
             stream_mode=["updates", "messages"],

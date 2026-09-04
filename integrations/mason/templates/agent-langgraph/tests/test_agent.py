@@ -78,7 +78,7 @@ def test_thread_config_from_session_id():
 
 
 def test_thread_config_uses_supplied_actor():
-    # A caller-supplied actor (e.g. the signed-in user) partitions the durable store per user.
+    # The helper still supports an explicit partition for non-template callers.
     assert thread_config("abc-123", "alice") == {
         "configurable": {"thread_id": "abc-123", "actor_id": "alice"}
     }
@@ -120,7 +120,7 @@ async def test_invoke_starts_a_turn_and_recover_resumes_the_checkpoint(monkeypat
 
     monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
     monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
-    context = SimpleNamespace(run_id="run-1", session_id="session-1", actor="alice")
+    context = SimpleNamespace(run_id="run-1", session_id="session-1")
     messages = [{"role": "user", "content": "hello"}]
 
     await agent_module.invoke({"input": messages}, context)
@@ -150,7 +150,7 @@ async def test_recover_replays_input_when_no_checkpoint_exists(monkeypatch):
 
     await agent_module.recover(
         {"input": messages},
-        SimpleNamespace(run_id="run-1", session_id="session-1", actor="alice"),
+        SimpleNamespace(run_id="run-1", session_id="session-1"),
     )
 
     assert calls == [{"messages": messages}]
@@ -176,7 +176,7 @@ async def test_recover_replays_input_when_checkpoint_belongs_to_an_older_run(mon
 
     await agent_module.recover(
         {"input": messages},
-        SimpleNamespace(run_id="run-1", session_id="session-1", actor="alice"),
+        SimpleNamespace(run_id="run-1", session_id="session-1"),
     )
 
     assert calls == [{"messages": messages}]

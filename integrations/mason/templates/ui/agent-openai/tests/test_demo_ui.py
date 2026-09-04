@@ -24,25 +24,20 @@ class _FakeStateClient:
         return {"session_id": session_id, "actor_id": actor}
 
     def get_session(self, session_id):
-        return {"session_id": session_id, "actor_id": "alice"}
+        return {"session_id": session_id, "actor_id": session_id}
 
     def list_sessions(self, actor):
         return {
             "sessions": [
                 {
-                    "session_id": "s1",
-                    "actor_id": "alice",
+                    "session_id": actor,
+                    "actor_id": actor,
                     "last_activity_time": "2026-08-28T12:00:00Z",
                 },
                 {
-                    "session_id": "s2",
-                    "actor_id": "alice",
-                    "last_activity_time": "2026-08-27T12:00:00Z",
-                },
-                {
-                    "session_id": "public-s1",
-                    "actor_id": "alice",
-                    "metadata": {"public_session_id": "s1"},
+                    "session_id": f"public-{actor}",
+                    "actor_id": actor,
+                    "metadata": {"public_session_id": actor},
                     "last_activity_time": "2026-08-28T12:01:00Z",
                 },
             ]
@@ -90,16 +85,12 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
         monkeypatch.setattr(ui, "_local_history", _session_history)
 
     async def invoke(request, context):
-        return {"output": [], "session_id": context.session_id}
+        return {"output": []}
 
     server = DurableAgentApp(invoke, durability_store=InMemoryDurabilityStore())
     ui.install_ui(server.app)
     client = TestClient(server.app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
-    if configured:
-        # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
-        # unconfigured requests have no header and fall back to the "agent" actor.
-        client.headers["X-Forwarded-Email"] = "alice"
     return client
 
 
@@ -118,6 +109,7 @@ def test_demo_ui_routes(monkeypatch):
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
+    assert "id: `inv_${crypto.randomUUID()}`" in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
@@ -139,7 +131,7 @@ def test_demo_ui_routes(monkeypatch):
         "sessions": [
             {
                 "session_id": "routing-session",
-                "actor_id": "agent",
+                "actor_id": "routing-session",
                 "metadata": {"client": "mason-demo-ui-local"},
             }
         ],
@@ -175,7 +167,7 @@ def test_unmanaged_local_history_route(monkeypatch):
     ]
 
 
-def test_managed_session_list_is_actor_scoped(monkeypatch):
+def test_managed_session_list_is_routing_session_scoped(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
     state_client = object.__new__(ui._ManagedStateClient)
     calls = []
@@ -183,15 +175,15 @@ def test_managed_session_list_is_actor_scoped(monkeypatch):
         "sessions": []
     }
 
-    # The actor (a signed-in user) is escaped into the list filter.
-    assert state_client.list_sessions('alice "demo"') == {"sessions": []}
+    # The routing session is escaped into the actor filter.
+    assert state_client.list_sessions('routing "session"') == {"sessions": []}
     assert calls == [
         (
             "GET",
             "/api/agents/v1/session-stores/sessions/sessions",
             {
                 "query": {
-                    "filter": 'actor_id = "alice \\"demo\\""',
+                    "filter": 'actor_id = "routing \\"session\\""',
                     "order_by": "last_activity_time desc",
                     "page_size": 50,
                 }
@@ -253,10 +245,10 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert config["memory"] == {
         "enabled": True,
         "store": "memory-stores/store",
-        "actor": "alice",
+        "actor": "s1",
     }
     assert config["session"]["store"] == "sessions"
-    assert config["session"]["actor"] == "alice"
+    assert config["session"]["actor"] == "s1"
     assert config["session"]["history"] is True
 
     created = client.post(
@@ -275,7 +267,7 @@ def test_managed_memory_and_session_routes(monkeypatch):
         == "s1"
     )
     listed = client.get("/api/demo/sessions").json()
-    assert [session["session_id"] for session in listed["sessions"]] == ["s1", "s2"]
+    assert [session["session_id"] for session in listed["sessions"]] == ["s1"]
     assert listed["current_session_id"] == "s1"
     assert listed["managed"] is True
     assert client.get("/api/demo/session").json()["session_id"] == "s1"
@@ -292,26 +284,8 @@ def test_managed_memory_and_session_routes(monkeypatch):
         for item in client.get("/api/demo/session/items").json()["session_items"]
     ] == ["s1", "saved reply"]
 
-    opened = client.post("/api/demo/sessions/s2/open")
-    assert opened.json() == {
-        "session_id": "s2",
-        "previous_session_id": "s1",
-        "managed": True,
-    }
-    assert client.get("/api/demo/config").json()["session_id"] == "s2"
-    assert (
-        client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
-    )
-
-
-def test_open_session_rejects_another_actor(monkeypatch):
+def test_open_session_rejects_another_routing_session(monkeypatch):
     client = _client(monkeypatch, configured=True, session_id="s1")
-
-    class _ForeignActorClient(_FakeStateClient):
-        def get_session(self, session_id):
-            return {"session_id": session_id, "actor_id": "bob"}
-
-    monkeypatch.setattr(ui, "_state_client", lambda: _ForeignActorClient())
 
     response = client.post("/api/demo/sessions/s2/open")
     assert response.status_code == 403

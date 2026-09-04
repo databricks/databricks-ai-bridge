@@ -9,8 +9,8 @@ import httpx
 import pytest
 
 from databricks_mason import DurableAgentApp
-from databricks_mason.durable_server.app import RUN_ID_HEADER, SESSION_ID_HEADER
-from databricks_mason.runtime.store import InMemoryDurabilityStore
+from databricks_mason.runtime.app import ROUTING_COOKIE
+from databricks_mason.runtime.store import RUNTIME_ENDPOINT_ENV, InMemoryDurabilityStore
 from databricks_mason.runtime.types import (
     DurableExecution,
     DurableExecutionContext,
@@ -40,7 +40,7 @@ async def running_client(server: DurableAgentApp) -> AsyncIterator[httpx.AsyncCl
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=server.app),
-            base_url="http://testserver",
+            base_url="https://testserver",
         ) as client:
             yield client
     finally:
@@ -48,37 +48,65 @@ async def running_client(server: DurableAgentApp) -> AsyncIterator[httpx.AsyncCl
 
 
 @pytest.mark.asyncio
-async def test_body_transport_parameters_are_removed_and_session_id_is_ignored() -> None:
+async def test_routing_cookie_is_the_only_session_source() -> None:
     async def invoke(payload, context):
         return {
             "received": payload,
+            "run_id": context.run_id,
+            "session_id": context.session_id,
             "attempt": context.attempt,
             "is_recovery": context.is_recovery,
         }
 
     server = make_app(invoke)
     async with running_client(server) as client:
+        client.cookies.set(ROUTING_COOKIE, "session-1")
         response = await client.post(
             "/invocations",
-            json={
-                "run_id": "run-1",
-                "session_id": "session-1",
-                "actor": "body-actor",
-                "background": False,
-                "stream": False,
-                "input": "hello",
-            },
+            json={"id": "run-1", "input": "hello"},
         )
 
     assert response.status_code == 200
-    assert response.headers[RUN_ID_HEADER] == "run-1"
-    assert response.headers[SESSION_ID_HEADER] != "session-1"
-    assert UUID(response.headers[SESSION_ID_HEADER])
     assert response.json() == {
         "received": {"input": "hello"},
+        "run_id": "run-1",
+        "session_id": "session-1",
         "attempt": 1,
         "is_recovery": False,
     }
+    assert "x-databricks-run-id" not in response.headers
+    assert "x-databricks-session-id" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_missing_routing_cookie_is_initialized_once() -> None:
+    seen_sessions = []
+
+    async def invoke(payload, context):
+        seen_sessions.append(context.session_id)
+        return {"output": payload}
+
+    server = make_app(invoke)
+    async with running_client(server) as client:
+        health = await client.get("/health")
+        session_id = health.cookies[ROUTING_COOKIE]
+        response = await client.post("/invocations", json={"id": "run-1"})
+
+    assert UUID(session_id)
+    assert seen_sessions == [session_id]
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_body_session_metadata_is_rejected() -> None:
+    server = make_app()
+    async with running_client(server) as client:
+        response = await client.post(
+            "/invocations",
+            json={"id": "run-1", "session_id": "body-session"},
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -95,11 +123,7 @@ async def test_recovery_attempt_uses_on_resume_hook() -> None:
 
     server = make_app(invoke, on_resume=recover)
     result = await server._execute(
-        {
-            "payload": {"input": "hello"},
-            "session_id": "session-1",
-            "actor": "alice@example.com",
-        },
+        {"input": {"input": "hello"}, "session_id": "session-1"},
         DurableExecutionContext("run-1", 2),
     )
 
@@ -117,7 +141,7 @@ async def test_recovery_without_on_resume_reuses_invoke_hook() -> None:
 
     server = make_app(invoke)
     await server._execute(
-        {"payload": {}, "session_id": "session-1", "actor": "agent"},
+        {"input": {}, "session_id": "session-1"},
         DurableExecutionContext("run-1", 2),
     )
 
@@ -133,163 +157,92 @@ async def test_background_invocation_can_be_polled() -> None:
     async with running_client(server) as client:
         submitted = await client.post(
             "/invocations",
-            json={"run_id": "run-bg", "input": "hello", "background": True},
+            json={"id": "run-bg", "input": "hello", "background": True},
         )
-        session_id = submitted.json()["session_id"]
-        assert submitted.status_code == 202
-        assert submitted.json() == {
-            "id": "run-bg",
-            "session_id": session_id,
-            "status": "in_progress",
-        }
+        assert submitted.status_code in {200, 202}
+        assert submitted.json()["id"] == "run-bg"
 
         for _ in range(100):
             polled = await client.get("/invocations/run-bg")
-            if polled.json()["status"] != "in_progress":
+            if polled.json()["status"] not in {"queued", "active"}:
                 break
             await asyncio.sleep(0.005)
 
     assert polled.json() == {
         "id": "run-bg",
-        "session_id": session_id,
         "status": "completed",
+        "attempt": 1,
         "output": "hello",
     }
 
 
 @pytest.mark.asyncio
-async def test_background_stream_returns_api_events_url() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        response = await client.post(
-            "/api/invocations",
-            json={"run_id": "run-bg", "input": "hello", "background": True, "stream": True},
-        )
-
-    assert response.status_code == 202
-    assert response.json()["events_url"] == "/api/invocations/run-bg/events"
-    assert UUID(response.json()["session_id"])
-
-
-@pytest.mark.asyncio
-async def test_retry_reuses_cookie_derived_session() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        first = await client.post(
-            "/invocations",
-            json={"run_id": "run-retry", "input": "hello", "background": True},
-        )
-        retry = await client.post(
-            "/invocations",
-            json={"run_id": "run-retry", "input": "hello", "background": True},
-        )
-
-    assert first.status_code in {200, 202}
-    assert retry.status_code in {200, 202}
-    assert retry.json()["session_id"] == first.json()["session_id"]
-    assert UUID(first.json()["session_id"])
-
-
-@pytest.mark.asyncio
-async def test_stream_replays_persisted_events_and_ends_with_done() -> None:
+async def test_stream_replays_events_without_context_headers() -> None:
     async def invoke(payload, context):
-        await context.emit({"type": "delta", "content": "hel"})
-        await context.emit({"type": "delta", "content": "lo"})
-        return {"output": "hello"}
+        await context.emit({"type": "delta", "content": "hello"})
+        return {"output": []}
 
     server = make_app(invoke)
     async with running_client(server) as client:
-        async with client.stream(
-            "POST",
-            "/invocations",
-            json={"run_id": "run-stream", "stream": True},
-        ) as response:
-            body = "".join([chunk async for chunk in response.aiter_text()])
+        response = await client.post(
+            "/api/invocations",
+            json={"id": "run-stream", "stream": True},
+        )
 
     assert response.status_code == 200
-    assert 'data: {"type": "delta", "content": "hel"}' in body
-    assert 'data: {"type": "delta", "content": "lo"}' in body
-    assert body.endswith("data: [DONE]\n\n")
+    assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
+    assert "[DONE]" not in response.text
+    assert "x-databricks-run-id" not in response.headers
+    assert "x-databricks-session-id" not in response.headers
 
 
 @pytest.mark.asyncio
-async def test_reusing_run_id_with_different_payload_returns_conflict() -> None:
+async def test_reusing_id_with_different_input_returns_conflict() -> None:
     server = make_app()
     async with running_client(server) as client:
-        first = await client.post("/invocations", json={"run_id": "run-1", "input": "one"})
-        conflict = await client.post("/invocations", json={"run_id": "run-1", "input": "two"})
+        first = await client.post("/invocations", json={"id": "run-1", "input": "one"})
+        conflict = await client.post("/invocations", json={"id": "run-1", "input": "two"})
 
     assert first.status_code == 200
     assert conflict.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_transport_mode_does_not_change_idempotent_request() -> None:
-    server = make_app()
+async def test_agent_failure_returns_500() -> None:
+    async def fail(payload, context):
+        raise RuntimeError("boom")
+
+    server = make_app(fail)
     async with running_client(server) as client:
-        first = await client.post("/invocations", json={"run_id": "run-1", "input": "one"})
-        second = await client.post(
-            "/invocations",
-            json={"run_id": "run-1", "input": "one", "background": True},
-        )
+        response = await client.post("/invocations", json={"id": "run-1"})
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert second.json()["output"] == {"input": "one"}
+    assert response.status_code == 500
+    assert response.json() == {"detail": "agent execution failed"}
 
 
-@pytest.mark.asyncio
-async def test_forwarded_actor_is_passed_to_agent_context() -> None:
-    async def invoke(payload, context):
-        return {"actor": context.actor}
-
-    server = make_app(invoke)
-    async with running_client(server) as client:
-        response = await client.post(
-            "/invocations",
-            json={},
-            headers={"X-Forwarded-Email": "alice@example.com"},
-        )
-
-    assert response.json() == {"actor": "alice@example.com"}
-
-
-@pytest.mark.asyncio
-async def test_run_id_is_generated_with_invocation_prefix() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        response = await client.post("/invocations", json={})
-
-    assert response.headers[RUN_ID_HEADER].startswith("inv_")
-
-
-@pytest.mark.asyncio
-async def test_new_session_rotates_local_cookie() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        health = await client.get("/health")
-        previous_session_id = health.cookies["mason-local-session"]
-        response = await client.post("/api/session/new")
-
-    assert response.json()["previous_session_id"] == previous_session_id
-    assert response.json()["session_id"] != previous_session_id
-    assert response.cookies["mason-local-session"] == response.json()["session_id"]
-
-
-def test_app_exposes_only_fastapi_surface() -> None:
+def test_app_exposes_local_and_deployed_invocation_routes() -> None:
     server = make_app()
     paths = server.app.openapi()["paths"]
 
     assert "/invocations" in paths
     assert "/api/invocations" in paths
-    assert "/api/session/new" in paths
+    assert "/invocations/{run_id}" in paths
+    assert "/api/invocations/{run_id}" in paths
+    assert "/invocations/{run_id}/events" in paths
+    assert "/api/invocations/{run_id}/events" in paths
+    assert "/health" in paths
+    assert "/api/healthz" in paths
+    assert "/api/session/new" not in paths
     assert not hasattr(server, "asgi_app")
     assert not hasattr(server, "run")
 
 
-def test_durability_store_is_required() -> None:
-    with pytest.raises(TypeError, match="durability_store"):
-        DurableAgentApp(echo)  # type: ignore[call-arg]
+def test_durability_store_defaults_to_in_memory(monkeypatch) -> None:
+    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
+
+    server = DurableAgentApp(echo)
+
+    assert isinstance(server._runtime.durability_store, InMemoryDurabilityStore)
 
 
 def test_state_payload_flattens_completed_application_response() -> None:
@@ -298,14 +251,14 @@ def test_state_payload_flattens_completed_application_response() -> None:
         status=DurableExecutionStatus.COMPLETED,
         attempt=1,
         heartbeat_at=None,
-        request={"payload": {}, "session_id": "session-1"},
+        request={"input": {}, "session_id": "session-1"},
         response={"output": [], "custom": "value"},
     )
 
-    assert DurableAgentApp._state_payload(state, session_id="session-1") == {
+    assert DurableAgentApp._state_payload(state) == {
         "id": "run-1",
-        "session_id": "session-1",
         "status": "completed",
+        "attempt": 1,
         "output": [],
         "custom": "value",
     }

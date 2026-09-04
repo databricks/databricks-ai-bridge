@@ -114,10 +114,10 @@ async def test_agent_events_omits_unavailable_mcp_servers(monkeypatch):
         lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
     )
 
-    context = SimpleNamespace(session_id="s", actor="test-actor")
+    context = SimpleNamespace(session_id="s")
     assert [event async for event in agent_module._agent_events({}, context)] == []
-    # create_agent(actor, mcp) — the healthy servers are the second positional arg.
-    assert create_agent.call_args.args[0] == "test-actor"
+    # create_agent(session_id, mcp) — the healthy servers are the second positional arg.
+    assert create_agent.call_args.args[0] == "s"
     assert create_agent.call_args.args[1] == [healthy]
     assert healthy.cache_tools_list is True
     assert all(

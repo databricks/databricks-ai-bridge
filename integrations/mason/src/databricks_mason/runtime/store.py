@@ -18,6 +18,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_mason.runtime.types import (
+    DurabilityStore,
     DurableEvent,
     DurableExecution,
     DurableExecutionStatus,
@@ -36,6 +37,7 @@ class _AsyncLakebase(Protocol):
 
 
 DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
+RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 _SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOKEN_CACHE_SECONDS = 15 * 60
 _POOL_RECYCLE_SECONDS = 14 * 60
@@ -708,3 +710,10 @@ class InMemoryDurabilityStore:
         if heartbeat_at.tzinfo is None:
             heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - heartbeat_at >= timedelta(seconds=stale_seconds)
+
+
+def default_durability_store() -> DurabilityStore:
+    """Use the attached Lakebase resource when deployed, otherwise process-local state."""
+    if endpoint := os.getenv(RUNTIME_ENDPOINT_ENV):
+        return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint)
+    return InMemoryDurabilityStore()

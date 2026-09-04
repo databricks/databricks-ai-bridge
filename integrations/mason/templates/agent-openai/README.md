@@ -56,7 +56,7 @@ uv run start-server        # serves at http://localhost:8000
 # 3. Send a request
 curl -X POST http://localhost:8000/invocations \
   -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
+  -d '{"id":"inv_quickstart_1","input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
 ```
 
 The model call goes to your Databricks workspace (via the profile). Everything else — session
@@ -66,20 +66,19 @@ storage, tracing — is off by default and requires no setup.
 
 The Databricks Apps `__Host-databricks-app-router` cookie is the single session identifier. It both
 keeps requests on the same App replica and keys the conversation session, resumes, and Session Store
-records. Do **not** send `session_id` in request bodies. The runtime ignores an old body value and
-injects the cookie value before calling the agent. Browsers resend the Apps cookie automatically; API
-clients must preserve it in a cookie jar. Localhost has no Apps router, so the server sets an
-HTTP-only `mason-local-session` fallback cookie instead.
+records. Do **not** send `session_id` in request bodies; the fixed request model rejects it. Browsers
+resend the Apps cookie automatically; API clients must preserve it in a cookie jar. Localhost uses
+the same cookie; the runtime creates it when the first request arrives.
 
-TODO: switch the client contract to `X-Routing-Key` when Databricks Apps supports it. Until then use
-the [documented Apps routing cookie](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/horizontal-scaling#api-clients).
+Every invocation also requires a client-generated `id`. Reuse an `id` only to retry the exact same
+request; reusing it with a different payload returns `409 Conflict`.
 
 ```bash
 curl -X POST "https://<app>.databricksapps.com/invocations" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -b "__Host-databricks-app-router=<routing-key>" \
-  -d '{"input":[{"role":"user","content":"hi"}]}'
+  -d '{"id":"inv_api_1","input":[{"role":"user","content":"hi"}]}'
 ```
 
 The examples below use a localhost cookie jar so every request addresses the same session:
@@ -91,7 +90,7 @@ curl -s -c "$COOKIE_JAR" "$BASE/health"
 ```
 
 When the chat app is enabled, `GET /api/demo/config` returns the resolved `session_id`, process
-`instance_id`, the signed-in viewer, and the enabled state for streaming, background, Session Store,
+`instance_id`, and the enabled state for streaming, background, Session Store,
 and Memory Store. The UI uses this response to color capability indicators automatically. Only the
 sync/streaming/background selector is a manual client choice.
 
@@ -100,33 +99,33 @@ sync/streaming/background selector is a manual client choice.
 ```bash
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
   -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"hi"}]}'
+  -d '{"id":"inv_sync_1","input":[{"role":"user","content":"hi"}]}'
 ```
 
-The response is `{ "output": [...], "session_id": "...", "status": "completed" }`. `output` contains
-normalized message dictionaries (`{role, content, tool_calls?}`).
+The response is `{ "output": [...] }`; `output` contains normalized message dictionaries
+(`{role, content, tool_calls?}`).
 
 **Streaming** adds `"stream": true` and returns SSE. Completed messages use
 `data: {"type":"message","message":{...}}`; token chunks use
 `data: {"type":"delta","content":"...","id":"..."}`; interruptions use
-`data: {"type":"interrupt",...}`; the final frame is `data: [DONE]`.
+`data: {"type":"interrupt",...}`. The stream ends when the execution completes or fails.
 
 ```bash
 curl -sN -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
   -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"Count to three"}],"stream":true}'
+  -d '{"id":"inv_stream_1","input":[{"role":"user","content":"Count to three"}],"stream":true}'
 ```
 
-**Background** (add `"background": true`) returns an `inv_...` id immediately; poll it:
+**Background** (add `"background": true`) accepts your id immediately; poll it:
 
 ```bash
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
   -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"do something"}],"background":true}'
-# -> {"id":"inv_...","status":"in_progress"}
+  -d '{"id":"inv_background_1","input":[{"role":"user","content":"do something"}],"background":true}'
+# -> {"id":"inv_background_1","status":"queued","attempt":0}
 
-curl -s -b "$COOKIE_JAR" "$BASE/invocations/inv_..."
-# -> in_progress, completed + output, or failed + error
+curl -s -b "$COOKIE_JAR" "$BASE/invocations/inv_background_1"
+# -> queued, active, completed + output, or failed + error
 ```
 
 Locally, background runs and polling use the in-memory durability store. After `mason deploy`, they
@@ -141,10 +140,10 @@ When initialized with the chat app (the default for `mason init --framework open
 - `POST /api/session/new` to generate a fresh session id and replace the routing cookie. The request
   has no body-level `session_id`; the response includes the new and previous ids.
 - `POST /api/demo/sessions` to create or resolve the current cookie-backed managed session.
-- `GET /api/demo/sessions` to list recent sessions for the configured actor. In local in-memory mode
-  it returns only the current browser session.
-- `POST /api/demo/sessions/{session_id}/open` to verify an actor-scoped managed session, replace the
-  routing cookie, and load that session's transcript.
+- `GET /api/demo/sessions` to list the current routing session. With no separate user identity, old
+  sessions are intentionally outside the new routing session's partition.
+- `POST /api/demo/sessions/{session_id}/open` to verify that a managed session belongs to the current
+  routing-session partition before loading its transcript.
 - `GET /api/demo/session/items` to load the current transcript. Without a managed Session Store it
   reconstructs messages from the in-process session. Managed responses filter out non-message items
   before returning items to the UI.
@@ -152,8 +151,7 @@ When initialized with the chat app (the default for `mason init --framework open
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
   `POST /api/demo/memory/search` for managed long-term memory. Created entries are tagged with the
-  current cookie-backed session id; entries are partitioned by the signed-in user (the request's
-  forwarded-identity header), so the panel shows that user's own memory.
+  current cookie-backed session id; entries use that same routing session as their actor partition.
 
 ### Human-in-the-loop (tool approval)
 
@@ -174,7 +172,7 @@ the agent to send a message and instead of running the tool, the run **pauses** 
 # Approve — the tool runs
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
   -H "Content-Type: application/json" \
-  -d '{"resume":{"decisions":[{"type":"approve"}]}}'
+  -d '{"id":"inv_hitl_resume_1","resume":{"decisions":[{"type":"approve"}]}}'
 
 # Reject — the tool is skipped; an optional message is fed back to the model
 #   { "type": "reject", "message": "Not allowed." }
@@ -196,9 +194,9 @@ the set to disable approval entirely.
 
 ```bash
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"My name is Alice"}]}'
+  -d '{"id":"inv_turn_1","input":[{"role":"user","content":"My name is Alice"}]}'
 curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"What is my name?"}]}'
+  -d '{"id":"inv_turn_2","input":[{"role":"user","content":"What is my name?"}]}'
 ```
 
 ## Customize the agent
@@ -238,7 +236,7 @@ mason deploy agent-openai --source .
 
 Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
 stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
-session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
+session data use the routing session as their actor partition.
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
