@@ -183,7 +183,10 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tracing", "instrument"): (
         ("mason tracing instrument --destination main.agent_traces", "print instrumentation code"),
     ),
-    ("deploy",): (("mason deploy my-agent", "deploy the agent to Databricks Apps"),),
+    ("deploy",): (
+        ("mason deploy my-agent", "deploy the agent"),
+        ("mason deploy my-agent --instances 2", "deploy with two instances"),
+    ),
     ("deployments",): (("mason deployments list", "list agent deployments"),),
     ("deployments", "list"): (("mason deployments list", "list agent deployments"),),
     ("deployments", "get"): (("mason deployments get mason-my-agent", "show one deployment"),),

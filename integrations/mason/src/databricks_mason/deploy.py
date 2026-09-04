@@ -101,6 +101,18 @@ def _validate_deployment_name(name: str) -> str:
     return name
 
 
+def _instance_args(instances: Optional[int]) -> list[str]:
+    """Build runtime instance arguments from Mason's fixed-count option."""
+    if instances is None:
+        return []
+    return [
+        "--compute-min-instances",
+        str(instances),
+        "--compute-max-instances",
+        str(instances),
+    ]
+
+
 def _prefixed_name(name: str) -> str:
     """Mason deployments carry a `mason-` prefix so `deployments list` can find only its own apps."""
     return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
@@ -351,6 +363,12 @@ def _grant_store_access(
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
 )
+@click.option(
+    "--instances",
+    type=click.IntRange(min=1, max=5),
+    default=None,
+    help="Number of deployment instances.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -360,14 +378,23 @@ def deploy(
     traces_experiment,
     pip_index_url,
     workspace_path,
+    instances,
 ) -> None:
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
     The app is named `mason-<name>` (Mason adds the prefix if absent); use that full name with the
     other `mason deployments` verbs. `deployments list` shows only apps carrying this prefix.
+
+    Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
+    preserve the routing cookie automatically.
+
+    \b
+    API clients must reuse a stable UUID in this cookie on every request:
+      __Host-databricks-app-router=<uuid>
     """
     name = _prefixed_name(name)
     _validate_deployment_name(name)
+    instance_args = _instance_args(instances)
     source_dir = pathlib.Path(source)
     client = obj.client()
 
@@ -395,6 +422,8 @@ def deploy(
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
         provisioned["Package index"] = pip_index_url
+    if instances is not None:
+        provisioned["Instances"] = str(instances)
 
     # 2. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
     scaffolded = False
@@ -404,7 +433,7 @@ def deploy(
     # 3. Roll out the deployment (Databricks Apps runtime).
     if not _deployment_exists(name, obj.profile):
         result = _databricks(
-            ["apps", "create", name],
+            ["apps", "create", name, *instance_args],
             obj.profile,
             capture=True,
             action=f"Could not create deployment '{name}'.",
@@ -415,6 +444,22 @@ def deploy(
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
         with render.status("Waiting for app compute to start (this can take a few minutes)…"):
             _wait_for_running(name, obj.profile)
+    elif instance_args:
+        update = {
+            "app": {
+                "compute_min_instances": instances,
+                "compute_max_instances": instances,
+            },
+            "update_mask": "compute_min_instances,compute_max_instances",
+        }
+        result = _databricks(
+            ["apps", "create-update", name, "--json", json.dumps(update)],
+            obj.profile,
+            capture=True,
+            action=f"Could not update deployment '{name}'.",
+        )
+        old, new = _AGENT_COMPUTE_OUTPUT
+        click.echo((result.stdout or "").replace(old, new), nl=False)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
