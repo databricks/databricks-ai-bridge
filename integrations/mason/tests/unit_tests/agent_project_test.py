@@ -103,27 +103,33 @@ def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch)
     assert path.read_text(encoding="utf-8") == before
 
 
-def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
+def test_bind_and_unbind_project_features_round_trip(tmp_path: pathlib.Path):
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
 
     assert project.bind_session_store("sessions") is True
     assert project.bind_memory_store("mem") is True
+    assert project.bind_durability() is True
     assert project.bind_session_store("sessions") is False  # idempotent no-op
+    assert project.bind_durability() is False
     project.write()
 
     reloaded = AgentProject.load(tmp_path)
     assert reloaded.session_store == "sessions"
     assert reloaded.memory_store == "mem"
+    assert reloaded.durability_enabled is True
     assert "# keep me" in (tmp_path / "agent.toml").read_text(encoding="utf-8")
 
     assert reloaded.unbind_session_store() is True
     assert reloaded.unbind_session_store() is False  # already gone
+    assert reloaded.unbind_durability() is True
+    assert reloaded.unbind_durability() is False
     reloaded.write()
 
     final = AgentProject.load(tmp_path)
     assert final.session_store is None
     assert final.memory_store == "mem"
+    assert final.durability_enabled is False
 
 
 def test_rebinding_replaces_the_store_name(tmp_path: pathlib.Path):
@@ -142,4 +148,13 @@ def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
         'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[session_store]\ndescription = "x"\n',
     )
     with pytest.raises(AgentCliError, match="session_store"):
+        AgentProject.load(tmp_path)
+
+
+def test_load_rejects_invalid_durability_table(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
+    )
+    with pytest.raises(AgentCliError, match="enabled = true"):
         AgentProject.load(tmp_path)

@@ -105,6 +105,13 @@ def _mark_template(source: pathlib.Path, template: str) -> None:
     config.write_text(f'schema_version = 1\nframework = "langgraph"\ntemplate = "{template}"\n')
 
 
+def _write_agent_manifest(source: pathlib.Path, *, durability: bool = False) -> None:
+    body = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    if durability:
+        body += "\n[durability]\nenabled = true\n"
+    (source / "agent.toml").write_text(body)
+
+
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
@@ -137,13 +144,14 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
 
 
-def test_deploy_existing_template_does_not_provision_runtime_store(
+def test_deploy_template_metadata_does_not_enable_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "agent-langgraph")
+    _mark_template(src, "durability-app")
+    _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -171,13 +179,13 @@ def test_deploy_existing_template_does_not_provision_runtime_store(
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
 
 
-def test_deploy_durability_app_reuses_session_store_before_startup(
+def test_deploy_durability_binding_reuses_session_store_before_startup(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durability-app")
+    _write_agent_manifest(src, durability=True)
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -218,13 +226,56 @@ def test_deploy_durability_app_reuses_session_store_before_startup(
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
 
 
-def test_deploy_durability_app_provisions_backend_before_startup(
+def test_deploy_durability_binding_reuses_memory_store_before_startup(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durability-app")
+    _write_agent_manifest(src, durability=True)
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_memory_store_database", lambda client, store: "memory-db")
+    monkeypatch.setattr(
+        deploy_mod.agent_durability_store,
+        "ensure_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse memory")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--memory", "memory"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    backend = events[0][1][0]
+    assert backend.database == "memory-db"
+
+
+def test_deploy_durability_binding_provisions_backend_before_startup(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, durability=True)
     selected = deploy_mod.agent_durability_store.backend("mason-myapp")
     events = []
 

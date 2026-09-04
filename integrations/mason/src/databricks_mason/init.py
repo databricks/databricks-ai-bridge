@@ -231,7 +231,10 @@ def init(
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=selected_framework, template=template_name)
-    AgentProject.create(dest, framework=selected_framework).write()
+    project = AgentProject.create(dest, framework=selected_framework)
+    if framework is None:
+        project.bind_durability()
+    project.write()
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 

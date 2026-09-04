@@ -98,6 +98,9 @@ def test_init_defaults_to_api_only_durability_app(tmp_path: pathlib.Path):
         "framework": "langgraph",
         "template": "durability-app",
     }
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["durability"] == {"enabled": True}
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):

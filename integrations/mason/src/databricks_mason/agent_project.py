@@ -18,6 +18,7 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
 _SCHEMA_VERSION = 1
+_DURABILITY_TABLE = "durability"
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
@@ -201,6 +202,16 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
+def _durability_from_manifest(value: object) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, Mapping):
+        raise AgentCliError("agent.toml [durability] must be a table.")
+    if cast(Mapping[str, Any], value).get("enabled") is not True:
+        raise AgentCliError("agent.toml [durability] must set enabled = true.")
+    return True
+
+
 def _scope_from_manifest(value: object) -> Scope:
     if not isinstance(value, Mapping):
         raise AgentCliError("Sandbox downscope entries must be TOML tables.")
@@ -287,6 +298,7 @@ class AgentProject:
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
+        durability_enabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -296,6 +308,7 @@ class AgentProject:
         # Managed store bindings declared in agent.toml; None = unbound.
         self.memory_store = memory_store
         self.session_store = session_store
+        self.durability_enabled = durability_enabled
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -335,7 +348,16 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
-        return cls(project_root, document, framework, tools, memory_store, session_store)
+        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
+        return cls(
+            project_root,
+            document,
+            framework,
+            tools,
+            memory_store,
+            session_store,
+            durability_enabled,
+        )
 
     @classmethod
     def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
@@ -403,6 +425,24 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
+
+    def bind_durability(self) -> bool:
+        """Declare durable invocation handling in agent.toml."""
+        if self.durability_enabled:
+            return False
+        durability = tomlkit.table()
+        durability.add("enabled", True)
+        self._document.append(_DURABILITY_TABLE, durability)
+        self.durability_enabled = True
+        return True
+
+    def unbind_durability(self) -> bool:
+        """Remove durable invocation handling from agent.toml."""
+        if not self.durability_enabled:
+            return False
+        del self._document[_DURABILITY_TABLE]
+        self.durability_enabled = False
+        return True
 
     def _set_store(self, table: str, name: str) -> bool:
         name = _required_string(name, f"[{table}] name")

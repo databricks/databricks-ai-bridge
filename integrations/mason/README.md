@@ -140,12 +140,14 @@ parameters; the Apps routing cookie is the session identifier, so body `session_
 The callback receives `input` and an optional `resume` payload. The internal runtime persists the
 payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
 
-The new `durability-app` template selects an in-memory durability store locally. When that template
-is deployed, `mason deploy` attaches one Lakebase database for runtime durability, chosen in this
-way:
+The new `durability-app` template selects an in-memory durability store locally. Bare `mason init`
+also writes its durability binding to `agent.toml`. Existing projects can opt in explicitly with
+`mason durability bind`; `mason deploy` then attaches one Lakebase database for runtime durability,
+chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
-2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
+2. Otherwise reuse the configured Memory Store's Lakebase database.
+3. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
 
 Mason adds only its `databricks_mason_runtime` schema and tables to the selected database. A
 replacement worker claims a stale heartbeat and calls `on_resume`; if `on_resume` is omitted,
@@ -167,6 +169,7 @@ mason [-p <profile>] [-o text|json]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--memory/-m N] [--session/-s N]
                [--with-traces C.S] [--no-create-stores]
+  durability   bind | unbind [--source PATH]
   memory
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete

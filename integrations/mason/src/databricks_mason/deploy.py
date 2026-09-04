@@ -25,8 +25,8 @@ from databricks_mason import (
     session_store_access,
     timefmt,
 )
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import load_project_metadata
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
@@ -34,7 +34,6 @@ from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, def
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
-_DURABILITY_TEMPLATE = "durability-app"
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -317,11 +316,11 @@ def _grant_store_access(
     return None
 
 
-def _uses_durable_runtime(source_dir: pathlib.Path) -> bool:
-    """Whether this project was scaffolded from Mason's durability template."""
-    if not (source_dir / ".mason" / "project.toml").is_file():
+def _has_durability_binding(source_dir: pathlib.Path) -> bool:
+    """Whether agent.toml opts this project into durable invocation storage."""
+    if not (source_dir / "agent.toml").is_file():
         return False
-    return load_project_metadata(source_dir).template == _DURABILITY_TEMPLATE
+    return AgentProject.load(source_dir).durability_enabled
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -418,15 +417,17 @@ def deploy(
     if _SESSION_ENV in env_updates:
         provisioned["Session store"] = env_updates[_SESSION_ENV]
 
+    memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
-    if _uses_durable_runtime(source_dir):
-        durability_backend = (
-            session_store_access.backend(session_store)
-            if session_store
-            else agent_durability_store.ensure_backend(
+    if _has_durability_binding(source_dir):
+        if session_store:
+            durability_backend = session_store_access.backend(session_store)
+        elif memory_database:
+            durability_backend = memory_store_access.backend(memory_database)
+        else:
+            durability_backend = agent_durability_store.ensure_backend(
                 name, obj.profile, create=not no_create_stores
             )
-        )
         env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
         provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
@@ -487,7 +488,6 @@ def deploy(
         if sp is None:
             grant_error = "could not resolve the app's service principal."
         else:
-            memory_database = _memory_store_database(client, memory_store) if memory_store else None
             grant_error = _grant_store_access(
                 name, sp, client.current_user, session_store, memory_database, obj.profile
             )

@@ -1,8 +1,8 @@
 # Durability App
 
 A minimal LangGraph application hosted by `databricks_mason.DurableAgentApp`.
-It has no model dependency: the graph waits for an optional delay and returns a
-deterministic result, which keeps the durability behavior easy to inspect.
+It has no model dependency: the graph returns a deterministic result, which
+keeps the durability behavior easy to inspect.
 
 ## Run locally
 
@@ -24,7 +24,7 @@ curl -sS -H "Cookie: $ROUTING_COOKIE" \
   -d '{
     "id": "run-1",
     "background": true,
-    "input": {"message": "hello", "delay_seconds": 2}
+    "input": {"message": "hello"}
   }'
 
 curl -sS -H "Cookie: $ROUTING_COOKIE" \
@@ -44,9 +44,11 @@ Bare `mason init` scaffolds this template. Deploy it with an explicit profile:
 mason --profile <profile> deploy durability-app --source .
 ```
 
-Mason attaches one Lakebase database for the runtime tables. If `--session` is
-provided, the runtime uses that Session Store database; otherwise Mason reuses or
-provisions `<app>-durability`. Existing Mason templates are unaffected.
+Bare `mason init` records the durability binding in `agent.toml`; an existing Mason
+project can opt in with `mason durability bind`. At deploy time Mason attaches one
+Lakebase database for the runtime tables, reusing the Session Store database first,
+then the Memory Store database, and otherwise reusing or provisioning
+`<app>-durability`. Existing Mason templates are unaffected.
 
 If an active run becomes stale after a process restart, the runtime claims a new
 attempt and calls the configured recovery callback. This example uses the same
