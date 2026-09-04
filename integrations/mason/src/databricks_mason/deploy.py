@@ -438,7 +438,7 @@ def deploy(
     #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
     if not _deployment_exists(name, obj.profile):
         with render.progress(
-            "Creating the app and starting its compute (this can take a few minutes)…"
+            "Creating the agent and starting its compute (this can take a few minutes)…"
         ):
             result = _databricks(
                 ["apps", "create", name, *instance_args],
@@ -467,7 +467,7 @@ def deploy(
     # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
     # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
     # compute is already ACTIVE.
-    with render.progress("Waiting for app compute to start (this can take a few minutes)…"):
+    with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
