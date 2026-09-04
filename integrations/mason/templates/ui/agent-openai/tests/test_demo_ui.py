@@ -301,6 +301,10 @@ class _FakeApiClient:
         return {
             "model_services": [
                 {
+                    "name": "model-services/system.ai.claude-opus-4-8",
+                    "supported_api_types": ["openai/v1/chat/completions"],
+                },
+                {
                     "name": "model-services/system.ai.claude-sonnet-4-5",
                     "supported_api_types": ["openai/v1/chat/completions"],
                 },
@@ -327,8 +331,12 @@ def test_models_route_lists_default_plus_gateway_models(monkeypatch):
     result = client.get("/api/demo/models").json()
     # Default first (deduped), system.ai chat models kept & sorted, embeddings dropped.
     assert result == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "models": ["system.ai.claude-sonnet-4-5", "system.ai.gpt-5-6-sol"],
+        "default": "system.ai.claude-opus-4-8",
+        "models": [
+            "system.ai.claude-opus-4-8",
+            "system.ai.claude-sonnet-4-5",
+            "system.ai.gpt-5-6-sol",
+        ],
     }
 
 
@@ -342,8 +350,8 @@ def test_models_route_falls_back_to_default_when_listing_fails(monkeypatch):
 
     result = client.get("/api/demo/models").json()
     assert result == {
-        "default": "system.ai.claude-sonnet-4-5",
-        "models": ["system.ai.claude-sonnet-4-5"],
+        "default": "system.ai.claude-opus-4-8",
+        "models": ["system.ai.claude-opus-4-8"],
     }
 
 

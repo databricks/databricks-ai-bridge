@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model your workspace exposes
 # — the demo chat app's picker lists what's available. `mason dev`'s chat UI can also override this
 # per request.
-MODEL = "system.ai.claude-sonnet-4-5"
+MODEL = "system.ai.claude-opus-4-8"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
