@@ -432,13 +432,20 @@ def deploy(
 
     # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
     #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    #
+    #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
+    #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
+    #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
     if not _deployment_exists(name, obj.profile):
-        result = _databricks(
-            ["apps", "create", name, *instance_args],
-            obj.profile,
-            capture=True,
-            action=f"Could not create deployment '{name}'.",
-        )
+        with render.progress(
+            "Creating the app and starting its compute (this can take a few minutes)…"
+        ):
+            result = _databricks(
+                ["apps", "create", name, *instance_args],
+                obj.profile,
+                capture=True,
+                action=f"Could not create deployment '{name}'.",
+            )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
     elif instance_args:
@@ -457,10 +464,9 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-    # `apps deploy` requires the app's compute to be ACTIVE — a just-created app isn't yet, and an
-    # existing one may be STOPPED/starting — so wait either way. Use progress (persistent line +
-    # spinner): the wait can run for minutes, so it must leave visible feedback even where the
-    # spinner animation doesn't render. Returns immediately when compute is already ACTIVE.
+    # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
+    # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
+    # compute is already ACTIVE.
     with render.progress("Waiting for app compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -518,7 +524,7 @@ def deploy(
         (f"mason deployments logs {name}", "Tail its logs"),
     ]
     if app_url:
-        steps.insert(0, (f"open {app_url}", "Open the deployed app"))
+        steps.insert(0, f"Open the deployed app: {app_url}")
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
