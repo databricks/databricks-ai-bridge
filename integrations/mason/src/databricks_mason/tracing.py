@@ -6,7 +6,7 @@ read traces back, and `instrument` prints the wiring snippet (the "Starter code"
 `mason deploy --with-traces` injects the destination into a deployment's app.yaml, exactly as
 `--memory` / `--session` inject their stores.
 
-MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.9.0`
+MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.10.1`
 installed and lazily import it; `instrument` (and the deploy wiring) are pure and need nothing.
 """
 
@@ -46,6 +46,12 @@ TRACES_DEST_ENV = "MLFLOW_TRACING_DESTINATION"
 TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
 
 
+# Installing the `tracing` extra (rather than a bare mlflow) is what actually resolves both the
+# missing- and too-old-mlflow cases: the extra carries the version floor `mason tracing` needs, so
+# a stale mlflow already in the venv gets upgraded to a compatible one.
+_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
+
+
 def _mlflow():
     """Import mlflow lazily so the core CLI (and offline wheel) don't depend on it."""
     try:
@@ -55,7 +61,7 @@ def _mlflow():
     except ImportError as exc:
         raise AgentCliError(
             "MLflow is required for `mason tracing` setup/list/get.",
-            hint="Install it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -77,7 +83,7 @@ def _uc_trace_symbols():
     except ImportError as exc:
         raise AgentCliError(
             "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
-            hint="Upgrade it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -355,7 +361,7 @@ def tracing_instrument(obj, destination, experiment) -> None:
     render.detail(
         _BREADCRUMB,
         dest,
-        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.9.0"},
+        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.10.1"},
         status="ACTIVE",
         snippets=[("python", "python", code)],
     )
