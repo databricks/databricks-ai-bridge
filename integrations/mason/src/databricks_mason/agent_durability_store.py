@@ -11,7 +11,7 @@ from databricks_mason.store_access import LakebaseBackend, _databricks
 
 _BRANCH = "production"
 _ENDPOINT = "primary"
-_DATABASE = "databricks_postgres"
+_DATABASE = "databricks-postgres"
 _SCHEMA = "databricks_mason_runtime"
 _RESOURCE_NAME = "postgres"
 
