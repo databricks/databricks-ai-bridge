@@ -94,8 +94,8 @@ def _source_option(function):
 def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
     """Bind memory STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
 
-    `mason dev` / `mason deploy` sync the bound store into the deployment's app.yaml env and grant the
-    app access. Pass --no-create-stores to require the store to already exist.
+    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
+    service principal access to it. Pass --no-create-stores to require the store to already exist.
     """
     from databricks_mason.agent_project import AgentProject
     from databricks_mason.deploy import _ensure_memory_store, _resolve_memory_store
@@ -103,17 +103,19 @@ def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -
     client = obj.client()
     if no_create_stores:
         with render.status(f"Resolving memory store '{store}'…"):
-            exists = _resolve_memory_store(client, store) is not None
-        if not exists:
+            resolved = _resolve_memory_store(client, store)
+        if resolved is None:
             raise AgentCliError(
                 f"Memory store '{store}' does not exist (drop --no-create-stores to create it)."
             )
     else:
         with render.status(f"Provisioning memory store '{store}'…"):
-            _ensure_memory_store(client, store)
+            resolved = _ensure_memory_store(client, store)
 
+    # Record the bare store id: the runtime needs it (not the display name) for the entries API.
+    store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
     project = AgentProject.load(source)
-    project.bind_memory_store(store)
+    project.bind_memory_store(store, store_id)
     project.write()
     if obj.output == "json":
         render.emit_json({"memory_store": store, "manifest": str(project.path)})
@@ -121,7 +123,10 @@ def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -
     render.success(
         f"Bound memory store '{store}'",
         fields={"agent.toml": str(project.path)},
-        next_steps=["mason dev", "mason deploy <name>"],
+        next_steps=[
+            ("mason dev", "Re-run to pick up the store locally"),
+            ("mason deploy <name>", "Redeploy to grant the app access"),
+        ],
     )
 
 
@@ -229,8 +234,8 @@ def stores_create(obj, display_name, description) -> None:
             ),
             (f"mason memory stores get {store_id}", "View this store's details"),
             (
-                f"mason deploy <agent> --memory {display_name}",
-                "Wire this store into a deployment",
+                f"mason memory bind {display_name}",
+                "Bind this store to the agent (wired in on dev/deploy)",
             ),
         ],
     )

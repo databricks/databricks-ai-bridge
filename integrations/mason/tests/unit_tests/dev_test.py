@@ -106,43 +106,40 @@ def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
     assert not (tmp_path / ".mason-dev.app.yaml").exists()
 
 
-def test_dev_with_flags_wires_app_yaml_before_running(tmp_path: pathlib.Path):
+def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.Path):
     import yaml
 
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+        '\n[memory_store]\nname = "m"\n\n[session_store]\nname = "s"\n',
+        encoding="utf-8",
+    )
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks") as db,
-        mock.patch.object(
-            dev_mod,
-            "resolve_store_env",
-            return_value={"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"},
-        ) as resolve,
+        mock.patch.object(dev_mod, "validate_stores_and_trace_env", return_value={}) as validate,
     ):
-        result = CliRunner().invoke(
-            dev_mod.dev,
-            ["--source", str(tmp_path), "--session", "s", "--memory", "m"],
-            obj=_Ctx(),
-        )
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    resolve.assert_called_once()  # same resolution path as deploy
-    env = {
-        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
-    }
-    assert env == {"AGENT_SESSION_STORE": "s", "AGENT_MEMORY_STORE": "abc"}  # patched before run
+    validate.assert_called_once()  # bound stores are validated, same path as deploy
+    # Stores are read from agent.toml at runtime, so no store env is written into app.yaml.
+    env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
+    assert {e["name"] for e in env_entries} == set()
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
-def test_dev_without_flags_does_not_touch_app_yaml(tmp_path: pathlib.Path):
+def test_dev_without_bindings_does_not_validate(tmp_path: pathlib.Path):
+    # No agent.toml store bindings (and no --with-* traces) -> nothing to validate.
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "resolve_store_env") as resolve,
+        mock.patch.object(dev_mod, "validate_stores_and_trace_env") as validate,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    resolve.assert_not_called()  # no --with-* -> no store resolution, app.yaml untouched
+    validate.assert_not_called()
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):
