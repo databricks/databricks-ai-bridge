@@ -430,7 +430,8 @@ def deploy(
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime).
+    # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
     if not _deployment_exists(name, obj.profile):
         result = _databricks(
             ["apps", "create", name, *instance_args],
@@ -440,12 +441,6 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-        # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
-        # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
-        # Use progress (persistent line + spinner): this wait runs for minutes, so it must leave
-        # visible feedback even where the spinner animation doesn't render.
-        with render.progress("Waiting for app compute to start (this can take a few minutes)…"):
-            _wait_for_running(name, obj.profile)
     elif instance_args:
         update = {
             "app": {
@@ -462,6 +457,12 @@ def deploy(
         )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
+    # `apps deploy` requires the app's compute to be ACTIVE — a just-created app isn't yet, and an
+    # existing one may be STOPPED/starting — so wait either way. Use progress (persistent line +
+    # spinner): the wait can run for minutes, so it must leave visible feedback even where the
+    # spinner animation doesn't render. Returns immediately when compute is already ACTIVE.
+    with render.progress("Waiting for app compute to start (this can take a few minutes)…"):
+        _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own

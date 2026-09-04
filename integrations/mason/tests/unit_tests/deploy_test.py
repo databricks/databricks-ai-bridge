@@ -7,11 +7,19 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
+
+
+@pytest.fixture(autouse=True)
+def _compute_active(monkeypatch):
+    # `mason deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
+    # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -351,10 +359,35 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     assert result.exit_code == 0, result.output
     assert ["apps", "create", "mason-myapp"] in calls
     assert waited["called"], "must wait for the new app to be running before deploying"
-    # the wait happens after create and before sync/deploy
-    create_i = calls.index(["apps", "create", "mason-myapp"])
-    sync_i = next(i for i, a in enumerate(calls) if a[:1] == ["sync"])
-    assert create_i < sync_i
+
+
+def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, monkeypatch):
+    # An existing app is re-deployed: no `apps create` (it would error), but still wait for compute
+    # so there's feedback and the app is ACTIVE before `apps deploy`.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)  # already exists
+    waited = {"called": False}
+    monkeypatch.setattr(
+        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert ["apps", "create", "mason-myapp"] not in calls  # never re-create an existing app
+    assert waited["called"], "re-deploy must also wait for compute"
 
 
 def test_wait_for_running_returns_when_compute_active(monkeypatch):
