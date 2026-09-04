@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from databricks_mason import workspace_client
-from databricks_mason.runtime import DurableAgentApp
-from fastapi import HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -20,6 +19,8 @@ from pydantic import BaseModel, Field
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
 _AGENTS_API = "/api/agents/v1"
+_ROUTING_COOKIE = "__Host-databricks-app-router"
+_LOCAL_SESSION_COOKIE = "mason-local-session"
 _MESSAGE_ROLES = {
     "ai",
     "assistant",
@@ -46,6 +47,27 @@ class MemorySearchRequest(BaseModel):
 
 class SessionItemsRequest(BaseModel):
     items: list[dict[str, Any]] = Field(min_length=1)
+
+
+def _rotate_session_cookie(request: Request, response: Response, session_id: str) -> None:
+    if request.cookies.get(_ROUTING_COOKIE):
+        response.set_cookie(
+            _ROUTING_COOKIE,
+            session_id,
+            secure=True,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        response.delete_cookie(_LOCAL_SESSION_COOKIE, path="/")
+    elif request.cookies.get(_LOCAL_SESSION_COOKIE):
+        response.set_cookie(
+            _LOCAL_SESSION_COOKIE,
+            session_id,
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
 
 
 _USER_HEADERS = ("x-forwarded-email", "x-forwarded-user")
@@ -269,9 +291,8 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
     return {**result, "session_items": items}
 
 
-def install_ui(server: DurableAgentApp) -> None:
+def install_ui(app: FastAPI) -> None:
     """Mount the Mason demo UI and its runtime control endpoints."""
-    app = server.asgi_app
     app.mount("/ui-assets", StaticFiles(directory=_UI_ROOT), name="mason-demo-ui-assets")
 
     @app.get("/", include_in_schema=False)
@@ -289,7 +310,7 @@ def install_ui(server: DurableAgentApp) -> None:
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
             "streaming": {"enabled": True, "transport": "Server-sent events"},
-            "background": {"enabled": True, "durable": server.is_durable},
+            "background": {"enabled": True, "durable": False},
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
@@ -302,17 +323,6 @@ def install_ui(server: DurableAgentApp) -> None:
                 "enabled": bool(memory_store),
                 "store": f"memory-stores/{memory_store}" if memory_store else None,
                 "actor": actor,
-            },
-            "durability": {
-                "enabled": server.is_durable,
-                "mode": "Lakebase runtime store"
-                if server.is_durable
-                else "In-memory runtime store",
-            },
-            "heartbeat": {
-                "enabled": True,
-                "interval_seconds": server.heartbeat_seconds,
-                "stale_after_seconds": server.stale_seconds,
             },
         }
 
@@ -381,6 +391,7 @@ def install_ui(server: DurableAgentApp) -> None:
         if session.get("actor_id") != _request_actor(request):
             raise HTTPException(status_code=403, detail="Session belongs to another actor.")
         previous_session_id = request.state.session_id
+        request.state.session_id = session_id
         response = JSONResponse(
             {
                 "session_id": session_id,
@@ -388,7 +399,7 @@ def install_ui(server: DurableAgentApp) -> None:
                 "managed": True,
             }
         )
-        server.set_session(request, response, session_id)
+        _rotate_session_cookie(request, response, session_id)
         return response
 
     @app.get("/api/demo/session", include_in_schema=False)

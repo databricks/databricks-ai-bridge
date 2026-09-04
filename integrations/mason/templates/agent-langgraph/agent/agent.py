@@ -10,13 +10,13 @@ from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
 from databricks_mason import (
+    DurableAgentContext,
     configure_tracing,
     tag_session,
     workspace_client,
     workspace_headers,
 )
 from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
-from databricks_mason.runtime import DurableAgentApp, DurableAgentContext
 
 from agent.mcps import build_mcp_servers
 
@@ -26,7 +26,6 @@ from agent.tools import all_tools
 logger = logging.getLogger(__name__)
 
 MODEL = "databricks-gpt-5-2"
-app = DurableAgentApp()
 _RUN_METADATA_KEY = "databricks_mason.run_id"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
@@ -97,13 +96,11 @@ async def create_agent_graph(actor: str):
     )
 
 
-@app.invoke
 async def invoke(request: dict, context: DurableAgentContext) -> dict:
     """Translate an invocation payload into LangGraph input and run it to completion."""
     return await _run_agent(_invocation_input(request), context)
 
 
-@app.recover
 async def recover(request: dict, context: DurableAgentContext) -> dict:
     """Resume the same LangGraph session after the runtime replaces a failed worker."""
     saver = checkpointer()
@@ -134,6 +131,7 @@ async def _run_agent(agent_input: Any, context: DurableAgentContext) -> dict:
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
         "output": [e["message"] if e["type"] == "message" else e for e in outputs],
+        "session_id": context.session_id,
         "status": "interrupted" if interrupted else "completed",
     }
 

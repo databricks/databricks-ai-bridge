@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import os
 import re
 import time
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -126,7 +129,7 @@ class _AppsPostgresLakebase:
 
 
 class LakebaseDurabilityStore:
-    """Store durable execution state in one Lakebase table."""
+    """Store durable execution state and events in one Lakebase schema."""
 
     persistent = True
 
@@ -171,24 +174,51 @@ class LakebaseDurabilityStore:
         cls,
         *,
         endpoint: str,
-        host: str,
-        port: int,
-        database: str,
-        username: str,
-        sslmode: str = "require",
+        host: str | None = None,
+        port: int | None = None,
+        database: str | None = None,
+        username: str | None = None,
+        sslmode: str | None = None,
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_DURABILITY_SCHEMA,
     ) -> "LakebaseDurabilityStore":
         """Use connection coordinates injected for a Databricks Apps Postgres resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid durability schema name: {schema!r}")
+        host = host or os.getenv("PGHOST")
+        database = database or os.getenv("PGDATABASE")
+        username = username or os.getenv("PGUSER")
+        if port is None:
+            raw_port = os.getenv("PGPORT")
+            try:
+                port = int(raw_port or "")
+            except ValueError as exc:
+                raise RuntimeError("PGPORT must be an integer") from exc
+        missing = [
+            name
+            for name, value in {
+                "PGHOST": host,
+                "PGPORT": port,
+                "PGDATABASE": database,
+                "PGUSER": username,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "Databricks Apps Postgres resource is missing: " + ", ".join(missing)
+            )
+        assert host is not None
+        assert port is not None
+        assert database is not None
+        assert username is not None
         lakebase = _AppsPostgresLakebase(
             endpoint=endpoint,
             host=host,
             port=port,
             database=database,
             username=username,
-            sslmode=sslmode,
+            sslmode=sslmode or os.getenv("PGSSLMODE", "require"),
             workspace_client=workspace_client,
             schema=schema,
         )
@@ -512,3 +542,169 @@ class LakebaseDurabilityStore:
             request=json.loads(row["request_json"]),
             response=json.loads(row["response_json"]) if row["response_json"] else None,
         )
+
+
+class InMemoryDurabilityStore:
+    """Process-local durability store for development and tests."""
+
+    persistent = False
+
+    def __init__(self) -> None:
+        self.states: dict[str, DurableExecution] = {}
+        self.persisted_events: list[DurableEvent] = []
+        self._lock = asyncio.Lock()
+
+    async def initialize(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+    async def accept(self, execution_id: str, request: JsonObject) -> DurableExecution:
+        _validate_execution_id(execution_id)
+        async with self._lock:
+            existing = self.states.get(execution_id)
+            if existing is not None:
+                if existing.request != request:
+                    raise DurableRequestConflictError(execution_id)
+                return copy.deepcopy(existing)
+            state = DurableExecution(
+                execution_id=execution_id,
+                status=DurableExecutionStatus.QUEUED,
+                attempt=0,
+                heartbeat_at=None,
+                request=copy.deepcopy(request),
+                response=None,
+            )
+            self.states[execution_id] = state
+            return copy.deepcopy(state)
+
+    async def get(self, execution_id: str) -> DurableExecution | None:
+        _validate_execution_id(execution_id)
+        async with self._lock:
+            state = self.states.get(execution_id)
+            return copy.deepcopy(state) if state is not None else None
+
+    async def recoverable_execution_ids(self, stale_seconds: float) -> list[str]:
+        async with self._lock:
+            return [
+                execution_id
+                for execution_id, state in self.states.items()
+                if self._is_recoverable(state, stale_seconds)
+            ]
+
+    async def claim(
+        self,
+        execution_id: str,
+        stale_seconds: float,
+    ) -> DurableExecution | None:
+        _validate_execution_id(execution_id)
+        async with self._lock:
+            state = self.states.get(execution_id)
+            if state is None or not self._is_recoverable(state, stale_seconds):
+                return None
+            claimed = DurableExecution(
+                execution_id=execution_id,
+                status=DurableExecutionStatus.ACTIVE,
+                attempt=state.attempt + 1,
+                heartbeat_at=datetime.now(timezone.utc),
+                request=copy.deepcopy(state.request),
+                response=None,
+            )
+            self.states[execution_id] = claimed
+            return copy.deepcopy(claimed)
+
+    async def heartbeat(self, execution_id: str, attempt: int) -> bool:
+        async with self._lock:
+            state = self.states.get(execution_id)
+            if state is None or not self._owns_attempt(state, attempt):
+                return False
+            self.states[execution_id] = DurableExecution(
+                execution_id=state.execution_id,
+                status=state.status,
+                attempt=state.attempt,
+                heartbeat_at=datetime.now(timezone.utc),
+                request=state.request,
+                response=state.response,
+            )
+            return True
+
+    async def complete(self, execution_id: str, attempt: int, response: JsonObject) -> bool:
+        async with self._lock:
+            state = self.states.get(execution_id)
+            if state is None or not self._owns_attempt(state, attempt):
+                return False
+            self.states[execution_id] = DurableExecution(
+                execution_id=state.execution_id,
+                status=DurableExecutionStatus.COMPLETED,
+                attempt=state.attempt,
+                heartbeat_at=state.heartbeat_at,
+                request=state.request,
+                response=copy.deepcopy(response),
+            )
+            return True
+
+    async def fail(self, execution_id: str, attempt: int) -> bool:
+        async with self._lock:
+            state = self.states.get(execution_id)
+            if state is None or not self._owns_attempt(state, attempt):
+                return False
+            self.states[execution_id] = DurableExecution(
+                execution_id=state.execution_id,
+                status=DurableExecutionStatus.FAILED,
+                attempt=state.attempt,
+                heartbeat_at=state.heartbeat_at,
+                request=state.request,
+                response=None,
+            )
+            return True
+
+    async def append_event(
+        self,
+        execution_id: str,
+        attempt: int,
+        event: JsonObject,
+    ) -> int | None:
+        async with self._lock:
+            state = self.states.get(execution_id)
+            if not self._owns_attempt(state, attempt):
+                return None
+            persisted = DurableEvent(
+                sequence_number=len(self.persisted_events) + 1,
+                execution_id=execution_id,
+                attempt=attempt,
+                event=copy.deepcopy(event),
+            )
+            self.persisted_events.append(persisted)
+            return persisted.sequence_number
+
+    async def events(
+        self,
+        execution_id: str,
+        after_sequence: int | None = None,
+    ) -> list[DurableEvent]:
+        _validate_execution_id(execution_id)
+        async with self._lock:
+            return [
+                copy.deepcopy(event)
+                for event in self.persisted_events
+                if event.execution_id == execution_id
+                and (after_sequence is None or event.sequence_number > after_sequence)
+            ]
+
+    @staticmethod
+    def _owns_attempt(state: DurableExecution | None, attempt: int) -> bool:
+        return bool(
+            state and state.status == DurableExecutionStatus.ACTIVE and state.attempt == attempt
+        )
+
+    @staticmethod
+    def _is_recoverable(state: DurableExecution, stale_seconds: float) -> bool:
+        if state.status == DurableExecutionStatus.QUEUED:
+            return True
+        if state.status != DurableExecutionStatus.ACTIVE or state.heartbeat_at is None:
+            return state.status == DurableExecutionStatus.ACTIVE
+        heartbeat_at = state.heartbeat_at
+        if heartbeat_at.tzinfo is None:
+            heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - heartbeat_at >= timedelta(seconds=stale_seconds)

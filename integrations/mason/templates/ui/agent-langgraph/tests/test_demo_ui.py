@@ -1,7 +1,8 @@
 import pytest
+from databricks_mason import DurableAgentApp
+from databricks_mason.runtime.store import InMemoryDurabilityStore
 from fastapi.testclient import TestClient
 from runtime import ui
-from databricks_mason.runtime import DurableAgentApp
 
 
 class _FakeStateClient:
@@ -94,18 +95,12 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     if history:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
 
-    server = DurableAgentApp()
-
-    @server.invoke
     async def invoke(request, context):
-        return {"output": []}
+        return {"output": [], "session_id": context.session_id}
 
-    @server.recover
-    async def recover(request, context):
-        return {"output": []}
-
-    ui.install_ui(server)
-    client = TestClient(server.asgi_app, base_url="https://testserver")
+    server = DurableAgentApp(invoke, durability_store=InMemoryDurabilityStore())
+    ui.install_ui(server.app)
+    client = TestClient(server.app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
     if configured:
         # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
@@ -141,8 +136,8 @@ def test_demo_ui_routes(monkeypatch):
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
-    assert config["durability"]["enabled"] is False
-    assert config["heartbeat"]["enabled"] is True
+    assert "durability" not in config
+    assert "recovery" not in config
 
     sessions = client.get("/api/demo/sessions").json()
     assert sessions == {

@@ -13,7 +13,7 @@ callers store whatever shape they like (the saver stores checkpoint fragments).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional, Sequence, cast
+from typing import Any, Iterator, Optional, Sequence
 
 from databricks.sdk import WorkspaceClient
 
@@ -55,8 +55,8 @@ class SessionStoreClient:
         return self
 
     def get_session(self, *, session_id: str) -> Session:
-        resp = self._api.do("GET", f"{self._sessions_path()}/{session_id}")
-        return self._session(self._object_response(resp))
+        resp: dict[str, Any] = self._api.do("GET", f"{self._sessions_path()}/{session_id}")  # type: ignore[assignment]
+        return self._session(resp)
 
     def create_session(
         self,
@@ -69,8 +69,8 @@ class SessionStoreClient:
         if metadata:
             body["metadata"] = metadata
         query = {"session_id": session_id} if session_id else None
-        resp = self._api.do("POST", self._sessions_path(), query=query, body=body)
-        return self._session(self._object_response(resp))
+        resp: dict[str, Any] = self._api.do("POST", self._sessions_path(), query=query, body=body)  # type: ignore[assignment]
+        return self._session(resp)
 
     def append_items(self, session: Session, *, items: Sequence[Any]) -> None:
         if not items:
@@ -88,9 +88,9 @@ class SessionStoreClient:
         page_token: Optional[str] = None
         while True:
             query = {k: v for k, v in {"order_by": order_by, "page_token": page_token}.items() if v}
-            resp = self._object_response(
-                self._api.do("GET", self._items_path(session), query=query or None)
-            )
+            resp: dict[str, Any] = self._api.do(
+                "GET", self._items_path(session), query=query or None
+            )  # type: ignore[assignment]
             for item in resp.get("session_items", []):
                 if "data" in item:
                     yield SessionItem(item_id=item.get("item_id", ""), data=item["data"])
@@ -118,9 +118,3 @@ class SessionStoreClient:
             actor_id=resp.get("actor_id", ""),
             metadata=dict(resp.get("metadata", {})),
         )
-
-    @staticmethod
-    def _object_response(resp: Any) -> dict[str, Any]:
-        if not isinstance(resp, dict):
-            raise TypeError(f"Session Store returned {type(resp).__name__}, expected a JSON object")
-        return cast(dict[str, Any], resp)

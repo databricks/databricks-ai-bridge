@@ -5,8 +5,8 @@ Tracing turns on only when a full config is present: a destination (``MLFLOW_TRA
 ``MLFLOW_EXPERIMENT_NAME``) — whichever pair the user or the Apps resource binding provides. MLflow
 resolves the specific value itself; this only decides on/off. Requiring both halves avoids the
 half-configured case where traces silently export to a local file store instead of the workspace.
-When unconfigured, tracing is disabled outright so no spans are exported. No user decision lives
-here — it is all driven by environment variables.
+When unconfigured, tracing is disabled outright. No user decision lives here — it's all driven by
+environment variables.
 """
 
 import os
@@ -19,16 +19,18 @@ import mlflow
 _DESTINATION_VARS = ("MLFLOW_TRACKING_URI", "MLFLOW_TRACING_DESTINATION")
 _EXPERIMENT_VARS = ("MLFLOW_EXPERIMENT_ID", "MLFLOW_EXPERIMENT_NAME")
 
-# Snapshotted once by configure() at startup (after .env is loaded) rather than at import, so this
-# module has no import-time side effects and load order does not matter.
+# Snapshotted once by configure_tracing() at startup (after .env is loaded) rather than at import, so
+# this module has no import-time side effects and load order does not matter.
 _enabled = False
 
 
 def configure_tracing(autolog: Callable[[], None] | None = None) -> None:
     """Enable MLflow tracing for the agent. Call once at startup.
 
-    ``autolog`` is the framework's MLflow autolog entry point, called only when tracing is enabled.
-    Framework adapters bind it so their public helper remains zero-argument.
+    Reads the MLflow destination/experiment from the environment and no-ops (disables tracing) when
+    they are absent, so it is safe to call unconditionally. ``autolog`` is the framework's MLflow
+    autolog entry point (e.g. ``mlflow.langchain.autolog``), called only when tracing is enabled;
+    framework adapters bind it so callers get a zero-arg ``configure_tracing()``.
     """
     global _enabled
     has_destination = any(os.getenv(v) for v in _DESTINATION_VARS)
@@ -38,8 +40,6 @@ def configure_tracing(autolog: Callable[[], None] | None = None) -> None:
         if autolog is not None:
             autolog()
     else:
-        # Without an experiment, MLflow would try to export to a missing one
-        # (INVALID_PARAMETER_VALUE), so disable tracing entirely.
         mlflow.tracing.disable()
 
 
