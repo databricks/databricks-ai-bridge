@@ -31,7 +31,7 @@ async def run_agent(payload: dict, context: DurableAgentContext) -> dict:
     if not isinstance(agent_input, dict):
         raise ValueError("input must be an object")
 
-    message = agent_input.get("message", "hello")
+    message = agent_input.get("message")
     delay_seconds = agent_input.get("delay_seconds", 0)
     if not isinstance(message, str):
         raise ValueError("message must be a string")
