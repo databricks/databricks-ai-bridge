@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 try:
     import tomllib  # ty: ignore[unresolved-import]
@@ -142,7 +142,7 @@ def load_tools(*, expected_framework: str) -> tuple[ToolRecord, ...]:
     return tools
 
 
-def store_binding(table: str, prefer: str = "name") -> str | None:
+def store_binding(table: str, prefer: Literal["name", "id"] = "name") -> str | None:
     """The store binding declared in agent.toml's ``[memory_store]`` / ``[session_store]``, or None.
 
     Read at runtime so `mason memory/sessions bind` (which writes these tables) takes effect without
