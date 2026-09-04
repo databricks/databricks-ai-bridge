@@ -528,9 +528,9 @@ def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, mo
         or experiment,
     )
 
-    experiment, schema = deploy_mod.provision_trace_experiment(
-        tmp_path, "myagent", "me@example.com", None
-    )
+    result = deploy_mod.provision_trace_experiment(tmp_path, "myagent", "me@example.com", None)
+    assert result is not None  # configured -> wires and returns (experiment, schema)
+    experiment, schema = result
 
     assert schema == "cat.schema"
     assert experiment == "/Users/me@example.com/mason-traces/myagent"
