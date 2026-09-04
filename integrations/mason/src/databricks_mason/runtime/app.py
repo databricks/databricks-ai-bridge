@@ -80,7 +80,6 @@ class DurableAgentApp:
             self.app.add_api_route(
                 f"{prefix}/invocations/{{run_id}}/events", self._events, methods=["GET"]
             )
-        self.app.add_api_route("/api/healthz", self._health, methods=["GET"])
 
     async def _bind_session(self, request: Request, call_next) -> Response:
         session_id = request.cookies.get(_ROUTING_COOKIE)
@@ -192,7 +191,3 @@ class DurableAgentApp:
         elif state.status == DurableExecutionStatus.FAILED:
             payload["error"] = "agent execution failed"
         return payload
-
-    @staticmethod
-    async def _health() -> JsonObject:
-        return {"status": "ok"}

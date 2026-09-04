@@ -6,12 +6,11 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import FunctionTool
-from agent.agent import _apply_decisions, _normalize_item, _serialize_events
+from agent.agent import _apply_decisions, _normalize_item, _serialize_events, _session_id
 from agent.tools import all_tools
 
 
@@ -73,7 +72,7 @@ class _FakeStreamResult:
 
 
 @pytest.mark.asyncio
-async def test_agent_events_omits_unavailable_mcp_servers(monkeypatch):
+async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
     import agent.agent as agent_module
 
     def server(name, *, connect_error=None, list_error=None, cleanup_error=None):
@@ -114,10 +113,8 @@ async def test_agent_events_omits_unavailable_mcp_servers(monkeypatch):
         lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
     )
 
-    context = SimpleNamespace(session_id="s")
-    assert [event async for event in agent_module._agent_events({}, context)] == []
-    # create_agent(session_id, mcp) — the healthy servers are the second positional arg.
-    assert create_agent.call_args.args[0] == "s"
+    assert [event async for event in agent_module.stream_handler({"session_id": "s"})] == []
+    # create_agent(actor, mcp) — the healthy servers are the second positional arg.
     assert create_agent.call_args.args[1] == [healthy]
     assert healthy.cache_tools_list is True
     assert all(
@@ -207,6 +204,16 @@ def test_session_store_selects_durable_store(monkeypatch):
 class _FakeStoreClient:
     def set_session_store(self, name):
         return self
+
+
+def test_session_id_from_request():
+    request = {"input": [{"role": "user", "content": "hi"}], "session_id": "abc-123"}
+    assert _session_id(request) == "abc-123"
+
+
+def test_session_id_is_required_from_runtime():
+    with pytest.raises(KeyError):
+        _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
 def _has_workspace_auth() -> bool:

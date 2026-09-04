@@ -1,20 +1,22 @@
-from databricks_mason import DurableAgentApp
-from databricks_mason.runtime.store import InMemoryDurabilityStore
+from collections.abc import AsyncGenerator
+
+from runtime.runtime import build_app
 
 
-async def _invoke(request, context):
+async def _invoke(request: dict) -> dict:
     return request
 
 
+async def _stream(request: dict) -> AsyncGenerator[dict, None]:
+    yield request
+
+
 def test_invocation_routes_support_local_and_deployed_app_auth_paths() -> None:
-    server = DurableAgentApp(_invoke, durability_store=InMemoryDurabilityStore())
-    paths = server.app.openapi()["paths"]
+    paths = build_app(_invoke, _stream).openapi()["paths"]
 
     assert paths["/invocations"]["post"]
     assert paths["/api/invocations"]["post"]
-    assert paths["/invocations/{run_id}"]["get"]
-    assert paths["/api/invocations/{run_id}"]["get"]
-    assert paths["/invocations/{run_id}/events"]["get"]
-    assert paths["/api/invocations/{run_id}/events"]["get"]
-    assert paths["/api/healthz"]["get"]
-    assert "/api/session/new" not in paths
+    assert paths["/invocations/{invocation_id}"]["get"]
+    assert paths["/api/invocations/{invocation_id}"]["get"]
+    assert paths["/health"]["get"]
+    assert paths["/api/health"]["get"]

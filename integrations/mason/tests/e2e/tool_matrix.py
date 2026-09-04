@@ -629,15 +629,13 @@ class Runner:
         self, label: str, url: str, prompt: str, headers: dict[str, str]
     ) -> dict[str, Any]:
         last: Exception | None = None
-        payload = {
-            "id": f"inv_{uuid.uuid4()}",
-            "input": [{"role": "user", "content": prompt}],
-        }
         for attempt in range(1, 4):
             try:
                 return _monitored(
                     label,
-                    lambda: _http_json(url, payload, headers),
+                    lambda: _http_json(
+                        url, {"input": [{"role": "user", "content": prompt}]}, headers
+                    ),
                     self.transcript,
                     timeout=360,
                 )
@@ -789,12 +787,7 @@ def _assert_semantics(tool_kind: str, serialized: str) -> None:
 
 def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     auth = " -H 'Authorization: Bearer <redacted>'" if authenticated else ""
-    body = json.dumps(
-        {
-            "id": "inv_<client-generated-id>",
-            "input": [{"role": "user", "content": prompt}],
-        }
-    )
+    body = json.dumps({"input": [{"role": "user", "content": prompt}]})
     return (
         f"curl -sS -X POST {shlex.quote(invocation_url)}"
         f" -H 'Content-Type: application/json'{auth} --data {shlex.quote(body)}"

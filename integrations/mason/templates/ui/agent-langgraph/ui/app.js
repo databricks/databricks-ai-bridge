@@ -316,7 +316,7 @@ function invocationHeaders() {
 }
 
 function invocationPayload(payload) {
-  return { id: `inv_${crypto.randomUUID()}`, ...payload };
+  return { ...payload };
 }
 
 async function jsonResponse(response) {
