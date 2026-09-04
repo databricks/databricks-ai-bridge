@@ -7,6 +7,7 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -99,6 +100,12 @@ class _FakeCtx:
         return _FakeClient()
 
 
+def _mark_template(source: pathlib.Path, template: str) -> None:
+    config = source / ".mason" / "project.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'schema_version = 1\nframework = "langgraph"\ntemplate = "{template}"\n')
+
+
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
     src = tmp_path / "app"
     src.mkdir()
@@ -129,6 +136,129 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     # Display name "mem" resolves to store id memory-stores/mem-id-123; the runtime re-adds the
     # `memory-stores/` prefix, so the env var must carry the bare id.
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
+
+
+def test_deploy_unknown_template_does_not_provision_runtime_store(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _mark_template(src, "custom-template")
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.agent_durability_store,
+        "ensure_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+
+
+@pytest.mark.parametrize("template", sorted(deploy_mod._DURABILITY_TEMPLATES))
+def test_deploy_durable_template_reuses_session_store_before_startup(
+    template: str, tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _mark_template(src, template)
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.agent_durability_store,
+        "ensure_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse session")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--session", "sessions"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    backend = events[0][1][0]
+    assert backend.database == "sessions"
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+
+
+@pytest.mark.parametrize("template", sorted(deploy_mod._DURABILITY_TEMPLATES))
+def test_deploy_durable_template_provisions_backend_before_startup(
+    template: str, tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _mark_template(src, template)
+    selected = deploy_mod.agent_durability_store.backend("mason-myapp")
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.agent_durability_store,
+        "ensure_backend",
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    assert events[0][1] == [selected]
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):

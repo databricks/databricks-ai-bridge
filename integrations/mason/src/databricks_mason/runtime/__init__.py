@@ -5,8 +5,8 @@ construction — so they work regardless of which framework an agent is built wi
 helpers (session-store checkpointer, MCP tools, memory tools) live in the per-framework adapter
 package, e.g. :mod:`databricks_mason.langgraph`, which re-exports these for a single import point.
 
-``__all__`` is the supported surface. ``tool_manifest``, ``session_store_client``, and ``background``
-are internal and reachable by their submodule paths but not re-exported here.
+``__all__`` is the supported surface. ``tool_manifest`` and ``session_store_client`` are internal and
+reachable by their submodule paths but not re-exported here.
 
 The re-exports below are resolved lazily (PEP 562) so importing a neutral submodule such as
 ``databricks_mason.runtime.tool_manifest`` does not pull in the tracing module's ``mlflow`` dependency.
@@ -15,10 +15,14 @@ The re-exports below are resolved lazily (PEP 562) so importing a neutral submod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from databricks_mason.runtime.app import DurableAgentApp
     from databricks_mason.runtime.tracing import configure_tracing, tag_session
+    from databricks_mason.runtime.types import DurableAgentContext
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 __all__ = [
+    "DurableAgentApp",
+    "DurableAgentContext",
     # MLflow tracing — call configure_tracing() once at startup (pass the framework's autolog, or use
     # a framework adapter that binds it).
     "configure_tracing",
@@ -29,6 +33,8 @@ __all__ = [
 ]
 
 _MODULE_BY_NAME = {
+    "DurableAgentApp": "app",
+    "DurableAgentContext": "types",
     "configure_tracing": "tracing",
     "tag_session": "tracing",
     "workspace_client": "workspace",
