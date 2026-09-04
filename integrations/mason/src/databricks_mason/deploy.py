@@ -434,6 +434,13 @@ def deploy(
         provisioned["Session store"] = _store_label(
             env_updates[_SESSION_ENV], created_stores.get("session")
         )
+    # Call out newly-provisioned stores as a standalone line the moment they're created, so the user
+    # notices (the final summary also marks them). Text mode only; JSON mode reports it structurally.
+    if obj.output != "json":
+        if created_stores.get("memory"):
+            render.note(f"Created new memory store '{memory_store}'")
+        if created_stores.get("session"):
+            render.note(f"Created new session store '{session_store}'")
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
@@ -485,6 +492,7 @@ def deploy(
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
+                "stores_created": created_stores,
                 "store_grant": "skipped"
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),

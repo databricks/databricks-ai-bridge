@@ -194,6 +194,22 @@ def _snippet_group(snippets: Sequence[tuple[str, str, str]]) -> RenderableType:
 # --- success / next steps (the "Set up" cards) -------------------------------
 
 
+def note(
+    message: str,
+    *,
+    symbol: str = "✓",
+    style: str = "green",
+    con: Optional[Console] = None,
+) -> None:
+    """Print a single standalone status line (outside any panel).
+
+    For a milestone worth calling out as it happens — e.g. a store just created during `mason
+    deploy` — so it stands on its own rather than being buried in the final summary's fields.
+    """
+    con = con or _stdout
+    con.print(Text(f"{symbol} ", style=f"bold {style}") + Text(message, style="bold"))
+
+
 def success(
     title: str,
     *,

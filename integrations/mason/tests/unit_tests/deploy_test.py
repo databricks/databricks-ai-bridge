@@ -548,7 +548,8 @@ def test_resolve_store_env_reports_existing_stores_on_no_create():
 
 def test_deploy_summary_marks_a_created_store(tmp_path: pathlib.Path, monkeypatch):
     # The deploy summary must tell the user a store was created (vs reused). _FakeClient creates on
-    # the default path, so the Memory/Session store fields carry the "(created)" marker.
+    # the default path, so the Memory/Session store fields carry the "(created)" marker, and a
+    # standalone "Created new ... store" line is logged as it happens.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -567,6 +568,31 @@ def test_deploy_summary_marks_a_created_store(tmp_path: pathlib.Path, monkeypatc
     )
     assert result.exit_code == 0, result.output
     assert "(created)" in result.output
+    assert "Created new memory store 'mem'" in result.output
+    assert "Created new session store 's'" in result.output
+
+
+def test_deploy_json_reports_stores_created(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(deploy_mod, "_app_url", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    ctx = _FakeCtx()
+    ctx.output = "json"
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
+        obj=ctx,
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["stores_created"] == {"memory": True, "session": True}
 
 
 def _run_deploy(src, monkeypatch, extra_args):
