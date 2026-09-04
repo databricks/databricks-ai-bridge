@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mason"
-version = "0.1.3.dev0"
+version = "0.1.4.dev0"
 description = "Databricks integration for Mason"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
