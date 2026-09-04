@@ -47,6 +47,26 @@ def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
         yield
 
 
+@contextmanager
+def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
+    """Like ``status``, but first prints a persistent line so feedback survives the spinner.
+
+    ``status`` clears itself on exit and only animates on a TTY, so a long, silent wait (e.g. waiting
+    for app compute) can look like a hang in terminals where the spinner doesn't render. This prints
+    a durable "• message" line up front, then runs the spinner underneath it. Skipped under
+    ``-o json`` so machine output stays clean.
+    """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
+    con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
+    con.print(f"[{MUTED}]•[/] {message}")
+    with con.status(message, spinner="dots"):
+        yield
+
+
 # --- small helpers -----------------------------------------------------------
 
 

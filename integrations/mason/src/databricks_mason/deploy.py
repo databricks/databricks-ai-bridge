@@ -442,7 +442,9 @@ def deploy(
         click.echo((result.stdout or "").replace(old, new), nl=False)
         # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
         # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
-        with render.status("Waiting for app compute to start (this can take a few minutes)…"):
+        # Use progress (persistent line + spinner): this wait runs for minutes, so it must leave
+        # visible feedback even where the spinner animation doesn't render.
+        with render.progress("Waiting for app compute to start (this can take a few minutes)…"):
             _wait_for_running(name, obj.profile)
     elif instance_args:
         update = {
