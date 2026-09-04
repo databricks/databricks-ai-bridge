@@ -171,18 +171,21 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
     ),
     ("tracing",): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+        (
+            "mason tracing setup --trace-location main.agent_traces",
+            "configure where the agent's traces go",
+        ),
     ),
     ("tracing", "setup"): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+        (
+            "mason tracing setup --trace-location main.agent_traces --warehouse-id <warehouse-id>",
+            "configure MLflow tracing to a UC schema",
+        ),
     ),
     ("tracing", "list"): (
-        ("mason tracing list --experiment /Users/me/mason-traces/my-agent", "list recent traces"),
+        ("mason tracing list --trace-location main.agent_traces", "list recent traces"),
     ),
     ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
-    ("tracing", "instrument"): (
-        ("mason tracing instrument --destination main.agent_traces", "print instrumentation code"),
-    ),
     ("deploy",): (("mason deploy my-agent", "deploy the agent to Databricks Apps"),),
     ("deployments",): (("mason deployments list", "list agent deployments"),),
     ("deployments", "list"): (("mason deployments list", "list agent deployments"),),

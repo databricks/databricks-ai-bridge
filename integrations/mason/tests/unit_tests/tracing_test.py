@@ -183,7 +183,7 @@ def _trace(trace_id):
 
 
 def test_list_uses_configured_uc_schema(tmp_path: pathlib.Path):
-    _project(tmp_path, schema="proj.schema")
+    _project(tmp_path, schema="proj.schema", warehouse="wh-1")
     fake = _fake_mlflow([_trace("tr-1")])
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
@@ -198,7 +198,7 @@ def test_list_uses_configured_uc_schema(tmp_path: pathlib.Path):
 
 
 def test_list_flag_overrides_project(tmp_path: pathlib.Path):
-    _project(tmp_path, schema="proj.schema")
+    _project(tmp_path, schema="proj.schema", warehouse="wh-1")
     fake = _fake_mlflow([])
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
@@ -241,6 +241,50 @@ def test_list_applies_configured_warehouse(tmp_path: pathlib.Path):
     assert res.exit_code == 0, res.output
     assert captured["warehouse"] == "wh-1"
     assert fake.search_traces.call_args.kwargs["locations"] == ["cat.schema"]
+
+
+def test_get_applies_configured_warehouse(tmp_path: pathlib.Path):
+    # `get` reads a UC-backed trace through the project's configured SQL warehouse, same as `list`
+    # (a UC trace read needs a warehouse; without one MLflow raises "SQL warehouse ID is required").
+    _project(tmp_path, schema="cat.schema", warehouse="wh-1")
+    captured: dict = {}
+    fake = mock.Mock()
+    fake.get_trace.return_value = _trace("tr-1")
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=fake),
+        mock.patch.object(
+            tracing_mod, "_configure", side_effect=lambda m, p, w: captured.update(warehouse=w)
+        ),
+    ):
+        res = CliRunner().invoke(
+            tracing_mod.tracing_get, ["tr-1", "--source", str(tmp_path)], obj=_Ctx(output="json")
+        )
+    assert res.exit_code == 0, res.output
+    assert captured["warehouse"] == "wh-1"
+    assert fake.get_trace.call_args.args[0] == "tr-1"
+
+
+def test_list_errors_without_warehouse(tmp_path: pathlib.Path, monkeypatch):
+    # A UC read needs a SQL warehouse; with none configured/passed and no env var, `list` fails fast
+    # with a mason hint instead of MLflow's raw "SQL warehouse ID is required" error.
+    monkeypatch.delenv("MLFLOW_TRACING_SQL_WAREHOUSE_ID", raising=False)
+    _project(tmp_path, schema="cat.schema")  # location configured, but no warehouse anywhere
+    result = CliRunner().invoke(
+        tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
+    )
+    assert result.exit_code != 0
+    assert "SQL warehouse" in result.output
+
+
+def test_get_errors_without_warehouse(tmp_path: pathlib.Path, monkeypatch):
+    # Same requirement for `get`: no warehouse anywhere -> fail fast with the hint.
+    monkeypatch.delenv("MLFLOW_TRACING_SQL_WAREHOUSE_ID", raising=False)
+    _project(tmp_path, schema="cat.schema")
+    result = CliRunner().invoke(
+        tracing_mod.tracing_get, ["tr-1", "--source", str(tmp_path)], obj=_Ctx(output="json")
+    )
+    assert result.exit_code != 0
+    assert "SQL warehouse" in result.output
 
 
 # --- helpers -----------------------------------------------------------------

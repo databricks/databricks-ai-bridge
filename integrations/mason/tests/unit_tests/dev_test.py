@@ -183,7 +183,9 @@ def test_dev_wires_tracing_through_shared_provision(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     prov.assert_called_once()  # configured -> tracing wired through the shared path
     assert prov.call_args.args[1] == tmp_path.resolve().name  # app name
-    assert prov.call_args.args[2] == "me@example.com"  # current_user (only read once configured)
+    assert (
+        prov.call_args.args[2].current_user == "me@example.com"
+    )  # the client (read once configured)
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

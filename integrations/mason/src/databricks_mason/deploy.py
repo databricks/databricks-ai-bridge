@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 import yaml
@@ -32,6 +32,9 @@ from databricks_mason.tracing import (
     experiment_name,
     experiment_ui_url,
 )
+
+if TYPE_CHECKING:
+    from databricks_mason._api_client import _MasonApiClient
 
 _MEMORY_ENV = "AGENT_MEMORY_STORE"
 _SESSION_ENV = "AGENT_SESSION_STORE"
@@ -278,7 +281,7 @@ def resolve_store_env(
 
 
 def provision_trace_experiment(
-    source: pathlib.Path, app: str, user: str, profile
+    source: pathlib.Path, app: str, client: _MasonApiClient, profile
 ) -> Optional[tuple[str, str]]:
     """Wire Unity Catalog tracing into app.yaml if it's configured, else no-op. Shared by dev+deploy.
 
@@ -301,7 +304,11 @@ def provision_trace_experiment(
     if not schema:
         return None
 
-    experiment = experiment_name(user, app)
+    experiment = experiment_name(client.current_user, app)
+    # `mlflow.create_experiment` does not create intermediate workspace folders, so create the parent
+    # (`/Users/<user>/mason-traces`) first - otherwise first-time provisioning on a workspace that
+    # doesn't have it yet fails.
+    client.ensure_workspace_dir(experiment.rsplit("/", 1)[0])
     experiment_id = ensure_uc_experiment(profile, experiment, schema, warehouse)
     env = {
         TRACES_TRACKING_URI_ENV: "databricks",
@@ -418,9 +425,7 @@ def deploy(
 
     # 1. Wire UC tracing first (if configured), so its experiment is created before the app. Tracing
     #    is opt-in and never blocks a deploy: an unconfigured project just deploys without it.
-    traced = provision_trace_experiment(
-        source_dir, source_dir.resolve().name, client.current_user, obj.profile
-    )
+    traced = provision_trace_experiment(source_dir, source_dir.resolve().name, client, obj.profile)
     trace_experiment_id: Optional[str] = None
     trace_schema: Optional[str] = None
     trace_url: Optional[str] = None

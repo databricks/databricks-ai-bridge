@@ -29,10 +29,6 @@ _BREADCRUMB = "Agent Tracing"
 TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
 TRACES_WAREHOUSE_ENV = "MLFLOW_TRACING_SQL_WAREHOUSE_ID"
-# The trace-destination pin: a bare experiment id, or a "catalog.schema" UC location. Wired
-# ALONGSIDE the experiment (not instead of it): the experiment var is what the agent runtime's
-# enable-gate keys on, while this pin makes MLflow export to exactly this location and ignore any
-# ambient OTEL_EXPORTER_OTLP_* exporter in the shell that would otherwise hijack the agent's traces.
 TRACES_DESTINATION_ENV = "MLFLOW_TRACING_DESTINATION"
 
 # Per-user workspace folder that holds each app's UC-linked tracing experiment.
@@ -111,6 +107,23 @@ def _configure(mlflow, profile: Optional[str], warehouse_id: Optional[str]) -> N
         os.environ[TRACES_WAREHOUSE_ENV] = warehouse_id
 
 
+def _read_warehouse(explicit: Optional[str], configured: Optional[str]) -> str:
+    """Resolve the SQL warehouse for a UC trace *read* (`get`/`list`), or raise - reads require one.
+
+    Unlike dev/deploy provisioning (whose create-location call can fall back to a workspace default),
+    MLflow's trace-read path has no default fallback, so a warehouse must come from ``--warehouse-id``,
+    the project's ``agent.toml`` (`mason tracing setup`), or MLFLOW_TRACING_SQL_WAREHOUSE_ID.
+    """
+    warehouse = explicit or configured or os.getenv(TRACES_WAREHOUSE_ENV)
+    if not warehouse:
+        raise AgentCliError(
+            "Reading UC traces needs a SQL warehouse.",
+            hint="Configure one with `mason tracing setup --warehouse-id <id>`, pass --warehouse-id, "
+            "or set MLFLOW_TRACING_SQL_WAREHOUSE_ID.",
+        )
+    return warehouse
+
+
 def ensure_uc_experiment(
     profile: Optional[str], experiment_name: str, catalog_schema: str, warehouse_id: Optional[str]
 ) -> str:
@@ -120,6 +133,10 @@ def ensure_uc_experiment(
     freshly created experiment; a re-deploy (experiment already linked) is a no-op, and an experiment
     that already holds non-UC traces raises a clear error pointing at the migration docs. Returns the
     experiment **id** (used to build the MLflow experiment UI link shown by dev/deploy).
+
+    Creating the UC trace tables needs a SQL warehouse: ``warehouse_id`` when configured, else MLflow
+    falls back to the workspace default - which may not exist, so `mason tracing setup` keeps
+    `--warehouse-id` available for workspaces without one.
     """
     mlflow = _mlflow()
     _configure(mlflow, profile, warehouse_id)
@@ -210,13 +227,14 @@ def tracing() -> None:
     "--trace-location",
     "trace_location",
     required=True,
-    help="Unity Catalog schema 'catalog.schema' where deployed traces are stored.",
+    help="Unity Catalog schema 'catalog.schema' where agent traces are stored.",
 )
 @click.option(
     "--warehouse-id",
     default=None,
-    help="SQL warehouse id for creating/querying the UC trace tables "
-    "(MLFLOW_TRACING_SQL_WAREHOUSE_ID).",
+    help="SQL warehouse id for provisioning the MLflow tracing experiment. Optional if "
+    "MLFLOW_TRACING_SQL_WAREHOUSE_ID env variable is set or if the workspace has a default "
+    "warehouse.",
 )
 @click.option(
     "--source",
@@ -226,7 +244,7 @@ def tracing() -> None:
 )
 @click.pass_obj
 def tracing_setup(obj, trace_location, warehouse_id, source) -> None:
-    """Turn on Unity Catalog tracing by recording a UC schema in agent.toml.
+    """Configure tracing via MLflow.
 
     Records the ``catalog.schema`` (and optional warehouse). From then on both ``mason dev`` and
     ``mason deploy`` send the agent's traces to that schema, creating a per-app UC-linked experiment
@@ -245,12 +263,14 @@ def tracing_setup(obj, trace_location, warehouse_id, source) -> None:
     fields = {"Trace location": location}
     if warehouse_id:
         fields["SQL warehouse"] = warehouse_id
+    # `list` needs a warehouse; suggest passing one only when none was just configured.
+    list_cmd = "mason tracing list" if warehouse_id else "mason tracing list --warehouse-id <id>"
     render.success(
-        f"UC tracing configured: {location}",
+        f"Configured tracing for '{location}'",
         fields=fields,
         next_steps=[
-            ("mason deploy <name>", "Creates the UC-linked experiment and deploys"),
-            (f"mason tracing list --trace-location {location}", "Read traces at this location"),
+            ("mason deploy <name>", "Create the UC-linked experiment and deploy"),
+            (list_cmd, "Read traces at this location"),
         ],
     )
 
@@ -269,8 +289,9 @@ def tracing_setup(obj, trace_location, warehouse_id, source) -> None:
 @click.option(
     "--warehouse-id",
     default=None,
-    help="SQL warehouse id for querying UC-backed traces (default: the project's configured "
-    "warehouse, MLFLOW_TRACING_SQL_WAREHOUSE_ID, or the workspace default).",
+    help="SQL warehouse id for reading UC-backed traces. Resolved from this flag, the project's "
+    "configured warehouse (`mason tracing setup`), or MLFLOW_TRACING_SQL_WAREHOUSE_ID; required - "
+    "MLflow has no workspace-default fallback for reads.",
 )
 @click.option("--limit", type=int, default=20)
 @click.option(
@@ -296,7 +317,7 @@ def tracing_list(obj, trace_location, warehouse_id, limit, source) -> None:
             "--trace-location.",
         )
 
-    warehouse = warehouse_id or configured_warehouse or os.getenv(TRACES_WAREHOUSE_ENV)
+    warehouse = _read_warehouse(warehouse_id, configured_warehouse)
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, warehouse)
     traces = mlflow.search_traces(
@@ -338,14 +359,31 @@ def _resolve_location(mlflow, location: str) -> str:
 
 @tracing.command("get")
 @click.argument("trace_id")
+@click.option(
+    "--warehouse-id",
+    default=None,
+    help="SQL warehouse id for reading UC-backed traces. Resolved from this flag, the project's "
+    "configured warehouse (`mason tracing setup`), or MLFLOW_TRACING_SQL_WAREHOUSE_ID; required - "
+    "MLflow has no workspace-default fallback for reads.",
+)
+@click.option(
+    "--source",
+    default=".",
+    type=click.Path(file_okay=False),
+    help="Project directory to read the configured warehouse from (default: current dir).",
+)
 @click.pass_obj
-def tracing_get(obj, trace_id) -> None:
+def tracing_get(obj, trace_id, warehouse_id, source) -> None:
     """Get a single trace by id (status, latency, span count, previews).
 
-    Needs only the id: a v4 trace id (``trace:/<catalog.schema>/<id>``) is self-locating.
+    Needs only the id: a v4 trace id (``trace:/<catalog.schema>/<id>``) is self-locating. Tracing is
+    UC-only, so the trace is read through a SQL warehouse - the project's configured one
+    (``mason tracing setup``), ``--warehouse-id``, or MLFLOW_TRACING_SQL_WAREHOUSE_ID.
     """
+    _, configured_warehouse = project_trace_location(source)
+    warehouse = _read_warehouse(warehouse_id, configured_warehouse)
     mlflow = _mlflow()
-    _configure(mlflow, obj.profile, os.getenv(TRACES_WAREHOUSE_ENV))
+    _configure(mlflow, obj.profile, warehouse)
     trace = mlflow.get_trace(trace_id)
     if trace is None:
         raise AgentCliError(f"No trace found with id {trace_id!r}.")

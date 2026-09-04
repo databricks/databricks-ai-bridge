@@ -122,7 +122,7 @@ def dev(
     if trace_schema:
         client = obj.client()
         traced = provision_trace_experiment(
-            source_dir, source_dir.resolve().name, client.current_user, obj.profile
+            source_dir, source_dir.resolve().name, client, obj.profile
         )
         if traced:
             trace_url = experiment_ui_url(client.host, traced[0])

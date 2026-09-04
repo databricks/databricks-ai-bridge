@@ -90,6 +90,9 @@ class _FakeClient:
     host = "https://ws"
     current_user = "me@example.com"
 
+    def ensure_workspace_dir(self, path):
+        pass
+
     def get_memory_store(self, name):
         return {"name": f"memory-stores/{name}"}
 
@@ -516,7 +519,9 @@ def test_provision_trace_experiment_returns_none_without_uc(tmp_path: pathlib.Pa
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     (tmp_path / "agent.toml").write_text(_AGENT_TOML_NO_TRACES)
 
-    assert deploy_mod.provision_trace_experiment(tmp_path, "app", "me@example.com", None) is None
+    client = mock.Mock(current_user="me@example.com")
+    assert deploy_mod.provision_trace_experiment(tmp_path, "app", client, None) is None
+    client.ensure_workspace_dir.assert_not_called()  # unconfigured -> no workspace side effects
 
 
 def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, monkeypatch):
@@ -533,13 +538,16 @@ def test_provision_trace_experiment_creates_and_wires(tmp_path: pathlib.Path, mo
         or experiment,
     )
 
-    result = deploy_mod.provision_trace_experiment(tmp_path, "myagent", "me@example.com", None)
+    client = mock.Mock(current_user="me@example.com")
+    result = deploy_mod.provision_trace_experiment(tmp_path, "myagent", client, None)
     assert result is not None  # configured -> wires and returns (experiment, schema)
     experiment, schema = result
 
     assert schema == "cat.schema"
     assert experiment == "/Users/me@example.com/mason-traces/myagent"
     assert calls["schema"] == "cat.schema"
+    # the parent workspace folder is created before the (nested) experiment, else it would fail
+    client.ensure_workspace_dir.assert_called_once_with("/Users/me@example.com/mason-traces")
     env = {
         e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
     }
