@@ -77,24 +77,29 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-async def create_agent_graph(model: str | None = None):
+async def create_agent_graph(actor: str, model: str | None = None):
     """Build the LangGraph agent: local tools + long-term-memory tools + any MCP tools.
 
-    ``model`` overrides the default serving endpoint (``MODEL``) for this build — the demo chat app's
-    model picker passes the selected endpoint per request; falls back to ``MODEL`` when unset.
+    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
+    memory tools' closures (never exposed to the model). See ``_actor``.
+
+    ``model`` selects the serving endpoint for this run; the chat UI passes the picker's choice and
+    everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the endpoint can vary
+    request to request.
     """
     # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones (mcps.py),
     # then fetch their tools. Edit build_mcp_servers in agent/mcps.py to add servers.
     mcp = await mcp_tools(build_mcp_servers())
-    tools = [*all_tools(), *memory_tools(), *mcp]
+    tools = [*all_tools(), *memory_tools(actor), *mcp]
     middleware = (
         [HumanInTheLoopMiddleware(interrupt_on=REQUIRE_APPROVAL)] if REQUIRE_APPROVAL else []
     )
+    endpoint = model or MODEL
     return create_agent(
         # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
         # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
         model=_RoutedChatDatabricks(
-            endpoint=model or MODEL, workspace_client=workspace_client(), use_ai_gateway=True
+            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
         ),
         tools=tools,
         middleware=middleware,
@@ -109,6 +114,17 @@ def _session_id(request: dict) -> str:
     the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
     """
     return str(request["session_id"])
+
+
+def _actor(request: dict) -> str:
+    """The identity that owns this request's memory and session data.
+
+    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
+    deployment platform sets); it partitions long-term memory and the durable session store so each
+    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
+    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
+    """
+    return str(request.get("actor") or "agent")
 
 
 async def invoke_handler(request: dict) -> dict:
@@ -137,11 +153,10 @@ async def invoke_handler(request: dict) -> dict:
 async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
     session_id = _session_id(request)
+    actor = _actor(request)
     tag_session(session_id)
 
-    # `model` (optional) lets a client pick the serving endpoint for this turn (see the demo UI's
-    # model picker); it defaults to MODEL inside create_agent_graph.
-    agent = await create_agent_graph(request.get("model"))
+    agent = await create_agent_graph(actor, request.get("model"))
     # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from
     # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
     # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
@@ -152,7 +167,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
 
     async for event in _serialize_events(
         agent.astream(
-            input=agent_input, config=thread_config(session_id), stream_mode=["updates", "messages"]
+            input=agent_input,
+            config=thread_config(session_id, actor),
+            stream_mode=["updates", "messages"],
         )
     ):
         yield event

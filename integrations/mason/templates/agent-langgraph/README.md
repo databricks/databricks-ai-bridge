@@ -152,7 +152,8 @@ When initialized with the chat app (the default for `mason init --framework lang
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
   `POST /api/demo/memory/search` for managed long-term memory. Created entries are tagged with the
-  current cookie-backed session id; actor partitioning comes from `AGENT_MEMORY_ACTOR_ID`.
+  current cookie-backed session id; entries are partitioned by the signed-in user (the request's
+  forwarded-identity header), so the panel shows that user's own memory.
 
 ### Human-in-the-loop (tool approval)
 
@@ -211,11 +212,11 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
   human-in-the-loop section above); empty the dict to disable gating.
 - **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make state durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the
+- **Make state durable:** run `mason sessions bind <store>` (see "Enable durable state" below); the
   checkpointer lives in `databricks_mason/langgraph/session_store.py`.
-- **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent_graph()`
+- **Add long-term memory:** run `mason memory bind <store>`; `create_agent_graph()`
   then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
-  conversations). Unset → the model isn't offered them.
+  conversations). Unbound → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
 
@@ -237,9 +238,9 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-langgraph --source .
 ```
 
-Add `--memory <name> --session <name> --actor-id <actor>` to wire managed state. Mason
-provisions or resolves the stores (creating them if missing), injects the store/actor env vars, and
-deploys the App.
+Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
+stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
+session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
@@ -269,7 +270,8 @@ each trace with the session id. Otherwise it disables tracing outright, so the p
 By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
 human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
 
-Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
+Bind a managed [Session Store](../../README.md) with **`mason sessions bind <store>`** (recorded in
+`agent.toml`; `AGENT_SESSION_STORE` still overrides it if set) and
 `databricks_mason/langgraph/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
 `BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
 through the managed Session Store **REST API** — no database the app connects to directly. Full graph
@@ -289,9 +291,7 @@ replicas, over RPCs only. No agent code changes; the checkpointer swap is the on
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_MEMORY_ACTOR_ID` | `agent` | Actor partition used by memory tools |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
-| `AGENT_SESSION_ACTOR_ID` | session id | Actor used by the durable saver |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |

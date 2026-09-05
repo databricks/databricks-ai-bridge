@@ -26,48 +26,85 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+## Shell completion
+Add this to `~/.zshrc`:
+```sh
+eval "$(_MASON_COMPLETE=zsh_source mason)"
+```
+
 ## Authentication
 
 Mason uses [Databricks authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication).
-If you do not already have credentials, authenticate a named profile first. You can
-then ask Mason to validate and remember that profile:
+Ask Mason to authenticate and remember a named profile:
 
 ```sh
-databricks auth login --profile <profile>
 mason login --profile <profile>
 mason sessions stores list
 ```
 
-`mason login` does not create credentials; it stores the selected profile in
-`~/.mason/config.json`. `mason logout` forgets that selection without revoking the
-underlying credentials. If Databricks SDK default authentication is already configured,
-you can skip `mason login`. You can also pass `--profile/-p` for an individual command.
-Use `--output json` for scripting.
+`mason login` validates existing credentials first. If credentials are missing or rejected in
+an interactive terminal, Mason runs `databricks auth login --profile <profile>`, revalidates the
+profile, and stores the selection in `~/.mason/config.json`. This browser-based setup requires
+the Databricks CLI. In non-interactive environments, authenticate the profile before running
+Mason. `mason logout` forgets the saved selection without revoking the underlying credentials.
+
+If Databricks SDK default authentication is already configured, you can skip `mason login`.
+You can also pass the global `--profile/-p` option before an individual command, for example
+`mason --profile <profile> mcp list`. Use `--output json` for scripting.
 
 ## Python SDK
 
-The same memory and session APIs are available programmatically through
-`MasonClient`, which authenticates exactly like the CLI (a `.databrickscfg` profile
-or the SDK's default resolution):
+`MasonClient` adds a small resource-oriented layer over the Mason API. Pass it an
+authenticated Databricks `WorkspaceClient`, or omit the argument to use the
+Databricks SDK's default authentication resolution:
 
 ```python
+from databricks.sdk import WorkspaceClient
 from databricks_mason import MasonClient
 
-client = MasonClient(profile="my-workspace")  # or MasonClient() for default auth
+mason = MasonClient(WorkspaceClient(profile="my-workspace"))
 
-store = client.create_memory_store("my-store")
-print(store.name, store.display_name)  # typed attribute access
+session_store = mason.session_stores.create("support-agent-sessions")
+session = session_store.add(actor_id="customer-123", session_id="case-456")
+session.append_items(
+    [
+        {"type": "message", "role": "user", "content": "I need help with my cluster."},
+        {"type": "message", "role": "assistant", "content": "Let's take a look."},
+    ]
+)
 
-client.create_memory_entry("my-store", actor_id="alice", path="/notes/1.md", content="hi")
-for entry in client.list_memory_entries("my-store", actor_id="alice").entries:
-    print(entry.path, entry.content)
+memory_store = mason.memory_stores.create("coding-agent-memory")
+memory = memory_store.add(
+    actor_id="alice",
+    path="/preferences/style.md",
+    content="The user prefers concise answers.",
+)
+results = memory_store.search(
+    actor_id="alice",
+    query="response preferences",
+    limit=10,
+)
+memory = memory.update(content="The user prefers very concise answers.")
+memory.delete()
 ```
 
-Each method maps to one `/api/agents/v1` operation. Responses come back as typed
-models (`MemoryStore`, `Session`, `SessionItemList`, ...) that expose attribute
-accessors (`store.name`) while remaining plain dicts underneath — so `store["name"]`,
-`json.dumps(store)`, and any new server-side fields keep working. API errors raise
-`databricks_mason.AgentCliError`. Deployment, sandbox, and tracing remain CLI-only.
+The root collections manage stores: `mason.memory_stores.create/get/list` and
+`mason.session_stores.create/get/list`. A returned store owns operations on its
+contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,
+`memory_store.list()`, and `memory_store.search()`, or `session_store.add()`,
+`session_store.get("session-id")`, and `session_store.list()`. Returned memories,
+sessions, and stores own their `update()` and `delete()` operations.
+
+All `list()` methods return iterators that automatically consume server pages. List
+`page_size` and search `limit` values must be between 1 and 100. `session.list_items()`
+also auto-pages. `session.fork(...)` creates an independent copy, optionally through
+a specific item. Deleting a session with descendants requires
+`session.delete(force=True)` to cascade the deletion.
+
+The resource layer intentionally does not mirror every API method. Its private
+transport will be replaced by the generated `WorkspaceClient.mason` service when that
+is released, without changing this public surface. Deployment, sandbox, tracing, and
+the existing CLI commands remain separate.
 
 ## Commands
 
@@ -78,12 +115,15 @@ mason [-p <profile>] [-o text|json]
   init         [--framework openai|langgraph] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
-               [--memory/-m N] [--session/-s N]
-               [--with-traces C.S] [--no-create-stores]
+               [--with-traces C.S]
   memory
+    bind         STORE [--source PATH] [--no-create-stores]
+    unbind       [--source PATH]
     stores     create | list | get | update | delete
     entries    create | get | list | search | update | delete
   sessions     create | list | get | update | delete | fork
+    bind         STORE [--source PATH] [--no-create-stores]
+    unbind       [--source PATH]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
   tracing
@@ -97,9 +137,7 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
-  deploy       <name> --source PATH [--memory/-m N]
-               [--session/-s N] [--actor-id ID]
-               [--with-traces C.S] [--no-create-stores]
+  deploy       <name> --source PATH [--with-traces C.S]
   deployments  list | get | logs | start | stop | delete
 ```
 
@@ -117,7 +155,7 @@ mason sessions items append --help
 For the shortest path from a blank directory to a running and deployed agent:
 
 ```sh
-mason login --profile my-workspace
+mason login --profile <profile>
 mason init my-agent
 cd my-agent
 mason dev
@@ -140,8 +178,13 @@ mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
 mason tools add python lookup-ticket
+mason tools remove mcp system.ai.web_search
 mason tools list
 ```
+
+For MCP services, the remove command accepts the same service name as the add command. You can also
+remove any binding by the ID shown in `mason tools list`, for example `mason tools remove
+web_search`. Removal updates only `agent.toml`; Python source and test files remain user-owned.
 
 Discover the MCP Services available to your user before adding one. By default Mason lists the
 Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
@@ -180,16 +223,17 @@ The chat app includes synchronous, SSE streaming, background polling, Session St
 and HITL resume UI. The framework-specific overlay adds `ui/`, `runtime/ui.py`, the UI-enabled
 `runtime/main.py`, and UI tests.
 
-For the full deployed demo, connect both managed stores:
+For the full deployed demo, bind both managed stores, then deploy:
 
 ```sh
-mason --profile <profile> deploy mason-agent-demo --source . \
-  --session mason-demo-sessions \
-  --memory mason-demo-memory \
-  --actor-id alice
+mason sessions bind mason-demo-sessions
+mason memory bind mason-demo-memory
+mason --profile <profile> deploy mason-agent-demo --source .
 ```
 
-(Missing stores are created automatically; pass `--no-create-stores` to require they already exist.)
+(Binding creates a missing store automatically; pass `--no-create-stores` to require it already
+exists. The agent reads the bound stores from `agent.toml` at runtime; `deploy` grants the app's
+service principal access to them.)
 
 The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
 application session id. The browser sends it automatically; API clients must reuse it as a cookie.

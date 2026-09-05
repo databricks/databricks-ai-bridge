@@ -17,12 +17,17 @@ The capability indicators are automatic. Streaming and background reflect the ru
 Session reflects checkpoint history; Memory requires `AGENT_MEMORY_STORE`. The transport selector is
 the only manual capability choice.
 
-The model picker in the chat header lists the workspace's Unity Catalog AI Gateway chat models — the
-`system.ai.*` model services (`GET /api/demo/models`, which always includes the agent's default and
-falls back to just the default when `system.ai` isn't readable) — and sends the chosen model as
-`model` in each invocation body. `create_agent_graph` in `agent/agent.py` builds a `ChatDatabricks`
-with `use_ai_gateway=True`, so the model routes through the gateway (`<host>/ai-gateway/mlflow/v1`);
-it uses the picked model for that turn and falls back to its `MODEL` default when none is sent.
+The chat header's model picker lists the workspace's Unity Catalog AI Gateway chat models — the
+`system.ai.*` model services (`GET /api/demo/config` → `models`, discovered via
+`list_ai_gateway_models`), with `agent.agent.MODEL` pinned as the default. Each request sends the
+selected model as `model` in the invocation body; the agent is rebuilt per turn (with
+`use_ai_gateway=True`, so it routes through `<host>/ai-gateway/mlflow/v1`), so the picker changes the
+model for the next turn without a restart. Discovery is best-effort: if listing is unavailable (e.g.
+no permission on `system.ai`), the picker falls back to just the default. Omitting `model` uses
+`MODEL`.
+
+The picker is capped (`_MODEL_LIMIT`, 20) with the default pinned first. The model-services list call
+is retried a few times before falling back to the default, so a transient blip doesn't blank it.
 
 The UI reads local history from the LangGraph checkpoint and managed history from Session Store
 items. The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and

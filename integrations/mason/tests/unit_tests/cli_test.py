@@ -6,6 +6,7 @@ import click
 from click.testing import CliRunner
 
 from databricks_mason import cli
+from databricks_mason import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):
@@ -30,6 +31,8 @@ def test_root_registers_supported_commands():
     assert {
         "login",
         "logout",
+        "init",
+        "dev",
         "memory",
         "sessions",
         "tracing",
@@ -58,9 +61,21 @@ def test_tools_help_explains_add_workflow():
     assert result.exit_code == 0, result.output
     assert "Manage tools configured in an agent project's agent.toml." in result.output
     assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
+    assert "Remove a tool binding from this agent." in result.output
     assert "List tools configured for this agent." in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+
+
+def test_tools_remove_help_shows_id_and_project_targeting():
+    result = CliRunner().invoke(cli.mason, ["tools", "remove", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
+    assert "--source DIRECTORY" in result.output
+    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "mason tools remove web_search" in result.output
 
 
 def test_tools_add_help_explains_types_and_project_targeting():
@@ -82,7 +97,7 @@ def test_help_examples_recommend_the_default_happy_path():
     runner = CliRunner()
     expected_examples = {
         (): (
-            "mason login --profile my-workspace",
+            "mason login --profile <profile>",
             "mason init my-agent",
             "cd my-agent",
             "mason dev",
@@ -90,6 +105,10 @@ def test_help_examples_recommend_the_default_happy_path():
         ),
         ("init",): ("mason init my-agent",),
         ("dev",): ("mason dev",),
+        ("memory",): (
+            "mason memory stores create --display-name agent-memory",
+            "mason memory bind agent-memory",
+        ),
         ("deploy",): ("mason deploy my-agent",),
     }
 
@@ -107,3 +126,64 @@ def test_every_command_has_an_example_in_option_help():
         result = runner.invoke(cli.mason, [*path, "--help"])
         assert result.exit_code == 0, (path, result.output)
         assert "Examples:" in result.output, path
+
+
+def test_root_examples_render_inline_comments():
+    # Short commands carry an aligned inline comment so first-time readers know what each does.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "mason init my-agent" in result.output
+    assert "# scaffold a new agent project" in result.output
+    # inline: command and its comment on the same line
+    line = next(ln for ln in result.output.splitlines() if "mason init my-agent" in ln)
+    assert "# scaffold a new agent project" in line
+
+
+def test_inline_comments_are_column_aligned():
+    # Every inline comment in a group starts at the same column (the `#` lines up).
+    result = CliRunner().invoke(cli.mason, ["mcp", "--help"])
+
+    assert result.exit_code == 0, result.output
+    hash_columns = {ln.index("#") for ln in result.output.splitlines() if "  # " in ln}
+    assert len(hash_columns) == 1, result.output
+
+
+def test_long_commands_stack_the_comment_above():
+    # A command too long to inline puts its comment on the preceding line so nothing wraps.
+    epilog = help_mod._example_epilog(
+        (("mason x " + "y" * help_mod._INLINE_COMMENT_MAX, "does a long thing"),)
+    )
+    lines = epilog.splitlines()
+    comment_i = next(i for i, ln in enumerate(lines) if "# does a long thing" in ln)
+    # comment sits on its own line, immediately above the command
+    assert lines[comment_i].strip() == "# does a long thing"
+    assert lines[comment_i + 1].strip().startswith("mason x")
+
+
+def test_group_comment_layout_is_uniform():
+    # If any command in a group must stack, the whole group stacks (no mixed inline/stacked).
+    epilog = help_mod._example_epilog(
+        (
+            ("mason short", "inline-able"),
+            ("mason " + "z" * help_mod._INLINE_COMMENT_MAX, "forces stacking"),
+        )
+    )
+    # no command line carries a trailing inline comment
+    assert not any(ln.strip().startswith("mason") and " # " in ln for ln in epilog.splitlines())
+
+
+def test_memory_search_uses_canonical_page_size_option():
+    entries = cli.memory.commands["entries"]
+    assert isinstance(entries, click.Group)
+    search = entries.commands["search"]
+    parameter_names = {parameter.name for parameter in search.params}
+
+    assert "page_size" in parameter_names
+    assert "limit" not in parameter_names
+
+
+def test_session_delete_has_force_option():
+    delete = cli.sessions.commands["delete"]
+
+    assert "force" in {parameter.name for parameter in delete.params}

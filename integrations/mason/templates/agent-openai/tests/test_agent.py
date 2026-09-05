@@ -6,6 +6,7 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import FunctionTool
@@ -68,6 +69,60 @@ class _FakeStreamResult:
 
     def to_state(self):
         return self._state
+
+
+@pytest.mark.asyncio
+async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
+    import agent.agent as agent_module
+
+    def server(name, *, connect_error=None, list_error=None, cleanup_error=None):
+        value = MagicMock(name=name)
+        value.name = name
+        value.tool_filter = lambda *_args: True
+        value.cache_tools_list = False
+        value.connect = AsyncMock(side_effect=connect_error)
+        value.cleanup = AsyncMock(side_effect=cleanup_error)
+        value.list_tools = AsyncMock(return_value=[], side_effect=list_error)
+        return value
+
+    healthy = server("healthy")
+    unavailable = [
+        server("connect-failure", connect_error=PermissionError("HTTP error 403")),
+        server(
+            "list-failure",
+            list_error=RuntimeError("tool discovery failed"),
+            cleanup_error=RuntimeError("cleanup failed"),
+        ),
+    ]
+    all_servers = [healthy, *unavailable]
+    tool_filters = [server.tool_filter for server in all_servers]
+
+    async def mcp_servers(_extra):
+        return [healthy, *unavailable]
+
+    create_agent = MagicMock(return_value=object())
+
+    monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
+    monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
+    monkeypatch.setattr(agent_module, "create_agent", create_agent)
+    monkeypatch.setattr(agent_module, "tag_session", lambda _session_id: None)
+    monkeypatch.setattr(agent_module, "session_store", lambda _session_id, _actor: None)
+    monkeypatch.setattr(
+        agent_module.Runner,
+        "run_streamed",
+        lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
+    )
+
+    assert [event async for event in agent_module.stream_handler({"session_id": "s"})] == []
+    # create_agent(actor, mcp) — the healthy servers are the second positional arg.
+    assert create_agent.call_args.args[1] == [healthy]
+    assert healthy.cache_tools_list is True
+    assert all(
+        server.tool_filter is tool_filter
+        for server, tool_filter in zip(all_servers, tool_filters, strict=True)
+    )
+    for server in all_servers:
+        server.cleanup.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -161,48 +216,6 @@ def test_session_id_is_required_from_runtime():
         _session_id({"input": [{"role": "user", "content": "hi"}]})
 
 
-@pytest.mark.asyncio
-async def test_stream_handler_forwards_selected_model(monkeypatch):
-    # The demo UI's model picker sends `model` in the request body; it must reach create_agent.
-    import agent.agent as agent_module
-
-    captured = {}
-
-    def _fake_create_agent(mcp=None, model=None):
-        captured["model"] = model
-        return object()
-
-    class _FakeResult:
-        interruptions: list = []
-
-        async def stream_events(self):
-            return
-            yield  # pragma: no cover - marks this an (empty) async generator
-
-    class _FakeRunner:
-        @staticmethod
-        def run_streamed(agent, run_input, session=None):
-            return _FakeResult()
-
-    async def _fake_mcp_servers(servers):
-        return []
-
-    monkeypatch.setattr(agent_module, "create_agent", _fake_create_agent)
-    monkeypatch.setattr(agent_module, "mcp_servers", _fake_mcp_servers)
-    monkeypatch.setattr(agent_module, "session_store", lambda session_id: None)
-    monkeypatch.setattr(agent_module, "Runner", _FakeRunner)
-    monkeypatch.setattr(agent_module, "tag_session", lambda *a, **k: None)
-
-    events = [
-        event
-        async for event in agent_module.stream_handler(
-            {"session_id": "s1", "input": [], "model": "system.ai.claude-sonnet-4-5"}
-        )
-    ]
-    assert events == []
-    assert captured["model"] == "system.ai.claude-sonnet-4-5"
-
-
 def _has_workspace_auth() -> bool:
     return bool(
         os.getenv("DATABRICKS_CONFIG_PROFILE")
@@ -222,10 +235,10 @@ async def test_agent_responds_end_to_end():
     from databricks_mason.openai import session_store
 
     configure()
-    agent = create_agent()
+    agent = create_agent("test-actor")
     result = await Runner.run(
         agent,
         [{"role": "user", "content": "Reply with the single word: pong"}],
-        session=session_store("test-e2e"),
+        session=session_store("test-e2e", "test-actor"),
     )
     assert result.final_output

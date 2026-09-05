@@ -2,8 +2,7 @@ command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
 # No env vars are required by default: the app runs the lean backend (in-process session, tracing
-# off). To enable tracing, long-term memory, or durable state, add the matching entries below
-# (literal values):
+# off). To enable tracing, add the matching env entries below (literal values):
 #
 # env:
 #   # Tracing (set a destination + an experiment). Destination: MLFLOW_TRACKING_URI or
@@ -12,14 +11,3 @@ command: ["uv", "run", "start-server"]
 #     value: "databricks"
 #   - name: MLFLOW_EXPERIMENT_ID
 #     value: "<experiment-id>"
-#   # Long-term memory tools: a managed memory store ID (registers remember/recall).
-#   - name: AGENT_MEMORY_STORE
-#     value: "<memory-store-id>"
-#   - name: AGENT_MEMORY_ACTOR_ID
-#     value: "alice"
-#   # Durable state: a managed Session Store name → transcript persisted via its REST API
-#   # (durable multi-turn history, no DB connection). Access uses the app's service principal.
-#   - name: AGENT_SESSION_STORE
-#     value: "<session-store-name>"
-#   - name: AGENT_SESSION_ACTOR_ID
-#     value: "alice"

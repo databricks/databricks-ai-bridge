@@ -7,7 +7,8 @@ Functions accept an optional `console` for testability; default is stdout.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Literal, Optional, Sequence
+from contextlib import contextmanager
+from typing import Any, Iterable, Iterator, Literal, Optional, Sequence
 
 import click
 from rich import box
@@ -26,6 +27,46 @@ _stdout = Console()
 
 def console() -> Console:
     return _stdout
+
+
+@contextmanager
+def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
+    """Show an animated spinner with ``message`` while a slow call runs, then clear it.
+
+    Wraps ``rich``'s console status; a no-op spinner (no TTY) still runs the body. Use around
+    network work like store provisioning so the CLI doesn't look hung. Under ``-o json`` the spinner
+    is skipped so no control characters leak into machine-readable output.
+    """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
+    con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
+    with con.status(message, spinner="dots"):
+        yield
+
+
+@contextmanager
+def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
+    """Like ``status``, but first prints a persistent line so feedback survives the spinner.
+
+    ``status`` clears itself on exit and only animates on a TTY, so a long, silent wait (e.g. waiting
+    for app compute) can look like a hang in terminals where the spinner doesn't render. This prints
+    a durable "• message" line up front, then runs a bare spinner (no repeated text) beneath it.
+    Skipped under ``-o json`` so machine output stays clean.
+    """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
+    con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
+    con.print(f"[{MUTED}]•[/] {message}")
+    # Empty status text: the persistent line above already carries the message, so the spinner
+    # underneath is just the animated glyph — no duplicated sentence.
+    with con.status("", spinner="dots"):
+        yield
 
 
 # --- small helpers -----------------------------------------------------------
@@ -68,6 +109,17 @@ def status_pill(status: Optional[str]) -> Text:
     if value in {"DISABLED", "DELETED", "STOPPED", "ERROR", "FAILED"}:
         return Text("⨯ ", style="red") + Text(value.title(), style="red")
     return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
+
+
+def hyperlink(text: str, url: Optional[str]) -> Text:
+    """A terminal hyperlink (OSC 8): renders `text`, opens `url` on click; plain text if no url.
+
+    Supported terminals show `text` as clickable so the full URL needn't fit on screen; others
+    fall back to the plain text. Use `-o json` for the raw URL where a terminal lacks OSC 8.
+    """
+    if not url:
+        return Text(text)
+    return Text(text, style=f"{ACCENT} underline link {url}")
 
 
 # --- list view ---------------------------------------------------------------
@@ -174,10 +226,16 @@ def success(
     title: str,
     *,
     fields: Optional[dict[str, Any]] = None,
-    next_steps: Optional[Sequence[str]] = None,
+    next_steps: "Optional[Sequence[str | tuple[str, str]]]" = None,
     con: Optional[Console] = None,
 ) -> None:
-    """A green success panel with optional details and a Next steps list."""
+    """A green success panel with optional details and a Next steps list.
+
+    Each next step is either a ``(command, description)`` pair — the command is highlighted and
+    the description explains what it does — or a bare string for a non-command instruction (e.g.
+    ``"Open http://localhost:8000"``), rendered as plain prose. Commands are shown so they can be
+    copied and run in a terminal.
+    """
     con = con or _stdout
     body: list[RenderableType] = [Text("✓ ", style="green") + Text(title, style="bold")]
 
@@ -190,9 +248,25 @@ def success(
         body.append(grid)
 
     if next_steps:
-        body.append(Text("Next steps", style=f"bold {MUTED}"))
+        has_command = any(isinstance(step, tuple) for step in next_steps)
+        # When any step is a command, define the `$` marker so the convention is self-explanatory.
+        header = Text("Next steps", style=f"bold {MUTED}")
+        if has_command:
+            header += Text("   ($ = run in your terminal)", style=MUTED)
+        body.append(header)
+        # A two-column grid aligns every command's description at the same offset.
+        steps = Table.grid(padding=(0, 2))
+        steps.add_column()
+        steps.add_column(style=MUTED)
         for step in next_steps:
-            body.append(Text("  → ", style=ACCENT) + Text(step))
+            if isinstance(step, tuple):
+                # A `$ ` prompt prefix marks a runnable command (both in accent).
+                command, description = step
+                steps.add_row(Text("$ ", style=ACCENT) + Text(command, style=ACCENT), description)
+            else:
+                # Prose (e.g. "Open <url>") gets a muted bullet, not a command prompt.
+                steps.add_row(Text("• ", style=MUTED) + Text(step), "")
+        body.append(steps)
 
     con.print()
     con.print(Panel(Group(*body), border_style="green", box=box.ROUNDED))

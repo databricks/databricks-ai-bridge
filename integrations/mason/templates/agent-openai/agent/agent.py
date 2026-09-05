@@ -1,11 +1,12 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
-from contextlib import AsyncExitStack
 from typing import Any
 
 from agents import Agent, RunResultStreaming, Runner, RunState
 from agents.items import ToolApprovalItem
+from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
@@ -75,17 +76,21 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(mcp=None, model: str | None = None) -> Agent:
+def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
     """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
 
-    ``model`` overrides the default serving endpoint (``MODEL``) for this build — the demo chat app's
-    model picker passes the selected endpoint per request; falls back to ``MODEL`` when unset.
+    ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
+    memory tools' closures (never exposed to the model). See ``_actor``.
+
+    ``model`` selects the serving endpoint for this run; the chat UI passes the picker's choice and
+    everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the endpoint can vary
+    request to request.
     """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
         model=model or MODEL,
-        tools=[*all_tools(), *memory_tools()],
+        tools=[*all_tools(), *memory_tools(actor)],
         mcp_servers=mcp or [],
     )
 
@@ -97,6 +102,17 @@ def _session_id(request: dict) -> str:
     the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
     """
     return str(request["session_id"])
+
+
+def _actor(request: dict) -> str:
+    """The identity that owns this request's memory and session data.
+
+    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
+    deployment platform sets); it partitions long-term memory and the durable session store so each
+    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
+    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
+    """
+    return str(request.get("actor") or "agent")
 
 
 async def invoke_handler(request: dict) -> dict:
@@ -125,18 +141,32 @@ async def invoke_handler(request: dict) -> dict:
 async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
     """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
     session_id = _session_id(request)
+    actor = _actor(request)
     tag_session(session_id)
 
-    # The agent runs inside an AsyncExitStack so any MCP servers stay connected for the whole run —
-    # the Agents SDK lists each server's tools lazily inside Runner.run.
-    async with AsyncExitStack() as stack:
-        # Join the manifest's MCP servers (from agent.toml) with your own hand-declared ones
-        # (mcps.py), then connect them for the life of the run.
-        servers = await mcp_servers(build_mcp_servers())
-        mcp = [await stack.enter_async_context(server) for server in servers]
-        # `model` (optional) lets a client pick the serving endpoint for this turn (see the demo UI's
-        # model picker); it defaults to MODEL inside create_agent.
-        agent = create_agent(mcp, request.get("model"))
+    servers = await mcp_servers(build_mcp_servers())
+    async with MCPServerManager(servers) as manager:
+        mcp = []
+        for server in manager.active_servers:
+            # Cache raw tools now; the SDK applies any context-dependent filter during the run.
+            tool_filter = server.tool_filter
+            try:
+                server.tool_filter = None
+                server.cache_tools_list = True
+                async with asyncio.timeout(manager.connect_timeout_seconds):
+                    await server.list_tools()
+            except Exception:
+                logger.warning(
+                    "Failed to list tools from MCP server %r; continuing without it.",
+                    server.name,
+                    exc_info=True,
+                )
+            else:
+                mcp.append(server)
+            finally:
+                server.tool_filter = tool_filter
+
+        agent = create_agent(actor, mcp, model=request.get("model"))
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
@@ -147,7 +177,9 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
             result = Runner.run_streamed(agent, run_input)
         else:
             result = Runner.run_streamed(
-                agent, request.get("input") or [], session=session_store(session_id)
+                agent,
+                request.get("input") or [],
+                session=session_store(session_id, actor),
             )
 
         async for event in _serialize_events(result, session_id):

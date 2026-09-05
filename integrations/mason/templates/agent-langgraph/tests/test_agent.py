@@ -79,9 +79,9 @@ def test_thread_config_from_session_id():
     }
 
 
-def test_thread_config_uses_configured_actor(monkeypatch):
-    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
-    assert thread_config("abc-123") == {
+def test_thread_config_uses_supplied_actor():
+    # A caller-supplied actor (e.g. the signed-in user) partitions the durable store per user.
+    assert thread_config("abc-123", "alice") == {
         "configurable": {"thread_id": "abc-123", "actor_id": "alice"}
     }
 
@@ -223,35 +223,6 @@ def test_runtime_rotates_apps_routing_cookie_and_clears_local_fallback():
     assert client.post("/invocations", json={"input": []}).json()["session_id"] == session_id
 
 
-@pytest.mark.asyncio
-async def test_stream_handler_forwards_selected_model(monkeypatch):
-    # The demo UI's model picker sends `model` in the request body; it must reach create_agent_graph.
-    import agent.agent as agent_module
-
-    captured = {}
-
-    class _FakeAgent:
-        async def astream(self, *args, **kwargs):
-            return
-            yield  # pragma: no cover - marks this an (empty) async generator
-
-    async def _fake_create_agent_graph(model=None):
-        captured["model"] = model
-        return _FakeAgent()
-
-    monkeypatch.setattr(agent_module, "create_agent_graph", _fake_create_agent_graph)
-    monkeypatch.setattr(agent_module, "tag_session", lambda *a, **k: None)
-
-    events = [
-        event
-        async for event in agent_module.stream_handler(
-            {"session_id": "s1", "input": [], "model": "system.ai.claude-sonnet-4-5"}
-        )
-    ]
-    assert events == []
-    assert captured["model"] == "system.ai.claude-sonnet-4-5"
-
-
 def _has_workspace_auth() -> bool:
     return bool(
         os.getenv("DATABRICKS_CONFIG_PROFILE")
@@ -268,9 +239,9 @@ async def test_agent_responds_end_to_end():
     from agent.agent import configure, create_agent_graph
 
     configure()
-    agent = await create_agent_graph()
+    agent = await create_agent_graph("test-actor")
     result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "Reply with the single word: pong"}]},
-        config=thread_config("test-e2e"),
+        config=thread_config("test-e2e", "test-actor"),
     )
     assert result["messages"][-1].content

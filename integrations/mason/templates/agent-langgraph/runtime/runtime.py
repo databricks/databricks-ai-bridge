@@ -40,6 +40,9 @@ _REQUEST_SESSION_ID_HEADER_KEY = (
 _TRACE_NAME_TAG = "mlflow.traceName"
 _ROUTING_COOKIE = "__Host-databricks-app-router"
 _LOCAL_SESSION_COOKIE = "mason-local-session"
+# Forwarded-identity headers for the signed-in user, in priority order — the deployment platform
+# sets these; absent locally. Their value becomes the request's actor (memory / session partition).
+_USER_HEADERS = ("X-Forwarded-Email", "X-Forwarded-User")
 
 # TODO: Replace the Apps routing cookie with X-Routing-Key when Databricks Apps supports it.
 
@@ -133,6 +136,16 @@ def build_app(invoke_handler: InvokeHandler, stream_handler: StreamHandler) -> F
         is_background = bool(data.pop(_REQUEST_BACKGROUND_PARAM_KEY, False))
         data.pop("session_id", None)
         data["session_id"] = request.state.session_id
+        # The signed-in user (from the platform's forwarded-identity headers) becomes the request's
+        # actor, so the agent partitions memory + session data per user. Absent (e.g. local dev) → the
+        # handler defaults it. Clients can't set it: any body value is dropped in favor of the header.
+        data.pop("actor", None)
+        actor = next(
+            (v for h in _USER_HEADERS if (v := request.headers.get(h))),
+            None,
+        )
+        if actor:
+            data["actor"] = actor
 
         if is_background:
             invocation_id = runs.start()

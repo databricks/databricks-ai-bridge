@@ -101,3 +101,65 @@ def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch)
         project.write()
 
     assert path.read_text(encoding="utf-8") == before
+
+
+def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+
+    assert project.bind_session_store("sessions") is True
+    assert project.bind_memory_store("mem") is True
+    assert project.bind_session_store("sessions") is False  # idempotent no-op
+    project.write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.session_store == "sessions"
+    assert reloaded.memory_store == "mem"
+    assert "# keep me" in (tmp_path / "agent.toml").read_text(encoding="utf-8")
+
+    assert reloaded.unbind_session_store() is True
+    assert reloaded.unbind_session_store() is False  # already gone
+    reloaded.write()
+
+    final = AgentProject.load(tmp_path)
+    assert final.session_store is None
+    assert final.memory_store == "mem"
+
+
+def test_rebinding_replaces_the_store_name(tmp_path: pathlib.Path):
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    project.bind_memory_store("first")
+    project.bind_memory_store("second")
+    project.write()
+
+    assert AgentProject.load(tmp_path).memory_store == "second"
+
+
+def test_bind_memory_store_records_id(tmp_path: pathlib.Path):
+    # The runtime needs the store id (not the display name) for the entries API, so bind writes both.
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    assert project.bind_memory_store("mem", "mem-id-123") is True
+    project.write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store == "mem"
+    assert reloaded.memory_store_id == "mem-id-123"
+    assert 'id = "mem-id-123"' in (tmp_path / "agent.toml").read_text(encoding="utf-8")
+
+    # Unbinding clears both name and id.
+    assert reloaded.unbind_memory_store() is True
+    reloaded.write()
+    final = AgentProject.load(tmp_path)
+    assert final.memory_store is None
+    assert final.memory_store_id is None
+
+
+def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[session_store]\ndescription = "x"\n',
+    )
+    with pytest.raises(AgentCliError, match="session_store"):
+        AgentProject.load(tmp_path)

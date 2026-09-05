@@ -69,6 +69,86 @@ def entries() -> None:
     """Memory entries within a store, partitioned by actor."""
 
 
+# --- bind a store to an agent project (agent.toml) --------------------------
+
+
+def _source_option(function):
+    return click.option(
+        "--source",
+        type=click.Path(exists=True, file_okay=False, path_type=pathlib.Path),
+        default=pathlib.Path("."),
+        show_default=True,
+        help="Mason agent project containing agent.toml.",
+    )(function)
+
+
+@memory.command("bind")
+@click.argument("store")
+@_source_option
+@click.option(
+    "--no-create-stores",
+    is_flag=True,
+    help="Require the store to already exist. By default a missing store is created (idempotent).",
+)
+@click.pass_obj
+def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
+    """Bind memory STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
+
+    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
+    service principal access to it. Pass --no-create-stores to require the store to already exist.
+    """
+    from databricks_mason.agent_project import AgentProject
+    from databricks_mason.deploy import _ensure_memory_store, _resolve_memory_store
+
+    client = obj.client()
+    if no_create_stores:
+        with render.status(f"Resolving memory store '{store}'…"):
+            resolved = _resolve_memory_store(client, store)
+        if resolved is None:
+            raise AgentCliError(
+                f"Memory store '{store}' does not exist (drop --no-create-stores to create it)."
+            )
+    else:
+        with render.status(f"Provisioning memory store '{store}'…"):
+            resolved = _ensure_memory_store(client, store)
+
+    # Record the bare store id: the runtime needs it (not the display name) for the entries API.
+    store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
+    project = AgentProject.load(source)
+    project.bind_memory_store(store, store_id)
+    project.write()
+    if obj.output == "json":
+        render.emit_json({"memory_store": store, "manifest": str(project.path)})
+        return
+    render.success(
+        f"Bound memory store '{store}'",
+        fields={"agent.toml": str(project.path)},
+        next_steps=[
+            ("mason dev", "Re-run to pick up the store locally"),
+            ("mason deploy <name>", "Redeploy to grant the app access"),
+        ],
+    )
+
+
+@memory.command("unbind")
+@_source_option
+@click.pass_obj
+def memory_unbind(obj, source: pathlib.Path) -> None:
+    """Remove the memory store binding from the agent's agent.toml.
+
+    Only edits agent.toml; the managed store itself is untouched (delete it with
+    `mason memory stores delete`).
+    """
+    from databricks_mason.agent_project import AgentProject
+
+    project = AgentProject.load(source)
+    if project.unbind_memory_store():
+        project.write()
+        render.success("Removed memory store binding", fields={"agent.toml": str(project.path)})
+    else:
+        click.echo(f"No memory store binding in {project.path}.")
+
+
 # --- stores -----------------------------------------------------------------
 
 
@@ -138,7 +218,8 @@ def _render_store_detail(obj, store: dict) -> None:
 @click.pass_obj
 def stores_create(obj, display_name, description) -> None:
     """Create a memory store."""
-    data = obj.client().create_memory_store(display_name, description)
+    with render.status(f"Creating memory store '{display_name}'…"):
+        data = obj.client().create_memory_store(display_name, description)
     if obj.output == "json":
         render.emit_json(data)
         return
@@ -147,8 +228,15 @@ def stores_create(obj, display_name, description) -> None:
         f"Created memory store '{display_name}'",
         fields={"Store ID": store_id, "Name": field(data, "name")},
         next_steps=[
-            f"mason memory entries create --store {store_id} --actor-id <id> --path </p>",
-            f"mason memory stores get {store_id}",
+            (
+                f"mason memory entries create --store {store_id} --actor-id <id> --path </p>",
+                "Add a memory entry for an actor",
+            ),
+            (f"mason memory stores get {store_id}", "View this store's details"),
+            (
+                f"mason memory bind {display_name}",
+                "Bind this store to the agent (wired in on dev/deploy)",
+            ),
         ],
     )
 
@@ -350,15 +438,25 @@ def entries_list(obj, store, actor_id, path_prefix, session_id, page_size, page_
 @click.option("--store", required=True)
 @click.option("--actor-id", required=True)
 @click.option("--query", required=True)
-@click.option("--limit", type=int, default=None)
+@click.option("--page-size", type=int, default=None)
 @click.pass_obj
-def entries_search(obj, store, actor_id, query, limit) -> None:
+def entries_search(obj, store, actor_id, query, page_size) -> None:
     """Full-text search an actor's entries, ranked (includes content)."""
-    data = obj.client().search_memory_entries(store, actor_id, query, limit)
+    data = obj.client().search_memory_entries(
+        store,
+        actor_id,
+        query,
+        page_size=page_size,
+    )
     if obj.output == "json":
         render.emit_json(data)
         return
-    items = field(data, "managed_memory_entries") or []
+    results = field(data, "results")
+    items = (
+        [field(result, "managed_memory_entry") for result in results]
+        if results is not None
+        else field(data, "managed_memory_entries") or []
+    )
     rows = [
         [
             field(e, "path"),

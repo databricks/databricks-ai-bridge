@@ -111,7 +111,8 @@ a file to `agent/tools/`.
   survives restarts/replicas. Adapted from the first-party `databricks_agent_client.langgraph`
   prototype over a vendored REST client (`session_store_client.py`); swap both for the published
   package when it lands. Requires `thread_id` + `actor_id` in the run config (see `thread_config`);
-  `AGENT_SESSION_ACTOR_ID` selects the saver actor partition.
+  `thread_config(session_id, actor)` partitions by actor — the handler passes the signed-in user
+  (`_actor`), so each user's threads stay separate.
 - Background mode is in-memory / single-process — non-durable. The store is `databricks_mason/runtime/background.py`
   (wired in `runtime/runtime.py`); swap it for a durable backend for cross-restart/replica recovery.
 - Human-in-the-loop: tools in `REQUIRE_APPROVAL` (`agent/agent.py`) pause via LangChain's

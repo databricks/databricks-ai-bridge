@@ -7,7 +7,7 @@ import json
 import pytest
 
 from databricks_mason import errors
-from databricks_mason.errors import AgentCliError
+from databricks_mason.errors import AgentCliError, wrap_api_error
 
 
 @pytest.fixture(autouse=True)
@@ -43,3 +43,33 @@ def test_error_renders_text_in_text_mode(capsys):
     # Not JSON in text mode.
     with pytest.raises(json.JSONDecodeError):
         json.loads(err)
+
+
+class _NoDetailError(RuntimeError):
+    """Mimics a databricks-sdk error with a code but no message (str() == 'None')."""
+
+    error_code = "CANCELLED"
+
+
+def test_message_less_error_surfaces_code_not_none():
+    # The SDK stringifies a message-less DatabricksError as the literal "None"; the wrapped
+    # error must surface the code instead of a bare `None`.
+    mapped = wrap_api_error(_NoDetailError(None))
+    assert mapped.error_code == "CANCELLED"
+    assert "None" not in mapped.message
+    assert "CANCELLED" in mapped.message
+
+
+def test_transient_error_gets_retry_hint():
+    mapped = wrap_api_error(_NoDetailError(None))
+    assert mapped.hint is not None
+    assert "transient" in mapped.hint.lower()
+
+
+def test_non_transient_error_keeps_original_message():
+    class NotFoundError(RuntimeError):
+        error_code = "NOT_FOUND"
+
+    mapped = wrap_api_error(NotFoundError("store not found"))
+    assert mapped.message == "store not found"
+    assert mapped.hint is None

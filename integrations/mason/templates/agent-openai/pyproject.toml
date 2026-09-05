@@ -11,7 +11,7 @@ dependencies = [
     # The agent-side runtime helpers (databricks_mason.runtime) plus the agent stack they need
     # (openai-agents, databricks-openai, fastapi, mlflow, …) come from this extra — see the package's
     # [project.optional-dependencies] runtime-openai.
-    "databricks-mason[runtime-openai]>=0.1.2.dev0",
+    "databricks-mason[runtime-openai]>=0.1.4.dev0",
     "uvicorn>=0.41.0",
     "python-dotenv>=1.2.1",
     "databricks-sdk>=0.79.0",

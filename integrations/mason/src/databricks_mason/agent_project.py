@@ -15,6 +15,7 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
+from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
 _SCHEMA_VERSION = 1
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
@@ -191,6 +192,23 @@ def _required_string(value: object, description: str) -> str:
     return value
 
 
+def _store_name_from_manifest(value: object, table: str) -> str | None:
+    """Read the ``name`` from a ``[memory_store]`` / ``[session_store]`` table, or None if absent."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise AgentCliError(f"agent.toml [{table}] must be a table.")
+    return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
+
+
+def _store_id_from_manifest(value: object) -> str | None:
+    """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
+    if not isinstance(value, Mapping):
+        return None
+    store_id = cast(Mapping[str, Any], value).get("id")
+    return store_id if isinstance(store_id, str) and store_id else None
+
+
 def _scope_from_manifest(value: object) -> Scope:
     if not isinstance(value, Mapping):
         raise AgentCliError("Sandbox downscope entries must be TOML tables.")
@@ -275,12 +293,20 @@ class AgentProject:
         document: TOMLDocument,
         framework: str,
         tools: list[ToolSpec],
+        memory_store: str | None = None,
+        session_store: str | None = None,
+        memory_store_id: str | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
         self._document = document
         self.framework = framework
         self.tools = tools
+        # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
+        # store id the runtime needs for the entries API (the display name can't be used there).
+        self.memory_store = memory_store
+        self.session_store = session_store
+        self.memory_store_id = memory_store_id
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -314,7 +340,22 @@ class AgentProject:
         ids = [tool.id for tool in tools]
         if len(ids) != len(set(ids)):
             raise AgentCliError("agent.toml tool ids must be unique.")
-        return cls(project_root, document, framework, tools)
+        memory_store = _store_name_from_manifest(
+            document.get(MEMORY_STORE_TABLE), MEMORY_STORE_TABLE
+        )
+        memory_store_id = _store_id_from_manifest(document.get(MEMORY_STORE_TABLE))
+        session_store = _store_name_from_manifest(
+            document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
+        )
+        return cls(
+            project_root,
+            document,
+            framework,
+            tools,
+            memory_store,
+            session_store,
+            memory_store_id,
+        )
 
     @classmethod
     def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
@@ -365,6 +406,59 @@ class AgentProject:
             raise AgentCliError("agent.toml tools must be an array of tables.")
         del raw_tools[index]
         del self.tools[index]
+        return True
+
+    def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
+        """Declare the memory store binding in agent.toml. Returns True if it changed.
+
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). The runtime needs
+        the id, not the display name, to build the entries API path, so we record it alongside the
+        name to keep resolution a pure agent.toml read.
+        """
+        return self._set_store(MEMORY_STORE_TABLE, name, store_id)
+
+    def bind_session_store(self, name: str) -> bool:
+        """Declare the session store binding in agent.toml. Returns True if it changed."""
+        return self._set_store(SESSION_STORE_TABLE, name)
+
+    def unbind_memory_store(self) -> bool:
+        """Remove the memory store binding from agent.toml. Returns True if it was present."""
+        return self._clear_store(MEMORY_STORE_TABLE)
+
+    def unbind_session_store(self) -> bool:
+        """Remove the session store binding from agent.toml. Returns True if it was present."""
+        return self._clear_store(SESSION_STORE_TABLE)
+
+    def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
+        name = _required_string(name, f"[{table}] name")
+        if getattr(self, table) == name and getattr(self, f"{table}_id", None) == store_id:
+            return False
+        existing = self._document.get(table)
+        if isinstance(existing, Mapping):
+            existing["name"] = name
+            if store_id:
+                existing["id"] = store_id
+            elif "id" in existing:
+                del existing["id"]
+        else:
+            store_table = tomlkit.table()
+            store_table.add("name", name)
+            if store_id:
+                store_table.add("id", store_id)
+            self._document.append(table, store_table)
+        setattr(self, table, name)
+        if hasattr(self, f"{table}_id"):
+            setattr(self, f"{table}_id", store_id)
+        return True
+
+    def _clear_store(self, table: str) -> bool:
+        if getattr(self, table) is None:
+            return False
+        if table in self._document:
+            del self._document[table]
+        setattr(self, table, None)
+        if hasattr(self, f"{table}_id"):
+            setattr(self, f"{table}_id", None)
         return True
 
     def write(self) -> pathlib.Path:

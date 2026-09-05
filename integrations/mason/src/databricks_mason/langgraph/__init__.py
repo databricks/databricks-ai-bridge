@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from databricks_mason.langgraph.mcp import mcp_tools
-    from databricks_mason.langgraph.memory import memory_tools, recall, remember
+    from databricks_mason.langgraph.memory import memory_tools
     from databricks_mason.langgraph.session_store import checkpointer, thread_config
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
 
@@ -56,8 +56,6 @@ __all__ = [
     "mcp_tools",
     # Long-term memory tools (opt-in via AGENT_MEMORY_STORE) — add to your tool list.
     "memory_tools",
-    "remember",
-    "recall",
     # Session persistence — pass checkpointer() to create_agent(checkpointer=...) and
     # thread_config(session_id) as the per-request run config.
     "checkpointer",
@@ -75,8 +73,6 @@ __all__ = [
 _MODULE_BY_NAME = {
     "mcp_tools": "databricks_mason.langgraph.mcp",
     "memory_tools": "databricks_mason.langgraph.memory",
-    "remember": "databricks_mason.langgraph.memory",
-    "recall": "databricks_mason.langgraph.memory",
     "checkpointer": "databricks_mason.langgraph.session_store",
     "thread_config": "databricks_mason.langgraph.session_store",
     "tag_session": "databricks_mason.runtime",

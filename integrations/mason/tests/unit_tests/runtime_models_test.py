@@ -6,7 +6,14 @@ from typing import Any, cast
 
 import pytest
 
+from databricks_mason.runtime import models as models_mod
 from databricks_mason.runtime.models import list_ai_gateway_models
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_delay(monkeypatch):
+    # Keep retry-exercising tests instant.
+    monkeypatch.setattr(models_mod, "_RETRY_DELAY_S", 0)
 
 
 def _svc(name: str, api_types=("openai/v1/chat/completions",)) -> dict:
@@ -86,7 +93,7 @@ def test_empty_listing():
     assert _list([{"model_services": []}]) == []
 
 
-def test_propagates_errors():
+def test_propagates_errors_after_retries():
     class _Boom:
         @property
         def api_client(self):
@@ -94,3 +101,21 @@ def test_propagates_errors():
 
     with pytest.raises(PermissionError):
         list_ai_gateway_models(cast(Any, _Boom()))
+
+
+def test_retries_transient_list_error():
+    calls = {"n": 0}
+
+    class _FlakyApiClient:
+        def do(self, method, path, query=None, body=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient 500")
+            return {"model_services": [_svc("system.ai.a")]}
+
+    class _FlakyClient:
+        api_client = _FlakyApiClient()
+
+    # First attempt fails, retry succeeds -> the model is discovered, not lost.
+    assert list_ai_gateway_models(cast(Any, _FlakyClient())) == ["system.ai.a"]
+    assert calls["n"] == 2

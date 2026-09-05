@@ -33,6 +33,40 @@ def test_validate_deployment_name_accepts_good():
     assert deploy_mod._validate_deployment_name("mason-agent-1") == "mason-agent-1"
 
 
+def test_validate_deployment_name_rejects_too_long():
+    with pytest.raises(AgentCliError, match="too long"):
+        deploy_mod._validate_deployment_name("mason-" + "a" * 25)  # 31 chars
+
+
+# --- `mason-` deployment prefix + list filtering -----------------------------
+
+
+def test_prefixed_name_adds_prefix_when_absent():
+    assert deploy_mod._prefixed_name("foo") == "mason-foo"
+
+
+def test_prefixed_name_is_idempotent():
+    assert deploy_mod._prefixed_name("mason-foo") == "mason-foo"
+
+
+def test_deployments_list_shows_only_mason_apps(monkeypatch):
+    apps = {"apps": [{"name": "mason-foo"}, {"name": "someone-else-app"}, {"name": "mason-bar"}]}
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=json.dumps(apps), stderr=""),
+    )
+
+    class _JsonCtx:
+        profile = "prof"
+        output = "json"
+
+    result = CliRunner().invoke(deploy_mod.deployments_list, [], obj=_JsonCtx())
+    assert result.exit_code == 0, result.output
+    names = {a["name"] for a in json.loads(result.output)}
+    assert names == {"mason-foo", "mason-bar"}
+
+
 def test_deployments_get_rejects_empty_name_without_calling_cli(monkeypatch):
     called = []
     monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
@@ -58,8 +92,9 @@ def test_delete_proceeds_with_yes(monkeypatch):
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **k: called.append(args)
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **k: (
+            called.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -69,20 +104,19 @@ def test_delete_proceeds_with_yes(monkeypatch):
 # --- ML-69248: session store pre-validation ----------------------------------
 
 
-def test_resolve_store_env_validates_session_store_on_non_create_path():
+def test_validate_stores_raises_when_session_store_missing():
     client = mock.Mock()
     client.get_session_store.side_effect = AgentCliError(
         "session store not found", error_code="NOT_FOUND"
     )
     with pytest.raises(AgentCliError) as exc:
-        deploy_mod.resolve_store_env(
+        deploy_mod.validate_stores_and_trace_env(
             client,
             app="a",
             memory_store=None,
             session_store="ghost",
             traces_destination=None,
             traces_experiment=None,
-            create_stores=False,
         )
     assert "does not exist" in str(exc.value)
     client.get_session_store.assert_called_once_with("ghost")

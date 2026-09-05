@@ -153,7 +153,8 @@ When initialized with the chat app (the default for `mason init --framework open
   managed Session Store.
 - `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
   `POST /api/demo/memory/search` for managed long-term memory. Created entries are tagged with the
-  current cookie-backed session id; actor partitioning comes from `AGENT_MEMORY_ACTOR_ID`.
+  current cookie-backed session id; entries are partitioned by the signed-in user (the request's
+  forwarded-identity header), so the panel shows that user's own memory.
 
 ### Human-in-the-loop (tool approval)
 
@@ -210,11 +211,11 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
   `REQUIRE_APPROVAL` in `agent/agent.py` (see the human-in-the-loop section above); empty the set to
   disable gating.
 - **Add an MCP server:** append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make history durable:** set `AGENT_SESSION_STORE` (see "Enable durable state" below); the session
+- **Make history durable:** run `mason sessions bind <store>` (see "Enable durable state" below); the session
   store lives in `databricks_mason/openai/sessions.py`.
-- **Add long-term memory:** set `AGENT_MEMORY_STORE` to a managed memory store ID; `create_agent()`
+- **Add long-term memory:** run `mason memory bind <store>`; `create_agent()`
   then includes the `remember`/`recall` tools from `databricks_mason/openai/memory.py` (persist/search
-  facts across conversations). Unset → the model isn't offered them.
+  facts across conversations). Unbound → the model isn't offered them.
 - **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
   store itself is `databricks_mason/runtime/background.py`).
 
@@ -236,9 +237,9 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-openai --source .
 ```
 
-Add `--memory <name> --session <name> --actor-id <actor>` to wire managed state. Mason
-provisions or resolves the stores (creating them if missing), injects the store/actor env vars, and
-deploys the App.
+Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
+stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
+session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
 
 `app.yaml` carries the app's start command and env. By default the deployed app is the same lean
 backend: in-process session state, tracing off.
@@ -268,7 +269,8 @@ each trace with the session id. Otherwise it disables tracing outright, so the p
 By default the agent uses an in-process session (`SQLiteSession` backed by `:memory:`) — multi-turn
 history works within a running process but does not survive restarts or span replicas.
 
-Set **`AGENT_SESSION_STORE`** to a managed [Session Store](../../README.md) name and
+Bind a managed [Session Store](../../README.md) with **`mason sessions bind <store>`** (recorded in
+`agent.toml`; `AGENT_SESSION_STORE` still overrides it if set) and
 `databricks_mason/openai/sessions.py` returns a `DatabricksSessionStore` instead. It's an Agents
 SDK `Session` that stores each Responses item as an ordered **session item** through the managed
 Session Store **REST API** — no database the app connects to directly. The conversation transcript is
@@ -292,9 +294,7 @@ only difference.
 | `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
 | `PORT` | `8000` | Port the server listens on |
 | `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_MEMORY_ACTOR_ID` | `agent` | Actor partition used by memory tools |
 | `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable transcript (REST-backed); unset = in-process `SQLiteSession` |
-| `AGENT_SESSION_ACTOR_ID` | session id | Actor used by the durable session store |
 | `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
 | `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
 | `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |

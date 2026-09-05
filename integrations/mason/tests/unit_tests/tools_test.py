@@ -193,6 +193,109 @@ def test_add_is_idempotent_and_json_reports_changed_files(tmp_path: pathlib.Path
     assert len(AgentProject.load(project).tools) == 1
 
 
+def test_remove_tool_updates_only_the_manifest(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    added = runner.invoke(
+        tools,
+        ["add", "mcp", "system.ai.missing_service", "--name", "broken", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert added.exit_code == 0, added.output
+
+    result = runner.invoke(
+        tools,
+        ["remove", "broken", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Removed broken" in result.output
+    assert AgentProject.load(project).tools == []
+    assert (project / "agent" / "mcps.py").read_text(encoding="utf-8") == "ORIGINAL = True\n"
+
+
+def test_remove_mcp_accepts_the_service_from_the_add_command(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    added = runner.invoke(
+        tools,
+        [
+            "add",
+            "mcp",
+            "system.ai.web_search",
+            "--name",
+            "web",
+            "--source",
+            str(project),
+        ],
+        obj=_Ctx(),
+    )
+    assert added.exit_code == 0, added.output
+
+    result = runner.invoke(
+        tools,
+        ["remove", "mcp", "system.ai.web_search", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Removed web" in result.output
+    assert AgentProject.load(project).tools == []
+
+
+def test_remove_tool_is_idempotent_and_reports_json_changes(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    added = runner.invoke(
+        tools,
+        ["add", "mcp", "system.ai.web_search", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert added.exit_code == 0, added.output
+    args = ["remove", "web_search", "--source", str(project)]
+
+    first = runner.invoke(tools, args, obj=_Ctx(output="json"))
+    second = runner.invoke(tools, args, obj=_Ctx(output="json"))
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert json.loads(first.output) == {
+        "schema_version": 1,
+        "changed": True,
+        "changed_files": [str(project / "agent.toml")],
+        "tool_id": "web_search",
+    }
+    assert json.loads(second.output) == {
+        "schema_version": 1,
+        "changed": False,
+        "changed_files": [],
+        "tool_id": "web_search",
+    }
+
+
+def test_remove_python_tool_preserves_user_owned_files(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    runner = CliRunner()
+    added = runner.invoke(
+        tools,
+        ["add", "python", "lookup-ticket", "--source", str(project)],
+        obj=_Ctx(),
+    )
+    assert added.exit_code == 0, added.output
+
+    result = runner.invoke(
+        tools,
+        ["remove", "lookup-ticket", "--source", str(project)],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(project).tools == []
+    assert (project / "agent" / "tools" / "lookup_ticket.py").exists()
+    assert (project / "tests" / "tools" / "test_lookup_ticket.py").exists()
+
+
 def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):
     project = _project(tmp_path)
     runner = CliRunner()

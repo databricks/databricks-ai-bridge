@@ -371,6 +371,35 @@ class Runner:
         return cases
 
     def _author_cli(self, project: pathlib.Path) -> None:
+        self.run(
+            [
+                str(self.mason),
+                "tools",
+                "add",
+                "mcp",
+                "system.ai.missing_service",
+                "--name",
+                "broken_mcp",
+                "--source",
+                str(project),
+            ]
+        )
+        self.run(
+            [
+                str(self.mason),
+                "tools",
+                "remove",
+                "mcp",
+                "system.ai.missing_service",
+                "--source",
+                str(project),
+            ]
+        )
+        listed = self.run(
+            [str(self.mason), "--output", "json", "tools", "list", "--source", str(project)]
+        )
+        if any(tool["id"] == "broken_mcp" for tool in json.loads(listed.stdout)["tools"]):
+            raise MatrixError("mason tools remove left the broken MCP binding in agent.toml")
         commands = [
             ["tools", "add", "sandbox", "--scope", "table:samples.nyctaxi.trips"],
             ["tools", "add", "mcp", "system.ai.web_search"],

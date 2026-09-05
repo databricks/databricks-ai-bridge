@@ -1,12 +1,13 @@
 """Unit tests for `mason login` / `logout` and the saved-profile helpers.
 
-`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `MasonClient`
+`MASON_CONFIG_HOME` redirects the config file into a tmp dir, and `_MasonApiClient`
 is stubbed so login never touches the network.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from unittest import mock
 
 from click.testing import CliRunner
@@ -26,7 +27,7 @@ def _stub_client(monkeypatch, user="me@example.com", host="https://ws"):
     fake = mock.Mock()
     fake.current_user = user
     fake.host = host
-    monkeypatch.setattr(auth, "MasonClient", lambda profile: fake)
+    monkeypatch.setattr(auth, "_MasonApiClient", lambda profile: fake)
 
 
 def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
@@ -37,9 +38,12 @@ def test_load_default_profile_missing_returns_none(tmp_path, monkeypatch):
 def test_login_persists_and_load_round_trips(tmp_path, monkeypatch):
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     _stub_client(monkeypatch)
+    databricks_login = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
     result = CliRunner().invoke(auth.login, ["--profile", "my-workspace"], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert auth.load_default_profile() == "my-workspace"
+    databricks_login.assert_not_called()
 
 
 def test_login_json_output(tmp_path, monkeypatch):
@@ -67,6 +71,110 @@ def test_login_without_any_profile_errors(tmp_path, monkeypatch):
     monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
     result = CliRunner().invoke(auth.login, [], obj=_Ctx(profile=None))
     assert result.exit_code != 0
+    assert auth.load_default_profile() is None
+
+
+def test_login_configures_invalid_profile_then_revalidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    validated = mock.Mock(current_user="me@example.com", host="https://ws")
+    mason_client = mock.Mock(side_effect=[auth.AgentCliError("no credentials"), validated])
+    monkeypatch.setattr(auth, "_MasonApiClient", mason_client)
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert auth.load_default_profile() == "prof"
+    assert mason_client.call_args_list == [mock.call("prof"), mock.call("prof")]
+    databricks_login.assert_called_once_with(
+        ["databricks", "auth", "login", "--profile", "prof"],
+        text=True,
+        check=False,
+        stdout=mock.ANY,
+    )
+
+
+def test_databricks_login_routes_child_stdout_to_stderr(monkeypatch):
+    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    auth._run_databricks_login("prof")
+
+    databricks_login.assert_called_once_with(
+        ["databricks", "auth", "login", "--profile", "prof"],
+        text=True,
+        check=False,
+        stdout=sys.stderr,
+    )
+
+
+def test_login_reauthenticates_unauthenticated_api_response(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    validated = mock.Mock(current_user="me@example.com", host="https://ws")
+    validate_profile = mock.Mock(
+        side_effect=[auth.Unauthenticated("expired credentials"), (validated, "me@example.com")]
+    )
+    monkeypatch.setattr(auth, "_validate_profile", validate_profile)
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    databricks_login = mock.Mock(return_value=mock.Mock(returncode=0))
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert validate_profile.call_count == 2
+    databricks_login.assert_called_once()
+
+
+def test_login_does_not_reauthenticate_non_auth_validation_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        auth, "_validate_profile", mock.Mock(side_effect=RuntimeError("service unavailable"))
+    )
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    databricks_login = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "service unavailable" in result.output
+    assert auth.load_default_profile() is None
+    databricks_login.assert_not_called()
+
+
+def test_login_does_not_launch_browser_when_noninteractive(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        auth, "_MasonApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
+    )
+    monkeypatch.setattr(auth, "_is_interactive", lambda: False)
+    databricks_login = mock.Mock()
+    monkeypatch.setattr(auth.subprocess, "run", databricks_login)
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "interactive terminal" in result.output
+    assert auth.load_default_profile() is None
+    databricks_login.assert_not_called()
+
+
+def test_login_reports_when_databricks_cli_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MASON_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        auth, "_MasonApiClient", mock.Mock(side_effect=auth.AgentCliError("no credentials"))
+    )
+    monkeypatch.setattr(auth, "_is_interactive", lambda: True)
+    monkeypatch.setattr(auth.subprocess, "run", mock.Mock(side_effect=FileNotFoundError))
+
+    result = CliRunner().invoke(auth.login, ["--profile", "prof"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "Could not configure Databricks authentication" in result.output
+    assert "not found" in result.output
     assert auth.load_default_profile() is None
 
 

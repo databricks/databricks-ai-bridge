@@ -32,14 +32,19 @@ def _databricks(
     capture: bool = False,
     check: bool = True,
     cwd: Optional[str] = None,
+    action: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     cmd = ["databricks", *args]
     if profile:
         cmd += ["--profile", profile]
     result = subprocess.run(cmd, text=True, capture_output=capture, cwd=cwd)
     if check and result.returncode != 0:
+        # Mason drives the `databricks apps` CLI as an implementation detail; surface a failure in
+        # Mason's own terms (`action`) rather than echoing the raw subcommand and --profile, which
+        # leaks the underlying tool at the customer. The captured stderr still rides along as the
+        # hint so debugging isn't lost.
         detail = (result.stderr or result.stdout or "").strip() if capture else None
-        raise AgentCliError(f"`{' '.join(cmd)}` failed (exit {result.returncode})", hint=detail)
+        raise AgentCliError(action or "A Databricks CLI command failed.", hint=detail)
     return result
 
 

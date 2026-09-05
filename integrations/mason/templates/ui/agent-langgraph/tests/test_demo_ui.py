@@ -5,26 +5,27 @@ from runtime.runtime import build_app
 
 
 class _FakeStateClient:
-    def create_memory_entry(self, request, session_id):
+    def create_memory_entry(self, actor, request, session_id):
         return {
             "name": "memory-stores/store/entries/entry",
             "session_id": session_id,
+            "actor_id": actor,
             **request.model_dump(),
         }
 
-    def list_memory_entries(self, path_prefix=None):
+    def list_memory_entries(self, actor, path_prefix=None):
         return {"managed_memory_entries": [{"path": f"{path_prefix or ''}/profile.md"}]}
 
-    def search_memory_entries(self, request):
+    def search_memory_entries(self, actor, request):
         return {"managed_memory_entries": [{"path": "/profile.md", "content": request.query}]}
 
-    def ensure_session(self, session_id):
-        return {"session_id": session_id, "actor_id": "alice"}
+    def ensure_session(self, actor, session_id):
+        return {"session_id": session_id, "actor_id": actor}
 
     def get_session(self, session_id):
         return {"session_id": session_id, "actor_id": "alice"}
 
-    def list_sessions(self):
+    def list_sessions(self, actor):
         return {
             "sessions": [
                 {
@@ -71,7 +72,7 @@ class _FakeInterrupt:
         self.id = id
 
 
-async def _session_history(session_id):
+async def _session_history(session_id, actor):
     return {
         "session_id": session_id,
         "session_items": [
@@ -85,15 +86,15 @@ async def _session_history(session_id):
 def _client(monkeypatch, *, configured=False, history=False, session_id="routing-session"):
     if configured:
         monkeypatch.setenv("AGENT_MEMORY_STORE", "store")
-        monkeypatch.setenv("AGENT_MEMORY_ACTOR_ID", "alice")
         monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
-        monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", "alice")
         monkeypatch.setattr(ui, "_state_client", lambda: _FakeStateClient())
     else:
         monkeypatch.delenv("AGENT_MEMORY_STORE", raising=False)
         monkeypatch.delenv("AGENT_SESSION_STORE", raising=False)
     if history:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
+    # Keep model discovery deterministic and offline (no AI Gateway listing call).
+    monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["system.ai.claude-opus-4-8"])
 
     async def invoke_handler(request):
         return {"output": [], "session_id": request["session_id"]}
@@ -106,6 +107,10 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
+    if configured:
+        # The actor is the signed-in user from this forwarded-identity header (ui._request_actor);
+        # unconfigured requests have no header and fall back to the "agent" actor.
+        client.headers["X-Forwarded-Email"] = "alice"
     return client
 
 
@@ -119,9 +124,10 @@ def test_demo_ui_routes(monkeypatch):
     assert 'id="model-select"' in index.text
     app_script = client.get("/ui-assets/app.js")
     assert app_script.status_code == 200
+    assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
+    assert "function renderModels(" in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
-    assert 'fetch("/api/demo/models"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
     styles = client.get("/ui-assets/styles.css").text
@@ -131,6 +137,10 @@ def test_demo_ui_routes(monkeypatch):
     config = client.get("/api/demo/config").json()
     assert config["session_id"] == "routing-session"
     assert config["deployed"] is False
+    assert config["models"] == {
+        "default": "system.ai.claude-opus-4-8",
+        "available": ["system.ai.claude-opus-4-8"],
+    }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
     assert config["memory"]["enabled"] is False
@@ -156,6 +166,15 @@ def test_demo_ui_routes(monkeypatch):
     assert client.post("/api/demo/sessions", json={"session_id": "ignored"}).status_code == 503
 
 
+def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "app")
+    monkeypatch.setenv("DATABRICKS_APP_URL", "http://127.0.0.1:8000")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is False
+
+    monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
+    assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is True
+
+
 def test_unmanaged_checkpoint_history_route(monkeypatch):
     client = _client(monkeypatch, history=True, session_id="local-session")
 
@@ -173,14 +192,14 @@ def test_unmanaged_checkpoint_history_route(monkeypatch):
 
 def test_managed_session_list_is_actor_scoped(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_STORE", "sessions")
-    monkeypatch.setenv("AGENT_SESSION_ACTOR_ID", 'alice "demo"')
     state_client = object.__new__(ui._ManagedStateClient)
     calls = []
     state_client._do = lambda method, path, **kwargs: calls.append((method, path, kwargs)) or {
         "sessions": []
     }
 
-    assert state_client.list_sessions() == {"sessions": []}
+    # The actor (a signed-in user) is escaped into the list filter.
+    assert state_client.list_sessions('alice "demo"') == {"sessions": []}
     assert calls == [
         (
             "GET",
@@ -218,11 +237,50 @@ def test_chat_session_items_exclude_non_message_items():
     }
 
 
+def test_discover_chat_models_pins_default_and_dedups(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-opus-4-8")
+    # list_ai_gateway_models returns the workspace's sorted system.ai models, incl. the default.
+    monkeypatch.setattr(
+        ui,
+        "list_ai_gateway_models",
+        lambda client: ["system.ai.claude-opus-4-8", "system.ai.gpt-5-6-sol", "system.ai.llama-4"],
+    )
+    monkeypatch.setattr(ui, "workspace_client", lambda: object())
+
+    # Default pinned first; the rest follow; the default isn't duplicated.
+    assert ui._discover_chat_models() == [
+        "system.ai.claude-opus-4-8",
+        "system.ai.gpt-5-6-sol",
+        "system.ai.llama-4",
+    ]
+
+
+def test_discover_chat_models_falls_back_to_default_on_error(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-opus-4-8")
+
+    def _boom(client):
+        raise PermissionError("cannot read system.ai")
+
+    monkeypatch.setattr(ui, "list_ai_gateway_models", _boom)
+    monkeypatch.setattr(ui, "workspace_client", lambda: object())
+
+    assert ui._discover_chat_models() == ["system.ai.claude-opus-4-8"]
+
+
+def test_discover_chat_models_caps_at_limit(monkeypatch):
+    monkeypatch.setattr(ui, "_default_model", lambda: "system.ai.claude-opus-4-8")
+    many = [f"system.ai.model-{i:03d}" for i in range(30)]
+    monkeypatch.setattr(ui, "list_ai_gateway_models", lambda client: many)
+    monkeypatch.setattr(ui, "workspace_client", lambda: object())
+
+    result = ui._discover_chat_models()
+    assert len(result) == 20  # capped
+    assert result[0] == "system.ai.claude-opus-4-8"  # default pinned first
+
+
 @pytest.mark.asyncio
 async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
     import agent.agent as agent_module
-
-    monkeypatch.delenv("AGENT_SESSION_ACTOR_ID", raising=False)
 
     class Message:
         id = "message-1"
@@ -245,16 +303,17 @@ async def test_checkpoint_history_reads_messages_and_interrupts(monkeypatch):
             assert config == {
                 "configurable": {
                     "thread_id": "saved-session",
-                    "actor_id": "saved-session",
+                    "actor_id": "alice",
                 }
             }
             return Snapshot()
 
-    async def fake_create_agent_graph():
+    async def fake_create_agent_graph(actor):
+        assert actor == "alice"
         return FakeAgent()
 
     monkeypatch.setattr(agent_module, "create_agent_graph", fake_create_agent_graph)
-    result = await ui._checkpoint_history("saved-session")
+    result = await ui._checkpoint_history("saved-session", "alice")
 
     assert result == {
         "session_id": "saved-session",
@@ -324,66 +383,6 @@ def test_managed_memory_and_session_routes(monkeypatch):
     assert (
         client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
     )
-
-
-class _FakeApiClient:
-    def do(self, method, path, query=None, body=None):
-        assert path == "/api/2.1/unity-catalog/model-services"
-        return {
-            "model_services": [
-                {
-                    "name": "model-services/system.ai.claude-opus-4-8",
-                    "supported_api_types": ["openai/v1/chat/completions"],
-                },
-                {
-                    "name": "model-services/system.ai.claude-sonnet-4-5",
-                    "supported_api_types": ["openai/v1/chat/completions"],
-                },
-                {
-                    "name": "model-services/system.ai.gte-large",
-                    "supported_api_types": ["openai/v1/embeddings"],
-                },
-                {
-                    "name": "model-services/system.ai.gpt-5-6-sol",
-                    "supported_api_types": ["openai/v1/chat/completions"],
-                },
-            ]
-        }
-
-
-class _FakeWorkspace:
-    api_client = _FakeApiClient()
-
-
-def test_models_route_lists_default_plus_gateway_models(monkeypatch):
-    client = _client(monkeypatch)
-    monkeypatch.setattr(ui, "workspace_client", lambda: _FakeWorkspace())
-
-    result = client.get("/api/demo/models").json()
-    # Default first (deduped), system.ai chat models kept & sorted, embeddings dropped.
-    assert result == {
-        "default": "system.ai.claude-opus-4-8",
-        "models": [
-            "system.ai.claude-opus-4-8",
-            "system.ai.claude-sonnet-4-5",
-            "system.ai.gpt-5-6-sol",
-        ],
-    }
-
-
-def test_models_route_falls_back_to_default_when_listing_fails(monkeypatch):
-    client = _client(monkeypatch)
-
-    def _boom():
-        raise RuntimeError("cannot read system.ai")
-
-    monkeypatch.setattr(ui, "workspace_client", _boom)
-
-    result = client.get("/api/demo/models").json()
-    assert result == {
-        "default": "system.ai.claude-opus-4-8",
-        "models": ["system.ai.claude-opus-4-8"],
-    }
 
 
 def test_open_session_rejects_another_actor(monkeypatch):

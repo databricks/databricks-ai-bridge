@@ -45,9 +45,8 @@ const state = {
   instanceId: null,
   lastAssistantText: "",
   managedSessionId: "",
-  mode: "streaming",
   model: "",
-  defaultModel: "",
+  mode: "streaming",
   pendingInterrupt: null,
   sessionId: "",
 };
@@ -75,11 +74,11 @@ function setBusy(busy, label = "Working") {
   elements.chatLog.setAttribute("aria-busy", String(busy));
   elements.sendButton.disabled = busy;
   elements.promptInput.disabled = busy;
-  elements.modelSelect.disabled = busy;
   elements.approveAction.disabled = busy;
   elements.rejectAction.disabled = busy;
   elements.refreshMemory.disabled = busy || !state.config?.memory.enabled;
   elements.newSession.disabled = busy;
+  elements.modelSelect.disabled = busy || elements.modelSelect.options.length <= 1;
   elements.refreshSession.disabled = busy || !state.config?.session.history;
   elements.resumeSession.disabled = busy || !state.config?.session.durable;
   elements.rejectSession.disabled = busy || !state.config?.session.durable;
@@ -90,11 +89,53 @@ function setBusy(busy, label = "Working") {
   else if (!elements.runStatus.classList.contains("error")) setStatus("Ready");
 }
 
-function setCapability(element, state) {
-  const degraded = state === "degraded";
-  element.classList.toggle("enabled", state === true);
-  element.classList.toggle("degraded", degraded);
-  element.classList.toggle("disabled", !state);
+// Human-readable name for each orb color, surfaced as a hover tooltip so the
+// green/amber/red states are self-explanatory.
+const CAPABILITY_SUMMARY = { enabled: "Available", degraded: "Limited", disabled: "Unavailable" };
+
+function setCapability(element, state, detail, command) {
+  const key = state === true ? "enabled" : state === "degraded" ? "degraded" : "disabled";
+  element.classList.toggle("enabled", key === "enabled");
+  element.classList.toggle("degraded", key === "degraded");
+  element.classList.toggle("disabled", key === "disabled");
+  element.setAttribute("role", "img");
+  element.setAttribute("aria-label", `Status: ${CAPABILITY_SUMMARY[key]}`);
+  const row = element.closest(".capability-row");
+  if (!row) return;
+
+  let tooltip = row.querySelector(".capability-tooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("span");
+    tooltip.id = `${element.id}-tooltip`;
+    tooltip.className = "capability-tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    row.append(tooltip);
+    row.tabIndex = 0;
+    row.setAttribute("aria-describedby", tooltip.id);
+  }
+  tooltip.dataset.state = key;
+  tooltip.replaceChildren();
+
+  const summary = document.createElement("strong");
+  summary.className = "capability-tooltip-status";
+  summary.textContent = CAPABILITY_SUMMARY[key];
+  tooltip.append(summary);
+
+  if (detail) {
+    const description = document.createElement("span");
+    description.className = "capability-tooltip-detail";
+    description.textContent = detail;
+    tooltip.append(description);
+  }
+  if (command) {
+    const guidance = document.createElement("span");
+    guidance.className = "capability-tooltip-guidance";
+    guidance.textContent = "Connect by redeploying:";
+    const commandText = document.createElement("code");
+    commandText.className = "capability-tooltip-command";
+    commandText.textContent = command;
+    tooltip.append(guidance, commandText);
+  }
 }
 
 function formatJson(value) {
@@ -278,8 +319,9 @@ function invocationHeaders() {
 }
 
 function invocationPayload(payload) {
-  // The selected model rides the invocation body; the agent falls back to its default when absent.
-  return state.model ? { model: state.model, ...payload } : { ...payload };
+  // Carry the picker's model so the runtime builds the agent on the selected endpoint. Omit it when
+  // unset so the agent falls back to its configured default.
+  return state.model ? { ...payload, model: state.model } : { ...payload };
 }
 
 async function jsonResponse(response) {
@@ -715,27 +757,19 @@ async function openSession(sessionId) {
   }
 }
 
-async function loadModels() {
-  try {
-    const response = await fetch("/api/demo/models", { cache: "no-store" });
-    const result = await jsonResponse(response);
-    state.defaultModel = result.default || "";
-    const models = result.models?.length ? result.models : state.defaultModel ? [state.defaultModel] : [];
-    elements.modelSelect.replaceChildren();
-    for (const name of models) {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name === state.defaultModel ? `${name} (default)` : name;
-      elements.modelSelect.append(option);
-    }
-    // Keep the current pick if still offered; otherwise fall back to the default (or first model).
-    if (!models.includes(state.model)) state.model = state.defaultModel || models[0] || "";
-    elements.modelSelect.value = state.model;
-    elements.modelSelect.disabled = state.busy;
-    addEvent("runtime.models", result);
-  } catch (error) {
-    addEvent("models.error", { message: error instanceof Error ? error.message : String(error) });
+function renderModels(models) {
+  const available = models?.available?.length ? models.available : [models?.default].filter(Boolean);
+  state.model = available.includes(state.model) ? state.model : models?.default || available[0] || "";
+  elements.modelSelect.replaceChildren();
+  for (const name of available) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    option.selected = name === state.model;
+    elements.modelSelect.append(option);
   }
+  // A single choice is informational, not a decision to make.
+  elements.modelSelect.disabled = state.busy || available.length <= 1;
 }
 
 async function loadConfig() {
@@ -745,18 +779,42 @@ async function loadConfig() {
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
+    renderModels(config.models);
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
-    setCapability(elements.streamingStatus, config.streaming.enabled);
-    setCapability(elements.backgroundStatus, config.background.enabled);
+    setCapability(
+      elements.streamingStatus,
+      config.streaming.enabled,
+      config.streaming.enabled
+        ? `Streaming responses over ${config.streaming.transport}.`
+        : "Streaming is disabled for this deployment.",
+    );
+    setCapability(
+      elements.backgroundStatus,
+      config.background.enabled,
+      config.background.enabled
+        ? `Background invocations use a ${config.background.durable ? "durable" : "in-process"} run store.`
+        : "Background invocations are disabled.",
+    );
     setCapability(
       elements.sessionStatus,
       config.session.managed ? true : config.session.history ? "degraded" : false,
+      config.session.managed
+        ? `Connected to Session Store "${config.session.store}" for actor ${config.session.actor}. State is durable and shareable.`
+        : "Session state is kept in process and resets when the app restarts.",
+      config.session.managed ? null : "mason sessions bind <store-name>",
     );
-    setCapability(elements.memoryStatus, config.memory.enabled);
+    setCapability(
+      elements.memoryStatus,
+      config.memory.enabled,
+      config.memory.enabled
+        ? `Connected to ${config.memory.store} for actor ${config.memory.actor}.`
+        : "No long-term memory is connected.",
+      config.memory.enabled ? null : "mason memory bind <store-name>",
+    );
     elements.refreshMemory.disabled = state.busy || !config.memory.enabled;
     elements.newSession.disabled = state.busy;
     elements.refreshSession.disabled = state.busy || !config.session.history;
@@ -764,17 +822,16 @@ async function loadConfig() {
     elements.rejectSession.disabled = state.busy || !config.session.durable;
     elements.memoryHelp.textContent = config.memory.enabled
       ? `${config.memory.store} · actor ${config.memory.actor}`
-      : "Deploy with --memory to expose managed entries and agent memory tools.";
+      : "Run from the project directory: mason memory bind <store-name>. Mason creates the store if needed.";
     elements.sessionStoreLabel.textContent = config.session.managed
       ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
       : config.session.history
         ? "Messages load from the in-process LangGraph checkpoint for the current routing cookie."
         : "Session history is unavailable.";
     addEvent("runtime.config", config);
-    void loadModels();
     void refreshSessionView({ hydrateChat: true });
     if (config.memory.enabled) void listMemoryEntries();
-    else stateMessage(elements.memoryResults, "Connect a Memory Store to manage entries.");
+    else stateMessage(elements.memoryResults, "Run the command above to connect a Memory Store and enable agent memory tools.");
     return config;
   } catch (error) {
     throw error;
@@ -812,6 +869,11 @@ document.querySelectorAll(".mode-button").forEach((button) => {
   });
 });
 
+elements.modelSelect.addEventListener("change", () => {
+  state.model = elements.modelSelect.value;
+  addEvent("model.selected", { model: state.model });
+});
+
 document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => {
     elements.promptInput.value = button.dataset.prompt;
@@ -825,11 +887,6 @@ elements.copySession.addEventListener("click", async () => {
   const label = elements.copySession.querySelector("span");
   label.textContent = "Copied";
   setTimeout(() => { label.textContent = "Copy"; }, 1200);
-});
-
-elements.modelSelect.addEventListener("change", () => {
-  state.model = elements.modelSelect.value;
-  addEvent("model.selected", { model: state.model });
 });
 
 elements.refreshConfig.addEventListener("click", () => loadConfig().catch(appendError));

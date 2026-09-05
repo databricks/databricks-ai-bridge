@@ -6,7 +6,7 @@ read traces back, and `instrument` prints the wiring snippet (the "Starter code"
 `mason deploy --with-traces` injects the destination into a deployment's app.yaml, exactly as
 `--memory` / `--session` inject their stores.
 
-MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.9.0`
+MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.10.1`
 installed and lazily import it; `instrument` (and the deploy wiring) are pure and need nothing.
 """
 
@@ -46,6 +46,12 @@ TRACES_DEST_ENV = "MLFLOW_TRACING_DESTINATION"
 TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
 
 
+# Installing the `tracing` extra (rather than a bare mlflow) is what actually resolves both the
+# missing- and too-old-mlflow cases: the extra carries the version floor `mason tracing` needs, so
+# a stale mlflow already in the venv gets upgraded to a compatible one.
+_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
+
+
 def _mlflow():
     """Import mlflow lazily so the core CLI (and offline wheel) don't depend on it."""
     try:
@@ -55,7 +61,7 @@ def _mlflow():
     except ImportError as exc:
         raise AgentCliError(
             "MLflow is required for `mason tracing` setup/list/get.",
-            hint="Install it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -77,7 +83,7 @@ def _uc_trace_symbols():
     except ImportError as exc:
         raise AgentCliError(
             "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
-            hint="Upgrade it: pip install 'mlflow[databricks]>=3.9.0'",
+            hint=_INSTALL_HINT,
         ) from exc
 
 
@@ -228,10 +234,16 @@ def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -
         f"Linked traces for '{exp_name}' to {destination}",
         fields={"Experiment": exp_name, "Destination": destination, "View traces": url},
         next_steps=[
-            f"mason dev --with-traces {destination}{exp_flag}",
-            f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
-            f"mason tracing instrument --destination {destination}",
-            f"mason tracing list --experiment {exp_name}",
+            (f"mason dev --with-traces {destination}{exp_flag}", "Run locally with tracing on"),
+            (
+                f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
+                "Deploy with tracing on",
+            ),
+            (
+                f"mason tracing instrument --destination {destination}",
+                "Print the code snippet to trace your own agent",
+            ),
+            (f"mason tracing list --experiment {exp_name}", "List traces once you have some"),
         ],
     )
 
@@ -250,8 +262,15 @@ def tracing_list(obj, experiment, limit) -> None:
     mlflow = _mlflow()
     _configure(mlflow, obj.profile, None)
     exp_name = experiment or _DEFAULT_EXPERIMENT
-    traces = mlflow.search_traces(
-        experiment_names=[exp_name], max_results=limit, return_type="list"
+    # search_traces selects experiments by id, not name, so resolve first. A missing experiment means
+    # no traces have been recorded there yet — show an empty list rather than erroring.
+    exp = mlflow.get_experiment_by_name(exp_name)
+    traces = (
+        mlflow.search_traces(
+            experiment_ids=[exp.experiment_id], max_results=limit, return_type="list"
+        )
+        if exp
+        else []
     )
 
     if obj.output == "json":
@@ -342,7 +361,7 @@ def tracing_instrument(obj, destination, experiment) -> None:
     render.detail(
         _BREADCRUMB,
         dest,
-        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.9.0"},
+        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.10.1"},
         status="ACTIVE",
         snippets=[("python", "python", code)],
     )
