@@ -20,7 +20,11 @@ from agent.tools import all_tools
 
 logger = logging.getLogger(__name__)
 
-MODEL = "databricks-gpt-5-2"
+# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
+# gateway (see `use_ai_gateway=True` in configure()). Swap for any `system.ai.*` model your workspace
+# exposes — the demo chat app's picker lists what's available. `mason dev`'s chat UI can also
+# override this per request.
+MODEL = "system.ai.claude-opus-4-8"
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -38,11 +42,12 @@ _pending_runs: dict[str, RunState] = {}
 def configure() -> None:
     """Wire up global state; call once at server startup (not at import)."""
     _check_databricks_auth()
-    # Route the Agents SDK's default OpenAI client at the Databricks model endpoint (account-host
-    # routing and auth handled by the SDK), so `Agent(model=MODEL)` resolves to a Databricks model.
+    # Route the Agents SDK's default OpenAI client at the Unity Catalog AI Gateway
+    # (`<host>/ai-gateway/mlflow/v1`; auth handled by the SDK), so `Agent(model=MODEL)` resolves a
+    # `system.ai.*` gateway model.
     from agents import set_default_openai_api, set_default_openai_client
 
-    set_default_openai_client(AsyncDatabricksOpenAI())
+    set_default_openai_client(AsyncDatabricksOpenAI(use_ai_gateway=True))
     set_default_openai_api("chat_completions")
     configure_tracing()
 

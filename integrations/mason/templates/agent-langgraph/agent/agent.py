@@ -24,7 +24,11 @@ from agent.tools import all_tools
 
 logger = logging.getLogger(__name__)
 
-MODEL = "databricks-gpt-5-2"
+# A Unity Catalog AI Gateway model, served from the `system.ai` schema and queried through the
+# gateway (see `use_ai_gateway=True` below). Swap for any `system.ai.*` model your workspace exposes
+# — the demo chat app's picker lists what's available. `mason dev`'s chat UI can also override this
+# per request.
+MODEL = "system.ai.claude-opus-4-8"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -92,7 +96,11 @@ async def create_agent_graph(actor: str, model: str | None = None):
     )
     endpoint = model or MODEL
     return create_agent(
-        model=_RoutedChatDatabricks(endpoint=endpoint, workspace_client=workspace_client()),
+        # use_ai_gateway routes to the Unity Catalog AI Gateway (`<host>/ai-gateway/mlflow/v1`), so
+        # `endpoint` is a `system.ai.*` model name rather than a serving-endpoint name.
+        model=_RoutedChatDatabricks(
+            endpoint=endpoint, workspace_client=workspace_client(), use_ai_gateway=True
+        ),
         tools=tools,
         middleware=middleware,
         checkpointer=checkpointer(),
