@@ -1,5 +1,6 @@
 import logging
 import os
+import warnings
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
@@ -195,11 +196,49 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
             for node_data in payload.values():
                 messages = node_data.get("messages", []) if isinstance(node_data, dict) else []
                 for msg in messages:
-                    yield {"type": "message", "message": msg.model_dump()}
+                    yield {"type": "message", "message": _dump_message(msg)}
         elif mode == "messages":
             try:
                 chunk = payload[0]
-                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
-                    yield {"type": "delta", "content": content, "id": chunk.id}
+                if isinstance(chunk, AIMessageChunk):
+                    content = _visible_content(chunk.content)
+                    if content:
+                        yield {"type": "delta", "content": content, "id": chunk.id}
             except Exception:
                 logger.exception("Error processing agent stream chunk")
+
+
+# Content-block types a reasoning model (e.g. Claude via the AI Gateway) emits internally; the chat
+# UI should render only user-visible parts, so these are dropped from what's sent to the client.
+_HIDDEN_CONTENT_BLOCKS = {"reasoning", "reasoning_content", "thinking"}
+
+
+def _visible_content(content: Any) -> Any:
+    """Drop reasoning/thinking blocks from message content, keeping the user-visible parts.
+
+    Claude returns ``content`` as a list of typed blocks — visible text plus internal ``reasoning``
+    blocks. Keep everything except the hidden block types so the chat UI renders cleanly. A plain
+    string (e.g. from GPT models) passes through unchanged.
+    """
+    if isinstance(content, list):
+        return [
+            block
+            for block in content
+            if not (isinstance(block, dict) and block.get("type") in _HIDDEN_CONTENT_BLOCKS)
+        ]
+    return content
+
+
+def _dump_message(msg: Any) -> dict:
+    """Serialize a LangChain message to a dict, without reasoning blocks or serializer noise.
+
+    Reasoning content blocks trip a benign ``PydanticSerializationUnexpectedValue`` warning during
+    ``model_dump`` and shouldn't reach the client; suppress the warning and filter them from the
+    dumped content. The message object itself is left untouched (its reasoning may be needed to
+    continue the thread on the next turn).
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
+        data = msg.model_dump()
+    data["content"] = _visible_content(data.get("content"))
+    return data
