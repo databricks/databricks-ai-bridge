@@ -59,14 +59,14 @@ class _FakeMessage:
 
 
 @pytest.mark.asyncio
-async def test_serialize_events_drops_reasoning_from_completed_message():
-    # Claude returns content as typed blocks incl. internal `reasoning`; only visible text should
-    # reach the client.
+async def test_serialize_events_splits_reasoning_from_completed_message():
+    # Claude returns content as typed blocks incl. internal `reasoning`; the answer keeps only the
+    # visible text, and reasoning is carried separately as message["reasoning"] for the UI.
     msg = _FakeMessage(
         {
             "type": "ai",
             "content": [
-                {"type": "reasoning", "summary": "secret", "signature": ""},
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "secret"}]},
                 {"type": "text", "text": "hello"},
             ],
         }
@@ -74,22 +74,34 @@ async def test_serialize_events_drops_reasoning_from_completed_message():
     stream = _aiter([("updates", {"agent": {"messages": [msg]}})])
     events = [e async for e in _serialize_events(stream)]
     assert events == [
-        {"type": "message", "message": {"type": "ai", "content": [{"type": "text", "text": "hello"}]}}
+        {
+            "type": "message",
+            "message": {
+                "type": "ai",
+                "content": [{"type": "text", "text": "hello"}],
+                "reasoning": "secret",
+            },
+        }
     ]
 
 
 @pytest.mark.asyncio
-async def test_serialize_events_filters_reasoning_from_deltas():
+async def test_serialize_events_streams_reasoning_and_text_separately():
     from langchain.messages import AIMessageChunk
 
-    visible = AIMessageChunk(
-        content=[{"type": "reasoning", "summary": "x"}, {"type": "text", "text": "hi"}], id="c1"
+    both = AIMessageChunk(
+        content=[{"type": "reasoning", "reasoning": "why"}, {"type": "text", "text": "hi"}], id="c1"
     )
-    reasoning_only = AIMessageChunk(content=[{"type": "reasoning", "summary": "x"}], id="c2")
-    stream = _aiter([("messages", (visible, {})), ("messages", (reasoning_only, {}))])
+    reasoning_only = AIMessageChunk(content=[{"type": "reasoning", "reasoning": "more"}], id="c2")
+    stream = _aiter([("messages", (both, {})), ("messages", (reasoning_only, {}))])
     events = [e async for e in _serialize_events(stream)]
-    # The reasoning block is filtered out of the visible chunk; the reasoning-only chunk is skipped.
-    assert events == [{"type": "delta", "content": [{"type": "text", "text": "hi"}], "id": "c1"}]
+    # Reasoning streams as its own event; visible text streams as a delta; a reasoning-only chunk
+    # still surfaces its thinking.
+    assert events == [
+        {"type": "reasoning", "content": "why", "id": "c1"},
+        {"type": "delta", "content": [{"type": "text", "text": "hi"}], "id": "c1"},
+        {"type": "reasoning", "content": "more", "id": "c2"},
+    ]
 
 
 def test_configure_raises_clear_error_without_auth(monkeypatch):

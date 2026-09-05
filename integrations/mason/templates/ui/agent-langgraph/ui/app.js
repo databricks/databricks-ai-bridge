@@ -48,6 +48,9 @@ const state = {
   model: "",
   mode: "streaming",
   pendingInterrupt: null,
+  reasoningDraft: null,
+  reasoningText: "",
+  reasoningShown: false,
   sessionId: "",
 };
 
@@ -237,6 +240,7 @@ function startDraft() {
 function appendDelta(content) {
   const text = extractText(content);
   if (!text) return;
+  finishReasoning(); // the answer is starting — collapse any live "Thinking" element
   const draft = startDraft();
   state.draftText += text;
   state.lastAssistantText = state.draftText;
@@ -257,6 +261,45 @@ function finishDraft(finalText = "") {
   return true;
 }
 
+function startReasoning() {
+  // A collapsible "Thinking" element for the model's reasoning, shown above its answer.
+  if (state.reasoningDraft) return state.reasoningDraft;
+  hideEmptyState();
+  const wrapper = document.createElement("details");
+  wrapper.className = "thinking streaming";
+  wrapper.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = "Thinking…";
+  const body = document.createElement("div");
+  body.className = "thinking-body";
+  wrapper.append(summary, body);
+  elements.chatLog.append(wrapper);
+  state.reasoningDraft = { wrapper, summary, body };
+  state.reasoningText = "";
+  state.reasoningShown = true;
+  return state.reasoningDraft;
+}
+
+function appendReasoning(content) {
+  const text = extractText(content);
+  if (!text) return;
+  const draft = startReasoning();
+  state.reasoningText += text;
+  draft.body.textContent = state.reasoningText;
+  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+}
+
+function finishReasoning(finalText = "") {
+  // Collapse the thinking element once the answer begins (or the turn completes).
+  if (!state.reasoningDraft) return;
+  if (finalText) state.reasoningDraft.body.textContent = finalText;
+  state.reasoningDraft.wrapper.classList.remove("streaming");
+  state.reasoningDraft.wrapper.open = false;
+  state.reasoningDraft.summary.textContent = "Thinking";
+  state.reasoningDraft = null;
+  state.reasoningText = "";
+}
+
 function toolSummary(message) {
   if (message?.name) return `${message.name}\n${extractText(message.content)}`.trim();
   if (Array.isArray(message?.tool_calls) && message.tool_calls.length) {
@@ -269,6 +312,14 @@ function handleAgentMessage(message) {
   const role = normalizeRole(message);
   if (role === "user") return;
   if (role === "assistant") {
+    // Reasoning rides on the completed message too; render it if it wasn't already streamed live
+    // (e.g. sync/background transports), otherwise just close the streamed "Thinking" element.
+    if (message?.reasoning && !state.reasoningShown) {
+      startReasoning();
+      finishReasoning(String(message.reasoning));
+    } else {
+      finishReasoning();
+    }
     const text = extractText(message?.content);
     if (finishDraft(text)) return;
     if (text) {
@@ -299,6 +350,7 @@ function handleInterrupt(interrupt) {
 
 function handleEvent(event) {
   addEvent(event?.type || "event", event);
+  if (event?.type === "reasoning") appendReasoning(event.content);
   if (event?.type === "delta") appendDelta(event.content);
   if (event?.type === "message") handleAgentMessage(event.message);
   if (event?.type === "interrupt") handleInterrupt(event);
@@ -430,6 +482,8 @@ function renderSessions(items) {
 function renderSessionTranscript(items) {
   state.draft = null;
   state.draftText = "";
+  state.reasoningDraft = null;
+  state.reasoningShown = false;
   state.lastAssistantText = "";
   elements.chatLog.replaceChildren(elements.emptyState);
   elements.emptyState.hidden = false;
@@ -632,6 +686,8 @@ async function invokeBackground(payload) {
 async function dispatch(payload, mode = state.mode) {
   state.lastAssistantText = "";
   state.pendingInterrupt = null;
+  state.reasoningDraft = null;
+  state.reasoningShown = false;
   elements.approvalPanel.hidden = true;
   if (mode === "streaming") return invokeStreaming(payload);
   if (mode === "background") return invokeBackground(payload);
@@ -702,6 +758,8 @@ function clearChat({ recordEvent = true } = {}) {
   state.pendingInterrupt = null;
   state.draft = null;
   state.draftText = "";
+  state.reasoningDraft = null;
+  state.reasoningShown = false;
   state.lastAssistantText = "";
   elements.approvalPanel.hidden = true;
   elements.chatLog.replaceChildren(elements.emptyState);

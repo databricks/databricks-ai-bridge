@@ -185,6 +185,11 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
     A human-approval gate surfaces as an ``__interrupt__`` update, relayed as
     ``{"type": "interrupt", "id", "value"}``; the run is then paused on the session's thread until the
     client resumes with the same session id.
+
+    A reasoning model (e.g. Claude via the AI Gateway) also emits internal ``reasoning``/``thinking``
+    content. That's split out of the answer so the UI can show it as a separate "Thinking" element:
+    streamed as ``{"type": "reasoning", "content", "id"}`` chunks, and carried on the completed
+    message as ``message["reasoning"]`` (so non-streaming transports keep it too).
     """
     async for event in async_stream:
         mode, payload = event[0], event[1]
@@ -201,44 +206,68 @@ async def _serialize_events(async_stream: AsyncIterator[Any]) -> AsyncGenerator[
             try:
                 chunk = payload[0]
                 if isinstance(chunk, AIMessageChunk):
-                    content = _visible_content(chunk.content)
-                    if content:
-                        yield {"type": "delta", "content": content, "id": chunk.id}
+                    visible, reasoning = _partition_content(chunk.content)
+                    if reasoning:
+                        yield {"type": "reasoning", "content": reasoning, "id": chunk.id}
+                    if visible:
+                        yield {"type": "delta", "content": visible, "id": chunk.id}
             except Exception:
                 logger.exception("Error processing agent stream chunk")
 
 
-# Content-block types a reasoning model (e.g. Claude via the AI Gateway) emits internally; the chat
-# UI should render only user-visible parts, so these are dropped from what's sent to the client.
+# Content-block types a reasoning model (e.g. Claude via the AI Gateway) emits for its private
+# chain-of-thought. Kept out of the answer bubble and surfaced as a separate "Thinking" element.
 _HIDDEN_CONTENT_BLOCKS = {"reasoning", "reasoning_content", "thinking"}
 
 
-def _visible_content(content: Any) -> Any:
-    """Drop reasoning/thinking blocks from message content, keeping the user-visible parts.
+def _reasoning_block_text(block: dict) -> str:
+    """Best-effort extraction of a reasoning block's text across provider shapes."""
+    for key in ("reasoning", "thinking", "text"):
+        value = block.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    # Anthropic-style summarized reasoning: {"summary": [{"type": "summary_text", "text": ...}]}.
+    summary = block.get("summary")
+    if isinstance(summary, list):
+        return "".join(p.get("text", "") for p in summary if isinstance(p, dict))
+    return ""
 
-    Claude returns ``content`` as a list of typed blocks — visible text plus internal ``reasoning``
-    blocks. Keep everything except the hidden block types so the chat UI renders cleanly. A plain
-    string (e.g. from GPT models) passes through unchanged.
+
+def _partition_content(content: Any) -> tuple[Any, str]:
+    """Split message content into (visible, reasoning_text).
+
+    Claude returns ``content`` as a list of typed blocks — visible text plus internal
+    ``reasoning``/``thinking`` blocks. Keep the visible blocks for the answer and pull the reasoning
+    text out separately so the UI can render it as a "Thinking" element. A plain string (e.g. from
+    GPT models) has no reasoning: it passes through as the visible part.
     """
-    if isinstance(content, list):
-        return [
-            block
-            for block in content
-            if not (isinstance(block, dict) and block.get("type") in _HIDDEN_CONTENT_BLOCKS)
-        ]
-    return content
+    if not isinstance(content, list):
+        return content, ""
+    visible: list[Any] = []
+    reasoning: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") in _HIDDEN_CONTENT_BLOCKS:
+            if text := _reasoning_block_text(block):
+                reasoning.append(text)
+        else:
+            visible.append(block)
+    return visible, "".join(reasoning)
 
 
 def _dump_message(msg: Any) -> dict:
-    """Serialize a LangChain message to a dict, without reasoning blocks or serializer noise.
+    """Serialize a LangChain message to a dict, splitting reasoning out and quieting serializer noise.
 
     Reasoning content blocks trip a benign ``PydanticSerializationUnexpectedValue`` warning during
-    ``model_dump`` and shouldn't reach the client; suppress the warning and filter them from the
-    dumped content. The message object itself is left untouched (its reasoning may be needed to
-    continue the thread on the next turn).
+    ``model_dump``; suppress it. The answer's ``content`` keeps only visible blocks, and any reasoning
+    is attached as ``message["reasoning"]`` for the UI's "Thinking" element (present even on
+    non-streaming transports, which don't see the streamed reasoning chunks). The message object
+    itself is left untouched — its reasoning may be needed to continue the thread on the next turn.
     """
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
         data = msg.model_dump()
-    data["content"] = _visible_content(data.get("content"))
+    visible, reasoning = _partition_content(data.get("content"))
+    data["content"] = visible
+    if reasoning:
+        data["reasoning"] = reasoning
     return data

@@ -704,6 +704,51 @@ h2 {
   animation: blink 0.8s infinite;
 }
 
+/* Collapsible "Thinking" element for a reasoning model's chain-of-thought, shown above its answer. */
+.thinking {
+  max-width: min(680px, 100%);
+  margin: 0 0 18px 41px; /* aligns under the assistant bubble (30px avatar + 11px gap) */
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface-muted);
+}
+
+.thinking > summary {
+  padding: 8px 12px;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 750;
+  cursor: pointer;
+  list-style: none;
+}
+
+.thinking > summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinking > summary::before {
+  content: "▸ ";
+}
+
+.thinking[open] > summary::before {
+  content: "▾ ";
+}
+
+.thinking.streaming > summary {
+  color: var(--accent-deep);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-body {
+  padding: 0 12px 10px;
+  color: var(--ink-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .approval-panel {
   margin: 0 20px 14px;
   padding: 14px 16px;

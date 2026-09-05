@@ -127,6 +127,9 @@ def test_demo_ui_routes(monkeypatch):
     assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
+    # Reasoning models get a collapsible "Thinking" element rather than dropped/inlined reasoning.
+    assert "function appendReasoning(" in app_script.text
+    assert 'event?.type === "reasoning"' in app_script.text
     assert 'fetch("/api/session/new"' in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: ensureSessionId()" not in app_script.text
