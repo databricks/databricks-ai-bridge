@@ -199,25 +199,27 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
             return None
 
 
-def _ensure_memory_store(client, display_name: str) -> dict:
+def _ensure_memory_store(client, display_name: str) -> tuple[dict, bool]:
+    """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_memory_store(display_name, retry_transient=True)
+        return client.create_memory_store(display_name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
     store = _resolve_memory_store(client, display_name)
     if store is None:
         raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
-    return store
+    return store, False
 
 
-def _ensure_session_store(client, name: str) -> dict:
+def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
+    """Create the session store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_session_store(name, retry_transient=True)
+        return client.create_session_store(name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    return client.get_session_store(name)
+    return client.get_session_store(name), False
 
 
 def _memory_store_database(client, memory_store: str) -> Optional[str]:

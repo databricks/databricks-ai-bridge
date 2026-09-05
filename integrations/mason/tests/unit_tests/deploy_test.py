@@ -55,8 +55,15 @@ def test_ensure_session_store_reuses_on_already_exists():
     client = mock.Mock()
     client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
     client.get_session_store.return_value = {"session_store_name": "s"}
-    assert deploy_mod._ensure_session_store(client, "s") == {"session_store_name": "s"}
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, False)
     client.create_session_store.assert_called_once_with("s", retry_transient=True)
+
+
+def test_ensure_session_store_reports_created():
+    client = mock.Mock()
+    client.create_session_store.return_value = {"session_store_name": "s"}
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, True)
 
 
 def test_ensure_memory_store_reuses_on_already_exists():
@@ -66,11 +73,21 @@ def test_ensure_memory_store_reuses_on_already_exists():
         "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
     }
 
-    assert deploy_mod._ensure_memory_store(client, "mem") == {
-        "name": "memory-stores/mem-id-123",
-        "display_name": "mem",
-    }
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123", "display_name": "mem"},
+        False,
+    )
     client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
+
+
+def test_ensure_memory_store_reports_created():
+    client = mock.Mock()
+    client.create_memory_store.return_value = {"name": "memory-stores/mem-id-123"}
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123"},
+        True,
+    )
 
 
 class _FakeClient:

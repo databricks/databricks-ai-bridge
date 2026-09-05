@@ -124,6 +124,8 @@ def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert ctx.client().created == ["agent-mem"]  # created by default
+    # Bind tells the user it created the store (vs reused an existing one).
+    assert "Created and bound memory store 'agent-mem'" in result.output
     project = AgentProject.load(tmp_path)
     assert project.memory_store == "agent-mem"
     assert project.memory_store_id == "mem-id-123"  # bare id recorded for the runtime

@@ -108,9 +108,10 @@ def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -
             raise AgentCliError(
                 f"Memory store '{store}' does not exist (drop --no-create-stores to create it)."
             )
+        created = False
     else:
         with render.status(f"Provisioning memory store '{store}'…"):
-            resolved = _ensure_memory_store(client, store)
+            resolved, created = _ensure_memory_store(client, store)
 
     # Record the bare store id: the runtime needs it (not the display name) for the entries API.
     store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
@@ -118,10 +119,14 @@ def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -
     project.bind_memory_store(store, store_id)
     project.write()
     if obj.output == "json":
-        render.emit_json({"memory_store": store, "manifest": str(project.path)})
+        render.emit_json({"memory_store": store, "created": created, "manifest": str(project.path)})
         return
+    # Say whether the store was newly created or an existing one was reused.
+    title = (
+        f"Created and bound memory store '{store}'" if created else f"Bound memory store '{store}'"
+    )
     render.success(
-        f"Bound memory store '{store}'",
+        title,
         fields={"agent.toml": str(project.path)},
         next_steps=[
             ("mason dev", "Re-run to pick up the store locally"),
