@@ -63,8 +63,8 @@ def _source_option(function):
 def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
     """Bind session STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
 
-    `mason dev` / `mason deploy` sync the bound store into the deployment's app.yaml env and grant the
-    app access. Pass --no-create-stores to require the store to already exist.
+    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
+    service principal access to it. Pass --no-create-stores to require the store to already exist.
     """
     from databricks_mason.agent_project import AgentProject
     from databricks_mason.deploy import _ensure_session_store
@@ -79,20 +79,32 @@ def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool)
                 f"Session store '{store}' does not exist (drop --no-create-stores to create it).",
                 error_code=exc.error_code,
             ) from exc
+        created = False
     else:
         with render.status(f"Provisioning session store '{store}'…"):
-            _ensure_session_store(client, store)
+            _, created = _ensure_session_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
     project.write()
     if obj.output == "json":
-        render.emit_json({"session_store": store, "manifest": str(project.path)})
+        render.emit_json(
+            {"session_store": store, "created": created, "manifest": str(project.path)}
+        )
         return
+    # Say whether the store was newly created or an existing one was reused.
+    title = (
+        f"Created and bound session store '{store}'"
+        if created
+        else f"Bound session store '{store}'"
+    )
     render.success(
-        f"Bound session store '{store}'",
+        title,
         fields={"agent.toml": str(project.path)},
-        next_steps=["mason dev", "mason deploy <name>"],
+        next_steps=[
+            ("mason dev", "Re-run to pick up the store locally"),
+            ("mason deploy <name>", "Redeploy to grant the app access"),
+        ],
     )
 
 
@@ -161,7 +173,10 @@ def stores_create(obj, name, description, metadata) -> None:
                 "Start a session for an actor",
             ),
             (f"mason sessions stores get {name}", "View this store's details"),
-            (f"mason deploy <agent> --session {name}", "Wire this store into a deployment"),
+            (
+                f"mason sessions bind {name}",
+                "Bind this store to the agent (wired in on dev/deploy)",
+            ),
         ],
     )
 

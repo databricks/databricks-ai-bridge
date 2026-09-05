@@ -1,8 +1,9 @@
 """`mason deploy` and the `mason deployments` group — manage agent deployments.
 
-`mason deploy` is the integrated entry point: it can provision a memory store and a
-session store for the agent, inject their identifiers into the deployment's `app.yaml`
-env, then roll out the deployment. `mason deployments` covers the lifecycle verbs
+`mason deploy` is the integrated entry point: it provisions the memory/session stores
+bound in `agent.toml`, grants the app's service principal access to them, then rolls out
+the deployment. The stores are read from `agent.toml` at runtime, so they are not written
+into `app.yaml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -24,9 +25,6 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
-
-_MEMORY_ENV = "AGENT_MEMORY_STORE"
-_SESSION_ENV = "AGENT_SESSION_STORE"
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -101,6 +99,18 @@ def _validate_deployment_name(name: str) -> str:
             f"'{_DEPLOYMENT_PREFIX}' prefix Mason adds on deploy.",
         )
     return name
+
+
+def _instance_args(instances: Optional[int]) -> list[str]:
+    """Build runtime instance arguments from Mason's fixed-count option."""
+    if instances is None:
+        return []
+    return [
+        "--compute-min-instances",
+        str(instances),
+        "--compute-max-instances",
+        str(instances),
+    ]
 
 
 def _prefixed_name(name: str) -> str:
@@ -212,13 +222,6 @@ def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
     return client.get_session_store(name), False
 
 
-def _store_label(identifier: str, created: Optional[bool]) -> str:
-    """Annotate a provisioned store id with whether deploy created it or reused an existing one."""
-    if created is None:
-        return identifier
-    return f"{identifier}  (created)" if created else f"{identifier}  (existing)"
-
-
 def _memory_store_database(client, memory_store: str) -> Optional[str]:
     """Resolve the memory store's per-store Lakebase database name from its storage backend.
 
@@ -231,7 +234,26 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
     return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
 
 
-def resolve_store_env(
+def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
+    """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
+
+    agent.toml is the single source of truth for an agent's stores. Both `mason dev` and `mason
+    deploy` resolve through here so the store env AND the deploy-time access grant honor the same
+    bindings. Missing/invalid agent.toml is ignored (no stores), so this never blocks a run.
+    """
+    try:
+        from databricks_mason.agent_project import AgentProject
+
+        project = AgentProject.load(source)
+    except AgentCliError:
+        return None, None
+    # str(): agent.toml bindings come back as tomlkit strings, which don't serialize to app.yaml.
+    memory = str(project.memory_store) if project.memory_store else None
+    session = str(project.session_store) if project.session_store else None
+    return memory, session
+
+
+def validate_stores_and_trace_env(
     client,
     *,
     app: Optional[str],
@@ -239,56 +261,30 @@ def resolve_store_env(
     session_store: Optional[str],
     traces_destination: Optional[str],
     traces_experiment: Optional[str],
-    create_stores: bool,
-    created: Optional[dict[str, bool]] = None,
 ) -> dict[str, str]:
-    """Resolve store/trace references to the AGENT_*/MLFLOW_* env vars that wire them in.
+    """Validate the agent's bound stores exist and build the MLFLOW_* trace env to wire in.
 
-    Shared by `mason deploy` and `mason dev` so both wire an agent's stores into app.yaml the same
-    way. With `create_stores` (the default), missing stores are created (idempotent); when it is off
-    they must already exist. The memory store resolves to its bare id (the runtime re-adds the
-    `memory-stores/` prefix when building the entries URL); the session store and trace destination
-    are used verbatim.
-
-    Pass `created` (a dict) to learn which stores this call newly created: it's populated with
-    `"memory"`/`"session"` -> True when created, False when an existing store was reused. Lets the
-    caller tell the user it provisioned a store rather than reused one.
+    Shared by `mason deploy` and `mason dev`. Stores are created by `mason memory/sessions bind` and
+    read from agent.toml at runtime, so this neither creates them nor writes them to app.yaml — it
+    only checks a bound store still exists (a typo or unbound clone fails here, not at runtime) and
+    returns the trace env.
     """
-    env: dict[str, str] = {}
-    if memory_store:
-        # Resolve by display name (what users pass) in both cases: get_memory_store looks up by
-        # resource id, so it can't resolve a display name on the non-create path.
-        if create_stores:
-            store, was_created = _ensure_memory_store(client, memory_store)
-        else:
-            store = _resolve_memory_store(client, memory_store)
-            if store is None:
-                raise AgentCliError(
-                    f"Memory store '{memory_store}' does not exist "
-                    "(drop --no-create-stores to create it)."
-                )
-            was_created = False
-        if created is not None:
-            created["memory"] = was_created
-        store_name = field(store, "name") or memory_store
-        env[_MEMORY_ENV] = store_name.split("/", 1)[-1]
+    if memory_store and _resolve_memory_store(client, memory_store) is None:
+        # Resolve by display name: get_memory_store looks up by resource id, not the bound name.
+        raise AgentCliError(
+            f"Memory store '{memory_store}' does not exist.",
+            hint=f"Run `mason memory bind {memory_store}` to create and bind it.",
+        )
     if session_store:
-        if create_stores:
-            _, was_created = _ensure_session_store(client, session_store)
-        else:
-            # Validate existence up front so a typo fails at deploy time, not at runtime.
-            try:
-                client.get_session_store(session_store)
-            except AgentCliError as exc:
-                raise AgentCliError(
-                    f"Session store '{session_store}' does not exist "
-                    "(drop --no-create-stores to create it).",
-                    error_code=exc.error_code,
-                ) from exc
-            was_created = False
-        if created is not None:
-            created["session"] = was_created
-        env[_SESSION_ENV] = session_store
+        try:
+            client.get_session_store(session_store)
+        except AgentCliError as exc:
+            raise AgentCliError(
+                f"Session store '{session_store}' does not exist.",
+                hint=f"Run `mason sessions bind {session_store}` to create and bind it.",
+                error_code=exc.error_code,
+            ) from exc
+    env: dict[str, str] = {}
     if traces_destination:
         env[TRACES_DEST_ENV] = traces_destination
         # The agent enables tracing only when BOTH a destination and an experiment are set, so
@@ -347,20 +343,6 @@ def _grant_store_access(
     "current directory.",
 )
 @click.option(
-    "--memory",
-    "-m",
-    "memory_store",
-    default=None,
-    help="Memory store display name to wire in via AGENT_MEMORY_STORE.",
-)
-@click.option(
-    "--session",
-    "-s",
-    "session_store",
-    default=None,
-    help="Session store name to wire in via AGENT_SESSION_STORE.",
-)
-@click.option(
     "--with-traces",
     "traces_destination",
     default=None,
@@ -373,12 +355,6 @@ def _grant_store_access(
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
 @click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require referenced stores to already exist. By default missing stores are created "
-    "(idempotent).",
-)
-@click.option(
     "--pip-index-url",
     default=_DEFAULT_PIP_INDEX_URL,
     show_default=True,
@@ -389,84 +365,126 @@ def _grant_store_access(
     default=None,
     help="Workspace destination for the synced source (defaults to a per-user path).",
 )
+@click.option(
+    "--instances",
+    type=click.IntRange(min=1, max=5),
+    default=None,
+    help="Number of deployment instances.",
+)
 @click.pass_obj
 def deploy(
     obj,
     name,
     source,
-    memory_store,
-    session_store,
     traces_destination,
     traces_experiment,
-    no_create_stores,
     pip_index_url,
     workspace_path,
+    instances,
 ) -> None:
-    """Deploy an agent: provision its stores, wire them in, and roll out the deployment.
+    """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
     The app is named `mason-<name>` (Mason adds the prefix if absent); use that full name with the
     other `mason deployments` verbs. `deployments list` shows only apps carrying this prefix.
+
+    Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
+    preserve the routing cookie automatically.
+
+    \b
+    API clients must reuse a stable UUID in this cookie on every request:
+      __Host-databricks-app-router=<uuid>
     """
     name = _prefixed_name(name)
     _validate_deployment_name(name)
+    instance_args = _instance_args(instances)
     source_dir = pathlib.Path(source)
     client = obj.client()
 
-    # 1. Provision / resolve stores and build the env to inject. `created` records which stores this
-    #    deploy newly created (vs reused) so the summary can say so.
-    created_stores: dict[str, bool] = {}
-    env_updates = resolve_store_env(
-        client,
-        app=name,
-        memory_store=memory_store,
-        session_store=session_store,
-        traces_destination=traces_destination,
-        traces_experiment=traces_experiment,
-        create_stores=not no_create_stores,
-        created=created_stores,
-    )
+    # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them) and build any
+    #    trace env. Stores are read from agent.toml at runtime, not wired into app.yaml; the bindings
+    #    also drive the store access grant (step 4).
+    memory_store, session_store = store_bindings(source_dir)
+    with render.status("Checking stores…"):
+        env_updates = validate_stores_and_trace_env(
+            client,
+            app=name,
+            memory_store=memory_store,
+            session_store=session_store,
+            traces_destination=traces_destination,
+            traces_experiment=traces_experiment,
+        )
     provisioned: dict[str, Any] = {}
-    if _MEMORY_ENV in env_updates:
-        provisioned["Memory store"] = _store_label(
-            env_updates[_MEMORY_ENV], created_stores.get("memory")
-        )
-    if _SESSION_ENV in env_updates:
-        provisioned["Session store"] = _store_label(
-            env_updates[_SESSION_ENV], created_stores.get("session")
-        )
-    # Call out newly-provisioned stores as a standalone line the moment they're created, so the user
-    # notices (the final summary also marks them). Text mode only; JSON mode reports it structurally.
-    if obj.output != "json":
-        if created_stores.get("memory"):
-            render.note(f"Created new memory store '{memory_store}'")
-        if created_stores.get("session"):
-            render.note(f"Created new session store '{session_store}'")
+    if memory_store:
+        provisioned["Memory store"] = memory_store
+    if session_store:
+        provisioned["Session store"] = session_store
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
         provisioned["Package index"] = pip_index_url
+    if instances is not None:
+        provisioned["Instances"] = str(instances)
 
-    # 2. Patch the app.yaml manifest with the store identifiers.
+    # 2. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
     scaffolded = False
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime).
+    # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    #
+    #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
+    #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
+    #    in progress (persistent line + spinner) so the CLI isn't silent for the whole provision.
     if not _deployment_exists(name, obj.profile):
-        result = _databricks(["apps", "create", name], obj.profile, capture=True)
+        with render.progress(
+            "Creating the agent and starting its compute (this can take a few minutes)…"
+        ):
+            result = _databricks(
+                ["apps", "create", name, *instance_args],
+                obj.profile,
+                capture=True,
+                action=f"Could not create deployment '{name}'.",
+            )
         old, new = _AGENT_COMPUTE_OUTPUT
         click.echo((result.stdout or "").replace(old, new), nl=False)
-        # `apps create` returns before the app's compute is up, but `apps deploy` requires it to be
-        # RUNNING — so wait for it, or the first deploy races and fails ("not in RUNNING state").
+    elif instance_args:
+        update = {
+            "app": {
+                "compute_min_instances": instances,
+                "compute_max_instances": instances,
+            },
+            "update_mask": "compute_min_instances,compute_max_instances",
+        }
+        result = _databricks(
+            ["apps", "create-update", name, "--json", json.dumps(update)],
+            obj.profile,
+            capture=True,
+            action=f"Could not update deployment '{name}'.",
+        )
+        old, new = _AGENT_COMPUTE_OUTPUT
+        click.echo((result.stdout or "").replace(old, new), nl=False)
+    # `apps deploy` requires the app's compute to be ACTIVE — a just-created app may still be
+    # starting, and an existing one may be STOPPED — so wait either way. Returns immediately when
+    # compute is already ACTIVE.
+    with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-    _databricks(["sync", str(source_dir), ws_path, "--exclude", "uv.lock"], obj.profile)
-    _databricks(["apps", "deploy", name, "--source-code-path", ws_path], obj.profile)
+    _databricks(
+        ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+        obj.profile,
+        action=f"Could not upload the agent source for '{name}'.",
+    )
+    _databricks(
+        ["apps", "deploy", name, "--source-code-path", ws_path],
+        obj.profile,
+        action=f"Could not deploy '{name}'.",
+    )
 
     # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
     #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
@@ -474,14 +492,17 @@ def deploy(
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
-        sp = _app_service_principal(name, obj.profile)
-        if sp is None:
-            grant_error = "could not resolve the app's service principal."
-        else:
-            memory_database = _memory_store_database(client, memory_store) if memory_store else None
-            grant_error = _grant_store_access(
-                name, sp, client.current_user, session_store, memory_database, obj.profile
-            )
+        with render.status("Granting the app access to its stores…"):
+            sp = _app_service_principal(name, obj.profile)
+            if sp is None:
+                grant_error = "could not resolve the app's service principal."
+            else:
+                memory_database = (
+                    _memory_store_database(client, memory_store) if memory_store else None
+                )
+                grant_error = _grant_store_access(
+                    name, sp, client.current_user, session_store, memory_database, obj.profile
+                )
 
     app_url = _app_url(name, obj.profile)
 
@@ -492,7 +513,6 @@ def deploy(
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
-                "stores_created": created_stores,
                 "store_grant": "skipped"
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
@@ -506,7 +526,7 @@ def deploy(
         (f"mason deployments logs {name}", "Tail its logs"),
     ]
     if app_url:
-        steps.insert(0, (f"open {app_url}", "Open the deployed app"))
+        steps.insert(0, f"Open the deployed agent: {app_url}")
     if scaffolded:
         steps.insert(
             0, f"Set a real `command:` in {source_dir / 'app.yaml'} (a placeholder was written)"
@@ -549,7 +569,12 @@ def _deployment_status(a: dict) -> Optional[str]:
 @click.pass_obj
 def deployments_list(obj) -> None:
     """List Mason agent deployments (apps named `mason-*`) in the workspace."""
-    result = _databricks(["apps", "list", "-o", "json"], obj.profile, capture=True)
+    result = _databricks(
+        ["apps", "list", "-o", "json"],
+        obj.profile,
+        capture=True,
+        action="Could not list agent deployments.",
+    )
     data = json.loads(result.stdout or "[]")
     items = data.get("apps", data) if isinstance(data, dict) else data
     items = [a for a in items if str(field(a, "name") or "").startswith(_DEPLOYMENT_PREFIX)]
@@ -577,7 +602,12 @@ def deployments_list(obj) -> None:
 def deployments_get(obj, name) -> None:
     """Get an agent deployment's details."""
     _validate_deployment_name(name)
-    result = _databricks(["apps", "get", name, "-o", "json"], obj.profile, capture=True)
+    result = _databricks(
+        ["apps", "get", name, "-o", "json"],
+        obj.profile,
+        capture=True,
+        action=f"Could not read deployment '{name}'.",
+    )
     data = json.loads(result.stdout or "{}")
     if obj.output == "json":
         render.emit_json(data)
@@ -603,7 +633,7 @@ def deployments_get(obj, name) -> None:
 def deployments_logs(obj, name) -> None:
     """Stream a deployment's logs."""
     _validate_deployment_name(name)
-    _databricks(["apps", "logs", name], obj.profile)
+    _databricks(["apps", "logs", name], obj.profile, action=f"Could not read logs for '{name}'.")
 
 
 @deployments.command("start")
@@ -612,7 +642,9 @@ def deployments_logs(obj, name) -> None:
 def deployments_start(obj, name) -> None:
     """Start a deployment."""
     _validate_deployment_name(name)
-    _databricks(["apps", "start", name], obj.profile)
+    _databricks(
+        ["apps", "start", name], obj.profile, action=f"Could not start deployment '{name}'."
+    )
     if obj.output == "json":
         render.emit_json({"started": name})
         return
@@ -627,7 +659,7 @@ def deployments_stop(obj, name, yes) -> None:
     """Stop a deployment."""
     _validate_deployment_name(name)
     _confirm_destroy(f"Stop deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "stop", name], obj.profile)
+    _databricks(["apps", "stop", name], obj.profile, action=f"Could not stop deployment '{name}'.")
     if obj.output == "json":
         render.emit_json({"stopped": name})
         return
@@ -642,7 +674,9 @@ def deployments_delete(obj, name, yes) -> None:
     """Delete a deployment."""
     _validate_deployment_name(name)
     _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
-    _databricks(["apps", "delete", name], obj.profile)
+    _databricks(
+        ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
+    )
     if obj.output == "json":
         render.emit_json({"deleted": name})
         return

@@ -64,13 +64,13 @@ def test_store_get_renders_timestamps_from_create_time():
     assert "2026" in result.output
 
 
-def test_store_create_suggests_deploying_with_memory():
+def test_store_create_suggests_binding_the_store():
     store = {"name": "memory-stores/abc123", "display_name": "demo"}
     result = CliRunner().invoke(
         stores, ["create", "--display-name", "demo"], obj=_Ctx(_Client(store=store))
     )
     assert result.exit_code == 0, result.output
-    assert "mason deploy <agent> --memory demo" in result.output
+    assert "mason memory bind demo" in result.output
 
 
 def test_store_list_renders_timestamps_from_create_time():
@@ -104,7 +104,8 @@ def _bind_ctx(tmp_path):
 
         def create_memory_store(self, display_name, description=None, *, retry_transient=False):
             self.created.append(display_name)
-            return {"name": f"memory-stores/{display_name}", "display_name": display_name}
+            # The API returns an id distinct from the display name, as the real one does.
+            return {"name": "memory-stores/mem-id-123", "display_name": display_name}
 
         def list_memory_stores(self, page_size=None, page_token=None):
             return {"managed_memory_stores": []}
@@ -123,7 +124,11 @@ def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert ctx.client().created == ["agent-mem"]  # created by default
-    assert AgentProject.load(tmp_path).memory_store == "agent-mem"
+    # Bind tells the user it created the store (vs reused an existing one).
+    assert "Created and bound memory store 'agent-mem'" in result.output
+    project = AgentProject.load(tmp_path)
+    assert project.memory_store == "agent-mem"
+    assert project.memory_store_id == "mem-id-123"  # bare id recorded for the runtime
 
 
 def test_memory_unbind_clears_agent_toml(tmp_path):

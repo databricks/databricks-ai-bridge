@@ -16,7 +16,11 @@ import click
 import yaml
 
 from databricks_mason import render
-from databricks_mason.deploy import _upsert_manifest_env, resolve_store_env
+from databricks_mason.deploy import (
+    _upsert_manifest_env,
+    store_bindings,
+    validate_stores_and_trace_env,
+)
 from databricks_mason.errors import AgentCliError
 from databricks_mason.store_access import _databricks
 
@@ -45,20 +49,6 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
 )
 @click.option("--app-port", type=int, default=None, help="Port to run the app on (default 8000).")
 @click.option(
-    "--memory",
-    "-m",
-    "memory_store",
-    default=None,
-    help="Memory store display name to wire in via AGENT_MEMORY_STORE (same as `mason deploy`).",
-)
-@click.option(
-    "--session",
-    "-s",
-    "session_store",
-    default=None,
-    help="Session store name to wire in via AGENT_SESSION_STORE (same as `mason deploy`).",
-)
-@click.option(
     "--with-traces",
     "traces_destination",
     default=None,
@@ -69,23 +59,14 @@ _BUILD_INDEX_ENVS = frozenset({"PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDE
     default=None,
     help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
 )
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require referenced stores to already exist. By default missing stores are created "
-    "(idempotent).",
-)
 @click.pass_obj
 def dev(
     obj,
     source: str,
     prepare_environment: Optional[bool],
     app_port: Optional[int],
-    memory_store: Optional[str],
-    session_store: Optional[str],
     traces_destination: Optional[str],
     traces_experiment: Optional[str],
-    no_create_stores: bool,
 ) -> None:
     """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
 
@@ -94,11 +75,10 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    The ``--memory`` / ``--session`` / ``--with-traces`` flags wire an agent's stores/traces
-    into ``app.yaml`` before running, exactly as ``mason deploy`` does — so you can iterate locally
-    against a real store without hand-editing env.
-    Locally the store owner (you) already has access, so no service-principal grant is needed here;
-    that grant happens at ``mason deploy`` time.
+    Stores bound with ``mason memory/sessions bind`` are validated here and read from agent.toml at
+    runtime (not written to app.yaml); the ``--with-traces`` flag wires tracing env into app.yaml,
+    exactly as ``mason deploy`` does. Locally the store owner (you) already has access, so no
+    service-principal grant is needed here; that grant happens at ``mason deploy`` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -108,19 +88,22 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
-    # Wire any requested stores/traces into app.yaml first, so run-local reads the updated env.
+    # Validate the agent.toml store bindings exist and wire any traces into app.yaml. The stores are
+    # read from agent.toml at runtime, so they aren't written to app.yaml — set them (and create them)
+    # with `mason memory/sessions bind`.
+    memory_store, session_store = store_bindings(source_dir)
     if memory_store or session_store or traces_destination or traces_experiment:
         # The agent name defaults to the project dir name, so a per-app trace experiment here matches
         # what `mason deploy <that-name>` derives.
-        env_updates = resolve_store_env(
-            obj.client(),
-            app=source_dir.resolve().name,
-            memory_store=memory_store,
-            session_store=session_store,
-            traces_destination=traces_destination,
-            traces_experiment=traces_experiment,
-            create_stores=not no_create_stores,
-        )
+        with render.status("Checking stores…"):
+            env_updates = validate_stores_and_trace_env(
+                obj.client(),
+                app=source_dir.resolve().name,
+                memory_store=memory_store,
+                session_store=session_store,
+                traces_destination=traces_destination,
+                traces_experiment=traces_experiment,
+            )
         if env_updates:
             _upsert_manifest_env(source_dir, env_updates)
 
@@ -147,7 +130,12 @@ def dev(
     _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
 
     # Run in the project dir so run-local finds the app; stream output (no capture).
-    _databricks(args, obj.profile, cwd=str(source_dir))
+    _databricks(
+        args,
+        obj.profile,
+        cwd=str(source_dir),
+        action="Could not start the agent locally.",
+    )
 
 
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
@@ -161,7 +149,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             next_steps=[
                 f"Open {base} to chat with your agent",
                 ("mason tools add mcp <service>", "Give the agent a tool"),
-                ("mason dev -m <store> -s <store>", "Attach a memory / session store"),
+                ("mason memory bind <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )

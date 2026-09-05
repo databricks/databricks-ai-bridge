@@ -34,10 +34,38 @@ def status(message: str, con: Optional[Console] = None) -> Iterator[None]:
     """Show an animated spinner with ``message`` while a slow call runs, then clear it.
 
     Wraps ``rich``'s console status; a no-op spinner (no TTY) still runs the body. Use around
-    network work like store provisioning so the CLI doesn't look hung.
+    network work like store provisioning so the CLI doesn't look hung. Under ``-o json`` the spinner
+    is skipped so no control characters leak into machine-readable output.
     """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
     con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
     with con.status(message, spinner="dots"):
+        yield
+
+
+@contextmanager
+def progress(message: str, con: Optional[Console] = None) -> Iterator[None]:
+    """Like ``status``, but first prints a persistent line so feedback survives the spinner.
+
+    ``status`` clears itself on exit and only animates on a TTY, so a long, silent wait (e.g. waiting
+    for app compute) can look like a hang in terminals where the spinner doesn't render. This prints
+    a durable "• message" line up front, then runs a bare spinner (no repeated text) beneath it.
+    Skipped under ``-o json`` so machine output stays clean.
+    """
+    from databricks_mason import errors  # local import avoids a cycle at module load
+
+    con = con or _stdout
+    if errors._OUTPUT_MODE == "json":
+        yield
+        return
+    con.print(f"[{MUTED}]•[/] {message}")
+    # Empty status text: the persistent line above already carries the message, so the spinner
+    # underneath is just the animated glyph — no duplicated sentence.
+    with con.status("", spinner="dots"):
         yield
 
 
@@ -192,22 +220,6 @@ def _snippet_group(snippets: Sequence[tuple[str, str, str]]) -> RenderableType:
 
 
 # --- success / next steps (the "Set up" cards) -------------------------------
-
-
-def note(
-    message: str,
-    *,
-    symbol: str = "✓",
-    style: str = "green",
-    con: Optional[Console] = None,
-) -> None:
-    """Print a single standalone status line (outside any panel).
-
-    For a milestone worth calling out as it happens — e.g. a store just created during `mason
-    deploy` — so it stands on its own rather than being buried in the final summary's fields.
-    """
-    con = con or _stdout
-    con.print(Text(f"{symbol} ", style=f"bold {style}") + Text(message, style="bold"))
 
 
 def success(

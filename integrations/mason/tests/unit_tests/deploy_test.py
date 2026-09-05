@@ -1,4 +1,4 @@
-"""Unit tests for the deploy wrapper: app.yaml env injection, store reuse, deploy argv."""
+"""Unit tests for the deploy wrapper: trace env injection, store validation, deploy argv."""
 
 from __future__ import annotations
 
@@ -7,11 +7,19 @@ import pathlib
 import types
 from unittest import mock
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
+
+
+@pytest.fixture(autouse=True)
+def _compute_active(monkeypatch):
+    # `mason deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
+    # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
+    monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -98,7 +106,6 @@ class _FakeClient:
         }
 
     def create_memory_store(self, display_name, *, retry_transient=False):
-        # Create-if-not-exists is the deploy default; return the same id resolution would find.
         return {"name": "memory-stores/mem-id-123", "display_name": display_name}
 
     def get_session_store(self, name):
@@ -120,19 +127,21 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, memory="mem")
 
     calls: list[list[str]] = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kw: calls.append(args)
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--memory", "mem"],
+        ["myapp", "--source", str(src)],
         obj=_FakeCtx(),
     )
 
@@ -142,10 +151,107 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "mason-myapp", "--source-code-path", ws] in calls
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    # Display name "mem" resolves to store id memory-stores/mem-id-123; the runtime re-adds the
-    # `memory-stores/` prefix, so the env var must carry the bare id.
-    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
+    # Stores are read from agent.toml at runtime, so deploy does NOT write store env into app.yaml.
+    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
+    env = {e["name"]: e["value"] for e in env_entries}
+    assert "AGENT_MEMORY_STORE" not in env
+
+
+def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: False)
+    monkeypatch.setattr(deploy_mod, "_wait_for_running", lambda name, profile: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: calls.append((args, kwargs))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        [
+            "apps",
+            "create",
+            "mason-myapp",
+            "--compute-min-instances",
+            "2",
+            "--compute-max-instances",
+            "2",
+        ],
+        {
+            "capture": True,
+            "action": "Could not create deployment 'mason-myapp'.",
+        },
+    ) in calls
+
+
+def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: calls.append((args, kwargs))
+        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src), "--instances", "2"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    update_args, update_kwargs = next(
+        call for call in calls if call[0][:3] == ["apps", "create-update", "mason-myapp"]
+    )
+    assert update_kwargs == {
+        "capture": True,
+        "action": "Could not update deployment 'mason-myapp'.",
+    }
+    payload = json.loads(update_args[update_args.index("--json") + 1])
+    assert payload == {
+        "app": {"compute_min_instances": 2, "compute_max_instances": 2},
+        "update_mask": "compute_min_instances,compute_max_instances",
+    }
+
+
+def test_deploy_rejects_instance_count_above_platform_limit():
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--instances", "6"],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "6 is not in the range 1<=x<=5" in result.output
+
+
+def test_deploy_help_exposes_instances_and_sticky_routing():
+    result = CliRunner().invoke(deploy_mod.deploy, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--instances" in result.output
+    assert "--min-instances" not in result.output
+    assert "--max-instances" not in result.output
+    assert "sticky routing" in result.output
+    assert "__Host-databricks-app-router" in result.output
+    assert "Databricks Apps instances" not in result.output
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
@@ -159,11 +265,13 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kwargs: calls.append((args, kwargs))
-        or types.SimpleNamespace(
-            returncode=0,
-            stdout="App compute is starting\n" if args[:2] == ["apps", "create"] else "",
-            stderr="",
+        lambda args, profile, **kwargs: (
+            calls.append((args, kwargs))
+            or types.SimpleNamespace(
+                returncode=0,
+                stdout="App compute is starting\n" if args[:2] == ["apps", "create"] else "",
+                stderr="",
+            )
         ),
     )
 
@@ -172,8 +280,13 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     assert result.exit_code == 0, result.output
     apps_calls = [call for call in calls if call[0][1] in ("create", "deploy")]
     assert [call[0][1] for call in apps_calls] == ["create", "deploy"]
-    assert apps_calls[0][1] == {"capture": True}
-    assert apps_calls[1][1] == {}
+    # create is still captured (to relabel its output); both carry an `action` so a failure is
+    # reported in Mason's terms instead of echoing the raw `databricks apps` command.
+    assert apps_calls[0][1] == {
+        "capture": True,
+        "action": "Could not create deployment 'mason-myapp'.",
+    }
+    assert apps_calls[1][1] == {"action": "Could not deploy 'mason-myapp'."}
     assert "Agent compute is starting" in result.output
     assert "App compute" not in result.output
     get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])
@@ -216,8 +329,9 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kw: calls.append(args)
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
@@ -252,8 +366,9 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kw: calls.append(args)
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
@@ -261,10 +376,35 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     assert result.exit_code == 0, result.output
     assert ["apps", "create", "mason-myapp"] in calls
     assert waited["called"], "must wait for the new app to be running before deploying"
-    # the wait happens after create and before sync/deploy
-    create_i = calls.index(["apps", "create", "mason-myapp"])
-    sync_i = next(i for i, a in enumerate(calls) if a[:1] == ["sync"])
-    assert create_i < sync_i
+
+
+def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, monkeypatch):
+    # An existing app is re-deployed: no `apps create` (it would error), but still wait for compute
+    # so there's feedback and the app is ACTIVE before `apps deploy`.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)  # already exists
+    waited = {"called": False}
+    monkeypatch.setattr(
+        deploy_mod, "_wait_for_running", lambda name, profile: waited.__setitem__("called", True)
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert ["apps", "create", "mason-myapp"] not in calls  # never re-create an existing app
+    assert waited["called"], "re-deploy must also wait for compute"
 
 
 def test_wait_for_running_returns_when_compute_active(monkeypatch):
@@ -282,10 +422,12 @@ def test_wait_for_running_times_out(monkeypatch):
         pass
 
 
-def test_deploy_injects_store_env_without_actor(tmp_path: pathlib.Path, monkeypatch):
+def test_deploy_does_not_write_store_env_to_app_yaml(tmp_path: pathlib.Path, monkeypatch):
+    # Stores are read from agent.toml at runtime, so deploy writes no AGENT_*_STORE (nor actor) env.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, memory="mem", session="sessions")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -296,18 +438,15 @@ def test_deploy_injects_store_env_without_actor(tmp_path: pathlib.Path, monkeypa
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--memory", "mem", "--session", "sessions"],
+        ["myapp", "--source", str(src)],
         obj=_FakeCtx(),
     )
 
     assert result.exit_code == 0, result.output
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-    }
-    assert env["AGENT_MEMORY_STORE"]  # resolved memory store id
-    assert env["AGENT_SESSION_STORE"] == "sessions"
-    # The actor is derived per request from the signed-in user, not injected at deploy time.
+    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
+    env = {entry["name"]: entry["value"] for entry in env_entries}
+    assert "AGENT_MEMORY_STORE" not in env
+    assert "AGENT_SESSION_STORE" not in env
     assert "AGENT_MEMORY_ACTOR_ID" not in env
     assert "AGENT_SESSION_ACTOR_ID" not in env
 
@@ -401,13 +540,12 @@ def test_memory_store_database_resolves_by_display_name():
     assert deploy_mod._memory_store_database(_Client(), "mem") == "memory-uuidx"
 
 
-def test_deploy_no_create_stores_resolves_memory_by_display_name(
-    tmp_path: pathlib.Path, monkeypatch
-):
-    # --no-create-stores path must resolve by display name (list+match), not get_memory_store (by id).
+def test_deploy_validates_bound_memory_store_by_display_name(tmp_path: pathlib.Path, monkeypatch):
+    # Deploy resolves the bound memory store by display name (list+match), not get_memory_store (by id).
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, memory="mem")
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
     monkeypatch.setattr(
@@ -415,184 +553,59 @@ def test_deploy_no_create_stores_resolves_memory_by_display_name(
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "--memory", "mem", "--no-create-stores"],
-        obj=_FakeCtx(),
-    )
+    # _FakeClient resolves display name "mem" via list+match; deploy succeeds.
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
     assert result.exit_code == 0, result.output
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"  # resolved by display name, bare id
 
 
-def test_deploy_creates_missing_stores_by_default(tmp_path: pathlib.Path, monkeypatch):
-    # Create-if-not-exists is now the default (no flag): a referenced store is created via the API.
-    created: list[str] = []
+def test_deploy_errors_when_bound_store_missing(tmp_path: pathlib.Path, monkeypatch):
+    # Stores are created by `mason ... bind`, not deploy; a bound-but-missing store fails with a hint.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, memory="ghost")
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
 
-    class _CreatingClient(_FakeClient):
-        def create_memory_store(self, display_name, *, retry_transient=False):
-            created.append(display_name)
-            return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+    class _EmptyClient(_FakeClient):
+        def list_memory_stores(self, page_size=None, page_token=None):
+            return {"managed_memory_stores": [], "next_page_token": ""}
 
     class _Ctx(_FakeCtx):
         def client(self):
-            return _CreatingClient()
+            return _EmptyClient()
 
-    result = CliRunner().invoke(
-        deploy_mod.deploy, ["myapp", "--source", str(src), "--memory", "new-mem"], obj=_Ctx()
-    )
-    assert result.exit_code == 0, result.output
-    assert created == ["new-mem"]  # created without any --create-stores flag
-
-
-def test_deploy_accepts_short_store_flags(tmp_path: pathlib.Path, monkeypatch):
-    # -m / -s are the short forms of --memory / --session.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
-        obj=_FakeCtx(),
-    )
-    assert result.exit_code == 0, result.output
-    env = {e["name"]: e["value"] for e in yaml.safe_load((src / "app.yaml").read_text())["env"]}
-    assert env["AGENT_MEMORY_STORE"] == "mem-id-123"
-    assert env["AGENT_SESSION_STORE"] == "s"
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_Ctx())
+    assert result.exit_code != 0
+    assert "does not exist" in result.output
+    assert "mason memory bind ghost" in result.output
 
 
 def test_with_traces_defaults_the_experiment_per_app():
     # --with-traces alone must still set the experiment, or the agent ships tracing half-configured
     # (destination set, experiment missing) and silently disables it. The default is per-app, so
     # each agent's traces are isolated instead of piling into one shared experiment.
-    env = deploy_mod.resolve_store_env(
+    env = deploy_mod.validate_stores_and_trace_env(
         _FakeClient(),
         app="my-agent",
         memory_store=None,
         session_store=None,
         traces_destination="cat.schema",
         traces_experiment=None,
-        create_stores=False,
     )
     assert env["MLFLOW_TRACING_DESTINATION"] == "cat.schema"
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Users/me@example.com/mason-traces/my-agent"
 
 
 def test_with_traces_explicit_experiment_wins_over_per_app():
-    env = deploy_mod.resolve_store_env(
+    env = deploy_mod.validate_stores_and_trace_env(
         _FakeClient(),
         app="my-agent",
         memory_store=None,
         session_store=None,
         traces_destination="cat.schema",
         traces_experiment="/Shared/custom",
-        create_stores=False,
     )
     assert env["MLFLOW_EXPERIMENT_NAME"] == "/Shared/custom"
-
-
-def test_store_label_marks_created_vs_existing():
-    assert deploy_mod._store_label("id", True) == "id  (created)"
-    assert deploy_mod._store_label("id", False) == "id  (existing)"
-    assert deploy_mod._store_label("id", None) == "id"
-
-
-def test_resolve_store_env_reports_created_stores():
-    # On the create path (_FakeClient's create_* succeed), both stores are reported as created.
-    created: dict[str, bool] = {}
-    deploy_mod.resolve_store_env(
-        _FakeClient(),
-        app="a",
-        memory_store="mem",
-        session_store="s",
-        traces_destination=None,
-        traces_experiment=None,
-        create_stores=True,
-        created=created,
-    )
-    assert created == {"memory": True, "session": True}
-
-
-def test_resolve_store_env_reports_existing_stores_on_no_create():
-    # With --no-create-stores the stores are resolved (already exist), so created is False.
-    created: dict[str, bool] = {}
-    deploy_mod.resolve_store_env(
-        _FakeClient(),
-        app="a",
-        memory_store="mem",
-        session_store="s",
-        traces_destination=None,
-        traces_experiment=None,
-        create_stores=False,
-        created=created,
-    )
-    assert created == {"memory": False, "session": False}
-
-
-def test_deploy_summary_marks_a_created_store(tmp_path: pathlib.Path, monkeypatch):
-    # The deploy summary must tell the user a store was created (vs reused). _FakeClient creates on
-    # the default path, so the Memory/Session store fields carry the "(created)" marker, and a
-    # standalone "Created new ... store" line is logged as it happens.
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(deploy_mod, "_app_url", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
-        obj=_FakeCtx(),
-    )
-    assert result.exit_code == 0, result.output
-    assert "(created)" in result.output
-    assert "Created new memory store 'mem'" in result.output
-    assert "Created new session store 's'" in result.output
-
-
-def test_deploy_json_reports_stores_created(tmp_path: pathlib.Path, monkeypatch):
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, p: None)
-    monkeypatch.setattr(deploy_mod, "_app_url", lambda name, p: None)
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    ctx = _FakeCtx()
-    ctx.output = "json"
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src), "-m", "mem", "-s", "s"],
-        obj=ctx,
-    )
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["stores_created"] == {"memory": True, "session": True}
 
 
 def _run_deploy(src, monkeypatch, extra_args):
@@ -649,3 +662,61 @@ def test_lifecycle_commands_honor_json_output(monkeypatch):
         result = CliRunner().invoke(command, args, obj=_JsonCtx())
         assert result.exit_code == 0, result.output
         assert json.loads(result.output) == {key: "myapp"}
+
+
+def _agent_toml(source: pathlib.Path, *, memory=None, session=None) -> None:
+    text = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+    if memory:
+        text += f'\n[memory_store]\nname = "{memory}"\n'
+    if session:
+        text += f'\n[session_store]\nname = "{session}"\n'
+    (source / "agent.toml").write_text(text, encoding="utf-8")
+
+
+def test_store_bindings_reads_agent_toml(tmp_path: pathlib.Path):
+    _agent_toml(tmp_path, memory="bound-mem", session="bound-sess")
+    assert deploy_mod.store_bindings(tmp_path) == ("bound-mem", "bound-sess")
+
+
+def test_store_bindings_none_when_unbound(tmp_path: pathlib.Path):
+    _agent_toml(tmp_path)  # scaffold with no store tables
+    assert deploy_mod.store_bindings(tmp_path) == (None, None)
+
+
+def test_store_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
+    # No agent.toml -> no stores, never raises (so deploy/dev aren't blocked).
+    assert deploy_mod.store_bindings(tmp_path) == (None, None)
+
+
+def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
+    # `mason sessions bind` then plain `mason deploy`: the binding must drive both the
+    # app.yaml env AND the SP access grant, or the deployed app can't reach its durable store.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, session="bound-sess")
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, profile: "sp-123")
+    grant_args: dict = {}
+    monkeypatch.setattr(
+        deploy_mod,
+        "_grant_store_access",
+        lambda name, sp, user, session_store, memory_database, profile: (
+            grant_args.update(sp=sp, session_store=session_store, memory_database=memory_database)
+            or None
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    # The grant fired for the bound session store, resolved from agent.toml — no store env in app.yaml.
+    assert grant_args == {"sp": "sp-123", "session_store": "bound-sess", "memory_database": None}
+    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
+    assert "AGENT_SESSION_STORE" not in {e["name"] for e in env_entries}

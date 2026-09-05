@@ -102,7 +102,15 @@
               <p class="eyebrow">Interactive client</p>
               <h2>OpenAI agent</h2>
             </div>
-            <span id="run-status" class="run-status">Ready</span>
+            <div class="chat-header-controls">
+              <label class="model-picker">
+                <span class="sr-only">Model</span>
+                <select id="model-select" aria-label="Model" disabled>
+                  <option>Loading models…</option>
+                </select>
+              </label>
+              <span id="run-status" class="run-status">Ready</span>
+            </div>
           </div>
 
           <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-busy="false">
@@ -153,7 +161,7 @@
               <div><p class="eyebrow">Cross-session</p><h2>Long-term memory</h2></div>
               <button id="refresh-memory" class="icon-button" type="button" aria-label="Refresh memory entries">↻</button>
             </div>
-            <p id="memory-help" class="supporting-text">Run from the project directory: mason dev --memory &lt;store-name&gt;</p>
+            <p id="memory-help" class="supporting-text">Run from the project directory: mason memory bind &lt;store-name&gt;</p>
             <div id="memory-results" class="state-list" aria-live="polite">
               <div class="state-empty">Memory entries appear here.</div>
             </div>

@@ -107,7 +107,7 @@ def test_help_examples_recommend_the_default_happy_path():
         ("dev",): ("mason dev",),
         ("memory",): (
             "mason memory stores create --display-name agent-memory",
-            "mason deploy <agent> --memory agent-memory",
+            "mason memory bind agent-memory",
         ),
         ("deploy",): ("mason deploy my-agent",),
     }

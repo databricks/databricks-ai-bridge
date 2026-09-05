@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mason"
-version = "0.1.3.dev0"
+version = "0.1.4.dev0"
 description = "Databricks integration for Mason"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tracing = [
-    "mlflow[databricks]>=3.9.0",
+    "mlflow[databricks]>=3.10.1",
 ]
 # The agent-side runtime helpers a deployed agent imports. Kept as extras so a plain
 # `pip install databricks-mason` (the CLI) stays light; each template depends on the extra for its
