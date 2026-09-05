@@ -21,6 +21,7 @@ def test_public_surface() -> None:
         "tag_session",
         "workspace_client",
         "workspace_headers",
+        "list_ai_gateway_models",
     }
 
     assert set(databricks_mason.__all__) == eager | lazy

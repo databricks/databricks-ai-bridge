@@ -9,6 +9,7 @@ from databricks_mason.session_store import Session, SessionItem, SessionStore
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
         configure_tracing,
+        list_ai_gateway_models,
         tag_session,
         workspace_client,
         workspace_headers,
@@ -26,10 +27,17 @@ __all__ = [
     "tag_session",
     "workspace_client",
     "workspace_headers",
+    "list_ai_gateway_models",
 ]
 
 _RUNTIME_REEXPORTS = frozenset(
-    {"configure_tracing", "tag_session", "workspace_client", "workspace_headers"}
+    {
+        "configure_tracing",
+        "tag_session",
+        "workspace_client",
+        "workspace_headers",
+        "list_ai_gateway_models",
+    }
 )
 
 
