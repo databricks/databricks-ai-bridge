@@ -71,16 +71,20 @@ def _check_databricks_auth() -> None:
         ) from e
 
 
-def create_agent(actor: str, mcp=None) -> Agent:
+def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
     """Build the OpenAI Agents SDK agent: local tools + long-term-memory tools + any MCP servers.
 
     ``actor`` is the identity whose long-term memory the agent reads/writes; it's captured in the
     memory tools' closures (never exposed to the model). See ``_actor``.
+
+    ``model`` selects the serving endpoint for this run; the chat UI passes the picker's choice and
+    everything else falls back to ``MODEL``. The agent is rebuilt per turn, so the endpoint can vary
+    request to request.
     """
     return Agent(
         name="Agent",
         instructions="You are a helpful assistant.",
-        model=MODEL,
+        model=model or MODEL,
         tools=[*all_tools(), *memory_tools(actor)],
         mcp_servers=mcp or [],
     )
@@ -157,7 +161,7 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(actor, mcp)
+        agent = create_agent(actor, mcp, model=request.get("model"))
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
         # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new

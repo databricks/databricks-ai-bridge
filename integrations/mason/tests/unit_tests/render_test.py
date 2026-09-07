@@ -140,3 +140,25 @@ def test_status_renders_spinner_in_text_mode(monkeypatch):
     with render.status("working…", con=con):
         ran.append(True)
     assert ran == [True]  # body runs whether or not the spinner is visible
+
+
+def test_progress_prints_persistent_line_in_text_mode(monkeypatch):
+    # The persistent line must survive even on a non-TTY console (where the spinner doesn't render),
+    # so a long wait always leaves visible feedback.
+    from databricks_mason import errors
+
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "text")
+    con, buf = _console()
+    with render.progress("Waiting for app compute…", con=con):
+        pass
+    assert "Waiting for app compute…" in buf.getvalue()
+
+
+def test_progress_skips_output_in_json_mode(monkeypatch):
+    from databricks_mason import errors
+
+    con, buf = _console()
+    monkeypatch.setattr(errors, "_OUTPUT_MODE", "json")
+    with render.progress("Waiting for app compute…", con=con):
+        pass
+    assert buf.getvalue() == ""  # nothing emitted in json mode

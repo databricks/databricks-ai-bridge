@@ -102,7 +102,15 @@
               <p class="eyebrow">Interactive client</p>
               <h2>LangGraph agent</h2>
             </div>
-            <span id="run-status" class="run-status">Ready</span>
+            <div class="chat-header-controls">
+              <label class="model-picker">
+                <span class="sr-only">Model</span>
+                <select id="model-select" aria-label="Model" disabled>
+                  <option>Loading models…</option>
+                </select>
+              </label>
+              <span id="run-status" class="run-status">Ready</span>
+            </div>
           </div>
 
           <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-busy="false">
