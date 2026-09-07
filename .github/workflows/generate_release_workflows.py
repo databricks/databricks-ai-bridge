@@ -14,7 +14,6 @@ class Package:
 PACKAGES = [
     Package("databricks-ai-bridge"),
     Package("databricks-langchain", "integrations/langchain"),
-    Package("databricks-mason", "integrations/mason"),
     Package("databricks-mcp", "databricks_mcp"),
     Package("databricks-openai", "integrations/openai"),
 ]
