@@ -236,13 +236,13 @@ def test_background_wait_uses_absolute_status_url(monkeypatch):
                 {
                     "id": "run-1",
                     "status": "queued",
-                    "status_url": "https://status.example/runs/run-1",
+                    "status_url": "https://app/runs/run-1",
                 },
                 status_code=202,
             ),
             _response(
                 {"id": "run-1", "status": "completed", "output": "done"},
-                url="https://status.example/runs/run-1",
+                url="https://app/runs/run-1",
             ),
         ]
     )
@@ -279,7 +279,89 @@ def test_background_wait_uses_absolute_status_url(monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert sent[1].url == "https://status.example/runs/run-1"
+    assert sent[1].url == "https://app/runs/run-1"
+
+
+def test_background_wait_rejects_cross_origin_status_url(monkeypatch):
+    class FakeSession:
+        def send(self, request, *, on_event=None):
+            return _response(
+                {
+                    "id": "run-1",
+                    "status": "queued",
+                    "status_url": "https://status.example/runs/run-1",
+                },
+                status_code=202,
+            )
+
+    monkeypatch.setattr(
+        endpoint_mod,
+        "resolve_target",
+        lambda **kwargs: ("https://app", False, None),
+    )
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--url",
+            "https://app",
+            "--preset",
+            "mason-durable",
+            "--message",
+            "hello",
+            "--background",
+            "--wait",
+            "--no-auth",
+        ],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Refusing to poll a cross-origin status URL" in result.output
+
+
+def test_background_wait_fails_for_terminal_failure(monkeypatch):
+    responses: Iterator[EndpointResponse] = iter(
+        [
+            _response({"id": "run-1", "status": "queued"}, status_code=202),
+            _response({"id": "run-1", "status": "failed", "error": "boom"}),
+        ]
+    )
+
+    class FakeSession:
+        def send(self, request, *, on_event=None):
+            return next(responses)
+
+    monkeypatch.setattr(
+        endpoint_mod,
+        "resolve_target",
+        lambda **kwargs: ("https://app", False, None),
+    )
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
+
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--url",
+            "https://app",
+            "--preset",
+            "mason-durable",
+            "--message",
+            "hello",
+            "--background",
+            "--wait",
+            "--no-auth",
+        ],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "finished with status 'failed'" in result.output
+    assert "boom" in result.output
 
 
 def test_request_id_requires_durable_preset():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.parse
 from typing import Mapping
 from uuid import UUID, uuid4
 
@@ -40,6 +41,12 @@ def _wait_for_completion(
         raise AgentCliError(
             "The background response did not contain an invocation id or status URL."
         )
+    poll_url = request_url(base_url, path, {})
+    if _origin(poll_url) != _origin(base_url):
+        raise AgentCliError(
+            "Refusing to poll a cross-origin status URL.",
+            hint="Mason preserves OAuth and routing headers while polling, so the status URL must use the endpoint origin.",
+        )
     deadline = time.monotonic() + timeout
     current = response
     while True:
@@ -56,13 +63,27 @@ def _wait_for_completion(
             raise AgentCliError(f"Timed out waiting {timeout:g}s for the invocation to complete.")
         current = session.send(
             EndpointRequest(
-                url=request_url(base_url, path, {}),
+                url=poll_url,
                 method="GET",
                 headers=headers,
                 body=None,
                 timeout=min(remaining, 60.0),
             )
         )
+
+
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    parsed = urllib.parse.urlsplit(url)
+    port = parsed.port
+    if port is None:
+        port = (
+            443
+            if parsed.scheme.lower() == "https"
+            else 80
+            if parsed.scheme.lower() == "http"
+            else None
+        )
+    return parsed.scheme.lower(), parsed.hostname, port
 
 
 @click.group()
@@ -189,6 +210,13 @@ def invoke(
         )
         if not success(response.status_code, expect_status):
             raise AgentCliError(f"Polling returned HTTP {response.status_code}.")
+        if isinstance(response.body, Mapping):
+            status = str(response.body.get("status") or "").lower()
+            if terminal_status(status) and status != "completed":
+                raise AgentCliError(
+                    f"Endpoint invocation finished with status {status!r}.",
+                    hint=json.dumps(response.body, default=str)[:1000],
+                )
     render_response(response, output=obj.output, streamed=stream and not wait)
 
 
