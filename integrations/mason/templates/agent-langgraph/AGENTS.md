@@ -1,8 +1,7 @@
 # Agent Development Guide
 
-A LangGraph agent backend for Databricks Apps, served from a FastAPI app (no serving
-framework). Local-first: runs with no database and no setup beyond a Databricks auth profile. MLflow
-tracing is optional.
+A LangGraph agent backend served from a FastAPI app (no serving framework). Local-first: runs with
+no database and no setup beyond a Databricks auth profile. MLflow tracing is optional.
 
 See `README.md` for the full run / deploy / client-contract docs. This file is the quick map for
 making changes.

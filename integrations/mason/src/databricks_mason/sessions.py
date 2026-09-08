@@ -79,18 +79,27 @@ def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool)
                 f"Session store '{store}' does not exist (drop --no-create-stores to create it).",
                 error_code=exc.error_code,
             ) from exc
+        created = False
     else:
         with render.status(f"Provisioning session store '{store}'…"):
-            _ensure_session_store(client, store)
+            _, created = _ensure_session_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
     project.write()
     if obj.output == "json":
-        render.emit_json({"session_store": store, "manifest": str(project.path)})
+        render.emit_json(
+            {"session_store": store, "created": created, "manifest": str(project.path)}
+        )
         return
+    # Say whether the store was newly created or an existing one was reused.
+    title = (
+        f"Created and bound session store '{store}'"
+        if created
+        else f"Bound session store '{store}'"
+    )
     render.success(
-        f"Bound session store '{store}'",
+        title,
         fields={"agent.toml": str(project.path)},
         next_steps=[
             ("mason dev", "Re-run to pick up the store locally"),
