@@ -168,6 +168,27 @@ def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch
     assert env["MLFLOW_TRACKING_URI"] == "databricks"
 
 
+def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
+    # No stores + no auth: obj.client() raises, but tracing is best-effort, so dev still runs the
+    # agent locally (it doesn't regress the offline path).
+    from databricks_mason.errors import AgentCliError
+
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".venv").mkdir()
+
+    class _OfflineCtx:
+        output = "text"
+        profile = None
+
+        def client(self):
+            raise AgentCliError("no databricks auth configured")
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_OfflineCtx())
+    assert result.exit_code == 0, result.output
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+
+
 def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path, monkeypatch):
     # Tracing is best-effort locally: if provisioning raises (e.g. no mlflow), dev still runs the
     # agent, just without wiring any MLflow env.

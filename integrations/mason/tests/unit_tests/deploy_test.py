@@ -495,6 +495,56 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     assert granted == {"app": "mason-myapp", "experiment_id": "exp-42"}
 
 
+def test_deploy_keys_experiment_on_source_dir_name_not_prefixed(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # dev keys the experiment on the source dir name; deploy must match it (NOT the mason-prefixed
+    # deployment name), so dev and deploy trace to the same per-agent experiment.
+    src = tmp_path / "my-agent"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    captured: dict = {}
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "resolve_trace_experiment",
+        lambda source, app, client, profile: captured.update(app=app) or None,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["my-agent", "--source", str(src)], obj=_FakeCtx()
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["app"] == "my-agent"  # source dir name, not "mason-my-agent"
+
+
+def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing provisioning is best-effort: a non-AgentCliError (e.g. MLflow/network) must not abort
+    # the deploy — it proceeds without tracing.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+
+    def _boom(*a, **k):
+        raise RuntimeError("mlflow create_experiment blew up")
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment", _boom)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    assert result.exit_code == 0, result.output  # deploy still succeeded
+    env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
+    assert not any(e["name"].startswith("MLFLOW") for e in env_entries)  # tracing skipped
+
+
 def test_resolve_memory_store_pages_at_100_and_matches_display_name():
     # The list API caps page_size at 100, so resolution must page (not request 1000) and match the
     # display name across pages.

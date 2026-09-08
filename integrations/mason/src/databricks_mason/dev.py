@@ -84,17 +84,20 @@ def dev(
     # (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
     env_updates: dict[str, str] = {}
-    client = obj.client()
+    # Stores legitimately require auth, so build the client eagerly only when stores are bound.
     if memory_store or session_store:
         with render.status("Checking stores…"):
-            validate_stores(client, memory_store=memory_store, session_store=session_store)
+            validate_stores(obj.client(), memory_store=memory_store, session_store=session_store)
+    # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
+    # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
+    # local run.
     try:
         experiment_id = resolve_trace_experiment(
-            source_dir, source_dir.resolve().name, client, obj.profile
+            source_dir, source_dir.resolve().name, obj.client(), obj.profile
         )
         if experiment_id:
             env_updates.update(trace_env(experiment_id))
-    except AgentCliError as exc:
+    except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
         render.console().print(f"[yellow]⚠[/] Tracing not enabled: {exc}. Running without traces.")
     if env_updates:
         _upsert_manifest_env(source_dir, env_updates)

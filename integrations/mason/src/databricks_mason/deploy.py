@@ -411,14 +411,18 @@ def deploy(
         validate_stores(client, memory_store=memory_store, session_store=session_store)
 
     # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
-    #    two env vars the runtime reads. Keyed on the app name, matching `mason dev`. The app's SP is
-    #    granted write access to it in step 5 (an experiment app resource). Best-effort: if it can't
-    #    be set up (e.g. no mlflow installed), the deploy still proceeds without tracing.
+    #    two env vars the runtime reads. Keyed on the source dir name (NOT the mason-prefixed
+    #    deployment name), matching `mason dev`, so dev and deploy trace to the same per-agent
+    #    experiment. The app's SP is granted write access to it in step 5 (an experiment app
+    #    resource). Best-effort: if it can't be set up (no mlflow, offline, permission), the deploy
+    #    still proceeds without tracing.
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = resolve_trace_experiment(source_dir, name, client, obj.profile)
-    except AgentCliError as exc:
+        trace_experiment_id = resolve_trace_experiment(
+            source_dir, source_dir.resolve().name, client, obj.profile
+        )
+    except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
         trace_setup_error = str(exc)
     env_updates: dict[str, str] = {}
     provisioned: dict[str, Any] = {}

@@ -183,7 +183,7 @@ def test_list_searches_by_explicit_experiment_id(tmp_path: pathlib.Path):
         )
     assert result.exit_code == 0, result.output
     kwargs = mlflow.search_traces.call_args.kwargs
-    assert kwargs["experiment_ids"] == ["eid-9"]
+    assert kwargs["locations"] == ["eid-9"]
     assert kwargs["max_results"] == 7
     assert json.loads(result.output)[0]["trace_id"] == "tr-1"
 
@@ -200,7 +200,7 @@ def test_list_defaults_to_projects_pinned_experiment(tmp_path: pathlib.Path):
             tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
         )
     assert result.exit_code == 0, result.output
-    assert mlflow.search_traces.call_args.kwargs["experiment_ids"] == ["p1"]
+    assert mlflow.search_traces.call_args.kwargs["locations"] == ["p1"]
 
 
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):

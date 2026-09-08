@@ -252,7 +252,7 @@ def tracing_list(obj, experiment_id, limit, source) -> None:
     _configure(mlflow, obj.profile)
     exp_id = experiment_id or _project_experiment_id(obj, source, mlflow)
     traces = (
-        mlflow.search_traces(experiment_ids=[exp_id], max_results=limit, return_type="list")
+        mlflow.search_traces(locations=[exp_id], max_results=limit, return_type="list")
         if exp_id
         else []
     )
