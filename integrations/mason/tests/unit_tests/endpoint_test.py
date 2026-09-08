@@ -9,6 +9,10 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_mason import endpoint as endpoint_mod
+from databricks_mason import endpoint_loadtest as endpoint_loadtest_mod
+from databricks_mason import endpoint_output as endpoint_output_mod
+from databricks_mason import endpoint_request as endpoint_request_mod
+from databricks_mason import endpoint_transport as endpoint_transport_mod
 from databricks_mason.endpoint import EndpointResponse, endpoint
 from databricks_mason.endpoint_presets import build_preset_body, get_preset, polling_path
 
@@ -79,7 +83,7 @@ def test_polling_path_supports_both_mason_presets():
 
 def test_request_url_accepts_absolute_status_url_and_merges_query():
     assert (
-        endpoint_mod._request_url(
+        endpoint_request_mod.request_url(
             "https://app.example/base",
             "https://status.example/runs/one?existing=yes",
             {"after": "10"},
@@ -98,15 +102,15 @@ def test_invoke_durable_preset_resolves_app_auth_and_body(monkeypatch):
 
     monkeypatch.setattr(
         endpoint_mod,
-        "_resolve_target",
+        "resolve_target",
         lambda **kwargs: ("https://app", True, "my-app"),
     )
     monkeypatch.setattr(
-        endpoint_mod,
-        "_auth_headers",
+        endpoint_request_mod,
+        "auth_headers",
         lambda profile: {"Authorization": "Bearer token"},
     )
-    monkeypatch.setattr(endpoint_mod, "_HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
 
     result = CliRunner().invoke(
         endpoint,
@@ -132,7 +136,7 @@ def test_invoke_generic_url_sends_body_without_auth(monkeypatch):
             captured["request"] = request
             return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(endpoint_mod, "_HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
 
     result = CliRunner().invoke(
         endpoint,
@@ -196,10 +200,10 @@ def test_background_wait_polls_to_terminal(monkeypatch):
 
     monkeypatch.setattr(
         endpoint_mod,
-        "_resolve_target",
+        "resolve_target",
         lambda **kwargs: ("https://app", False, None),
     )
-    monkeypatch.setattr(endpoint_mod, "_HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
     monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
 
     result = CliRunner().invoke(
@@ -251,10 +255,10 @@ def test_background_wait_uses_absolute_status_url(monkeypatch):
 
     monkeypatch.setattr(
         endpoint_mod,
-        "_resolve_target",
+        "resolve_target",
         lambda **kwargs: ("https://app", False, None),
     )
-    monkeypatch.setattr(endpoint_mod, "_HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
     monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
 
     result = CliRunner().invoke(
@@ -321,7 +325,7 @@ def test_http_session_wraps_connection_errors():
         def open(self, request, timeout):
             raise urllib.error.URLError("connection refused")
 
-    session = endpoint_mod._HttpSession()
+    session = endpoint_transport_mod.HttpSession()
     session._opener = FailingOpener()
 
     with pytest.raises(endpoint_mod.AgentCliError, match="Could not reach endpoint"):
@@ -344,7 +348,7 @@ def test_loadtest_durable_preset_generates_unique_ids(monkeypatch):
             bodies.append(request.body)
             return _response({"status": "completed"}, url=request.url)
 
-    monkeypatch.setattr(endpoint_mod, "_HttpSession", FakeSession)
+    monkeypatch.setattr(endpoint_loadtest_mod, "HttpSession", FakeSession)
 
     result = CliRunner().invoke(
         endpoint,
@@ -376,7 +380,7 @@ def test_sse_parser_decodes_json_and_done_markers():
         b'id: 1\nevent: delta\ndata: {"type":"delta","content":"hi"}\n\ndata: [DONE]\n\n'
     )
 
-    events = list(endpoint_mod._iter_sse(response, on_event=None))
+    events = list(endpoint_transport_mod.iter_sse(response, on_event=None))
 
     assert events == [
         {
@@ -389,7 +393,7 @@ def test_sse_parser_decodes_json_and_done_markers():
 
 
 def test_stream_printer_suppresses_done_marker():
-    printer = endpoint_mod._StreamPrinter(enabled=True)
+    printer = endpoint_output_mod.StreamPrinter(enabled=True)
 
     with CliRunner().isolation() as streams:
         printer({"data": {"type": "delta", "content": "hello"}})
