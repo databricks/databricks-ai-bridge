@@ -324,10 +324,16 @@ def validate_stores(client, *, memory_store: Optional[str], session_store: Optio
 def resolve_trace_experiment(source: pathlib.Path, app: str, client, profile) -> Optional[str]:
     """The MLflow experiment id an agent traces to, or None when tracing is disabled.
 
-    Tracing is on by default: unless `mason tracing disable` was run, this returns the project's
-    pinned experiment id (`mason tracing configure --experiment`), else creates-and-returns a per-app
-    experiment (`/Users/<you>/mason-traces/<app>`). Shared by `mason dev` and `mason deploy` so both
-    trace to the same experiment for a given agent.
+    Tracing is on by default. Resolution:
+
+    - `mason tracing disable` was run -> None (tracing off).
+    - a pinned experiment id (`mason tracing configure --experiment`) -> that id.
+    - otherwise -> create the per-app experiment (`/Users/<you>/mason-traces/<app>`), pin its id into
+      agent.toml, and return it. Pinning on first run means later `mason dev` / `mason deploy` reuse
+      the same experiment by id rather than re-deriving the default each time — there is no separate
+      "default" state once tracing has run once.
+
+    Shared by `mason dev` and `mason deploy` so both trace to the same experiment for a given agent.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
 
@@ -340,7 +346,12 @@ def resolve_trace_experiment(source: pathlib.Path, app: str, client, profile) ->
     pinned = project.trace_experiment_id if project is not None else None
     if pinned:
         return pinned
-    return ensure_experiment(profile, client, default_experiment(client.current_user, app))
+    experiment_id = ensure_experiment(profile, client, default_experiment(client.current_user, app))
+    # Pin the resolved default so subsequent runs reuse it by id (removes the special-cased "recompute
+    # the default" path). No agent.toml (raw dir) just means nowhere to pin — still trace this run.
+    if project is not None and project.configure_tracing(experiment_id):
+        project.write()
+    return experiment_id
 
 
 @dataclass(frozen=True)
@@ -473,7 +484,8 @@ def deploy(
     # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
     #    two env vars the runtime reads. Keyed on the source dir name (NOT the mason-prefixed
     #    deployment name), matching `mason dev`, so dev and deploy trace to the same per-agent
-    #    experiment. The app's SP is granted write access to it in step 5 (an experiment app
+    #    experiment. On first run the resolved default experiment id is pinned into agent.toml, so
+    #    later runs reuse it. The app's SP is granted write access to it in step 5 (an experiment app
     #    resource). Best-effort: if it can't be set up (no mlflow, offline, permission), the deploy
     #    still proceeds without tracing.
     trace_experiment_id: Optional[str] = None

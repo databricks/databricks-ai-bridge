@@ -878,6 +878,26 @@ def test_resolve_trace_experiment_creates_per_app_default(tmp_path: pathlib.Path
     exp_id = _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None)
     assert exp_id == "made-id"
     assert created["name"] == "/Users/me@example.com/mason-traces/my-agent"
+    # First run pins the resolved default into agent.toml so later runs reuse it by id.
+    from databricks_mason.agent_project import AgentProject
+
+    assert AgentProject.load(tmp_path).trace_experiment_id == "made-id"
+
+
+def test_resolve_trace_experiment_reuses_pinned_default_on_second_run(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        deploy_mod,
+        "ensure_experiment",
+        lambda profile, client, name: calls.append(name) or "made-id",
+    )
+    # First run creates + pins; the second reads the pinned id straight from agent.toml.
+    assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
+    assert _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None) == "made-id"
+    assert calls == ["/Users/me@example.com/mason-traces/my-agent"]  # created only once
 
 
 def _run_deploy(src, monkeypatch, extra_args):

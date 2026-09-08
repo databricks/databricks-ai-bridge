@@ -2,9 +2,10 @@
 
 Tracing is managed MLflow tracing (traces are stored in the workspace's MLflow backend) and is **on
 by default**: with no configuration, ``mason dev`` and ``mason deploy`` send an agent's traces to a
-per-app experiment (``/Users/<you>/mason-traces/<app>``), auto-created on first run. The experiment
-is identified everywhere by its **id** — that single value binds the agent (``MLFLOW_EXPERIMENT_ID``),
-grants the deployed app (an experiment app resource), reads traces, and builds the UI link.
+per-app experiment (``/Users/<you>/mason-traces/<app>``), auto-created and pinned into agent.toml on
+first run (so later runs reuse it by id). The experiment is identified everywhere by its **id** — that
+single value binds the agent (``MLFLOW_EXPERIMENT_ID``), grants the deployed app (an experiment app
+resource), reads traces, and builds the UI link.
 
 ``mason tracing configure`` pins a specific experiment by id (or re-enables the per-app default after
 a disable); ``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.

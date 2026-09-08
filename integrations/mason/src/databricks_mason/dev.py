@@ -67,8 +67,8 @@ def dev(
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
     Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
-    the agent name (the same one ``mason deploy`` uses), created on first run — configure or turn it
-    off with ``mason tracing configure`` / ``disable``. Stores bound with ``mason memory/sessions
+    the agent name (the same one ``mason deploy`` uses), created and pinned into agent.toml on first
+    run — configure or turn it off with ``mason tracing configure`` / ``disable``. Stores bound with ``mason memory/sessions
     bind`` are validated here and read from agent.toml at runtime. Locally you already have access, so
     no service-principal grant is needed; that grant happens at ``mason deploy`` time.
     """
