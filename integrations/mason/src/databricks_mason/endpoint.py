@@ -16,7 +16,7 @@ import urllib.request
 from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable, Mapping, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import click
 
@@ -496,6 +496,11 @@ def invoke(
         selected_preset is None or not selected_preset.client_generated_id
     ):
         raise AgentCliError("--id requires --preset mason-durable.")
+    if request_id is not None:
+        try:
+            UUID(request_id)
+        except ValueError as exc:
+            raise AgentCliError("--id must be a valid UUID.") from exc
     if wait and (not background or selected_preset is None):
         raise AgentCliError("--wait requires --background and a Mason preset.")
     base_url, is_app, _ = _resolve_target(

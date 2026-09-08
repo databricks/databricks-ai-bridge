@@ -297,6 +297,25 @@ def test_request_id_requires_durable_preset():
     assert "--id requires --preset mason-durable" in result.output
 
 
+def test_request_id_requires_uuid():
+    result = CliRunner().invoke(
+        endpoint,
+        [
+            "invoke",
+            "--url",
+            "http://localhost:8000",
+            "--preset",
+            "mason-durable",
+            "--id",
+            "request-id",
+        ],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "--id must be a valid UUID" in result.output
+
+
 def test_http_session_wraps_connection_errors():
     class FailingOpener:
         def open(self, request, timeout):
