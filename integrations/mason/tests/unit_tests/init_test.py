@@ -15,7 +15,7 @@ import pytest
 import tomli
 from click.testing import CliRunner
 
-from databricks_mason import init as init_mod
+from databricks_mason.cli import init as init_mod
 from databricks_mason.errors import AgentCliError
 
 # The real implementation, captured before the autouse fixture stubs it out, so the tests that

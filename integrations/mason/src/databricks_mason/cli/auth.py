@@ -20,8 +20,8 @@ from typing import Optional
 import click
 from databricks.sdk.errors import Unauthenticated
 
-from databricks_mason import render
 from databricks_mason._api_client import _MasonApiClient
+from databricks_mason.cli import render
 from databricks_mason.errors import AgentCliError
 
 

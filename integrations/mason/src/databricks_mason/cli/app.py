@@ -12,17 +12,17 @@ import click
 
 from databricks_mason import errors
 from databricks_mason._api_client import _MasonApiClient
-from databricks_mason.auth import load_default_profile, login, logout
-from databricks_mason.deploy import deploy, deployments
-from databricks_mason.dev import dev
-from databricks_mason.endpoint import endpoint
-from databricks_mason.help import configure_help
-from databricks_mason.init import init
-from databricks_mason.mcp import mcp
-from databricks_mason.memory import memory
-from databricks_mason.sessions import sessions
-from databricks_mason.tools import tools
-from databricks_mason.tracing import tracing
+from databricks_mason.cli.auth import load_default_profile, login, logout
+from databricks_mason.cli.deploy import deploy, deployments
+from databricks_mason.cli.dev import dev
+from databricks_mason.cli.endpoint import endpoint
+from databricks_mason.cli.help import configure_help
+from databricks_mason.cli.init import init
+from databricks_mason.cli.mcp import mcp
+from databricks_mason.cli.memory import memory
+from databricks_mason.cli.sessions import sessions
+from databricks_mason.cli.tools import tools
+from databricks_mason.cli.tracing import tracing
 
 
 class CliContext:

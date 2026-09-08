@@ -9,9 +9,10 @@ from typing import Any, Optional
 
 import click
 
-from databricks_mason import render, timefmt
+from databricks_mason import timefmt
+from databricks_mason.cli import render
+from databricks_mason.cli.render import field
 from databricks_mason.errors import AgentCliError
-from databricks_mason.render import field
 
 _BREADCRUMB = "Agent Session"
 
@@ -68,7 +69,7 @@ def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool)
     service principal access to it. Pass --no-create-stores to require the store to already exist.
     """
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.deploy import _ensure_session_store
+    from databricks_mason.cli.deploy import _ensure_session_store
 
     client = obj.client()
     if no_create_stores:

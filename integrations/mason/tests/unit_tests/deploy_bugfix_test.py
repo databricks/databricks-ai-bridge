@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from databricks_mason import app_resources as sa
-from databricks_mason import deploy as deploy_mod
+from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
 

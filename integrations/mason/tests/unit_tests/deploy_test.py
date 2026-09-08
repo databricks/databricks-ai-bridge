@@ -11,8 +11,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_mason import deploy as deploy_mod
 from databricks_mason.agent_project import AgentProject, ToolSpec
+from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 

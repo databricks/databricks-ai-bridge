@@ -15,10 +15,9 @@ from typing import Optional
 import click
 import yaml
 
-from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
-from databricks_mason.databricks_cli import _databricks
-from databricks_mason.deploy import (
+from databricks_mason.cli import render
+from databricks_mason.cli.deploy import (
     _load_project,
     _upsert_manifest_env,
     mlflow_tracing_config,
@@ -26,6 +25,7 @@ from databricks_mason.deploy import (
     store_bindings,
     validate_stores,
 )
+from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import (
     is_custom_server_template,

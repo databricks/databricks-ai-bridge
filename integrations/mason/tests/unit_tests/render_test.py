@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
 
-from databricks_mason import render, timefmt
+from databricks_mason import timefmt
+from databricks_mason.cli import render
 
 
 def _console() -> tuple[Console, io.StringIO]:

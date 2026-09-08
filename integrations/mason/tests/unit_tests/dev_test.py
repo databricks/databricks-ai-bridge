@@ -9,8 +9,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from databricks_mason import dev as dev_mod
 from databricks_mason.agent_project import AgentProject, ToolSpec
+from databricks_mason.cli import dev as dev_mod
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 

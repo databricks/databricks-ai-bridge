@@ -7,12 +7,12 @@ import urllib.error
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason import endpoint as endpoint_mod
-from databricks_mason import endpoint_output as endpoint_output_mod
-from databricks_mason import endpoint_request as endpoint_request_mod
-from databricks_mason import endpoint_transport as endpoint_transport_mod
-from databricks_mason.endpoint import endpoint
-from databricks_mason.endpoint_transport import EndpointRequest, EndpointResponse
+from databricks_mason.cli import endpoint as endpoint_mod
+from databricks_mason.cli import endpoint_output as endpoint_output_mod
+from databricks_mason.cli import endpoint_request as endpoint_request_mod
+from databricks_mason.cli import endpoint_transport as endpoint_transport_mod
+from databricks_mason.cli.endpoint import endpoint
+from databricks_mason.cli.endpoint_transport import EndpointRequest, EndpointResponse
 
 
 class _Ctx:

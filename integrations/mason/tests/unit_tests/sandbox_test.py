@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason import sandbox as sandbox_mod
-from databricks_mason.sandbox import add_sandbox
+from databricks_mason.cli import sandbox as sandbox_mod
+from databricks_mason.cli.sandbox import add_sandbox
 
 _EMPTY_MCPS = '''"""MCP servers to offer the agent."""
 

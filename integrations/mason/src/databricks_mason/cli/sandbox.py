@@ -14,7 +14,7 @@ from typing import Protocol
 
 import click
 
-from databricks_mason import render
+from databricks_mason.cli import render
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import load_project_metadata
 
@@ -786,7 +786,7 @@ def add_sandbox(
     """Add the system.ai.sandbox MCP with a fixed downscope to an agent project."""
     project = source.resolve()
     if (project / "agent.toml").is_file():
-        from databricks_mason.tools import add_sandbox_to_manifest
+        from databricks_mason.cli.tools import add_sandbox_to_manifest
 
         if framework is not None:
             load_project_metadata(project, framework_override=framework)

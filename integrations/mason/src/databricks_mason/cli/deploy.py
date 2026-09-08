@@ -24,24 +24,24 @@ import yaml
 
 from databricks_mason import (
     lakebase_durability_store,
-    render,
     timefmt,
 )
 from databricks_mason.app_resources import (
     apply_experiment_resource,
     apply_postgres_resources,
 )
-from databricks_mason.databricks_cli import _databricks
-from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import require_managed_tool_support
-from databricks_mason.render import field
-from databricks_mason.tracing import (
+from databricks_mason.cli import render
+from databricks_mason.cli.render import field
+from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
     create_experiment_idempotent,
     default_experiment_name,
     experiment_url,
 )
+from databricks_mason.databricks_cli import _databricks
+from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import require_managed_tool_support
 
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 _AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
