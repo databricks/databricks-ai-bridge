@@ -206,6 +206,46 @@ mason [-p <profile>] [-o text|json]
     list             [--source PATH]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
+  endpoint
+    invoke      [APP] [--url URL] [--preset mason|mason-durable]
+    loadtest    [APP] [--url URL] [--preset mason|mason-durable]
+```
+
+## Invoke and load-test HTTP endpoints
+
+`mason endpoint` targets any Databricks App or arbitrary HTTP URL. Generic mode does not assume an
+agent protocol: provide the method, path, headers, query parameters, and complete JSON body.
+
+```sh
+mason --profile <profile> endpoint invoke my-app \
+  --path /api/custom-agent \
+  --json '{"question":"hello"}'
+
+mason endpoint invoke --url http://localhost:8000 \
+  --path /custom-agent/run \
+  --json-file request.json
+```
+
+Presets add request defaults for Mason-owned runtimes while retaining the same HTTP transport. The
+`mason` preset targets the standard LangGraph/OpenAI templates. The `mason-durable` preset targets
+`DurableAgentApp`, generates a unique invocation id, and understands background polling.
+
+```sh
+mason --profile <profile> endpoint invoke mason-my-agent \
+  --preset mason --message "Summarize today's activity" --stream
+
+mason --profile <profile> endpoint invoke mason-durable-agent \
+  --preset mason-durable --message "Run the report" --background --wait
+```
+
+`loadtest` repeats the same generic or preset request and reports throughput, status codes, and
+latency percentiles. Durable preset requests receive a new id each time so persisted idempotent
+responses are not mistaken for model execution load. Its defaults are intentionally conservative:
+ten requests with concurrency one.
+
+```sh
+mason --profile <profile> endpoint loadtest mason-my-agent \
+  --preset mason --message "Hello" --requests 20 --concurrency 4
 ```
 
 ## Command help

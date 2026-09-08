@@ -199,6 +199,34 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deployments", "delete"): (
         ("mason deployments delete mason-my-agent", "delete a deployment"),
     ),
+    ("endpoint",): (
+        (
+            'mason endpoint invoke mason-my-agent --preset mason --message "Hello"',
+            "invoke a Mason agent",
+        ),
+        (
+            "mason endpoint loadtest mason-my-agent --preset mason --requests 20",
+            "run a lightweight HTTP load test",
+        ),
+    ),
+    ("endpoint", "invoke"): (
+        (
+            'mason endpoint invoke mason-my-agent --preset mason --message "Hello"',
+            "invoke a known Mason runtime",
+        ),
+        (
+            "mason endpoint invoke --url http://localhost:8000 --path /custom/run "
+            '--json \'{"input":"hello"}\'',
+            "invoke an arbitrary HTTP server",
+        ),
+    ),
+    ("endpoint", "loadtest"): (
+        (
+            "mason endpoint loadtest mason-my-agent --preset mason-durable "
+            ' --message "Hello" --requests 20 --concurrency 4',
+            "load-test a durable Mason runtime",
+        ),
+    ),
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
