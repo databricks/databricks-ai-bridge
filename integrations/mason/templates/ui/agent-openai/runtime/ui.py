@@ -362,14 +362,13 @@ def install_ui(app: FastAPI) -> None:
         actor = _request_actor(request)
         memory_store = _memory_store()
         session_store = _session_store()
-        # Off-thread: serving_endpoints.list() is a blocking SDK call.
-        available_models = await asyncio.to_thread(_discover_chat_models)
+        default_model = _default_model()
         return {
             "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
-            "models": {"default": _default_model(), "available": available_models},
+            "models": {"default": default_model, "available": [default_model]},
             "streaming": {"enabled": True, "transport": "Server-sent events"},
             "background": {"enabled": True, "durable": True},
             "session": {
@@ -386,6 +385,13 @@ def install_ui(app: FastAPI) -> None:
                 "actor": actor,
             },
         }
+
+    @app.get("/api/demo/models", include_in_schema=False)
+    async def demo_models() -> dict:
+        # Model discovery can take several seconds in a large workspace. Keep it separate from the
+        # runtime config so the rest of the UI becomes interactive immediately.
+        available_models = await asyncio.to_thread(_discover_chat_models)
+        return {"default": _default_model(), "available": available_models}
 
     @app.post("/api/demo/memory/entries", include_in_schema=False)
     async def create_memory_entry(request: Request, payload: MemoryEntryRequest) -> dict:

@@ -756,6 +756,11 @@ function renderModels(models) {
   elements.modelSelect.disabled = state.busy || available.length <= 1;
 }
 
+async function loadModels() {
+  const response = await fetch(demoUrl("/api/demo/models"), { cache: "no-store" });
+  renderModels(await jsonResponse(response));
+}
+
 async function loadConfig() {
   try {
     const response = await fetch(demoUrl("/api/demo/config"), { cache: "no-store" });
@@ -764,6 +769,7 @@ async function loadConfig() {
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
     renderModels(config.models);
+    void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";

@@ -95,6 +95,7 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     if history:
         monkeypatch.setattr(ui, "_checkpoint_history", _session_history)
     # Keep model discovery deterministic and offline (no serving_endpoints.list() call).
+    monkeypatch.setattr(ui, "_default_model", lambda: "databricks-gpt-5-2")
     monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["databricks-gpt-5-2"])
 
     async def invoke_handler(request, context):
@@ -126,6 +127,7 @@ def test_demo_ui_routes(monkeypatch):
     assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
+    assert 'demoUrl("/api/demo/models")' in app_script.text
     assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
     assert "session_id: sessionId" in app_script.text
@@ -149,6 +151,11 @@ def test_demo_ui_routes(monkeypatch):
     assert config["session"]["history"] is True
     assert "durability" not in config
     assert "recovery" not in config
+
+    assert client.get("/api/demo/models").json() == {
+        "default": "databricks-gpt-5-2",
+        "available": ["databricks-gpt-5-2"],
+    }
 
     sessions = client.get("/api/demo/sessions").json()
     assert sessions == {
@@ -174,6 +181,24 @@ def test_demo_config_distinguishes_run_local_from_a_deployed_app(monkeypatch):
 
     monkeypatch.setenv("DATABRICKS_APP_URL", "https://agent.example.databricksapps.com")
     assert _client(monkeypatch).get("/api/demo/config").json()["deployed"] is True
+
+
+def test_demo_config_does_not_wait_for_model_discovery(monkeypatch):
+    client = _client(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        ui,
+        "_discover_chat_models",
+        lambda: calls.append(True) or ["databricks-gpt-5-2", "databricks-gpt-5-5"],
+    )
+
+    assert client.get("/api/demo/config").status_code == 200
+    assert calls == []
+    assert client.get("/api/demo/models").json()["available"] == [
+        "databricks-gpt-5-2",
+        "databricks-gpt-5-5",
+    ]
+    assert calls == [True]
 
 
 def test_unmanaged_checkpoint_history_route(monkeypatch):
