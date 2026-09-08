@@ -23,8 +23,19 @@ import yaml
 from databricks_mason import memory_store_access, render, session_store_access, timefmt
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
-from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
-from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
+from databricks_mason.store_access import (
+    _databricks,
+    apply_experiment_resource,
+    apply_postgres_resources,
+    grant_tables,
+)
+from databricks_mason.tracing import (
+    TRACES_EXPERIMENT_ID_ENV,
+    TRACES_TRACKING_URI_ENV,
+    default_experiment,
+    ensure_experiment,
+    experiment_url,
+)
 
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -251,21 +262,12 @@ def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
     return memory, session
 
 
-def validate_stores_and_trace_env(
-    client,
-    *,
-    app: Optional[str],
-    memory_store: Optional[str],
-    session_store: Optional[str],
-    traces_destination: Optional[str],
-    traces_experiment: Optional[str],
-) -> dict[str, str]:
-    """Validate the agent's bound stores exist and build the MLFLOW_* trace env to wire in.
+def validate_stores(client, *, memory_store: Optional[str], session_store: Optional[str]) -> None:
+    """Validate the agent's bound stores exist. Shared by `mason deploy` and `mason dev`.
 
-    Shared by `mason deploy` and `mason dev`. Stores are created by `mason memory/sessions bind` and
-    read from agent.toml at runtime, so this neither creates them nor writes them to app.yaml — it
-    only checks a bound store still exists (a typo or unbound clone fails here, not at runtime) and
-    returns the trace env.
+    Stores are created by `mason memory/sessions bind` and read from agent.toml at runtime, so this
+    neither creates them nor writes them to app.yaml — it only checks a bound store still exists (a
+    typo or unbound clone fails here, not at runtime).
     """
     if memory_store and _resolve_memory_store(client, memory_store) is None:
         # Resolve by display name: get_memory_store looks up by resource id, not the bound name.
@@ -282,18 +284,33 @@ def validate_stores_and_trace_env(
                 hint=f"Run `mason sessions bind {session_store}` to create and bind it.",
                 error_code=exc.error_code,
             ) from exc
-    env: dict[str, str] = {}
-    if traces_destination:
-        env[TRACES_DEST_ENV] = traces_destination
-        # The agent enables tracing only when BOTH a destination and an experiment are set, so
-        # default the experiment to this agent's per-app path (matching `mason tracing setup --app`),
-        # otherwise --with-traces alone would ship a half-config that silently disables tracing.
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment or default_experiment(
-            client.current_user, app
-        )
-    elif traces_experiment:
-        env[TRACES_EXPERIMENT_ENV] = traces_experiment
-    return env
+
+
+def resolve_trace_experiment(source: pathlib.Path, app: str, client, profile) -> Optional[str]:
+    """The MLflow experiment id an agent traces to, or None when tracing is disabled.
+
+    Tracing is on by default: unless `mason tracing disable` was run, this returns the project's
+    pinned experiment id (`mason tracing configure --experiment`), else creates-and-returns a per-app
+    experiment (`/Users/<you>/mason-traces/<app>`). Shared by `mason dev` and `mason deploy` so both
+    trace to the same experiment for a given agent.
+    """
+    from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
+
+    try:
+        project = AgentProject.load(source)
+    except AgentCliError:
+        project = None
+    if project is not None and project.trace_disabled:
+        return None
+    pinned = project.trace_experiment_id if project is not None else None
+    if pinned:
+        return pinned
+    return ensure_experiment(profile, client, default_experiment(client.current_user, app))
+
+
+def trace_env(experiment_id: str) -> dict[str, str]:
+    """The env that binds a dev/deployed agent to an experiment: the workspace + the experiment id."""
+    return {TRACES_TRACKING_URI_ENV: "databricks", TRACES_EXPERIMENT_ID_ENV: experiment_id}
 
 
 def _grant_store_access(
@@ -341,18 +358,6 @@ def _grant_store_access(
     "current directory.",
 )
 @click.option(
-    "--with-traces",
-    "traces_destination",
-    default=None,
-    help="UC trace destination 'catalog.schema' to wire in via MLFLOW_TRACING_DESTINATION "
-    "(link it first with `mason tracing setup`).",
-)
-@click.option(
-    "--traces-experiment",
-    default=None,
-    help="MLflow experiment path to wire in via MLFLOW_EXPERIMENT_NAME.",
-)
-@click.option(
     "--pip-index-url",
     default=_DEFAULT_PIP_INDEX_URL,
     show_default=True,
@@ -374,8 +379,6 @@ def deploy(
     obj,
     name,
     source,
-    traces_destination,
-    traces_experiment,
     pip_index_url,
     workspace_path,
     instances,
@@ -398,26 +401,34 @@ def deploy(
     source_dir = pathlib.Path(source)
     client = obj.client()
 
-    # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them) and build any
-    #    trace env. Stores are read from agent.toml at runtime, not wired into app.yaml; the bindings
-    #    also drive the store access grant (step 4).
+    # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them). Stores are
+    #    read from agent.toml at runtime, not wired into app.yaml; the bindings also drive the store
+    #    access grant (step 4).
     memory_store, session_store = store_bindings(source_dir)
     with render.status("Checking stores…"):
-        env_updates = validate_stores_and_trace_env(
-            client,
-            app=name,
-            memory_store=memory_store,
-            session_store=session_store,
-            traces_destination=traces_destination,
-            traces_experiment=traces_experiment,
-        )
+        validate_stores(client, memory_store=memory_store, session_store=session_store)
+
+    # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
+    #    two env vars the runtime reads. Keyed on the app name, matching `mason dev`. The app's SP is
+    #    granted write access to it in step 5 (an experiment app resource). Best-effort: if it can't
+    #    be set up (e.g. no mlflow installed), the deploy still proceeds without tracing.
+    trace_experiment_id: Optional[str] = None
+    trace_setup_error: Optional[str] = None
+    try:
+        trace_experiment_id = resolve_trace_experiment(source_dir, name, client, obj.profile)
+    except AgentCliError as exc:
+        trace_setup_error = str(exc)
+    env_updates: dict[str, str] = {}
     provisioned: dict[str, Any] = {}
     if memory_store:
         provisioned["Memory store"] = memory_store
     if session_store:
         provisioned["Session store"] = session_store
-    if traces_destination:
-        provisioned["Traces"] = traces_destination
+    if trace_experiment_id:
+        env_updates.update(trace_env(trace_experiment_id))
+        provisioned["Traces"] = (
+            experiment_url(client.host, trace_experiment_id) or trace_experiment_id
+        )
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -425,12 +436,12 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 2. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
+    # 3. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
     scaffolded = False
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    # 4. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
     #    (`apps create` errors on an existing app); the compute wait runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
@@ -484,9 +495,10 @@ def deploy(
         action=f"Could not deploy '{name}'.",
     )
 
-    # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
-    #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
-    #    both, the app runs but the durable store path fails (can't connect, or can't read tables).
+    # 5. Grant the app's service principal what it needs to run (best-effort):
+    #    - stores: bind each store DB as a `postgres` resource (CONNECT) + GRANT read/write on tables;
+    #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
+    #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
@@ -501,6 +513,10 @@ def deploy(
                 grant_error = _grant_store_access(
                     name, sp, client.current_user, session_store, memory_database, obj.profile
                 )
+    trace_grant_error: Optional[str] = None
+    if trace_experiment_id:
+        with render.status("Granting the app access to its trace experiment…"):
+            trace_grant_error = apply_experiment_resource(name, trace_experiment_id, obj.profile)
 
     app_url = _app_url(name, obj.profile)
 
@@ -511,6 +527,12 @@ def deploy(
                 "url": app_url,
                 "workspace_path": ws_path,
                 "env": env_updates,
+                "trace_experiment_id": trace_experiment_id,
+                "trace_setup_error": trace_setup_error,
+                "trace_grant": None
+                if not trace_experiment_id
+                else ("granted" if trace_grant_error is None else "failed"),
+                "trace_grant_error": trace_grant_error,
                 "store_grant": "skipped"
                 if not grants_stores
                 else ("granted" if grant_error is None else "failed"),
@@ -536,8 +558,18 @@ def deploy(
             "be applied automatically (it requires store ownership). "
             f"Cause: {grant_error}",
         )
+    if trace_setup_error is not None:
+        steps.insert(0, f"Tracing wasn't set up (deployed without it). Cause: {trace_setup_error}")
+    if trace_experiment_id and trace_grant_error is not None:
+        steps.insert(
+            0,
+            "The app's service principal needs write access to its trace experiment; that grant "
+            f"couldn't be applied automatically. Cause: {trace_grant_error}",
+        )
     if grants_stores and grant_error is None:
         provisioned["Store access"] = "granted to app service principal"
+    if trace_experiment_id and trace_grant_error is None:
+        provisioned["Trace access"] = "granted to app service principal"
     fields = {"URL": app_url} if app_url else {}
     fields.update({"Workspace path": ws_path, **provisioned})
     render.success(

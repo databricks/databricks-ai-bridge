@@ -1,18 +1,20 @@
-"""`mason tracing` — route an agent's traces to MLflow / Unity Catalog and inspect them.
+"""`mason tracing` — send an agent's traces to an MLflow experiment and inspect them.
 
-Parallel to `mason memory` and `mason sessions`: `setup` provisions the trace destination
-(links a UC schema to an MLflow experiment, the analog of creating a store), `list`/`get`
-read traces back, and `instrument` prints the wiring snippet (the "Starter code" analog).
-`mason deploy --with-traces` injects the destination into a deployment's app.yaml, exactly as
-`--memory` / `--session` inject their stores.
+Tracing is managed MLflow tracing (traces are stored in the workspace's MLflow backend) and is **on
+by default**: with no configuration, ``mason dev`` and ``mason deploy`` send an agent's traces to a
+per-app experiment (``/Users/<you>/mason-traces/<app>``), auto-created on first run. The experiment
+is identified everywhere by its **id** — that single value binds the agent (``MLFLOW_EXPERIMENT_ID``),
+grants the deployed app (an experiment app resource), reads traces, and builds the UI link.
 
-MLflow is an optional dependency: `setup`/`list`/`get` need `mlflow[databricks]>=3.10.1`
-installed and lazily import it; `instrument` (and the deploy wiring) are pure and need nothing.
+``mason tracing configure`` pins a specific experiment by id (or re-enables the per-app default after
+a disable); ``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
+
+MLflow is an optional dependency: ``configure``/``list``/``get`` and the dev/deploy experiment
+provisioning import it lazily and need ``mlflow[databricks]``; nothing else does.
 """
 
 from __future__ import annotations
 
-import os
 import pathlib
 from typing import Any, Optional
 
@@ -22,34 +24,31 @@ from databricks_mason import render, timefmt
 from databricks_mason.errors import AgentCliError
 
 _BREADCRUMB = "Agent Tracing"
-# Fallback experiment when there's no agent context (e.g. `tracing setup` with no --app). Prefer a
-# per-agent experiment via `default_experiment` so each agent's traces are isolated, not commingled.
-_DEFAULT_EXPERIMENT = "/Shared/mason-agent-traces"
+# Per-app experiment folder: each agent's traces stay in their own experiment under the user's home.
+_TRACES_DIR = "mason-traces"
+
+# The two env vars the deployed/dev agent reads to enable tracing: a destination (the workspace) and
+# an experiment (by id). MLflow turns tracing on only when it has both.
+TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
+TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
+
+# Installing the `tracing` extra (rather than a bare mlflow) resolves both the missing- and
+# too-old-mlflow cases: the extra carries the version floor `mason tracing` needs.
+_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
 
 
 def default_experiment(user: str, app: Optional[str]) -> str:
-    """The per-agent experiment path for `app`, under the user's workspace home.
-
-    Keeps each agent's traces in their own experiment (and out of other users' view), instead of the
-    single shared bucket. `mason tracing setup`, `dev`, and `deploy` all derive the same path for a
-    given agent, so the experiment `setup` links is the one the agent logs to. Falls back to the
-    shared default only when no app name is available.
-    """
+    """The per-app experiment path under the user's workspace home (shared by dev and deploy)."""
     if not app:
-        return _DEFAULT_EXPERIMENT
-    return f"/Users/{user}/mason-traces/{app}"
+        raise AgentCliError("Cannot derive the default tracing experiment without an app name.")
+    return f"/Users/{user}/{_TRACES_DIR}/{app}"
 
 
-# Env vars the deployed agent reads (see deploy.py). MLFLOW_TRACING_DESTINATION is MLflow's own
-# "catalog.schema" convention; MLFLOW_EXPERIMENT_NAME is the standard MLflow experiment selector.
-TRACES_DEST_ENV = "MLFLOW_TRACING_DESTINATION"
-TRACES_EXPERIMENT_ENV = "MLFLOW_EXPERIMENT_NAME"
-
-
-# Installing the `tracing` extra (rather than a bare mlflow) is what actually resolves both the
-# missing- and too-old-mlflow cases: the extra carries the version floor `mason tracing` needs, so
-# a stale mlflow already in the venv gets upgraded to a compatible one.
-_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
+def experiment_url(host: Optional[str], experiment_id: str) -> Optional[str]:
+    """The workspace MLflow experiment Traces page, or None when the host is unavailable."""
+    if not host or host == "unknown":
+        return None
+    return f"{host.rstrip('/')}/ml/experiments/{experiment_id}?compareRunsMode=TRACES"
 
 
 def _mlflow():
@@ -60,70 +59,52 @@ def _mlflow():
         return mlflow
     except ImportError as exc:
         raise AgentCliError(
-            "MLflow is required for `mason tracing` setup/list/get.",
+            "MLflow is required for `mason tracing` configure/list/get.",
             hint=_INSTALL_HINT,
         ) from exc
 
 
-def _uc_trace_symbols():
-    """Import the version-specific UC-tracing symbols, surfacing the same clean error as `_mlflow`.
-
-    `import mlflow` succeeding doesn't guarantee these exist — they were added in the tracing API
-    this feature needs. Guard them so an older installed MLflow yields Mason's install hint rather
-    than a raw ImportError traceback.
-    """
-    try:
-        from mlflow.entities import UCSchemaLocation  # noqa: PLC0415 - lazy, version-specific
-        from mlflow.tracing import (  # noqa: PLC0415
-            set_experiment_trace_location,
-            unset_experiment_trace_location,
-        )
-
-        return UCSchemaLocation, set_experiment_trace_location, unset_experiment_trace_location
-    except ImportError as exc:
-        raise AgentCliError(
-            "This MLflow version is too old for `mason tracing setup` (UC trace destinations).",
-            hint=_INSTALL_HINT,
-        ) from exc
-
-
-def _link_trace_location(set_location, unset_location, location, exp_id: str, relink: bool) -> None:
-    """Link the experiment to the UC schema, handling the already-linked case.
-
-    MLflow raises if the experiment is already bound to a storage location. With `relink`, unset the
-    existing binding first and re-link; otherwise surface a clean error pointing at `--relink`.
-    """
-    try:
-        set_location(location=location, experiment_id=exp_id)
-    except Exception as exc:  # noqa: BLE001 - mlflow raises a generic error when already linked
-        if "already" not in str(exc).lower():
-            raise
-        if not relink:
-            raise AgentCliError(
-                "This experiment is already linked to a trace storage location.",
-                hint="Re-run with --relink to replace the existing link.",
-            ) from exc
-        unset_location(location=location, experiment_id=exp_id)
-        set_location(location=location, experiment_id=exp_id)
-
-
-def _configure(mlflow, profile: Optional[str], warehouse_id: Optional[str]) -> None:
-    """Point MLflow at the workspace (honoring mason's --profile) for UC-backed tracing."""
+def _configure(mlflow, profile: Optional[str]) -> None:
+    """Point MLflow at the workspace (honoring mason's --profile)."""
     mlflow.set_tracking_uri(f"databricks://{profile}" if profile else "databricks")
-    if warehouse_id:
-        os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = warehouse_id
 
 
-def _ensure_experiment(mlflow, client, name: str) -> str:
+def ensure_experiment(profile: Optional[str], client, name: str) -> str:
+    """Create the experiment ``name`` if missing and return its id (idempotent).
+
+    ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
+    ``/Users/<you>/mason-traces/<app>``), so the parent dir is created first. Used by dev/deploy to
+    provision the managed experiment that traces log to.
+    """
+    mlflow = _mlflow()
+    _configure(mlflow, profile)
     experiment = mlflow.get_experiment_by_name(name)
     if experiment:
         return experiment.experiment_id
-    # create_experiment won't make the intermediate workspace folder for a nested path (e.g.
-    # /Users/<you>/mason-traces/<app>), so create the parent dir first.
     parent = name.rsplit("/", 1)[0]
     if parent:
         client.ensure_workspace_dir(parent)
     return mlflow.create_experiment(name)
+
+
+def _project_experiment_id(obj, source: str, mlflow) -> Optional[str]:
+    """The experiment id `list` should read for this project, or None if none exists yet.
+
+    Resolution: the project's pinned ``experiment_id``, else the per-app default experiment (looked up
+    by name; None when it hasn't been created yet — i.e. nothing has traced here).
+    """
+    from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
+
+    try:
+        project = AgentProject.load(source)
+    except AgentCliError:
+        project = None
+    if project is not None and project.trace_experiment_id:
+        return project.trace_experiment_id
+    client = obj.client()
+    name = default_experiment(client.current_user, pathlib.Path(source).resolve().name)
+    experiment = mlflow.get_experiment_by_name(name)
+    return experiment.experiment_id if experiment else None
 
 
 def _attr(obj: Any, *paths: str, default: Any = None) -> Any:
@@ -145,16 +126,13 @@ def _status_str(status: Any) -> Optional[str]:
     return getattr(status, "name", None) or str(status)
 
 
-def _split_destination(destination: str) -> tuple[str, str]:
-    catalog, _, schema = destination.partition(".")
-    if not catalog or not schema:
-        raise AgentCliError("--destination must be 'catalog.schema'.")
-    return catalog, schema
-
-
-def _experiment_url(host: str, experiment_id: str) -> str:
-    """Workspace URL for an experiment's Traces tab."""
-    return f"{host.rstrip('/')}/ml/experiments/{experiment_id}?compareRunsMode=TRACES"
+def _trace_json(trace: Any) -> dict:
+    return {
+        "trace_id": _attr(trace, "info.trace_id", "info.request_id"),
+        "status": _status_str(_attr(trace, "info.status", "info.state")),
+        "execution_time_ms": _attr(trace, "info.execution_time_ms", "info.execution_duration_ms"),
+        "timestamp_ms": _attr(trace, "info.timestamp_ms", "info.request_time"),
+    }
 
 
 # --- group ------------------------------------------------------------------
@@ -162,89 +140,87 @@ def _experiment_url(host: str, experiment_id: str) -> str:
 
 @click.group()
 def tracing() -> None:
-    """Set up and inspect MLflow traces (in Unity Catalog) for your agents."""
+    """Configure MLflow tracing for your agents, and inspect the traces."""
 
 
-# --- setup: provision the UC trace destination ------------------------------
+# --- configure / disable ----------------------------------------------------
 
 
-@tracing.command("setup")
-@click.option("--catalog", required=True, help="Unity Catalog catalog to store traces in.")
-@click.option("--schema", required=True, help="Unity Catalog schema to store traces in.")
-@click.option(
-    "--app",
-    default=None,
-    help="Agent name — gives this agent its own experiment (/Users/<you>/mason-traces/<app>) so its "
-    "traces aren't commingled with other agents'. Defaults to the current directory name (matching "
-    "`mason dev`/`deploy`). Overridden by --experiment.",
-)
+@tracing.command("configure")
 @click.option(
     "--experiment",
+    "experiment_id",
     default=None,
-    help="MLflow experiment path (overrides the per-app default derived from --app).",
+    help="MLflow experiment id to trace to. Must be an existing experiment. Omit to use (or return "
+    "to) the per-app experiment mason creates automatically.",
 )
 @click.option(
-    "--warehouse-id",
-    default=None,
-    help="SQL warehouse id for trace queries (MLFLOW_TRACING_SQL_WAREHOUSE_ID).",
-)
-@click.option(
-    "--relink",
-    is_flag=True,
-    help="Replace an existing trace-location link on the experiment (unset, then re-link).",
+    "--source",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Project directory containing agent.toml. Defaults to the current directory.",
 )
 @click.pass_obj
-def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -> None:
-    """Link a UC schema to an MLflow experiment so agent traces land in Unity Catalog."""
-    mlflow = _mlflow()
-    _configure(mlflow, obj.profile, warehouse_id)
-    # Default the agent name to the current directory, matching `mason dev`/`deploy`, so running
-    # setup from a project dir needs no --app and still lands in that agent's own experiment.
-    app = app or pathlib.Path.cwd().name
-    client = obj.client()
-    exp_name = experiment or default_experiment(client.current_user, app)
-    exp_id = _ensure_experiment(mlflow, client, exp_name)
+def tracing_configure(obj, experiment_id, source) -> None:
+    """Configure tracing via MLflow: pin an experiment, rebind, or re-enable after `disable`.
 
-    UCSchemaLocation, set_location, unset_location = _uc_trace_symbols()
-    _link_trace_location(
-        set_location,
-        unset_location,
-        UCSchemaLocation(catalog_name=catalog, schema_name=schema),
-        exp_id,
-        relink,
+    Tracing is on by default (a per-app experiment mason creates). Use this to pin a specific
+    experiment by id, rebind to a different one, or turn tracing back on after ``mason tracing
+    disable``. Omit ``--experiment`` to (re)enable the per-app default.
+    """
+    from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
+
+    if experiment_id:
+        # Verify the experiment exists so a wrong id fails here, not silently when the agent runs.
+        mlflow = _mlflow()
+        _configure(mlflow, obj.profile)
+        if mlflow.get_experiment(experiment_id) is None:
+            raise AgentCliError(
+                f"No MLflow experiment found with id {experiment_id!r}.",
+                hint="Pass an existing experiment id, or omit --experiment for the per-app default.",
+            )
+
+    project = AgentProject.load(pathlib.Path(source))
+    project.configure_tracing(experiment_id)
+    project.write()
+
+    target = f"experiment {experiment_id}" if experiment_id else "a per-app experiment"
+    if obj.output == "json":
+        render.emit_json({"experiment_id": experiment_id, "disabled": False})
+        return
+    render.success(
+        f"Tracing on: {target}",
+        fields={"Experiment id": experiment_id} if experiment_id else None,
+        next_steps=[
+            ("mason dev", "Run locally with tracing on"),
+            ("mason tracing list", "List traces once you have some"),
+            ("mason tracing disable", "Turn tracing off"),
+        ],
     )
-    destination = f"{catalog}.{schema}"
-    url = _experiment_url(client.host, exp_id)
+
+
+@tracing.command("disable")
+@click.option(
+    "--source",
+    default=".",
+    type=click.Path(exists=True, file_okay=False),
+    help="Project directory containing agent.toml. Defaults to the current directory.",
+)
+@click.pass_obj
+def tracing_disable(obj, source) -> None:
+    """Turn tracing off for this agent (recorded in agent.toml; dev/deploy then wire no MLflow env)."""
+    from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
+
+    project = AgentProject.load(pathlib.Path(source))
+    project.disable_tracing()
+    project.write()
 
     if obj.output == "json":
-        render.emit_json(
-            {
-                "experiment": exp_name,
-                "experiment_id": exp_id,
-                "destination": destination,
-                "url": url,
-            }
-        )
+        render.emit_json({"disabled": True})
         return
-    # dev/deploy derive this same experiment from the agent name (dev: project dir, deploy: <name>),
-    # so only spell out --traces-experiment when the experiment was set explicitly (not per-app).
-    exp_flag = "" if experiment is None else f" --traces-experiment {exp_name}"
-    deploy_name = app
     render.success(
-        f"Linked traces for '{exp_name}' to {destination}",
-        fields={"Experiment": exp_name, "Destination": destination, "View traces": url},
-        next_steps=[
-            (f"mason dev --with-traces {destination}{exp_flag}", "Run locally with tracing on"),
-            (
-                f"mason deploy {deploy_name} --with-traces {destination}{exp_flag}",
-                "Deploy with tracing on",
-            ),
-            (
-                f"mason tracing instrument --destination {destination}",
-                "Print the code snippet to trace your own agent",
-            ),
-            (f"mason tracing list --experiment {exp_name}", "List traces once you have some"),
-        ],
+        "Tracing off",
+        next_steps=[("mason tracing configure", "Turn tracing back on")],
     )
 
 
@@ -253,23 +229,31 @@ def tracing_setup(obj, catalog, schema, app, experiment, warehouse_id, relink) -
 
 @tracing.command("list")
 @click.option(
-    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
+    "--experiment",
+    "experiment_id",
+    default=None,
+    help="MLflow experiment id to read (default: this project's experiment).",
 )
 @click.option("--limit", type=int, default=20)
+@click.option(
+    "--source",
+    default=".",
+    type=click.Path(file_okay=False),
+    help="Project directory to resolve the default experiment from (default: current dir).",
+)
 @click.pass_obj
-def tracing_list(obj, experiment, limit) -> None:
-    """List recent agent traces in an experiment."""
+def tracing_list(obj, experiment_id, limit, source) -> None:
+    """List recent agent traces in an experiment.
+
+    Resolution: ``--experiment <id>`` (works standalone), else this project's experiment (the pinned
+    one, or its per-app default). A missing experiment just lists nothing (nothing has traced yet).
+    """
     mlflow = _mlflow()
-    _configure(mlflow, obj.profile, None)
-    exp_name = experiment or _DEFAULT_EXPERIMENT
-    # search_traces selects experiments by id, not name, so resolve first. A missing experiment means
-    # no traces have been recorded there yet — show an empty list rather than erroring.
-    exp = mlflow.get_experiment_by_name(exp_name)
+    _configure(mlflow, obj.profile)
+    exp_id = experiment_id or _project_experiment_id(obj, source, mlflow)
     traces = (
-        mlflow.search_traces(
-            experiment_ids=[exp.experiment_id], max_results=limit, return_type="list"
-        )
-        if exp
+        mlflow.search_traces(experiment_ids=[exp_id], max_results=limit, return_type="list")
+        if exp_id
         else []
     )
 
@@ -286,7 +270,7 @@ def tracing_list(obj, experiment, limit) -> None:
         for t in traces
     ]
     render.resource_table(
-        f"Agent Traces · {exp_name}",
+        f"Agent Traces · {exp_id or 'no experiment yet'}",
         [("Trace ID", "left"), ("Status", "left"), ("Latency (ms)", "left"), ("Created", "left")],
         rows,
     )
@@ -298,8 +282,10 @@ def tracing_list(obj, experiment, limit) -> None:
 def tracing_get(obj, trace_id) -> None:
     """Get a single trace by id (status, latency, span count, previews)."""
     mlflow = _mlflow()
-    _configure(mlflow, obj.profile, None)
+    _configure(mlflow, obj.profile)
     trace = mlflow.get_trace(trace_id)
+    if trace is None:
+        raise AgentCliError(f"No trace found with id {trace_id!r}.")
     if obj.output == "json":
         render.emit_json(_trace_json(trace))
         return
@@ -316,52 +302,4 @@ def tracing_get(obj, trace_id) -> None:
             "Created": timefmt.absolute(_attr(trace, "info.timestamp_ms", "info.request_time")),
         },
         status=_status_str(_attr(trace, "info.status", "info.state")),
-    )
-
-
-def _trace_json(trace: Any) -> dict:
-    return {
-        "trace_id": _attr(trace, "info.trace_id", "info.request_id"),
-        "status": _status_str(_attr(trace, "info.status", "info.state")),
-        "execution_time_ms": _attr(trace, "info.execution_time_ms", "info.execution_duration_ms"),
-        "timestamp_ms": _attr(trace, "info.timestamp_ms", "info.request_time"),
-    }
-
-
-# --- instrument: print the agent wiring snippet (no MLflow needed) ----------
-
-
-@tracing.command("instrument")
-@click.option(
-    "--destination",
-    default=None,
-    help="UC trace destination 'catalog.schema' (from `mason tracing setup`).",
-)
-@click.option(
-    "--experiment", default=None, help=f"MLflow experiment path (default: {_DEFAULT_EXPERIMENT})."
-)
-@click.pass_obj
-def tracing_instrument(obj, destination, experiment) -> None:
-    """Print the snippet that routes an OpenAI Agents SDK agent's traces to UC."""
-    catalog, schema = _split_destination(destination) if destination else ("<catalog>", "<schema>")
-    exp_name = experiment or _DEFAULT_EXPERIMENT
-    dest = destination or f"{catalog}.{schema}"
-    code = (
-        "import mlflow\n"
-        "from mlflow.entities import UCSchemaLocation\n\n"
-        'mlflow.set_tracking_uri("databricks")\n'
-        f'mlflow.set_experiment("{exp_name}")\n'
-        f'mlflow.tracing.set_destination(UCSchemaLocation(catalog_name="{catalog}", schema_name="{schema}"))\n'
-        "mlflow.openai.autolog()   # OpenAI Agents SDK spans -> Unity Catalog traces\n"
-        "# NOTE: do NOT call agents.set_tracing_disabled(True) — that turns tracing off."
-    )
-    if obj.output == "json":
-        render.emit_json({"destination": dest, "experiment": exp_name, "snippet": code})
-        return
-    render.detail(
-        _BREADCRUMB,
-        dest,
-        {"Experiment": exp_name, "Destination": dest, "Requires": "mlflow[databricks]>=3.10.1"},
-        status="ACTIVE",
-        snippets=[("python", "python", code)],
     )
