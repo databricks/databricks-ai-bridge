@@ -141,9 +141,8 @@ The callback receives `input` and an optional `resume` payload. The internal run
 payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
 
 The new `durability-app` template selects an in-memory durability store locally. Bare `mason init`
-also writes its durability binding to `agent.toml`. Existing projects can opt in explicitly with
-`mason durability bind`; `mason deploy` then attaches one Lakebase database for runtime durability,
-chosen in this order:
+also writes its durability binding to `agent.toml`; `mason deploy` then attaches one Lakebase
+database for runtime durability, chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
 2. Otherwise reuse the configured Memory Store's Lakebase database.

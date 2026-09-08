@@ -44,10 +44,9 @@ Bare `mason init` scaffolds this template. Deploy it with an explicit profile:
 mason --profile <profile> deploy durability-app --source .
 ```
 
-Bare `mason init` records the durability binding in `agent.toml`; an existing Mason
-project can opt in with `mason durability bind`. At deploy time Mason attaches one
-Lakebase database for the runtime tables, reusing the Session Store database first,
-then the Memory Store database, and otherwise reusing or provisioning
+Bare `mason init` records the durability binding in `agent.toml`. At deploy time Mason
+attaches one Lakebase database for the runtime tables, reusing the Session Store database
+first, then the Memory Store database, and otherwise reusing or provisioning
 `<app>-durability`. Existing Mason templates are unaffected.
 
 If an active run becomes stale after a process restart, the runtime claims a new

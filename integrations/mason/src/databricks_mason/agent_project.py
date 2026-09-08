@@ -373,7 +373,13 @@ class AgentProject:
         )
 
     @classmethod
-    def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
+    def create(
+        cls,
+        root: pathlib.Path | str,
+        *,
+        framework: str,
+        durability_enabled: bool = False,
+    ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
         project_root = pathlib.Path(root).expanduser().resolve()
@@ -383,7 +389,17 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        return cls(project_root, document, framework, [])
+        if durability_enabled:
+            durability = tomlkit.table()
+            durability.add("enabled", True)
+            document.add(_DURABILITY_TABLE, durability)
+        return cls(
+            project_root,
+            document,
+            framework,
+            [],
+            durability_enabled=durability_enabled,
+        )
 
     def add_tool(self, spec: ToolSpec) -> bool:
         for existing in self.tools:
@@ -443,24 +459,6 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
-
-    def bind_durability(self) -> bool:
-        """Declare durable invocation handling in agent.toml."""
-        if self.durability_enabled:
-            return False
-        durability = tomlkit.table()
-        durability.add("enabled", True)
-        self._document.append(_DURABILITY_TABLE, durability)
-        self.durability_enabled = True
-        return True
-
-    def unbind_durability(self) -> bool:
-        """Remove durable invocation handling from agent.toml."""
-        if not self.durability_enabled:
-            return False
-        del self._document[_DURABILITY_TABLE]
-        self.durability_enabled = False
-        return True
 
     def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
         name = _required_string(name, f"[{table}] name")
