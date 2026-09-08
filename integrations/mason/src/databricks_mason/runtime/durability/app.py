@@ -225,10 +225,3 @@ class AgentApp(FastAPI):
         elif state.status == DurableExecutionStatus.FAILED:
             payload["error"] = "agent execution failed"
         return payload
-
-
-class DurableAgentApp(AgentApp):
-    """Compatibility name for an :class:`AgentApp` with durable runtime enabled."""
-
-    def __init__(self, *, durability_store: DurabilityStore | None = None) -> None:
-        super().__init__(durable_runtime=True, durability_store=durability_store)

@@ -18,7 +18,6 @@ def test_public_surface() -> None:
     }
     lazy = {
         "AgentApp",
-        "DurableAgentApp",
         "DurableAgentContext",
         "configure_tracing",
         "tag_session",
@@ -30,23 +29,16 @@ def test_public_surface() -> None:
     for name in eager:
         assert hasattr(databricks_mason, name)
 
-    from databricks_mason import AgentApp, DurableAgentApp
+    from databricks_mason import AgentApp
     from databricks_mason.runtime import AgentApp as RuntimeAgentApp
-    from databricks_mason.runtime import DurableAgentApp as RuntimeDurableAgentApp
-    from databricks_mason.runtime.durability.app import (
-        DurableAgentApp as ModuleDurableAgentApp,
-    )
 
     assert AgentApp is RuntimeAgentApp
-    assert DurableAgentApp is RuntimeDurableAgentApp is ModuleDurableAgentApp
-    assert issubclass(DurableAgentApp, AgentApp)
 
 
 def test_durable_runtime_public_surface_is_application_only() -> None:
     import databricks_mason.runtime as runtime
 
     assert "AgentApp" in runtime.__all__
-    assert "DurableAgentApp" in runtime.__all__
     assert "DurableAgentContext" in runtime.__all__
     assert "DurableRuntime" not in runtime.__all__
     assert "LakebaseDurabilityStore" not in runtime.__all__

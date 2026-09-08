@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from databricks_mason import AgentApp, DurableAgentApp
+from databricks_mason import AgentApp
 from databricks_mason.runtime.durability.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
@@ -386,12 +386,6 @@ def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> 
 
     with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
         AgentApp(durable_runtime=True)
-
-
-def test_durable_agent_app_compatibility_name_enables_durable_runtime() -> None:
-    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
-
-    assert app.durable_runtime is True
 
 
 def test_state_payload_nests_completed_application_response() -> None:
