@@ -1,15 +1,21 @@
 """Tests for the SDK-provided durable agent application."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from databricks_mason import DurableAgentApp
-from databricks_mason.runtime.store import RUNTIME_ENDPOINT_ENV, InMemoryDurabilityStore
+from databricks_mason.runtime.store import (
+    RUNTIME_ENDPOINT_ENV,
+    RUNTIME_SCHEMA_ENV,
+    InMemoryDurabilityStore,
+)
 from databricks_mason.runtime.types import (
     DurableExecution,
     DurableExecutionContext,
@@ -17,75 +23,84 @@ from databricks_mason.runtime.types import (
 )
 
 _ROUTING_COOKIE = "__Host-databricks-app-router"
+_RUN_1 = "11111111-1111-4111-8111-111111111111"
+_RUN_2 = "22222222-2222-4222-8222-222222222222"
 
 
-async def echo(payload, context):
-    return {"output": payload}
+async def echo(input, context):
+    return input
 
 
-def make_app(invoke=echo, *, on_resume=None) -> DurableAgentApp:
-    return DurableAgentApp(
-        invoke,
-        on_resume=on_resume,
-        durability_store=InMemoryDurabilityStore(),
-    )
+def make_app(invoke=echo, *, on_recovery=None) -> DurableAgentApp:
+    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
+    app.invoke(invoke)
+    if on_recovery is not None:
+        app.on_recovery(on_recovery)
+    return app
 
 
 @asynccontextmanager
-async def running_client(server: DurableAgentApp) -> AsyncIterator[httpx.AsyncClient]:
-    await server._runtime.start(recover=server._on_resume is not None)
+async def running_client(app: DurableAgentApp) -> AsyncIterator[httpx.AsyncClient]:
+    await app._runtime.start(recover=app._on_recovery_hook is not None)
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=server.app),
+            transport=httpx.ASGITransport(app=app),
             base_url="https://testserver",
         ) as client:
             yield client
     finally:
-        await server._runtime.stop()
+        await app._runtime.stop()
+
+
+async def poll(client: httpx.AsyncClient, run_id: str) -> dict:
+    for _ in range(100):
+        response = await client.get(f"/api/invocations/{run_id}")
+        if response.json()["status"] not in {"queued", "active"}:
+            return response.json()
+        await asyncio.sleep(0.005)
+    raise AssertionError("run did not finish")
 
 
 @pytest.mark.asyncio
 async def test_routing_cookie_is_the_only_session_source() -> None:
-    async def invoke(payload, context):
+    async def invoke(input, context):
         return {
-            "received": payload,
+            "received": input,
             "run_id": context.run_id,
             "session_id": context.session_id,
-            "attempt": context.attempt,
-            "is_recovery": context.is_recovery,
         }
 
-    server = make_app(invoke)
-    async with running_client(server) as client:
+    app = make_app(invoke)
+    async with running_client(app) as client:
         client.cookies.set(_ROUTING_COOKIE, "session-1")
         response = await client.post(
-            "/invocations",
-            json={"id": "run-1", "input": "hello"},
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello"},
         )
 
     assert response.status_code == 200
     assert response.json() == {
-        "received": {"input": "hello"},
-        "run_id": "run-1",
-        "session_id": "session-1",
-        "attempt": 1,
-        "is_recovery": False,
+        "id": _RUN_1,
+        "status": "completed",
+        "output": {
+            "received": "hello",
+            "run_id": _RUN_1,
+            "session_id": "session-1",
+        },
     }
-    assert "x-databricks-run-id" not in response.headers
-    assert "x-databricks-session-id" not in response.headers
 
 
 @pytest.mark.asyncio
 async def test_missing_routing_cookie_is_initialized_once() -> None:
     seen_sessions = []
 
-    async def invoke(payload, context):
+    async def invoke(input, context):
         seen_sessions.append(context.session_id)
-        return {"output": payload}
+        return input
 
-    server = make_app(invoke)
-    async with running_client(server) as client:
-        response = await client.post("/invocations", json={"id": "run-1"})
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
         session_id = response.cookies[_ROUTING_COOKIE]
 
     assert UUID(session_id)
@@ -94,163 +109,265 @@ async def test_missing_routing_cookie_is_initialized_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_body_session_metadata_is_rejected() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        response = await client.post(
-            "/invocations",
-            json={"id": "run-1", "session_id": "body-session"},
+async def test_body_session_and_resume_metadata_are_rejected() -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        session = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "session_id": "body-session"},
+        )
+        resume = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "resume": {"answer": "yes"}},
         )
 
-    assert response.status_code == 422
+    assert session.status_code == 422
+    assert resume.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_recovery_attempt_uses_on_resume_hook() -> None:
+async def test_recovery_attempt_uses_on_recovery_hook() -> None:
     calls = []
 
-    async def invoke(payload, context):
+    async def invoke(input, context):
         calls.append("invoke")
-        return payload
+        return input
 
-    async def recover(payload, context):
+    async def recover(input, context):
         calls.append("recover")
-        return {"attempt": context.attempt, "session_id": context.session_id}
+        return {"input": input, "session_id": context.session_id}
 
-    server = make_app(invoke, on_resume=recover)
-    result = await server._execute(
-        {"input": {"input": "hello"}, "session_id": "session-1"},
-        DurableExecutionContext("run-1", 2),
+    app = make_app(invoke, on_recovery=recover)
+    result = await app._execute(
+        {"input": "hello", "session_id": "session-1"},
+        DurableExecutionContext(_RUN_1, 2),
     )
 
-    assert result == {"attempt": 2, "session_id": "session-1"}
+    assert result == {"input": "hello", "session_id": "session-1"}
     assert calls == ["recover"]
 
 
 @pytest.mark.asyncio
-async def test_recovery_without_on_resume_is_disabled() -> None:
-    server = make_app()
-    await server._runtime.start(recover=False)
-    try:
-        assert server._runtime._scanner is None
-        with pytest.raises(RuntimeError, match="on_resume"):
-            await server._execute(
-                {"input": {}, "session_id": "session-1"},
-                DurableExecutionContext("run-1", 2),
-            )
-    finally:
-        await server._runtime.stop()
+async def test_omitting_on_recovery_warns_and_disables_recovery(caplog) -> None:
+    app = make_app()
+    with caplog.at_level(logging.WARNING):
+        async with app.router.lifespan_context(app):
+            assert app._runtime._scanner is None
+
+    assert "crash recovery is disabled" in caplog.text
+    with pytest.raises(RuntimeError, match="@app.on_recovery"):
+        await app._execute(
+            {"input": {}, "session_id": "session-1"},
+            DurableExecutionContext(_RUN_1, 2),
+        )
 
 
 @pytest.mark.asyncio
-async def test_background_invocation_can_be_polled() -> None:
-    async def invoke(payload, context):
-        return {"output": payload["input"]}
-
-    server = make_app(invoke)
-    async with running_client(server) as client:
-        submitted = await client.post(
-            "/invocations",
-            json={"id": "run-bg", "input": "hello", "background": True},
+@pytest.mark.parametrize(
+    "value",
+    [None, True, 7, "text", [1, "two"], {"nested": [None]}],
+)
+async def test_foreground_sync_accepts_any_json_input_and_output(value) -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": value},
         )
-        assert submitted.status_code in {200, 202}
-        assert submitted.json()["id"] == "run-bg"
 
-        for _ in range(100):
-            polled = await client.get("/invocations/run-bg")
-            if polled.json()["status"] not in {"queued", "active"}:
-                break
-            await asyncio.sleep(0.005)
+    assert response.status_code == 200
+    assert response.json() == {"id": _RUN_1, "status": "completed", "output": value}
 
-    assert polled.json() == {
-        "id": "run-bg",
+
+@pytest.mark.asyncio
+async def test_background_sync_returns_202_and_can_be_polled() -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        submitted = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello", "background": True},
+        )
+        completed = await poll(client, _RUN_1)
+
+    assert submitted.status_code == 202
+    assert submitted.json() == {
+        "id": _RUN_1,
+        "status": "queued",
+        "status_url": f"/api/invocations/{_RUN_1}",
+        "events_url": f"/api/invocations/{_RUN_1}/events",
+    }
+    assert completed == {"id": _RUN_1, "status": "completed", "output": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_foreground_stream_returns_sse() -> None:
+    async def invoke(input, context):
+        await context.emit({"type": "delta", "content": input})
+        return [input]
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello", "stream": True},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: run.started" in response.text
+    assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
+    assert "event: run.completed" in response.text
+
+
+@pytest.mark.asyncio
+async def test_background_stream_returns_202_with_polling_urls() -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        response = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "hello", "background": True, "stream": True},
+        )
+
+    assert response.status_code == 202
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["events_url"] == f"/api/invocations/{_RUN_1}/events"
+
+
+@pytest.mark.asyncio
+async def test_run_id_is_idempotency_key_for_every_mode() -> None:
+    calls = 0
+
+    async def invoke(input, context):
+        nonlocal calls
+        calls += 1
+        return input
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        first = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "one"},
+        )
+        replay = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "one", "background": True, "stream": True},
+        )
+        conflict = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "two"},
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 202
+    assert conflict.status_code == 409
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_id_must_be_uuid() -> None:
+    app = make_app()
+    async with running_client(app) as client:
+        submitted = await client.post("/api/invocations", json={"id": "not-a-uuid"})
+        polled = await client.get("/api/invocations/not-a-uuid")
+
+    assert submitted.status_code == 422
+    assert polled.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_application_output_cannot_overwrite_protocol_metadata() -> None:
+    async def invoke(input, context):
+        return {"id": "application-id", "status": "application-status", "attempt": 99}
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+
+    assert response.json() == {
+        "id": _RUN_1,
         "status": "completed",
-        "attempt": 1,
-        "output": "hello",
+        "output": {"id": "application-id", "status": "application-status", "attempt": 99},
     }
 
 
 @pytest.mark.asyncio
-async def test_stream_replays_events_without_context_headers() -> None:
-    async def invoke(payload, context):
-        await context.emit({"type": "delta", "content": "hello"})
-        return {"output": []}
-
-    server = make_app(invoke)
-    async with running_client(server) as client:
-        response = await client.post(
-            "/api/invocations",
-            json={"id": "run-stream", "stream": True},
-        )
-
-    assert response.status_code == 200
-    assert 'event: delta\ndata: {"type": "delta", "content": "hello"}' in response.text
-    assert "[DONE]" not in response.text
-    assert "x-databricks-run-id" not in response.headers
-    assert "x-databricks-session-id" not in response.headers
-
-
-@pytest.mark.asyncio
-async def test_reusing_id_with_different_input_returns_conflict() -> None:
-    server = make_app()
-    async with running_client(server) as client:
-        first = await client.post("/invocations", json={"id": "run-1", "input": "one"})
-        conflict = await client.post("/invocations", json={"id": "run-1", "input": "two"})
-
-    assert first.status_code == 200
-    assert conflict.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_agent_failure_returns_500() -> None:
-    async def fail(payload, context):
+async def test_agent_failure_returns_500_and_failed_event() -> None:
+    async def fail(input, context):
         raise RuntimeError("boom")
 
-    server = make_app(fail)
-    async with running_client(server) as client:
-        response = await client.post("/invocations", json={"id": "run-1"})
+    app = make_app(fail)
+    async with running_client(app) as client:
+        response = await client.post("/api/invocations", json={"id": _RUN_1})
+        events = await app._runtime.events(_RUN_1)
 
     assert response.status_code == 500
     assert response.json() == {"detail": "agent execution failed"}
+    assert [event.event for event in events] == [
+        {"type": "run.started"},
+        {"type": "run.failed"},
+    ]
 
 
-def test_app_exposes_local_and_deployed_invocation_routes() -> None:
-    server = make_app()
-    paths = server.app.openapi()["paths"]
+def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
+    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
 
-    assert "/invocations" in paths
-    assert "/api/invocations" in paths
-    assert "/invocations/{run_id}" in paths
-    assert "/api/invocations/{run_id}" in paths
-    assert "/invocations/{run_id}/events" in paths
-    assert "/api/invocations/{run_id}/events" in paths
-    assert "/api/session/new" not in paths
-    assert not hasattr(server, "asgi_app")
-    assert not hasattr(server, "run")
+    @app.invoke
+    async def invoke(input, context):
+        return input
+
+    @app.on_recovery
+    async def recover(input, context):
+        return input
+
+    assert isinstance(app, FastAPI)
+    assert app._invoke_hook is invoke
+    assert app._on_recovery_hook is recover
+    with pytest.raises(ValueError, match="already registered"):
+        app.invoke(echo)
 
 
-def test_durability_store_defaults_to_in_memory(monkeypatch) -> None:
+def test_app_exposes_only_api_invocation_routes() -> None:
+    app = make_app()
+    paths = app.openapi()["paths"]
+
+    assert set(paths) == {
+        "/api/invocations",
+        "/api/invocations/{run_id}",
+        "/api/invocations/{run_id}/events",
+    }
+    assert {getattr(route, "path", None) for route in app.routes} == set(paths)
+
+
+def test_durability_store_defaults_to_in_memory_outside_apps(monkeypatch) -> None:
+    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
+    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(RUNTIME_SCHEMA_ENV, raising=False)
+
+    app = DurableAgentApp()
+
+    assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
+
+
+def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> None:
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
-    server = DurableAgentApp(echo)
+    with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
+        DurableAgentApp()
 
-    assert isinstance(server._runtime.durability_store, InMemoryDurabilityStore)
 
-
-def test_state_payload_flattens_completed_application_response() -> None:
+def test_state_payload_nests_completed_application_response() -> None:
     state = DurableExecution(
-        execution_id="run-1",
+        execution_id=_RUN_2,
         status=DurableExecutionStatus.COMPLETED,
         attempt=1,
         heartbeat_at=None,
         request={"input": {}, "session_id": "session-1"},
-        response={"output": [], "custom": "value"},
+        response={"id": "application-id", "status": "application-status"},
     )
 
     assert DurableAgentApp._state_payload(state) == {
-        "id": "run-1",
+        "id": _RUN_2,
         "status": "completed",
-        "attempt": 1,
-        "output": [],
-        "custom": "value",
+        "output": {"id": "application-id", "status": "application-status"},
     }

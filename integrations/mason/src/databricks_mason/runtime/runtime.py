@@ -7,6 +7,7 @@ import copy
 import json
 import logging
 from datetime import datetime, timezone
+from typing import cast
 
 from databricks_mason.runtime.types import (
     DurabilityStore,
@@ -18,18 +19,24 @@ from databricks_mason.runtime.types import (
     DurableExecutionStatus,
     DurableExecutor,
     JsonObject,
+    JsonValue,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
-    if not isinstance(value, dict):
-        raise TypeError(f"{name} must be a JSON object, got {type(value).__name__}")
+def _copy_json_value(value: JsonValue, name: str) -> JsonValue:
     try:
-        return json.loads(json.dumps(value, allow_nan=False))
+        return cast(JsonValue, json.loads(json.dumps(value, allow_nan=False)))
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{name} must be JSON serializable") from exc
+
+
+def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
+    copied = _copy_json_value(value, name)
+    if not isinstance(copied, dict):
+        raise TypeError(f"{name} must be a JSON object")
+    return copied
 
 
 class DurableRuntime:
@@ -71,9 +78,9 @@ class DurableRuntime:
 
     async def execute(
         self,
-        request: JsonObject,
+        request: JsonValue,
         context: DurableExecutionContext,
-    ) -> JsonObject:
+    ) -> JsonValue:
         """Run one attempt; subclasses may override this method."""
         if self._executor is None:
             raise NotImplementedError("provide an executor or override execute()")
@@ -112,14 +119,14 @@ class DurableRuntime:
         self._started = False
         await self.durability_store.close()
 
-    async def submit(self, execution_id: str, request: JsonObject) -> DurableExecution:
+    async def submit(self, execution_id: str, request: JsonValue) -> DurableExecution:
         """Accept an idempotent request and ensure recoverable work is scheduled."""
         self._require_started()
         if not execution_id:
             raise ValueError("execution_id must not be empty")
         state = await self.durability_store.accept(
             execution_id,
-            _copy_json_object(request, "request"),
+            _copy_json_value(request, "request"),
         )
         self._ensure_scheduled(state)
         return state
@@ -127,10 +134,10 @@ class DurableRuntime:
     async def invoke(
         self,
         execution_id: str,
-        request: JsonObject,
+        request: JsonValue,
         *,
         timeout: float | None = None,
-    ) -> JsonObject:
+    ) -> JsonValue:
         """Accept a request and wait for its persisted terminal response."""
         await self.submit(execution_id, request)
         return await self.wait(execution_id, timeout=timeout)
@@ -148,20 +155,16 @@ class DurableRuntime:
         execution_id: str,
         *,
         timeout: float | None = None,
-    ) -> JsonObject:
+    ) -> JsonValue:
         """Wait for a completed response, including work owned by another process."""
         self._require_started()
 
-        async def poll() -> JsonObject:
+        async def poll() -> JsonValue:
             while True:
                 state = await self.get(execution_id)
                 if state is None:
                     raise DurableExecutionNotFoundError(execution_id)
                 if state.status == DurableExecutionStatus.COMPLETED:
-                    if state.response is None:
-                        raise RuntimeError(
-                            f"execution {execution_id!r} completed without a response"
-                        )
                     return copy.deepcopy(state.response)
                 if state.status == DurableExecutionStatus.FAILED:
                     raise DurableExecutionFailedError(execution_id)
@@ -245,7 +248,7 @@ class DurableRuntime:
                     _emit=emit,
                 ),
             )
-            response = _copy_json_object(response, "executor response")
+            response = _copy_json_value(response, "executor response")
             completed = await self.durability_store.complete(
                 execution_id,
                 claimed.attempt,

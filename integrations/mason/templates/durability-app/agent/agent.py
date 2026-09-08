@@ -23,8 +23,7 @@ builder.add_edge("process", END)
 graph = builder.compile()
 
 
-async def run_agent(payload: dict, context: DurableAgentContext) -> dict:
-    agent_input = payload.get("input", {})
+async def run_agent(agent_input: object, context: DurableAgentContext) -> dict:
     if not isinstance(agent_input, dict):
         raise ValueError("input must be an object")
 
@@ -36,13 +35,11 @@ async def run_agent(payload: dict, context: DurableAgentContext) -> dict:
         {
             "type": "progress",
             "stage": "recovered" if context.is_recovery else "started",
-            "attempt": context.attempt,
         }
     )
     result = await graph.ainvoke({"message": message})
-    await context.emit({"type": "progress", "stage": "completed", "attempt": context.attempt})
+    await context.emit({"type": "progress", "stage": "completed"})
     return {
         "result": result["result"],
-        "attempt": context.attempt,
         "recovered": context.is_recovery,
     }

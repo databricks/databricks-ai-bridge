@@ -1,5 +1,6 @@
 """Tests for the Lakebase durability store."""
 
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -8,6 +9,7 @@ import pytest
 
 from databricks_mason.runtime.store import (
     RUNTIME_ENDPOINT_ENV,
+    RUNTIME_SCHEMA_ENV,
     InMemoryDurabilityStore,
     LakebaseDurabilityStore,
     default_durability_store,
@@ -47,6 +49,7 @@ def mapping_result(value):
 
 
 def test_default_store_is_local_without_an_attached_resource(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
     assert isinstance(default_durability_store(), InMemoryDurabilityStore)
@@ -54,16 +57,36 @@ def test_default_store_is_local_without_an_attached_resource(monkeypatch):
 
 def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
     expected = MagicMock()
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
     monkeypatch.setenv(
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
     )
+    monkeypatch.setenv(RUNTIME_SCHEMA_ENV, "databricks_mason_runtime_app")
     from_app_resource = MagicMock(return_value=expected)
     monkeypatch.setattr(LakebaseDurabilityStore, "from_app_resource", from_app_resource)
 
     assert default_durability_store() is expected
     from_app_resource.assert_called_once_with(
-        endpoint="projects/project/branches/production/endpoints/primary"
+        endpoint="projects/project/branches/production/endpoints/primary",
+        schema="databricks_mason_runtime_app",
     )
+
+
+def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
+    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
+    monkeypatch.setenv(
+        RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
+    )
+
+    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
+
+
+def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
+    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
+        default_durability_store()
 
 
 def execution_row(**overrides):
@@ -91,6 +114,8 @@ async def test_initialize_creates_execution_and_event_tables():
     assert "execution_id TEXT PRIMARY KEY" in sql
     assert "request JSONB NOT NULL" in sql
     assert "response JSONB" in sql
+    assert "jsonb_typeof(request)" not in sql
+    assert "jsonb_typeof(response)" not in sql
     assert "databricks_mason_runtime.execution_events" in sql
     assert "sequence_number BIGSERIAL PRIMARY KEY" in sql
     lakebase.create_schema.assert_awaited_once()
@@ -134,16 +159,19 @@ async def test_claim_returns_request_and_incremented_attempt():
     assert state.attempt == 2
     assert state.heartbeat_at == heartbeat
     assert state.request == {"input": "hello"}
+    event_parameters = connection.execute.await_args_list[1].args[1]
+    assert event_parameters["event"] == '{"type": "run.started"}'
 
 
 @pytest.mark.asyncio
-async def test_get_decodes_cached_response():
+@pytest.mark.parametrize("response_json", ['["done"]', '"done"', "null"])
+async def test_get_decodes_any_cached_json_response(response_json):
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = mapping_result(
         execution_row(
             status="COMPLETED",
             attempt=1,
-            response_json='{"output": "done"}',
+            response_json=response_json,
         )
     )
     store = LakebaseDurabilityStore(lakebase=lakebase)
@@ -152,21 +180,35 @@ async def test_get_decodes_cached_response():
 
     assert state is not None
     assert state.status == DurableExecutionStatus.COMPLETED
-    assert state.response == {"output": "done"}
+    assert state.response == json.loads(response_json)
 
 
 @pytest.mark.asyncio
-async def test_complete_persists_response_for_owned_attempt():
+async def test_complete_persists_response_and_lifecycle_event_atomically():
     lakebase, connection = mock_lakebase()
     connection.execute.return_value = MagicMock(rowcount=1)
     store = LakebaseDurabilityStore(lakebase=lakebase)
 
-    assert await store.complete("session-1", 2, {"output": "done"}) is True
+    assert await store.complete("session-1", 2, ["done"]) is True
 
-    parameters = connection.execute.await_args.args[1]
+    parameters = connection.execute.await_args_list[0].args[1]
     assert parameters["execution_id"] == "session-1"
     assert parameters["attempt"] == 2
-    assert parameters["response"] == '{"output": "done"}'
+    assert parameters["response"] == '["done"]'
+    event_parameters = connection.execute.await_args_list[1].args[1]
+    assert event_parameters["event"] == '{"type": "run.completed"}'
+
+
+@pytest.mark.asyncio
+async def test_fail_persists_lifecycle_event_atomically():
+    lakebase, connection = mock_lakebase()
+    connection.execute.return_value = MagicMock(rowcount=1)
+    store = LakebaseDurabilityStore(lakebase=lakebase)
+
+    assert await store.fail("session-1", 2) is True
+
+    event_parameters = connection.execute.await_args_list[1].args[1]
+    assert event_parameters["event"] == '{"type": "run.failed"}'
 
 
 @pytest.mark.asyncio

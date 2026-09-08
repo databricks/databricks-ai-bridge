@@ -6,8 +6,13 @@ import uvicorn
 from agent.agent import run_agent
 from databricks_mason import DurableAgentApp
 
-server = DurableAgentApp(run_agent, on_resume=run_agent)
-app = server.app
+app = DurableAgentApp()
+
+
+@app.invoke
+@app.on_recovery
+async def invoke(input, context):
+    return await run_agent(input, context)
 
 
 def main() -> None:

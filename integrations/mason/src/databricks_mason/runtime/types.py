@@ -4,9 +4,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Protocol
+from typing import Protocol, TypeAlias
 
-JsonObject = dict[str, Any]
+JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject = dict[str, JsonValue]
 DurableEventEmitter = Callable[[JsonObject], Awaitable[int]]
 
 
@@ -27,8 +28,8 @@ class DurableExecution:
     status: DurableExecutionStatus
     attempt: int
     heartbeat_at: datetime | None
-    request: JsonObject
-    response: JsonObject | None
+    request: JsonValue
+    response: JsonValue
 
     @property
     def is_terminal(self) -> bool:
@@ -67,7 +68,7 @@ class DurableExecutionContext:
         return await self._emit(event)
 
 
-DurableExecutor = Callable[[JsonObject, DurableExecutionContext], Awaitable[JsonObject]]
+DurableExecutor = Callable[[JsonValue, DurableExecutionContext], Awaitable[JsonValue]]
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,7 @@ class DurableAgentContext:
         return await self._execution_context.emit(event)
 
 
-AgentHook = Callable[[JsonObject, DurableAgentContext], Awaitable[JsonObject]]
+AgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
 
 
 class DurabilityStore(Protocol):
@@ -97,7 +98,7 @@ class DurabilityStore(Protocol):
 
     async def close(self) -> None: ...
 
-    async def accept(self, execution_id: str, request: JsonObject) -> DurableExecution: ...
+    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution: ...
 
     async def get(self, execution_id: str) -> DurableExecution | None: ...
 
@@ -115,7 +116,7 @@ class DurabilityStore(Protocol):
         self,
         execution_id: str,
         attempt: int,
-        response: JsonObject,
+        response: JsonValue,
     ) -> bool: ...
 
     async def fail(self, execution_id: str, attempt: int) -> bool: ...

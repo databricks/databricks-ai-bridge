@@ -16,6 +16,7 @@ import click
 import yaml
 
 from databricks_mason import render
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.deploy import (
     _upsert_manifest_env,
     store_bindings,
@@ -155,13 +156,20 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        sample = (
-            f"curl -X POST {base}/invocations -H 'Content-Type: application/json' "
-            '-d \'{"input": [{"role": "user", "content": "hi"}]}\''
+        try:
+            durable = AgentProject.load(source_dir).durability_enabled
+        except AgentCliError:
+            durable = False
+        endpoint = f"{base}/api/invocations" if durable else f"{base}/invocations"
+        body = (
+            '{"id": "00000000-0000-4000-8000-000000000000", "input": {"message": "hi"}}'
+            if durable
+            else '{"input": [{"role": "user", "content": "hi"}]}'
         )
+        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {base}/invocations"},
+            fields={"Invoke": f"POST {endpoint}"},
             next_steps=[
                 (sample, "Send a test request"),
                 ("mason tools add mcp <service>", "Give the agent a tool"),

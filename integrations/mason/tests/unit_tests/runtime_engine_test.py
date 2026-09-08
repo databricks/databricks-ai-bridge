@@ -14,6 +14,7 @@ from databricks_mason.runtime.types import (
     DurableExecutionFailedError,
     DurableExecutionStatus,
     DurableRequestConflictError,
+    JsonValue,
 )
 
 
@@ -31,7 +32,7 @@ class MemoryDurabilityStore:
     async def close(self) -> None:
         self.closed = True
 
-    async def accept(self, execution_id: str, request: dict) -> DurableExecution:
+    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution:
         existing = self.states.get(execution_id)
         if existing is not None:
             if existing.request != request:
@@ -91,6 +92,7 @@ class MemoryDurabilityStore:
             response=None,
         )
         self.states[execution_id] = state
+        self._append_event(execution_id, state.attempt, {"type": "run.started"})
         return state
 
     async def heartbeat(self, execution_id: str, attempt: int) -> bool:
@@ -108,7 +110,7 @@ class MemoryDurabilityStore:
         )
         return True
 
-    async def complete(self, execution_id: str, attempt: int, response: dict) -> bool:
+    async def complete(self, execution_id: str, attempt: int, response: JsonValue) -> bool:
         state = self.states[execution_id]
         if state.status != DurableExecutionStatus.ACTIVE or state.attempt != attempt:
             return False
@@ -120,6 +122,7 @@ class MemoryDurabilityStore:
             request=state.request,
             response=copy.deepcopy(response),
         )
+        self._append_event(execution_id, attempt, {"type": "run.completed"})
         return True
 
     async def fail(self, execution_id: str, attempt: int) -> bool:
@@ -134,6 +137,7 @@ class MemoryDurabilityStore:
             request=state.request,
             response=None,
         )
+        self._append_event(execution_id, attempt, {"type": "run.failed"})
         return True
 
     async def append_event(
@@ -153,6 +157,16 @@ class MemoryDurabilityStore:
         )
         self.persisted_events.append(persisted)
         return persisted.sequence_number
+
+    def _append_event(self, execution_id: str, attempt: int, event: dict) -> None:
+        self.persisted_events.append(
+            DurableEvent(
+                sequence_number=len(self.persisted_events) + 1,
+                execution_id=execution_id,
+                attempt=attempt,
+                event=copy.deepcopy(event),
+            )
+        )
 
     async def events(
         self,
@@ -378,26 +392,30 @@ async def test_executor_can_persist_replayable_events():
     runtime = make_runtime(execute)
     await runtime.start()
     try:
-        assert await runtime.invoke("session-1", {"input": "hello"}) == {"last_sequence_number": 1}
+        assert await runtime.invoke("session-1", {"input": "hello"}) == {"last_sequence_number": 2}
         events = await runtime.events("session-1")
         assert [(event.sequence_number, event.event) for event in events] == [
-            (1, {"type": "progress", "step": 1})
+            (1, {"type": "run.started"}),
+            (2, {"type": "progress", "step": 1}),
+            (3, {"type": "run.completed"}),
         ]
-        assert await runtime.events("session-1", after_sequence=1) == []
+        assert [event.event for event in await runtime.events("session-1", after_sequence=1)] == [
+            {"type": "progress", "step": 1},
+            {"type": "run.completed"},
+        ]
     finally:
         await runtime.stop()
 
 
 @pytest.mark.asyncio
-async def test_request_must_be_json_object():
-    async def execute(request: dict, context: DurableExecutionContext) -> dict:
-        return {}
+async def test_request_and_response_may_be_any_json_value():
+    async def execute(request: JsonValue, context: DurableExecutionContext) -> JsonValue:
+        return None
 
     runtime = make_runtime(execute)
     await runtime.start()
     try:
-        with pytest.raises(TypeError, match="request must be a JSON object"):
-            await runtime.submit("session-1", ["not", "an", "object"])
+        assert await runtime.invoke("session-1", ["not", "an", "object"]) is None
     finally:
         await runtime.stop()
 
@@ -407,9 +425,10 @@ async def test_subclass_can_own_execution_wiring():
     class Runtime(DurableRuntime):
         async def execute(
             self,
-            request: dict,
+            request: JsonValue,
             context: DurableExecutionContext,
-        ) -> dict:
+        ) -> JsonValue:
+            assert isinstance(request, dict)
             return {"attempt": context.attempt, "input": request["input"]}
 
     runtime = Runtime(

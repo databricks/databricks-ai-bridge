@@ -2,9 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents reuse one of those Lakebase databases, or provision a dedicated
-database when neither is bound. The managed stores are read from `agent.toml` at runtime, so they
-are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
+the deployment. Durable agents reuse the Session Store database or provision a dedicated
+database when no Session Store is bound. The managed stores are read from `agent.toml` at runtime,
+so they are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from dataclasses import replace
 from typing import Any, Optional
 
 import click
@@ -35,6 +36,7 @@ from databricks_mason.store_access import _databricks, apply_postgres_resources,
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -433,15 +435,19 @@ def deploy(
     memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
     if _has_durability_binding(source_dir):
+        runtime_schema = agent_durability_store.runtime_schema(name)
         if session_store:
-            durability_backend = session_store_access.backend(session_store)
-        elif memory_database:
-            durability_backend = memory_store_access.backend(memory_database)
+            durability_backend = replace(
+                session_store_access.backend(session_store),
+                schema=runtime_schema,
+                tables=(),
+            )
         else:
             durability_backend = agent_durability_store.ensure_backend(
                 name, obj.profile, create=True
             )
         env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = runtime_schema
         provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
         provisioned["Traces"] = traces_destination

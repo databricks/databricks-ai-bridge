@@ -17,6 +17,7 @@ from sqlalchemy import URL, event, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from databricks_mason.agent_durability_store import runtime_schema
 from databricks_mason.runtime.types import (
     DurabilityStore,
     DurableEvent,
@@ -24,6 +25,7 @@ from databricks_mason.runtime.types import (
     DurableExecutionStatus,
     DurableRequestConflictError,
     JsonObject,
+    JsonValue,
 )
 
 if TYPE_CHECKING:
@@ -38,14 +40,13 @@ class _AsyncLakebase(Protocol):
 
 DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
 RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+RUNTIME_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 _SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOKEN_CACHE_SECONDS = 15 * 60
 _POOL_RECYCLE_SECONDS = 14 * 60
 
 
-def _serialize_json_object(value: JsonObject) -> str:
-    if not isinstance(value, dict):
-        raise TypeError(f"expected a JSON object, got {type(value).__name__}")
+def _serialize_json_value(value: JsonValue) -> str:
     return json.dumps(value, allow_nan=False)
 
 
@@ -237,9 +238,7 @@ class LakebaseDurabilityStore:
                         heartbeat_at TIMESTAMPTZ,
                         request JSONB NOT NULL,
                         response JSONB,
-                        CHECK (status IN ('QUEUED', 'ACTIVE', 'COMPLETED', 'FAILED')),
-                        CHECK (jsonb_typeof(request) = 'object'),
-                        CHECK (response IS NULL OR jsonb_typeof(response) = 'object')
+                        CHECK (status IN ('QUEUED', 'ACTIVE', 'COMPLETED', 'FAILED'))
                     )
                     """
                 )
@@ -279,9 +278,9 @@ class LakebaseDurabilityStore:
     async def close(self) -> None:
         await self._engine.dispose()
 
-    async def accept(self, execution_id: str, request: JsonObject) -> DurableExecution:
+    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution:
         _validate_execution_id(execution_id)
-        serialized_request = _serialize_json_object(request)
+        serialized_request = _serialize_json_value(request)
         async with self._engine.begin() as connection:
             await connection.execute(
                 text(
@@ -400,6 +399,20 @@ class LakebaseDurabilityStore:
                 .mappings()
                 .one_or_none()
             )
+            if row is not None:
+                await connection.execute(
+                    text(
+                        f"""
+                        INSERT INTO {self._events_table} (execution_id, attempt, event)
+                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        """
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "attempt": int(row["attempt"]),
+                        "event": _serialize_json_value({"type": "run.started"}),
+                    },
+                )
         return self._to_execution(row) if row is not None else None
 
     async def heartbeat(self, execution_id: str, attempt: int) -> bool:
@@ -423,10 +436,10 @@ class LakebaseDurabilityStore:
         self,
         execution_id: str,
         attempt: int,
-        response: JsonObject,
+        response: JsonValue,
     ) -> bool:
         _validate_execution_id(execution_id)
-        serialized_response = _serialize_json_object(response)
+        serialized_response = _serialize_json_value(response)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
@@ -444,6 +457,20 @@ class LakebaseDurabilityStore:
                     "response": serialized_response,
                 },
             )
+            if result.rowcount == 1:
+                await connection.execute(
+                    text(
+                        f"""
+                        INSERT INTO {self._events_table} (execution_id, attempt, event)
+                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        """
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "attempt": attempt,
+                        "event": _serialize_json_value({"type": "run.completed"}),
+                    },
+                )
         return result.rowcount == 1
 
     async def fail(self, execution_id: str, attempt: int) -> bool:
@@ -461,6 +488,20 @@ class LakebaseDurabilityStore:
                 ),
                 {"execution_id": execution_id, "attempt": attempt},
             )
+            if result.rowcount == 1:
+                await connection.execute(
+                    text(
+                        f"""
+                        INSERT INTO {self._events_table} (execution_id, attempt, event)
+                        VALUES (:execution_id, :attempt, CAST(:event AS JSONB))
+                        """
+                    ),
+                    {
+                        "execution_id": execution_id,
+                        "attempt": attempt,
+                        "event": _serialize_json_value({"type": "run.failed"}),
+                    },
+                )
         return result.rowcount == 1
 
     async def append_event(
@@ -471,7 +512,7 @@ class LakebaseDurabilityStore:
     ) -> int | None:
         """Append an event only while the caller owns the active attempt."""
         _validate_execution_id(execution_id)
-        serialized_event = _serialize_json_object(event)
+        serialized_event = _serialize_json_value(event)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 text(
@@ -558,7 +599,7 @@ class InMemoryDurabilityStore:
     async def close(self) -> None:
         pass
 
-    async def accept(self, execution_id: str, request: JsonObject) -> DurableExecution:
+    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution:
         _validate_execution_id(execution_id)
         async with self._lock:
             existing = self.states.get(execution_id)
@@ -610,6 +651,7 @@ class InMemoryDurabilityStore:
                 response=None,
             )
             self.states[execution_id] = claimed
+            self._append_event(execution_id, claimed.attempt, {"type": "run.started"})
             return copy.deepcopy(claimed)
 
     async def heartbeat(self, execution_id: str, attempt: int) -> bool:
@@ -627,7 +669,7 @@ class InMemoryDurabilityStore:
             )
             return True
 
-    async def complete(self, execution_id: str, attempt: int, response: JsonObject) -> bool:
+    async def complete(self, execution_id: str, attempt: int, response: JsonValue) -> bool:
         async with self._lock:
             state = self.states.get(execution_id)
             if state is None or not self._owns_attempt(state, attempt):
@@ -640,6 +682,7 @@ class InMemoryDurabilityStore:
                 request=state.request,
                 response=copy.deepcopy(response),
             )
+            self._append_event(execution_id, attempt, {"type": "run.completed"})
             return True
 
     async def fail(self, execution_id: str, attempt: int) -> bool:
@@ -655,6 +698,7 @@ class InMemoryDurabilityStore:
                 request=state.request,
                 response=None,
             )
+            self._append_event(execution_id, attempt, {"type": "run.failed"})
             return True
 
     async def append_event(
@@ -667,13 +711,7 @@ class InMemoryDurabilityStore:
             state = self.states.get(execution_id)
             if not self._owns_attempt(state, attempt):
                 return None
-            persisted = DurableEvent(
-                sequence_number=len(self.persisted_events) + 1,
-                execution_id=execution_id,
-                attempt=attempt,
-                event=copy.deepcopy(event),
-            )
-            self.persisted_events.append(persisted)
+            persisted = self._append_event(execution_id, attempt, event)
             return persisted.sequence_number
 
     async def events(
@@ -696,6 +734,16 @@ class InMemoryDurabilityStore:
             state and state.status == DurableExecutionStatus.ACTIVE and state.attempt == attempt
         )
 
+    def _append_event(self, execution_id: str, attempt: int, event: JsonObject) -> DurableEvent:
+        persisted = DurableEvent(
+            sequence_number=len(self.persisted_events) + 1,
+            execution_id=execution_id,
+            attempt=attempt,
+            event=copy.deepcopy(event),
+        )
+        self.persisted_events.append(persisted)
+        return persisted
+
     @staticmethod
     def _is_recoverable(state: DurableExecution, stale_seconds: float) -> bool:
         if state.status == DurableExecutionStatus.QUEUED:
@@ -710,6 +758,12 @@ class InMemoryDurabilityStore:
 
 def default_durability_store() -> DurabilityStore:
     """Use the attached Lakebase resource when deployed, otherwise process-local state."""
+    app_name = os.getenv("DATABRICKS_APP_NAME")
+    if not app_name:
+        return InMemoryDurabilityStore()
     if endpoint := os.getenv(RUNTIME_ENDPOINT_ENV):
-        return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint)
-    return InMemoryDurabilityStore()
+        schema = os.getenv(RUNTIME_SCHEMA_ENV) or runtime_schema(app_name)
+        return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint, schema=schema)
+    raise RuntimeError(
+        f"{RUNTIME_ENDPOINT_ENV} is required for durable execution in Databricks Apps"
+    )

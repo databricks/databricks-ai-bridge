@@ -17,6 +17,9 @@ def test_backend_uses_one_deterministic_autoscaling_project() -> None:
     assert backend.endpoint_id == "primary"
     assert backend.database == "databricks-postgres"
     assert backend.resource_name == "postgres"
+    assert backend.schema == durability.runtime_schema("mason-My_App")
+    assert backend.schema.startswith("databricks_mason_runtime_")
+    assert backend.schema != durability.runtime_schema("mason-other-app")
 
 
 def test_ensure_backend_reuses_existing_project(monkeypatch) -> None:

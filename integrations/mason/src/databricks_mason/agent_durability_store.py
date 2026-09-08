@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Optional
@@ -12,7 +13,6 @@ from databricks_mason.store_access import LakebaseBackend, _databricks
 _BRANCH = "production"
 _ENDPOINT = "primary"
 _DATABASE = "databricks-postgres"
-_SCHEMA = "databricks_mason_runtime"
 _RESOURCE_NAME = "postgres"
 
 
@@ -24,7 +24,7 @@ def backend(app: str) -> LakebaseBackend:
         branch=_BRANCH,
         endpoint_id=_ENDPOINT,
         database=_DATABASE,
-        schema=_SCHEMA,
+        schema=runtime_schema(app),
         tables=(),
         resource_name=_RESOURCE_NAME,
     )
@@ -42,7 +42,7 @@ def ensure_backend(app: str, profile: Optional[str], *, create: bool) -> Lakebas
     if not create:
         raise AgentCliError(
             f"Durability store '{selected.project}' does not exist.",
-            hint="Bind a Session or Memory Store to reuse its Lakebase database.",
+            hint="Bind a Session Store to reuse its Lakebase database.",
         )
 
     payload = {"spec": {"display_name": f"Mason durability for {app}"}}
@@ -70,3 +70,9 @@ def _project_id(app: str) -> str:
     if not normalized[0].isalpha():
         normalized = f"mason-{normalized}"
     return f"{normalized}-durability"[:63].rstrip("-")
+
+
+def runtime_schema(app: str) -> str:
+    """Return the schema owned by one deployed app's durability runtime."""
+    digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
+    return f"databricks_mason_runtime_{digest}"

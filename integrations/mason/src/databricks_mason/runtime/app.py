@@ -1,18 +1,20 @@
-"""Thin FastAPI layer over Mason's durable runtime."""
+"""FastAPI adapter for Mason's durable runtime."""
 
 from __future__ import annotations
 
 import asyncio
 import copy
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import JsonValue as PydanticJsonValue
 
 from databricks_mason.runtime.runtime import DurableRuntime
 from databricks_mason.runtime.store import default_durability_store
@@ -26,35 +28,30 @@ from databricks_mason.runtime.types import (
     DurableExecutionStatus,
     DurableRequestConflictError,
     JsonObject,
+    JsonValue,
 )
 
+logger = logging.getLogger(__name__)
+
 _ROUTING_COOKIE = "__Host-databricks-app-router"
+_API_ROOT = "/api/invocations"
 
 
 class _InvocationRequest(BaseModel):
-    """The fixed HTTP request accepted by :class:`DurableAgentApp`."""
-
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1)
-    input: Any = Field(default_factory=list)
-    resume: JsonObject | None = None
+    id: UUID
+    input: PydanticJsonValue = Field(default_factory=list)
     background: bool = False
     stream: bool = False
 
 
-class DurableAgentApp:
-    """Serve one agent callback through Mason's durable HTTP protocol."""
+class DurableAgentApp(FastAPI):
+    """Expose decorated agent handlers through Mason's durable HTTP protocol."""
 
-    def __init__(
-        self,
-        invoke: AgentHook,
-        *,
-        on_resume: AgentHook | None = None,
-        durability_store: DurabilityStore | None = None,
-    ) -> None:
-        self._invoke = invoke
-        self._on_resume = on_resume
+    def __init__(self, *, durability_store: DurabilityStore | None = None) -> None:
+        self._invoke_hook: AgentHook | None = None
+        self._on_recovery_hook: AgentHook | None = None
         self._runtime = DurableRuntime(
             self._execute,
             durability_store=(
@@ -64,27 +61,49 @@ class DurableAgentApp:
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
-            await self._runtime.start(recover=self._on_resume is not None)
+            if self._invoke_hook is None:
+                raise RuntimeError("register an invocation handler with @app.invoke")
+            recover = self._on_recovery_hook is not None
+            if not recover:
+                logger.warning(
+                    "No @app.on_recovery handler is registered; crash recovery is disabled."
+                )
+            await self._runtime.start(recover=recover)
             try:
                 yield
             finally:
                 await self._runtime.stop()
 
-        self.app = FastAPI(title="Databricks Durable Agent", lifespan=lifespan)
-        self.app.middleware("http")(self._bind_session)
-        for prefix in ("", "/api"):
-            self.app.add_api_route(f"{prefix}/invocations", self._invoke_request, methods=["POST"])
-            self.app.add_api_route(
-                f"{prefix}/invocations/{{run_id}}", self._get_request, methods=["GET"]
-            )
-            self.app.add_api_route(
-                f"{prefix}/invocations/{{run_id}}/events", self._events, methods=["GET"]
-            )
+        super().__init__(
+            title="Databricks Durable Agent",
+            lifespan=lifespan,
+            docs_url=None,
+            redoc_url=None,
+            openapi_url=None,
+        )
+        self.middleware("http")(self._bind_session)
+        self.add_api_route(_API_ROOT, self._invoke_request, methods=["POST"])
+        self.add_api_route(f"{_API_ROOT}/{{run_id}}", self._get_request, methods=["GET"])
+        self.add_api_route(f"{_API_ROOT}/{{run_id}}/events", self._events, methods=["GET"])
+
+    def invoke(self, function: AgentHook) -> AgentHook:
+        """Register the handler for a run's first attempt."""
+        if self._invoke_hook is not None:
+            raise ValueError("an invocation handler is already registered")
+        self._invoke_hook = function
+        return function
+
+    def on_recovery(self, function: AgentHook) -> AgentHook:
+        """Register the handler used after an interrupted attempt becomes stale."""
+        if self._on_recovery_hook is not None:
+            raise ValueError("a recovery handler is already registered")
+        self._on_recovery_hook = function
+        return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
-        session_id = request.cookies.get(_ROUTING_COOKIE)
-        if session_id is None:
-            session_id = str(uuid.uuid4())
+        # TODO: Read the standard session header once Databricks Apps supports one. For now this
+        # routing cookie is also the only supported session identifier.
+        session_id = request.cookies.get(_ROUTING_COOKIE) or str(uuid.uuid4())
         request.state.session_id = session_id
         response = await call_next(request)
         if _ROUTING_COOKIE not in request.cookies:
@@ -100,12 +119,13 @@ class DurableAgentApp:
 
     async def _execute(
         self,
-        request: JsonObject,
+        request: JsonValue,
         execution_context: DurableExecutionContext,
-    ) -> JsonObject:
-        payload = request.get("input")
+    ) -> JsonValue:
+        if not isinstance(request, dict):
+            raise TypeError("persisted request must be an object")
         session_id = request.get("session_id")
-        if not isinstance(payload, dict) or not isinstance(session_id, str):
+        if not isinstance(session_id, str) or "input" not in request:
             raise TypeError("persisted request must contain session_id and input")
 
         context = DurableAgentContext(
@@ -114,50 +134,47 @@ class DurableAgentApp:
             attempt=execution_context.attempt,
             _execution_context=execution_context,
         )
-        if context.is_recovery:
-            if self._on_resume is None:
-                raise RuntimeError("recovery requires an on_resume callback")
-            return await self._on_resume(copy.deepcopy(payload), context)
-        return await self._invoke(copy.deepcopy(payload), context)
+        function = self._on_recovery_hook if context.is_recovery else self._invoke_hook
+        if function is None:
+            handler = "@app.on_recovery" if context.is_recovery else "@app.invoke"
+            raise RuntimeError(f"no {handler} handler is registered")
+        return await function(copy.deepcopy(request["input"]), context)
 
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
-        payload: JsonObject = {"input": body.input}
-        if body.resume is not None:
-            payload["resume"] = body.resume
+        run_id = str(body.id)
         persisted_request: JsonObject = {
             "session_id": request.state.session_id,
-            "input": payload,
+            "input": copy.deepcopy(body.input),
         }
         try:
+            if body.background:
+                state = await self._runtime.submit(run_id, persisted_request)
+                return JSONResponse(self._accepted_payload(state), status_code=202)
             if body.stream:
-                await self._runtime.submit(body.id, persisted_request)
+                await self._runtime.submit(run_id, persisted_request)
                 return StreamingResponse(
-                    self._event_stream(body.id),
+                    self._event_stream(run_id),
                     media_type="text/event-stream",
                 )
-            if body.background:
-                state = await self._runtime.submit(body.id, persisted_request)
-                return JSONResponse(
-                    self._state_payload(state),
-                    status_code=200 if state.is_terminal else 202,
-                )
-            return JSONResponse(await self._runtime.invoke(body.id, persisted_request))
+            output = await self._runtime.invoke(run_id, persisted_request)
+            return JSONResponse({"id": run_id, "status": "completed", "output": output})
         except DurableRequestConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
         except DurableExecutionFailedError as exc:
             raise HTTPException(500, "agent execution failed") from exc
 
-    async def _get_request(self, run_id: str) -> JSONResponse:
-        state = await self._runtime.get(run_id)
+    async def _get_request(self, run_id: UUID) -> JSONResponse:
+        state = await self._runtime.get(str(run_id))
         if state is None:
             raise HTTPException(404, "run not found")
         return JSONResponse(self._state_payload(state))
 
-    async def _events(self, run_id: str, after: int = 0) -> StreamingResponse:
-        if await self._runtime.get(run_id) is None:
+    async def _events(self, run_id: UUID, after: int = 0) -> StreamingResponse:
+        normalized_run_id = str(run_id)
+        if await self._runtime.get(normalized_run_id) is None:
             raise HTTPException(404, "run not found")
         return StreamingResponse(
-            self._event_stream(run_id, after),
+            self._event_stream(normalized_run_id, after),
             media_type="text/event-stream",
         )
 
@@ -170,24 +187,28 @@ class DurableAgentApp:
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
             state = await self._runtime.get(run_id)
-            if state is None:
-                return
-            if state.status == DurableExecutionStatus.FAILED:
-                yield f"data: {json.dumps({'error': 'agent execution failed'})}\n\n"
-                return
-            if state.status == DurableExecutionStatus.COMPLETED:
+            if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)
+
+    @staticmethod
+    def _accepted_payload(state: DurableExecution) -> JsonObject:
+        run_id = state.execution_id
+        return {
+            "id": run_id,
+            "status": state.status.value.lower(),
+            "status_url": f"{_API_ROOT}/{run_id}",
+            "events_url": f"{_API_ROOT}/{run_id}/events",
+        }
 
     @staticmethod
     def _state_payload(state: DurableExecution) -> JsonObject:
         payload: JsonObject = {
             "id": state.execution_id,
             "status": state.status.value.lower(),
-            "attempt": state.attempt,
         }
         if state.status == DurableExecutionStatus.COMPLETED:
-            payload.update(copy.deepcopy(state.response or {}))
+            payload["output"] = copy.deepcopy(state.response)
         elif state.status == DurableExecutionStatus.FAILED:
             payload["error"] = "agent execution failed"
         return payload

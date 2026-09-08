@@ -121,37 +121,48 @@ separate package layer so it can be exposed as a standalone embedding API later:
 ```python
 from databricks_mason import DurableAgentApp, DurableAgentContext
 
-async def invoke(payload: dict, context: DurableAgentContext) -> dict:
-    return await run_agent(payload, session_id=context.session_id)
+app = DurableAgentApp()
 
-async def recover(payload: dict, context: DurableAgentContext) -> dict:
-    return await resume_agent(payload, session_id=context.session_id)
 
-server = DurableAgentApp(
-    invoke,
-    on_resume=recover,
-)
-app = server.app
+@app.invoke
+async def invoke(input: object, context: DurableAgentContext) -> object:
+    return await run_agent(input, session_id=context.session_id)
+
+
+@app.on_recovery
+async def recover(input: object, context: DurableAgentContext) -> object:
+    return await recover_agent(input, session_id=context.session_id)
 ```
 
-The application exposes `POST /invocations`, `GET /invocations/{run_id}`, and
-`GET /invocations/{run_id}/events?after={cursor}`. `id`, `background`, and `stream` are transport
-parameters; the Apps routing cookie is the session identifier, so body `session_id` is rejected.
-The callback receives `input` and an optional `resume` payload. The internal runtime persists the
-payload, attempt status, heartbeats, emitted events, and final result for every invocation mode.
+The application exposes `POST /api/invocations`, `GET /api/invocations/{run_id}`, and
+`GET /api/invocations/{run_id}/events?after={cursor}`. Databricks Apps bearer-token requests must
+use `/api/` routes ([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
+The client supplies a UUID `id`, which is also the idempotency key for every invocation mode:
+
+- foreground sync returns `200` with the result under `output`;
+- background sync returns `202` with status and event URLs;
+- foreground streaming returns `200` server-sent events; and
+- background streaming returns `202` with status and event URLs.
+
+`input` and `output` may be any JSON value. Transport fields are not passed to the callback. The
+Apps routing cookie is the only supported session identifier, so body `session_id` is rejected.
+Polling uses only the run ID and relies on Databricks Apps authentication. The runtime persists the
+input, internal attempt status, heartbeats, `run.started`/`run.completed`/`run.failed` lifecycle
+events, application events, and final output.
 
 The new `durability-app` template selects an in-memory durability store locally. Bare `mason init`
 also writes its durability binding to `agent.toml`; `mason deploy` then attaches one Lakebase
 database for runtime durability, chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
-2. Otherwise reuse the configured Memory Store's Lakebase database.
-3. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
+2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
 
-Mason adds only its `databricks_mason_runtime` schema and tables to the selected database. A
-replacement worker claims a stale heartbeat and calls `on_resume`; if `on_resume` is omitted,
-automatic recovery is disabled. Agent checkpoint restoration and idempotent external side effects
-remain the developer's responsibility.
+Mason adds only its `databricks_mason_runtime_<app-hash>` schema and tables to the selected database,
+giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
+`@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
+is disabled; register the same function for both decorators when replaying the initial invocation is
+safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
+responsibility.
 
 Bare `mason init` scaffolds this minimal, API-only LangGraph app. Explicit
 `--framework langgraph` and `--framework openai` continue to scaffold the existing templates
@@ -167,7 +178,6 @@ mason [-p <profile>] [-o text|json]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
-  durability   bind | unbind [--source PATH]
   memory
     bind         STORE [--source PATH] [--no-create-stores]
     unbind       [--source PATH]
