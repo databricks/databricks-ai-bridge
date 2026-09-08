@@ -1,62 +1,105 @@
 from types import SimpleNamespace
 
+import agent.agent as agent_module
 import pytest
-from agent.agent import run_agent
+import runtime.main as main_module
 from fastapi.testclient import TestClient
-from runtime.main import app, recover
+from langchain.messages import AIMessage, AIMessageChunk
 
 
-async def test_langgraph_agent_emits_progress_and_marks_recovery() -> None:
+class _FakeAgent:
+    async def astream(self, *, input, stream_mode):
+        assert input == {"messages": [{"role": "user", "content": "hello"}]}
+        assert stream_mode == ["updates", "messages"]
+        yield "messages", (AIMessageChunk(content="hello", id="chunk-1"), {})
+        yield "updates", {
+            "model": {"messages": [AIMessage(content="hello", id="message-1")]}
+        }
+
+
+async def test_langgraph_agent_persists_streaming_events(monkeypatch) -> None:
     events = []
 
     async def emit(event):
         events.append(event)
         return len(events)
 
-    context = SimpleNamespace(attempt=2, is_recovery=True, emit=emit)
-    result = await run_agent(
-        {"message": "hello"},
+    async def create_agent_graph():
+        return _FakeAgent()
+
+    monkeypatch.setattr(agent_module, "create_agent_graph", create_agent_graph)
+    context = SimpleNamespace(
+        invocation_id="invocation-1",
+        session_id="session-1",
+        is_recovery=False,
+        emit=emit,
+    )
+
+    result = await agent_module.run_agent(
+        [{"role": "user", "content": "hello"}],
         context,
     )
 
-    assert result == {"result": "Processed: hello", "recovered": True}
-    assert events == [
-        {"type": "progress", "stage": "recovered"},
-        {"type": "progress", "stage": "completed"},
-    ]
-
-
-async def test_langgraph_agent_requires_message() -> None:
-    async def emit(event):
-        return 1
-
-    context = SimpleNamespace(attempt=1, is_recovery=False, emit=emit)
-    with pytest.raises(ValueError, match="message must be a string"):
-        await run_agent({}, context)
-
-
-@pytest.mark.asyncio
-async def test_recovery_handler_can_adapt_the_original_input() -> None:
-    async def emit(event):
-        return 1
-
-    context = SimpleNamespace(attempt=2, is_recovery=True, emit=emit)
-
-    result = await recover({"message": "hello"}, context)
-
+    assert events[0] == {"type": "delta", "content": "hello", "id": "chunk-1"}
+    assert events[1]["type"] == "message"
+    assert events[1]["message"]["content"] == "hello"
     assert result == {
-        "result": "Processed: hello (recovery attempt after the pod crashed)",
-        "recovered": True,
+        "output": [events[1]["message"]],
+        "session_id": "session-1",
+        "recovered": False,
     }
 
 
-def test_app_exposes_only_durable_invocation_routes() -> None:
-    with TestClient(app, base_url="https://testserver") as client:
+async def test_langgraph_agent_requires_message_list() -> None:
+    async def emit(event):
+        return 1
+
+    context = SimpleNamespace(
+        invocation_id="invocation-1",
+        session_id="session-1",
+        is_recovery=False,
+        emit=emit,
+    )
+    with pytest.raises(ValueError, match="input must be a list"):
+        await agent_module.run_agent({}, context)
+
+
+@pytest.mark.asyncio
+async def test_recovery_handler_explains_the_recovery_attempt(monkeypatch) -> None:
+    received_input = None
+
+    async def run_agent(input, context):
+        nonlocal received_input
+        received_input = input
+        return {"recovered": context.is_recovery}
+
+    monkeypatch.setattr(main_module, "run_agent", run_agent)
+    context = SimpleNamespace(is_recovery=True)
+    original_input = [{"role": "user", "content": "hello"}]
+
+    result = await main_module.recover(original_input, context)
+
+    assert result == {"recovered": True}
+    assert received_input[1:] == original_input
+    assert received_input[0]["role"] == "system"
+    assert "previous pod crashed" in received_input[0]["content"]
+
+
+def test_app_exposes_only_durable_invocation_routes(monkeypatch) -> None:
+    async def run_agent(input, context):
+        return {
+            "output": [{"role": "assistant", "content": "hello"}],
+            "session_id": context.session_id,
+            "recovered": context.is_recovery,
+        }
+
+    monkeypatch.setattr(main_module, "run_agent", run_agent)
+    with TestClient(main_module.app, base_url="https://testserver") as client:
         response = client.post(
             "/api/invocations",
             json={
                 "id": "11111111-1111-4111-8111-111111111111",
-                "input": {"message": "hello"},
+                "input": [{"role": "user", "content": "hello"}],
             },
         )
 
@@ -65,11 +108,12 @@ def test_app_exposes_only_durable_invocation_routes() -> None:
         "id": "11111111-1111-4111-8111-111111111111",
         "status": "completed",
         "output": {
-            "result": "Processed: hello",
+            "output": [{"role": "assistant", "content": "hello"}],
+            "session_id": "11111111-1111-4111-8111-111111111111",
             "recovered": False,
         },
     }
-    paths = app.openapi()["paths"]
+    paths = main_module.app.openapi()["paths"]
     assert set(paths) == {
         "/api/invocations",
         "/api/invocations/{invocation_id}",

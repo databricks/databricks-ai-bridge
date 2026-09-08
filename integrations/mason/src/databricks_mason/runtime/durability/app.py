@@ -6,7 +6,6 @@ import asyncio
 import copy
 import json
 import logging
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import UUID
@@ -106,21 +105,11 @@ class DurableAgentApp(FastAPI):
         return function
 
     async def _bind_session(self, request: Request, call_next) -> Response:
-        # TODO: Read the standard session header once Databricks Apps supports one. For now this
-        # routing cookie is also the only supported session identifier.
-        session_id = request.cookies.get(_ROUTING_COOKIE) or str(uuid.uuid4())
-        request.state.session_id = session_id
-        response = await call_next(request)
-        if _ROUTING_COOKIE not in request.cookies:
-            response.set_cookie(
-                _ROUTING_COOKIE,
-                session_id,
-                secure=True,
-                httponly=True,
-                samesite="lax",
-                path="/",
-            )
-        return response
+        # TODO: Read the standard session header once Databricks Apps supports one. The Apps proxy
+        # currently consumes its routing cookie before forwarding deployed requests, so the
+        # invocation ID becomes the deterministic session fallback in _invoke_request.
+        request.state.session_id = request.cookies.get(_ROUTING_COOKIE)
+        return await call_next(request)
 
     async def _execute(
         self,
@@ -148,7 +137,7 @@ class DurableAgentApp(FastAPI):
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
         invocation_id = str(body.id)
         execution_request: JsonObject = {
-            "session_id": request.state.session_id,
+            "session_id": request.state.session_id or invocation_id,
             "input": copy.deepcopy(body.input),
         }
         try:

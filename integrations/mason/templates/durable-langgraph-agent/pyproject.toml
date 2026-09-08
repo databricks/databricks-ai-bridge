@@ -1,11 +1,12 @@
 [project]
 name = "durable-langgraph-agent"
 version = "0.1.0"
-description = "Minimal durable LangGraph agent using the Mason runtime"
+description = "Durable LangGraph agent using the Mason runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "databricks-mason[runtime]>=0.1.4.dev0",
+    "python-dotenv>=1.2.1",
 ]
 
 [build-system]

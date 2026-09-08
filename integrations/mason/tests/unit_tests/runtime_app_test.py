@@ -4,7 +4,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from uuid import UUID
 
 import httpx
 import pytest
@@ -92,7 +91,7 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_routing_cookie_is_initialized_once() -> None:
+async def test_missing_forwarded_routing_cookie_uses_invocation_id() -> None:
     seen_sessions = []
 
     async def invoke(input, context):
@@ -102,11 +101,10 @@ async def test_missing_routing_cookie_is_initialized_once() -> None:
     app = make_app(invoke)
     async with running_client(app) as client:
         response = await client.post("/api/invocations", json={"id": _RUN_1})
-        session_id = response.cookies[_ROUTING_COOKIE]
 
-    assert UUID(session_id)
-    assert seen_sessions == [session_id]
+    assert seen_sessions == [_RUN_1]
     assert response.status_code == 200
+    assert _ROUTING_COOKIE not in response.cookies
 
 
 @pytest.mark.asyncio
@@ -265,6 +263,32 @@ async def test_invocation_id_is_idempotency_key_for_every_mode() -> None:
     assert first.status_code == 200
     assert replay.status_code == 202
     assert conflict.status_code == 409
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_remains_idempotent_when_proxy_consumes_routing_cookie() -> None:
+    calls = 0
+
+    async def invoke(input, context):
+        nonlocal calls
+        calls += 1
+        return input
+
+    app = make_app(invoke)
+    async with running_client(app) as client:
+        first = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "one"},
+        )
+        client.cookies.clear()
+        replay = await client.post(
+            "/api/invocations",
+            json={"id": _RUN_1, "input": "one", "background": True},
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 202
     assert calls == 1
 
 

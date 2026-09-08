@@ -166,7 +166,8 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             durable = False
         endpoint = f"{base}/api/invocations" if durable else f"{base}/invocations"
         body = (
-            '{"id": "00000000-0000-4000-8000-000000000000", "input": {"message": "hi"}}'
+            '{"id": "00000000-0000-4000-8000-000000000000", '
+            '"input": [{"role": "user", "content": "hi"}]}'
             if durable
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
