@@ -862,8 +862,10 @@ def test_lifecycle_commands_honor_json_output(monkeypatch):
         assert json.loads(result.output) == {key: "myapp"}
 
 
-def _agent_toml(source: pathlib.Path, *, memory=None, session=None) -> None:
+def _agent_toml(source: pathlib.Path, *, memory=None, session=None, deployment_name=None) -> None:
     text = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+    if deployment_name:
+        text += f'deployment_name = "{deployment_name}"\n'
     if memory:
         text += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
@@ -884,6 +886,65 @@ def test_store_bindings_none_when_unbound(tmp_path: pathlib.Path):
 def test_store_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
     # No agent.toml -> no stores, never raises (so deploy/dev aren't blocked).
     assert deploy_mod.store_bindings(tmp_path) == (None, None)
+
+
+def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypatch):
+    from databricks_mason.agent_project import AgentProject
+
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src)  # a project with no deployment_name yet
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    assert AgentProject.load(src).deployment_name == "myapp"  # persisted for later deploys
+
+
+def test_deploy_reads_deployment_name_from_toml_when_omitted(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src, deployment_name="stored")
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: (
+            calls.append(args) or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    ws = "/Workspace/Users/me@example.com/mason_deployments/mason-stored"
+    assert ["apps", "deploy", "mason-stored", "--source-code-path", ws] in calls
+
+
+def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))  # no agent.toml
+
+    called: list = []
+    monkeypatch.setattr(deploy_mod, "_databricks", lambda *a, **k: called.append(a))
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code != 0
+    assert "No deployment name" in result.output
+    assert called == []  # errored before shelling out to `databricks apps`
 
 
 def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):

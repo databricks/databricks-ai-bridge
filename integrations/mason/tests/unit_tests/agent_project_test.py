@@ -126,6 +126,32 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     assert final.memory_store == "mem"
 
 
+def test_deployment_name_round_trips(tmp_path: pathlib.Path):
+    _write_manifest(tmp_path)
+    project = AgentProject.load(tmp_path)
+    assert project.deployment_name is None
+
+    assert project.set_deployment_name("my-agent") is True
+    assert project.set_deployment_name("my-agent") is False  # idempotent no-op
+    project.write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.deployment_name == "my-agent"
+    assert "# keep me" in (tmp_path / "agent.toml").read_text(encoding="utf-8")
+
+    assert reloaded.set_deployment_name("renamed") is True  # a new name wins
+    reloaded.write()
+    assert AgentProject.load(tmp_path).deployment_name == "renamed"
+
+
+def test_load_rejects_empty_deployment_name(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\ndeployment_name = ""\n'
+    )
+    with pytest.raises(AgentCliError, match="deployment_name"):
+        AgentProject.load(tmp_path)
+
+
 def test_rebinding_replaces_the_store_name(tmp_path: pathlib.Path):
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)

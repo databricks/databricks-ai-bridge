@@ -238,6 +238,9 @@ Deploy with the [Mason](../../README.md) CLI:
 mason deploy agent-langgraph --source .
 ```
 
+The name is recorded in `agent.toml` on first deploy, so later re-deploys can just be `mason deploy`
+(from the project dir); passing a name again updates it. The app is named `mason-<name>`.
+
 Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
 stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
 session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
