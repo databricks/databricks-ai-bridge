@@ -4,9 +4,9 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-With no framework override, Mason scaffolds the minimal LangGraph durability app. `--framework`
-keeps the existing framework templates available. `--repo` / `--ref` override the source, e.g. to
-pull from a fork or branch before a template has merged to its canonical repo.
+`--durability` selects the minimal durable template for LangGraph. Without it, Mason keeps the
+existing framework templates. `--repo` / `--ref` override the source, e.g. to pull from a fork or
+branch before a template has merged to its canonical repo.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from databricks_mason.project_config import write_project_metadata
 # Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
 _MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
-_DEFAULT_TEMPLATE = {
+_DURABILITY_TEMPLATE = {
     "repo": _MASON_REPO,
     "ref": "main",
     "path": "integrations/mason/templates/durability-app",
@@ -161,7 +161,12 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     "--framework",
     type=click.Choice(sorted(_TEMPLATES)),
     default=None,
-    help="Scaffold an existing framework template instead of the default durability app.",
+    help="Agent framework to scaffold (defaults to langgraph).",
+)
+@click.option(
+    "--durability",
+    is_flag=True,
+    help="Scaffold the API-only durability template (currently requires --framework langgraph).",
 )
 @click.option(
     "--profile",
@@ -187,6 +192,7 @@ def init(
     obj,
     directory: Optional[str],
     framework: Optional[str],
+    durability: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -202,11 +208,16 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
+    if durability and framework != "langgraph":
+        raise AgentCliError("--durability currently requires --framework langgraph.")
+
     selected_framework = framework or "langgraph"
-    spec = _DEFAULT_TEMPLATE if framework is None else _TEMPLATES[framework]
-    # Existing framework templates retain their chat overlay behavior. The default durability app
-    # is deliberately API-only so the new SDK surface stays easy to inspect.
-    chat_app_enabled = framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    spec = _DURABILITY_TEMPLATE if durability else _TEMPLATES[selected_framework]
+    # The durability template is deliberately API-only. Existing framework templates retain their
+    # chat overlay behavior.
+    chat_app_enabled = (
+        not durability and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    )
     template_path = spec["path"]
     dest = (
         pathlib.Path(directory)
@@ -220,7 +231,7 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled and framework else ()
+    overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
     _fetch_template(
         repo or spec["repo"],
         ref or _template_ref(selected_framework),
@@ -234,7 +245,7 @@ def init(
     project = AgentProject.create(
         dest,
         framework=selected_framework,
-        durability_enabled=framework is None,
+        durability_enabled=durability,
     )
     project.write()
     env_profile = profile or obj.profile

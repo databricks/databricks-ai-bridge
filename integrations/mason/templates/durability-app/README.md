@@ -36,15 +36,16 @@ returns the persisted run; reusing the ID with a different payload returns `409`
 
 ## Deploy
 
-Bare `mason init` scaffolds this template. Deploy it with an explicit profile:
+`mason init --framework langgraph --durability` scaffolds this template. Deploy it with an explicit
+profile:
 
 ```bash
 mason --profile <profile> deploy durability-app --source .
 ```
 
-Bare `mason init` records the durability binding in `agent.toml`. At deploy time Mason
-attaches one Lakebase database for the runtime tables, reusing the Session Store database
-or otherwise reusing or provisioning `<app>-durability`. Runtime tables live in the app-owned
+The durability flag records the binding in `agent.toml`. At deploy time Mason attaches one Lakebase
+database for the runtime tables, reusing the Session Store database or otherwise reusing or
+provisioning `<app>-durability`. Runtime tables live in the app-owned
 `databricks_mason_runtime_<app-hash>` schema. Existing Mason templates are unaffected.
 
 If an active run becomes stale after a process restart, the runtime claims a new

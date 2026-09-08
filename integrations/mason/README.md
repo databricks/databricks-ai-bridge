@@ -150,9 +150,10 @@ Polling uses only the run ID and relies on Databricks Apps authentication. The r
 input, internal attempt status, heartbeats, `run.started`/`run.completed`/`run.failed` lifecycle
 events, application events, and final output.
 
-The new `durability-app` template selects an in-memory durability store locally. Bare `mason init`
-also writes its durability binding to `agent.toml`; `mason deploy` then attaches one Lakebase
-database for runtime durability, chosen in this order:
+The new `durability-app` template selects an in-memory durability store locally. Initialize it with
+`mason init --framework langgraph --durability`; Mason writes its durability binding to
+`agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability, chosen
+in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
 2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
@@ -164,9 +165,9 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-Bare `mason init` scaffolds this minimal, API-only LangGraph app. Explicit
-`--framework langgraph` and `--framework openai` continue to scaffold the existing templates
-unchanged.
+`mason init --framework langgraph --durability` scaffolds this minimal, API-only app. Bare
+`mason init`, `--framework langgraph`, and `--framework openai` continue to scaffold the existing
+templates unchanged.
 
 ## Commands
 
@@ -174,7 +175,7 @@ unchanged.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--disable-chat-app]
+  init         [--framework openai|langgraph] [--durability] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]

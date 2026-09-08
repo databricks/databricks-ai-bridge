@@ -27,7 +27,7 @@ class _Ctx:
 
 
 def test_framework_specs_have_repo_ref_path():
-    assert init_mod._DEFAULT_TEMPLATE["path"] == "integrations/mason/templates/durability-app"
+    assert init_mod._DURABILITY_TEMPLATE["path"] == "integrations/mason/templates/durability-app"
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
@@ -84,12 +84,35 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai" in result.output
 
 
-def test_init_defaults_to_api_only_durability_app(tmp_path: pathlib.Path):
+def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
-        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())  # no --framework
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert f.call_args.args[2] == init_mod._DEFAULT_TEMPLATE["path"]
+    assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "agent-langgraph",
+    }
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert "durability" not in manifest
+
+
+def test_init_scaffolds_durability_app_for_langgraph(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", "--durability", str(dest)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[2] == init_mod._DURABILITY_TEMPLATE["path"]
     assert f.call_args.args[4] == ()
     with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
         metadata = tomli.load(metadata_file)
@@ -101,6 +124,25 @@ def test_init_defaults_to_api_only_durability_app(tmp_path: pathlib.Path):
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
     assert manifest["durability"] == {"enabled": True}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--durability"],
+        ["--framework", "openai", "--durability"],
+    ],
+)
+def test_init_durability_requires_explicit_langgraph_framework(
+    tmp_path: pathlib.Path,
+    args: list[str],
+):
+    with mock.patch.object(init_mod, "_fetch_template") as fetched:
+        result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path / "proj")], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "requires --framework langgraph" in " ".join(result.output.split())
+    fetched.assert_not_called()
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
