@@ -697,7 +697,7 @@ def test_deploy_keys_experiment_on_source_dir_name_not_prefixed(
     tmp_path: pathlib.Path, monkeypatch
 ):
     # dev keys the experiment on the source dir name; deploy must match it (NOT the mason-prefixed
-    # deployment name), so dev and deploy trace to the same per-agent experiment.
+    # deployment name), so dev and deploy trace to the same per-project experiment.
     src = tmp_path / "my-agent"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -867,7 +867,7 @@ def test_resolve_trace_experiment_uses_pinned_id_without_creating(
     assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "pinned-1"
 
 
-def test_resolve_trace_experiment_creates_per_app_default(tmp_path: pathlib.Path, monkeypatch):
+def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.Path, monkeypatch):
     (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
     created: dict = {}
     monkeypatch.setattr(

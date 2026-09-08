@@ -173,7 +173,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tracing",): (
         (
             "mason tracing configure",
-            "use the default per-app experiment (tracing is on by default)",
+            "use the default per-project experiment (tracing is on by default)",
         ),
         ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
         ("mason tracing disable", "turn tracing off"),

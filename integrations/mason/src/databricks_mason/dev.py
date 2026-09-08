@@ -67,7 +67,7 @@ def dev(
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
     Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
-    the agent name (the same one ``mason deploy`` uses), created and pinned into agent.toml on first
+    the project name (the same one ``mason deploy`` uses), created and pinned into agent.toml on first
     run — configure or turn it off with ``mason tracing configure`` / ``disable``. Stores bound with ``mason memory/sessions
     bind`` are validated here and read from agent.toml at runtime. Locally you already have access, so
     no service-principal grant is needed; that grant happens at ``mason deploy`` time.
@@ -82,7 +82,7 @@ def dev(
 
     # Validate the agent.toml store bindings and wire tracing into app.yaml. Stores are read from
     # agent.toml at runtime (not written here); tracing is on by default, so resolve/create the
-    # per-app experiment and wire its env. Tracing is best-effort locally — if it can't be set up
+    # per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set up
     # (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
     env_updates: dict[str, str] = {}

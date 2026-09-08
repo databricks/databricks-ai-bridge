@@ -48,14 +48,14 @@ def _project(tmp_path: pathlib.Path, *, experiment_id: str | None = None, disabl
 # --- pure surface -----------------------------------------------------------
 
 
-def test_default_experiment_is_per_app_under_user_home():
+def test_default_experiment_is_per_project_under_user_home():
     assert (
         tracing_mod.default_experiment("me@x.com", "my-agent")
         == "/Users/me@x.com/mason-traces/my-agent"
     )
 
 
-def test_default_experiment_requires_app():
+def test_default_experiment_requires_project():
     with pytest.raises(AgentCliError):
         tracing_mod.default_experiment("me@x.com", None)
 
@@ -155,8 +155,8 @@ def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
     assert AgentProject.load(tmp_path).trace_experiment_id is None  # nothing persisted
 
 
-def test_configure_default_enables_per_app_offline(tmp_path: pathlib.Path):
-    # No --experiment: enables the per-app default. Pure agent.toml write, no mlflow call.
+def test_configure_default_enables_per_project_offline(tmp_path: pathlib.Path):
+    # No --experiment: enables the per-project default. Pure agent.toml write, no mlflow call.
     _project(tmp_path, disabled=True)
     result = CliRunner().invoke(
         tracing_mod.tracing_configure, ["--source", str(tmp_path)], obj=_Ctx()
@@ -226,7 +226,7 @@ def test_list_defaults_to_projects_pinned_experiment(tmp_path: pathlib.Path):
 
 
 def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
-    # No pinned id and the per-app experiment isn't created yet -> nothing traced, list is empty.
+    # No pinned id and the per-project experiment isn't created yet -> nothing traced, list is empty.
     _project(tmp_path)
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.return_value = None

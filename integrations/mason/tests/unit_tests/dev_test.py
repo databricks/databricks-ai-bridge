@@ -153,7 +153,7 @@ def test_dev_without_bindings_does_not_validate(tmp_path: pathlib.Path):
 
 
 def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing is on by default: dev resolves the per-app experiment and wires the two MLflow env vars
+    # Tracing is on by default: dev resolves the per-project experiment and wires the two MLflow env vars
     # into app.yaml (the experiment id + the workspace tracking uri).
     import yaml
 

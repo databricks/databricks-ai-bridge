@@ -2,12 +2,13 @@
 
 Tracing is managed MLflow tracing (traces are stored in the workspace's MLflow backend) and is **on
 by default**: with no configuration, ``mason dev`` and ``mason deploy`` send an agent's traces to a
-per-app experiment (``/Users/<you>/mason-traces/<app>``), auto-created and pinned into agent.toml on
-first run (so later runs reuse it by id). The experiment is identified everywhere by its **id** — that
-single value binds the agent (``MLFLOW_EXPERIMENT_ID``), grants the deployed app (an experiment app
-resource), reads traces, and builds the UI link.
+per-project experiment (``/Users/<you>/mason-traces/<project>``), auto-created and pinned into
+agent.toml on first run (so later runs reuse it by id). The experiment is identified everywhere by its
+**id** — that single value binds the agent (``MLFLOW_EXPERIMENT_ID``), grants the deployed app (an
+experiment app resource), reads traces, and builds the UI link.
 
-``mason tracing configure`` pins a specific experiment by id (or re-enables the per-app default after
+``mason tracing configure`` pins a specific experiment by id (or re-enables the per-project default
+after
 a disable); ``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
 
 MLflow is an optional dependency: ``configure``/``list``/``get`` and the dev/deploy experiment
@@ -38,11 +39,15 @@ TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 _INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
 
 
-def default_experiment(user: str, app: Optional[str]) -> str:
-    """The per-app experiment path under the user's workspace home (shared by dev and deploy)."""
-    if not app:
-        raise AgentCliError("Cannot derive the default tracing experiment without an app name.")
-    return f"/Users/{user}/{_TRACES_DIR}/{app}"
+def default_experiment(user: str, project: Optional[str]) -> str:
+    """The per-project experiment path under the user's workspace home (shared by dev and deploy).
+
+    ``project`` is the Mason project name (the source directory's basename), not the deployed app name
+    — dev and deploy resolve the same value so they trace to one experiment per project.
+    """
+    if not project:
+        raise AgentCliError("Cannot derive the default tracing experiment without a project name.")
+    return f"/Users/{user}/{_TRACES_DIR}/{project}"
 
 
 def experiment_url(host: Optional[str], experiment_id: str) -> Optional[str]:
@@ -84,7 +89,7 @@ def ensure_experiment(profile: Optional[str], client, name: str) -> str:
     """Create the experiment ``name`` if missing and return its id (idempotent).
 
     ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
-    ``/Users/<you>/mason-traces/<app>``), so the parent dir is created first. Used by dev/deploy to
+    ``/Users/<you>/mason-traces/<project>``), so the parent dir is created first. Used by dev/deploy to
     provision the managed experiment that traces log to.
     """
     mlflow = _mlflow()
@@ -101,7 +106,7 @@ def ensure_experiment(profile: Optional[str], client, name: str) -> str:
 def _project_experiment_id(obj, source: str, mlflow) -> Optional[str]:
     """The experiment id `list` should read for this project, or None if none exists yet.
 
-    Resolution: the project's pinned ``experiment_id``, else the per-app default experiment (looked up
+    Resolution: the project's pinned ``experiment_id``, else the per-project default experiment (looked up
     by name; None when it hasn't been created yet — i.e. nothing has traced here).
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415 - avoid import cycle
@@ -163,7 +168,7 @@ def tracing() -> None:
     "experiment_id",
     default=None,
     help="MLflow experiment id to trace to. Must be an existing experiment. Omit to use (or return "
-    "to) the per-app experiment mason creates automatically.",
+    "to) the per-project experiment mason creates automatically.",
 )
 @click.option(
     "--source",
@@ -175,9 +180,9 @@ def tracing() -> None:
 def tracing_configure(obj, experiment_id, source) -> None:
     """Configure tracing via MLflow: pin an experiment, rebind, or re-enable after `disable`.
 
-    Tracing is on by default (a per-app experiment mason creates). Use this to pin a specific
+    Tracing is on by default (a per-project experiment mason creates). Use this to pin a specific
     experiment by id, rebind to a different one, or turn tracing back on after ``mason tracing
-    disable``. Omit ``--experiment`` to (re)enable the per-app default.
+    disable``. Omit ``--experiment`` to (re)enable the per-project default.
     """
     from databricks_mason.agent_project import AgentProject  # noqa: PLC0415
 
@@ -205,7 +210,7 @@ def tracing_configure(obj, experiment_id, source) -> None:
     project.configure_tracing(experiment_id)
     project.write()
 
-    target = f"experiment {experiment_id}" if experiment_id else "a per-app experiment"
+    target = f"experiment {experiment_id}" if experiment_id else "a per-project experiment"
     if obj.output == "json":
         render.emit_json({"experiment_id": experiment_id, "disabled": False})
         return
@@ -267,7 +272,7 @@ def tracing_list(obj, experiment_id, limit, source) -> None:
     """List recent agent traces in an experiment.
 
     Resolution: ``--experiment <id>`` (works standalone), else this project's experiment (the pinned
-    one, or its per-app default). A missing experiment just lists nothing (nothing has traced yet).
+    one, or its per-project default). A missing experiment just lists nothing (nothing has traced yet).
     """
     mlflow = _mlflow()
     _configure(mlflow, obj.profile)

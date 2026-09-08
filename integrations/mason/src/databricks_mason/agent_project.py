@@ -17,7 +17,7 @@ from tomlkit.exceptions import ParseError
 from databricks_mason.errors import AgentCliError
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
-# The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-app
+# The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
 TRACING_TABLE = "tracing"
 
@@ -329,7 +329,7 @@ class AgentProject:
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
         self.durability_enabled = durability_enabled
-        # Tracing config: an explicit experiment id override (None = default per-app experiment), and
+        # Tracing config: an explicit experiment id override (None = default per-project experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
         self.trace_disabled = trace_disabled
@@ -505,7 +505,7 @@ class AgentProject:
     def configure_tracing(self, experiment_id: str | None) -> bool:
         """Enable tracing and (optionally) pin an explicit experiment id. Returns True if changed.
 
-        ``experiment_id=None`` means "use the default per-app experiment": any prior override is
+        ``experiment_id=None`` means "use the default per-project experiment": any prior override is
         cleared. Enabling always clears a previous ``disabled`` flag (tracing is on by default, so an
         absent ``[tracing]`` table is the enabled default).
         """
