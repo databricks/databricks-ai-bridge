@@ -17,7 +17,7 @@ from sqlalchemy import URL, event, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from databricks_mason.agent_durability_store import runtime_schema
+from databricks_mason.lakebase_durability_store import get_lakebase_schema
 from databricks_mason.runtime.types import (
     DurabilityStore,
     DurableEvent,
@@ -133,7 +133,18 @@ class _AppsPostgresLakebase:
 
 
 class LakebaseDurabilityStore:
-    """Store durable execution state and events in one Lakebase schema."""
+    """Persist shared execution state, attempt leases, and ordered events in Lakebase.
+
+    The ``executions`` table is the source of truth for idempotency and lifecycle state. Conditional
+    SQL updates claim an attempt and fence completion, failure, heartbeat, and event writes by its
+    attempt number. The ``execution_events`` table provides an ordered replay cursor. Because every
+    app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
+    next attempt, and continue after process or pod loss.
+
+    This store requires a Lakebase Postgres database. ``mason deploy`` reuses the Session Store
+    database when configured or provisions one durability database, then assigns each app its own
+    schema. ``mason dev`` uses ``InMemoryDurabilityStore`` instead.
+    """
 
     def __init__(
         self,
@@ -765,7 +776,7 @@ def default_durability_store() -> DurabilityStore:
     if not app_name:
         return InMemoryDurabilityStore()
     if endpoint := os.getenv(RUNTIME_ENDPOINT_ENV):
-        schema = os.getenv(RUNTIME_SCHEMA_ENV) or runtime_schema(app_name)
+        schema = os.getenv(RUNTIME_SCHEMA_ENV) or get_lakebase_schema(app_name)
         return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint, schema=schema)
     raise RuntimeError(
         f"{RUNTIME_ENDPOINT_ENV} is required for durable execution in Databricks Apps"

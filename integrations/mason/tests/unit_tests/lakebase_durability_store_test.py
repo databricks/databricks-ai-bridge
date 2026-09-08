@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from databricks_mason import agent_durability_store as durability
+from databricks_mason import lakebase_durability_store as durability
 from databricks_mason.errors import AgentCliError
 
 
@@ -17,12 +17,12 @@ def test_backend_uses_one_deterministic_autoscaling_project() -> None:
     assert backend.endpoint_id == "primary"
     assert backend.database == "databricks-postgres"
     assert backend.resource_name == "postgres"
-    assert backend.schema == durability.runtime_schema("mason-My_App")
+    assert backend.schema == durability.get_lakebase_schema("mason-My_App")
     assert backend.schema.startswith("databricks_mason_runtime_")
-    assert backend.schema != durability.runtime_schema("mason-other-app")
+    assert backend.schema != durability.get_lakebase_schema("mason-other-app")
 
 
-def test_ensure_backend_reuses_existing_project(monkeypatch) -> None:
+def test_get_or_create_backend_reuses_existing_project(monkeypatch) -> None:
     calls = []
 
     def fake_databricks(args, profile, **kwargs):
@@ -31,13 +31,13 @@ def test_ensure_backend_reuses_existing_project(monkeypatch) -> None:
 
     monkeypatch.setattr(durability, "_databricks", fake_databricks)
 
-    selected = durability.ensure_backend("mason-app", "prof", create=True)
+    selected = durability.get_or_create_backend("mason-app", "prof", create=True)
 
     assert selected.project == "mason-app-durability"
     assert calls == [["postgres", "get-project", "projects/mason-app-durability"]]
 
 
-def test_ensure_backend_creates_missing_project(monkeypatch) -> None:
+def test_get_or_create_backend_creates_missing_project(monkeypatch) -> None:
     calls = []
 
     def fake_databricks(args, profile, **kwargs):
@@ -50,7 +50,7 @@ def test_ensure_backend_creates_missing_project(monkeypatch) -> None:
 
     monkeypatch.setattr(durability, "_databricks", fake_databricks)
 
-    selected = durability.ensure_backend("mason-app", "prof", create=True)
+    selected = durability.get_or_create_backend("mason-app", "prof", create=True)
 
     assert selected.project == "mason-app-durability"
     create = calls[1]
@@ -59,7 +59,7 @@ def test_ensure_backend_creates_missing_project(monkeypatch) -> None:
     assert payload["spec"]["display_name"] == "Mason durability for mason-app"
 
 
-def test_ensure_backend_respects_no_create_stores(monkeypatch) -> None:
+def test_get_or_create_backend_respects_no_create_stores(monkeypatch) -> None:
     monkeypatch.setattr(
         durability,
         "_databricks",
@@ -67,4 +67,4 @@ def test_ensure_backend_respects_no_create_stores(monkeypatch) -> None:
     )
 
     with pytest.raises(AgentCliError, match="does not exist"):
-        durability.ensure_backend("mason-app", "prof", create=False)
+        durability.get_or_create_backend("mason-app", "prof", create=False)

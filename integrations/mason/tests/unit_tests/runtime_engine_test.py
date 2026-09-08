@@ -206,7 +206,7 @@ async def test_invoke_persists_request_and_response():
     await runtime.start()
     try:
         response = await runtime.invoke("session-1", {"input": "hello"})
-        state = await runtime.get("session-1")
+        state = await runtime.get_execution("session-1")
     finally:
         await runtime.stop()
 
@@ -298,7 +298,7 @@ async def test_executor_failure_is_persisted_as_terminal_state():
     try:
         with pytest.raises(DurableExecutionFailedError):
             await runtime.invoke("session-1", {"input": "hello"})
-        state = await runtime.get("session-1")
+        state = await runtime.get_execution("session-1")
     finally:
         await runtime.stop()
 
@@ -374,7 +374,7 @@ async def test_blocking_timeout_does_not_cancel_execution():
     try:
         with pytest.raises(TimeoutError):
             await runtime.invoke("session-1", {"input": "hello"}, timeout=0.02)
-        state = await runtime.get("session-1")
+        state = await runtime.get_execution("session-1")
         assert state is not None
         assert state.status == DurableExecutionStatus.ACTIVE
         release.set()
@@ -393,13 +393,15 @@ async def test_executor_can_persist_replayable_events():
     await runtime.start()
     try:
         assert await runtime.invoke("session-1", {"input": "hello"}) == {"last_sequence_number": 2}
-        events = await runtime.events("session-1")
+        events = await runtime.get_events("session-1")
         assert [(event.sequence_number, event.event) for event in events] == [
             (1, {"type": "run.started"}),
             (2, {"type": "progress", "step": 1}),
             (3, {"type": "run.completed"}),
         ]
-        assert [event.event for event in await runtime.events("session-1", after_sequence=1)] == [
+        assert [
+            event.event for event in await runtime.get_events("session-1", after_sequence=1)
+        ] == [
             {"type": "progress", "step": 1},
             {"type": "run.completed"},
         ]

@@ -288,8 +288,8 @@ def test_deploy_template_metadata_does_not_enable_runtime_store(
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.agent_durability_store,
-        "ensure_backend",
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
     )
     monkeypatch.setattr(
@@ -323,8 +323,8 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.agent_durability_store,
-        "ensure_backend",
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse session")),
     )
     monkeypatch.setattr(
@@ -352,7 +352,7 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
     assert [event[0] for event in events] == ["attach", "deploy"]
     backend = events[0][1][0]
     assert backend.database == "sessions"
-    assert backend.schema == deploy_mod.agent_durability_store.runtime_schema("mason-myapp")
+    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     assert backend.tables == ()
     env = {
         entry["name"]: entry["value"]
@@ -360,7 +360,7 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
     }
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
-        deploy_mod.agent_durability_store.runtime_schema("mason-myapp")
+        deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     )
 
 
@@ -371,14 +371,14 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, memory="mem")
-    selected = deploy_mod.agent_durability_store.backend("mason-myapp")
+    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(deploy_mod, "_memory_store_database", lambda client, store: "memory-db")
     monkeypatch.setattr(
-        deploy_mod.agent_durability_store,
-        "ensure_backend",
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
         lambda app, profile, create: selected,
     )
     monkeypatch.setattr(
@@ -414,13 +414,13 @@ def test_deploy_durability_binding_provisions_backend_before_startup(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True)
-    selected = deploy_mod.agent_durability_store.backend("mason-myapp")
+    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
-        deploy_mod.agent_durability_store,
-        "ensure_backend",
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
         lambda app, profile, create: selected,
     )
     monkeypatch.setattr(

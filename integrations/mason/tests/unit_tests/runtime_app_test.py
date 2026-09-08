@@ -303,7 +303,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
     app = make_app(fail)
     async with running_client(app) as client:
         response = await client.post("/api/invocations", json={"id": _RUN_1})
-        events = await app._runtime.events(_RUN_1)
+        events = await app._runtime.get_events(_RUN_1)
 
     assert response.status_code == 500
     assert response.json() == {"detail": "agent execution failed"}

@@ -1,4 +1,15 @@
-"""Public types for durable request execution."""
+"""Public contracts shared by the durable runtime, store, and agent application.
+
+``DurableRuntime`` accepts a ``DurableExecutorFn`` and coordinates its work through a
+``DurabilityStore``. The store returns ``DurableExecution`` snapshots and ordered ``DurableEvent``
+records. Each executor call receives a ``DurableExecutionContext`` for attempt fencing and event
+emission. ``DurableAgentApp`` adapts that lower-level context into ``DurableAgentContext`` for
+functions registered with ``@app.invoke`` and ``@app.on_recovery``.
+
+All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,
+so values crossing the durability boundary can be persisted identically by in-memory and Lakebase
+stores.
+"""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -22,7 +33,7 @@ class DurableExecutionStatus(str, Enum):
 
 @dataclass(frozen=True)
 class DurableExecution:
-    """Persisted state for one idempotent request."""
+    """A store snapshot for one idempotent execution and its current owning attempt."""
 
     execution_id: str
     status: DurableExecutionStatus
@@ -33,6 +44,7 @@ class DurableExecution:
 
     @property
     def is_terminal(self) -> bool:
+        """Whether this execution can no longer transition or emit events."""
         return self.status in {
             DurableExecutionStatus.COMPLETED,
             DurableExecutionStatus.FAILED,
@@ -51,7 +63,7 @@ class DurableEvent:
 
 @dataclass(frozen=True)
 class DurableExecutionContext:
-    """Attempt metadata passed to the caller-owned executor."""
+    """Attempt metadata and event emission passed to the runtime's executor function."""
 
     execution_id: str
     attempt: int
@@ -59,6 +71,7 @@ class DurableExecutionContext:
 
     @property
     def is_recovery(self) -> bool:
+        """Whether this is a replacement attempt after an earlier worker stopped heartbeating."""
         return self.attempt > 1
 
     async def emit(self, event: JsonObject) -> int:
@@ -68,12 +81,12 @@ class DurableExecutionContext:
         return await self._emit(event)
 
 
-DurableExecutor = Callable[[JsonValue, DurableExecutionContext], Awaitable[JsonValue]]
+DurableExecutorFn = Callable[[JsonValue, DurableExecutionContext], Awaitable[JsonValue]]
 
 
 @dataclass(frozen=True)
 class DurableAgentContext:
-    """Invocation metadata and durable event emission for an agent callback."""
+    """Run/session metadata and durable event emission for a decorated agent function."""
 
     run_id: str
     session_id: str
@@ -82,57 +95,85 @@ class DurableAgentContext:
 
     @property
     def is_recovery(self) -> bool:
+        """Whether ``@app.on_recovery`` is handling a replacement attempt."""
         return self.attempt > 1
 
     async def emit(self, event: JsonObject) -> int:
+        """Persist an ordered application event and return its replay cursor."""
         return await self._execution_context.emit(event)
 
 
-AgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
+DurableAgentHook = Callable[[JsonValue, DurableAgentContext], Awaitable[JsonValue]]
 
 
 class DurabilityStore(Protocol):
-    """Persistence contract used by :class:`DurableRuntime`."""
+    """Atomic persistence operations required by :class:`DurableRuntime`.
 
-    async def initialize(self) -> None: ...
+    Implementations fence every mutating attempt operation with ``execution_id`` and ``attempt``.
+    Returning ``False`` or ``None`` means the caller no longer owns that attempt.
+    """
 
-    async def close(self) -> None: ...
+    async def initialize(self) -> None:
+        """Create required storage resources and open connections."""
+        ...
 
-    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution: ...
+    async def close(self) -> None:
+        """Release connections and other store resources."""
+        ...
 
-    async def get(self, execution_id: str) -> DurableExecution | None: ...
+    async def accept(self, execution_id: str, request: JsonValue) -> DurableExecution:
+        """Create a queued execution, or return the identical previously accepted request."""
+        ...
 
-    async def recoverable_execution_ids(self, stale_seconds: float) -> list[str]: ...
+    async def get(self, execution_id: str) -> DurableExecution | None:
+        """Return the latest execution snapshot, or ``None`` when the ID is unknown."""
+        ...
+
+    async def recoverable_execution_ids(self, stale_seconds: float) -> list[str]:
+        """List queued executions and active executions whose heartbeat is stale."""
+        ...
 
     async def claim(
         self,
         execution_id: str,
         stale_seconds: float,
-    ) -> DurableExecution | None: ...
+    ) -> DurableExecution | None:
+        """Atomically claim recoverable work and return its new active attempt."""
+        ...
 
-    async def heartbeat(self, execution_id: str, attempt: int) -> bool: ...
+    async def heartbeat(self, execution_id: str, attempt: int) -> bool:
+        """Refresh an active attempt's lease when the caller still owns it."""
+        ...
 
     async def complete(
         self,
         execution_id: str,
         attempt: int,
         response: JsonValue,
-    ) -> bool: ...
+    ) -> bool:
+        """Atomically persist output and complete an attempt still owned by the caller."""
+        ...
 
-    async def fail(self, execution_id: str, attempt: int) -> bool: ...
+    async def fail(self, execution_id: str, attempt: int) -> bool:
+        """Atomically mark an attempt failed when it is still owned by the caller."""
+        ...
 
     async def append_event(
         self,
         execution_id: str,
         attempt: int,
         event: JsonObject,
-    ) -> int | None: ...
+    ) -> int | None:
+        """Append an ordered event for an owned attempt and return its replay cursor."""
+        ...
 
     async def events(
         self,
         execution_id: str,
         after_sequence: int | None = None,
-    ) -> list[DurableEvent]: ...
+    ) -> list[DurableEvent]:
+        """Return execution events after an optional exclusive replay cursor."""
+        ...
 
 
 class DurableRequestConflictError(ValueError):

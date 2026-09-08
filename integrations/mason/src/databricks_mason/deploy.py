@@ -23,7 +23,7 @@ import click
 import yaml
 
 from databricks_mason import (
-    agent_durability_store,
+    lakebase_durability_store,
     memory_store_access,
     render,
     session_store_access,
@@ -435,19 +435,19 @@ def deploy(
     memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
     if _has_durability_binding(source_dir):
-        runtime_schema = agent_durability_store.runtime_schema(name)
+        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
         if session_store:
             durability_backend = replace(
                 session_store_access.backend(session_store),
-                schema=runtime_schema,
+                schema=durability_schema,
                 tables=(),
             )
         else:
-            durability_backend = agent_durability_store.ensure_backend(
+            durability_backend = lakebase_durability_store.get_or_create_backend(
                 name, obj.profile, create=True
             )
         env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
-        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = runtime_schema
+        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
         provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
         provisioned["Traces"] = traces_destination

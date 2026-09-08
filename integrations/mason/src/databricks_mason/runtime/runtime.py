@@ -17,7 +17,7 @@ from databricks_mason.runtime.types import (
     DurableExecutionFailedError,
     DurableExecutionNotFoundError,
     DurableExecutionStatus,
-    DurableExecutor,
+    DurableExecutorFn,
     JsonObject,
     JsonValue,
 )
@@ -40,15 +40,22 @@ def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
 
 
 class DurableRuntime:
-    """Execute idempotent JSON requests with Lakebase-backed crash recovery.
+    """Coordinate idempotent execution, leases, recovery, and event replay.
 
-    The runtime persists only request execution state. The executor owns agent
-    sessions, checkpoints, tools, and any recovery-specific prompt or behavior.
+    ``submit`` first records an immutable request in the configured ``DurabilityStore``. One worker
+    atomically claims the next attempt, runs ``execute_fn``, and refreshes that attempt's heartbeat
+    until output or failure is committed. When recovery is enabled, a scanner schedules queued work
+    and reclaims active work whose heartbeat has become stale. Attempt numbers fence late writes
+    from replaced workers, while persisted events let clients replay progress across processes.
+
+    Durability depends on the configured store: Mason uses process-local memory during development
+    and Lakebase in deployed Apps. This runtime persists execution state only; the executor remains
+    responsible for agent checkpoints and idempotent external side effects.
     """
 
     def __init__(
         self,
-        executor: DurableExecutor | None = None,
+        execute_fn: DurableExecutorFn | None = None,
         *,
         durability_store: DurabilityStore,
         heartbeat_seconds: float = 3.0,
@@ -65,7 +72,7 @@ class DurableRuntime:
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
 
-        self._executor = executor
+        self._execute_fn = execute_fn
         self.durability_store = durability_store
         self.heartbeat_seconds = heartbeat_seconds
         self.stale_seconds = stale_seconds
@@ -82,9 +89,9 @@ class DurableRuntime:
         context: DurableExecutionContext,
     ) -> JsonValue:
         """Run one attempt; subclasses may override this method."""
-        if self._executor is None:
+        if self._execute_fn is None:
             raise NotImplementedError("provide an executor or override execute()")
-        return await self._executor(request, context)
+        return await self._execute_fn(request, context)
 
     async def start(self, *, recover: bool = True) -> None:
         """Initialize storage and optionally start proactive recovery scanning."""
@@ -142,7 +149,7 @@ class DurableRuntime:
         await self.submit(execution_id, request)
         return await self.wait(execution_id, timeout=timeout)
 
-    async def get(self, execution_id: str) -> DurableExecution | None:
+    async def get_execution(self, execution_id: str) -> DurableExecution | None:
         """Return persisted state and schedule recovery if it is currently eligible."""
         self._require_started()
         state = await self.durability_store.get(execution_id)
@@ -161,7 +168,7 @@ class DurableRuntime:
 
         async def poll() -> JsonValue:
             while True:
-                state = await self.get(execution_id)
+                state = await self.get_execution(execution_id)
                 if state is None:
                     raise DurableExecutionNotFoundError(execution_id)
                 if state.status == DurableExecutionStatus.COMPLETED:
@@ -177,7 +184,7 @@ class DurableRuntime:
         except asyncio.TimeoutError as exc:
             raise TimeoutError from exc
 
-    async def events(
+    async def get_events(
         self,
         execution_id: str,
         *,

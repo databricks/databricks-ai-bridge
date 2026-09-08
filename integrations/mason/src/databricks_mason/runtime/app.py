@@ -19,9 +19,9 @@ from pydantic import JsonValue as PydanticJsonValue
 from databricks_mason.runtime.runtime import DurableRuntime
 from databricks_mason.runtime.store import default_durability_store
 from databricks_mason.runtime.types import (
-    AgentHook,
     DurabilityStore,
     DurableAgentContext,
+    DurableAgentHook,
     DurableExecution,
     DurableExecutionContext,
     DurableExecutionFailedError,
@@ -50,8 +50,8 @@ class DurableAgentApp(FastAPI):
     """Expose decorated agent handlers through Mason's durable HTTP protocol."""
 
     def __init__(self, *, durability_store: DurabilityStore | None = None) -> None:
-        self._invoke_hook: AgentHook | None = None
-        self._on_recovery_hook: AgentHook | None = None
+        self._invoke_hook: DurableAgentHook | None = None
+        self._on_recovery_hook: DurableAgentHook | None = None
         self._runtime = DurableRuntime(
             self._execute,
             durability_store=(
@@ -66,7 +66,8 @@ class DurableAgentApp(FastAPI):
             recover = self._on_recovery_hook is not None
             if not recover:
                 logger.warning(
-                    "No @app.on_recovery handler is registered; crash recovery is disabled."
+                    "No @app.on_recovery handler is registered; automatic crash recovery is "
+                    "disabled."
                 )
             await self._runtime.start(recover=recover)
             try:
@@ -75,7 +76,7 @@ class DurableAgentApp(FastAPI):
                 await self._runtime.stop()
 
         super().__init__(
-            title="Databricks Durable Agent",
+            title="Databricks Durable Agent Runtime",
             lifespan=lifespan,
             docs_url=None,
             redoc_url=None,
@@ -86,14 +87,14 @@ class DurableAgentApp(FastAPI):
         self.add_api_route(f"{_API_ROOT}/{{run_id}}", self._get_request, methods=["GET"])
         self.add_api_route(f"{_API_ROOT}/{{run_id}}/events", self._events, methods=["GET"])
 
-    def invoke(self, function: AgentHook) -> AgentHook:
+    def invoke(self, function: DurableAgentHook) -> DurableAgentHook:
         """Register the handler for a run's first attempt."""
         if self._invoke_hook is not None:
             raise ValueError("an invocation handler is already registered")
         self._invoke_hook = function
         return function
 
-    def on_recovery(self, function: AgentHook) -> AgentHook:
+    def on_recovery(self, function: DurableAgentHook) -> DurableAgentHook:
         """Register the handler used after an interrupted attempt becomes stale."""
         if self._on_recovery_hook is not None:
             raise ValueError("a recovery handler is already registered")
@@ -119,14 +120,14 @@ class DurableAgentApp(FastAPI):
 
     async def _execute(
         self,
-        request: JsonValue,
+        execution_request: JsonValue,
         execution_context: DurableExecutionContext,
     ) -> JsonValue:
-        if not isinstance(request, dict):
-            raise TypeError("persisted request must be an object")
-        session_id = request.get("session_id")
-        if not isinstance(session_id, str) or "input" not in request:
-            raise TypeError("persisted request must contain session_id and input")
+        if not isinstance(execution_request, dict):
+            raise TypeError("execution request must be an object")
+        session_id = execution_request.get("session_id")
+        if not isinstance(session_id, str) or "input" not in execution_request:
+            raise TypeError("execution request must contain session_id and input")
 
         context = DurableAgentContext(
             run_id=execution_context.execution_id,
@@ -138,28 +139,28 @@ class DurableAgentApp(FastAPI):
         if function is None:
             handler = "@app.on_recovery" if context.is_recovery else "@app.invoke"
             raise RuntimeError(f"no {handler} handler is registered")
-        return await function(copy.deepcopy(request["input"]), context)
+        return await function(copy.deepcopy(execution_request["input"]), context)
 
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
         run_id = str(body.id)
-        persisted_request: JsonObject = {
+        execution_request: JsonObject = {
             "session_id": request.state.session_id,
             "input": copy.deepcopy(body.input),
         }
         try:
             if body.background:
-                state = await self._runtime.submit(run_id, persisted_request)
+                state = await self._runtime.submit(run_id, execution_request)
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream),
                     status_code=202,
                 )
             if body.stream:
-                await self._runtime.submit(run_id, persisted_request)
+                await self._runtime.submit(run_id, execution_request)
                 return StreamingResponse(
                     self._event_stream(run_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(run_id, persisted_request)
+            output = await self._runtime.invoke(run_id, execution_request)
             return JSONResponse({"id": run_id, "status": "completed", "output": output})
         except DurableRequestConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
@@ -167,14 +168,14 @@ class DurableAgentApp(FastAPI):
             raise HTTPException(500, "agent execution failed") from exc
 
     async def _get_request(self, run_id: UUID) -> JSONResponse:
-        state = await self._runtime.get(str(run_id))
+        state = await self._runtime.get_execution(str(run_id))
         if state is None:
             raise HTTPException(404, "run not found")
         return JSONResponse(self._state_payload(state))
 
     async def _events(self, run_id: UUID, after: int = 0) -> StreamingResponse:
         normalized_run_id = str(run_id)
-        if await self._runtime.get(normalized_run_id) is None:
+        if await self._runtime.get_execution(normalized_run_id) is None:
             raise HTTPException(404, "run not found")
         return StreamingResponse(
             self._event_stream(normalized_run_id, after),
@@ -184,12 +185,12 @@ class DurableAgentApp(FastAPI):
     async def _event_stream(self, run_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
         while True:
-            for event in await self._runtime.events(run_id, after_sequence=cursor):
+            for event in await self._runtime.get_events(run_id, after_sequence=cursor):
                 cursor = event.sequence_number
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get(run_id)
+            state = await self._runtime.get_execution(run_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)

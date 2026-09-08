@@ -1,4 +1,4 @@
-"""Lakebase provisioning for Mason agent durability."""
+"""Provision and locate the Lakebase database used by Mason durability."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ def backend(app: str) -> LakebaseBackend:
         branch=_BRANCH,
         endpoint_id=_ENDPOINT,
         database=_DATABASE,
-        schema=runtime_schema(app),
+        schema=get_lakebase_schema(app),
         tables=(),
         resource_name=_RESOURCE_NAME,
     )
 
 
-def ensure_backend(app: str, profile: Optional[str], *, create: bool) -> LakebaseBackend:
+def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> LakebaseBackend:
     """Reuse the deployment's durability project or create it when allowed."""
     selected = backend(app)
     project_path = f"projects/{selected.project}"
@@ -72,7 +72,7 @@ def _project_id(app: str) -> str:
     return f"{normalized}-durability"[:63].rstrip("-")
 
 
-def runtime_schema(app: str) -> str:
+def get_lakebase_schema(app: str) -> str:
     """Return the schema owned by one deployed app's durability runtime."""
     digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
     return f"databricks_mason_runtime_{digest}"
