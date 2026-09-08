@@ -15,7 +15,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from runtime.runtime import rotate_session_cookie
 
 _UI_ROOT = Path(__file__).resolve().parent.parent / "ui"
 _INSTANCE_ID = uuid.uuid4().hex[:12]  # identifies this process in the UI
@@ -76,6 +75,16 @@ def _request_actor(request: Request) -> str:
         if value := request.headers.get(header):
             return value
     return "agent"
+
+
+def _request_session_id(request: Request) -> str:
+    """Read the chat session selected by the browser, falling back to the router cookie locally."""
+    session_id = request.query_params.get("session_id") or getattr(
+        request.state, "session_id", None
+    )
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    return str(session_id)
 
 
 def _is_deployed() -> bool:
@@ -298,7 +307,7 @@ def _require_session() -> None:
 async def _local_history(session_id: str) -> dict[str, Any]:
     """Reconstruct the transcript from the in-process session (no managed Session Store).
 
-    Reads the Responses items the agent stored in its ``SQLiteSession`` for this routing cookie and
+    Reads the Responses items the agent stored in its ``SQLiteSession`` for this browser session and
     shapes each into a ``{item_id, data}`` entry the UI renders. There are no durable interrupts here:
     a paused human-in-the-loop run is held in-process by ``agent.py`` and is not part of the session
     transcript, so ``interrupts`` is always empty for the unmanaged path.
@@ -356,13 +365,13 @@ def install_ui(app: FastAPI) -> None:
         # Off-thread: serving_endpoints.list() is a blocking SDK call.
         available_models = await asyncio.to_thread(_discover_chat_models)
         return {
-            "session_id": request.state.session_id,
+            "session_id": _request_session_id(request),
             "instance_id": _INSTANCE_ID,
             "viewer": actor if actor != "agent" else "Local developer",
             "deployed": _is_deployed(),
             "models": {"default": _default_model(), "available": available_models},
             "streaming": {"enabled": True, "transport": "Server-sent events"},
-            "background": {"enabled": True, "durable": False},
+            "background": {"enabled": True, "durable": True},
             "session": {
                 "durable": bool(session_store),
                 "managed": bool(session_store),
@@ -385,7 +394,7 @@ def install_ui(app: FastAPI) -> None:
             _state_client().create_memory_entry,
             _request_actor(request),
             payload,
-            request.state.session_id,
+            _request_session_id(request),
         )
 
     @app.get("/api/demo/memory/entries", include_in_schema=False)
@@ -409,12 +418,14 @@ def install_ui(app: FastAPI) -> None:
     async def ensure_session(request: Request) -> dict:
         _require_session()
         return await _managed_call(
-            _state_client().ensure_session, _request_actor(request), request.state.session_id
+            _state_client().ensure_session,
+            _request_actor(request),
+            _request_session_id(request),
         )
 
     @app.get("/api/demo/sessions", include_in_schema=False)
     async def list_sessions(request: Request) -> dict:
-        session_id = request.state.session_id
+        session_id = _request_session_id(request)
         actor = _request_actor(request)
         if not _session_store():
             return {
@@ -442,35 +453,31 @@ def install_ui(app: FastAPI) -> None:
         session = await _managed_call(_state_client().get_session, session_id)
         if session.get("actor_id") != _request_actor(request):
             raise HTTPException(status_code=403, detail="Session belongs to another actor.")
-        previous_session_id = request.state.session_id
-        request.state.session_id = session_id
-        response = JSONResponse(
+        return JSONResponse(
             {
                 "session_id": session_id,
-                "previous_session_id": previous_session_id,
+                "previous_session_id": _request_session_id(request),
                 "managed": True,
             }
         )
-        rotate_session_cookie(request, response, session_id)
-        return response
 
     @app.get("/api/demo/session", include_in_schema=False)
     async def get_session(request: Request) -> dict:
         _require_session()
-        return await _managed_call(_state_client().get_session, request.state.session_id)
+        return await _managed_call(_state_client().get_session, _request_session_id(request))
 
     @app.post("/api/demo/session/items", include_in_schema=False)
     async def append_session_items(request: Request, payload: SessionItemsRequest) -> dict:
         _require_session()
         return await _managed_call(
             _state_client().append_session_items,
-            request.state.session_id,
+            _request_session_id(request),
             payload.items,
         )
 
     @app.get("/api/demo/session/items", include_in_schema=False)
     async def list_session_items(request: Request) -> dict:
-        session_id = request.state.session_id
+        session_id = _request_session_id(request)
         if _session_store():
             result = await _managed_call(_state_client().list_session_items, session_id)
             return _chat_session_items(result)

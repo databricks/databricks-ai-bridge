@@ -1,7 +1,7 @@
 [project]
 name = "agent-openai"
 version = "0.1.0"
-description = "OpenAI Agents SDK agent on a FastAPI server for Databricks Apps"
+description = "OpenAI Agents SDK agent on Mason's durable runtime for Databricks Apps"
 readme = "README.md"
 authors = [
     { name = "Agent Developer", email = "developer@example.com" }

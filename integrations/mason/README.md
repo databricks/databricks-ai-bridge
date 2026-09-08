@@ -145,10 +145,10 @@ The client supplies a UUID `id`, which is also the idempotency key for every inv
 - foreground streaming returns `200` server-sent events; and
 - background streaming returns `202` with status and event URLs.
 
-`input` and `output` may be any JSON value. Transport fields are not passed to the callback. The
-Apps routing cookie is the only supported session identifier, so body `session_id` is rejected.
-Polling uses only the invocation ID and relies on Databricks Apps authentication. The runtime
-persists the input, internal attempt status, heartbeats,
+`input` and `output` may be any JSON value. Transport fields are not passed to the callback. A
+top-level `session_id` is rejected, but a framework template may carry its own stable application
+session inside `input`. Polling uses only the invocation ID and relies on Databricks Apps
+authentication. The runtime persists the input, internal attempt status, heartbeats,
 `run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
 
 The new `durable-langgraph-agent` template selects an in-memory durability store locally. Initialize
@@ -166,9 +166,10 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-`mason init --framework langgraph --durability` scaffolds this minimal, API-only app. Bare
-`mason init`, `--framework langgraph`, and `--framework openai` continue to scaffold the existing
-templates unchanged.
+`mason init --framework langgraph --durability` scaffolds the minimal API-only example. Bare
+`mason init`, `--framework langgraph`, and `--framework openai` scaffold the full framework
+templates on the same durable runtime, including tools, HITL, sessions, memory, and the optional
+chat UI. All generated manifests opt into deployed Lakebase durability.
 
 ## Commands
 
@@ -299,10 +300,10 @@ mason --profile <profile> deploy mason-agent-demo --source .
 exists. The agent reads the bound stores from `agent.toml` at runtime; `deploy` grants the app's
 service principal access to them.)
 
-The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
-application session id. The browser sends it automatically; API clients must reuse it as a cookie.
-Request bodies never carry `session_id`. A localhost-only `mason-local-session` cookie provides the
-same behavior outside Databricks Apps. TODO: move to `X-Routing-Key` when Apps supports it.
+The chat UI generates a stable application session UUID in browser local storage, places it inside
+the durable invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
+`__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
+replica routing, but it is neither authentication nor the template's application session state.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory

@@ -4,9 +4,10 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-`--durability` selects the minimal durable template for LangGraph. Without it, Mason keeps the
-existing framework templates. `--repo` / `--ref` override the source, e.g. to pull from a fork or
-branch before a template has merged to its canonical repo.
+`--durability` selects the minimal durable template for LangGraph. The standard framework templates
+also use the durable runtime, with their full tool, session, memory, and chat UI examples.
+`--repo` / `--ref` override the source, e.g. to pull from a fork or branch before a template has
+merged to its canonical repo.
 """
 
 from __future__ import annotations
@@ -262,8 +263,8 @@ def init(
 
     selected_framework = framework or "langgraph"
     spec = _DURABILITY_TEMPLATE if durability else _TEMPLATES[selected_framework]
-    # The durability template is deliberately API-only. Existing framework templates retain their
-    # chat overlay behavior.
+    # The minimal durability template is deliberately API-only. Standard framework templates retain
+    # their chat overlay behavior.
     chat_app_enabled = (
         not durability and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
     )
@@ -298,7 +299,7 @@ def init(
     project = AgentProject.create(
         dest,
         framework=selected_framework,
-        durability_enabled=durability,
+        durability_enabled=True,
     )
     project.write()
     env_profile = profile or obj.profile

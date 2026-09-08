@@ -1,7 +1,8 @@
 import pytest
+from databricks_mason import DurableAgentApp
+from databricks_mason.runtime.durability.store import InMemoryDurabilityStore
 from fastapi.testclient import TestClient
 from runtime import ui
-from runtime.runtime import build_app
 
 
 class _FakeStateClient:
@@ -90,14 +91,12 @@ def _client(monkeypatch, *, configured=False, history=False, session_id="routing
     # Keep model discovery deterministic and offline (no serving_endpoints.list() call).
     monkeypatch.setattr(ui, "_discover_chat_models", lambda: ["databricks-gpt-5-2"])
 
-    async def invoke_handler(request):
-        return {"output": [], "session_id": request["session_id"]}
+    async def invoke_handler(request, context):
+        return {"output": [], "session_id": context.session_id}
 
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    app = build_app(invoke_handler, stream_handler)
+    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
+    app.invoke(invoke_handler)
+    app.on_recovery(invoke_handler)
     ui.install_ui(app)
     client = TestClient(app, base_url="https://testserver")
     client.cookies.set("__Host-databricks-app-router", session_id)
@@ -121,9 +120,10 @@ def test_demo_ui_routes(monkeypatch):
     assert "mason memory bind <store-name>" in app_script.text
     assert "refreshSessionView({ hydrateChat: true })" in app_script.text
     assert "function renderModels(" in app_script.text
-    assert 'fetch("/api/session/new"' in app_script.text
+    assert 'fetch("/api/session/new"' not in app_script.text
     assert "/api/demo/sessions/${encodeURIComponent(sessionId)}/open" in app_script.text
-    assert "session_id: ensureSessionId()" not in app_script.text
+    assert "session_id: sessionId" in app_script.text
+    assert 'fetch("/api/invocations"' in app_script.text
     styles = client.get("/ui-assets/styles.css").text
     assert "@media (min-width: 1181px)" in styles
     assert "scrollbar-gutter: stable" in styles
@@ -137,6 +137,7 @@ def test_demo_ui_routes(monkeypatch):
     }
     assert config["streaming"]["enabled"] is True
     assert config["background"]["enabled"] is True
+    assert config["background"]["durable"] is True
     assert config["memory"]["enabled"] is False
     assert config["session"]["managed"] is False
     assert config["session"]["history"] is True
@@ -384,9 +385,15 @@ def test_managed_memory_and_session_routes(monkeypatch):
         "previous_session_id": "s1",
         "managed": True,
     }
-    assert client.get("/api/demo/config").json()["session_id"] == "s2"
     assert (
-        client.get("/api/demo/session/items").json()["session_items"][0]["data"]["content"] == "s2"
+        client.get("/api/demo/config", params={"session_id": "s2"}).json()["session_id"]
+        == "s2"
+    )
+    assert (
+        client.get("/api/demo/session/items", params={"session_id": "s2"}).json()[
+            "session_items"
+        ][0]["data"]["content"]
+        == "s2"
     )
 
 

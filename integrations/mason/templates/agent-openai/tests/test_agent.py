@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import FunctionTool
-from agent.agent import _apply_decisions, _normalize_item, _serialize_events, _session_id
+from agent.agent import _agent_events, _apply_decisions, _normalize_item, _serialize_events
 from agent.tools import all_tools
 
 
@@ -72,7 +72,7 @@ class _FakeStreamResult:
 
 
 @pytest.mark.asyncio
-async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
+async def test_agent_events_omit_unavailable_mcp_servers(monkeypatch):
     import agent.agent as agent_module
 
     def server(name, *, connect_error=None, list_error=None, cleanup_error=None):
@@ -105,7 +105,6 @@ async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
     monkeypatch.setattr(agent_module, "mcp_servers", mcp_servers)
     monkeypatch.setattr(agent_module, "build_mcp_servers", lambda: [])
     monkeypatch.setattr(agent_module, "create_agent", create_agent)
-    monkeypatch.setattr(agent_module, "tag_session", lambda _session_id: None)
     monkeypatch.setattr(agent_module, "session_store", lambda _session_id, _actor: None)
     monkeypatch.setattr(
         agent_module.Runner,
@@ -113,7 +112,7 @@ async def test_stream_handler_omits_unavailable_mcp_servers(monkeypatch):
         lambda *_args, **_kwargs: _FakeStreamResult([], [], None),
     )
 
-    assert [event async for event in agent_module.stream_handler({"session_id": "s"})] == []
+    assert [event async for event in _agent_events({"messages": []}, "s", "actor")] == []
     # create_agent(actor, mcp) — the healthy servers are the second positional arg.
     assert create_agent.call_args.args[1] == [healthy]
     assert healthy.cache_tools_list is True
@@ -162,7 +161,7 @@ def test_apply_decisions_approves_pending_run(monkeypatch):
             raise AssertionError("should not reject on approve")
 
     _pending_runs["sess-2"] = _State()
-    state = _apply_decisions("sess-2", {"decisions": [{"type": "approve"}]})
+    _apply_decisions("sess-2", {"decisions": [{"type": "approve"}]})
     assert approved == ["item-a"]
     assert "sess-2" not in _pending_runs  # popped so it can't be resumed twice
 
@@ -206,14 +205,24 @@ class _FakeStoreClient:
         return self
 
 
-def test_session_id_from_request():
-    request = {"input": [{"role": "user", "content": "hi"}], "session_id": "abc-123"}
-    assert _session_id(request) == "abc-123"
+@pytest.mark.asyncio
+async def test_invoke_and_recovery_use_same_application_payload(monkeypatch):
+    import agent.agent as agent_module
 
+    calls = []
 
-def test_session_id_is_required_from_runtime():
-    with pytest.raises(KeyError):
-        _session_id({"input": [{"role": "user", "content": "hi"}]})
+    async def fake_run_agent(payload, context):
+        calls.append((payload, context))
+        return {"output": []}
+
+    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
+    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+    context = object()
+
+    await agent_module.invoke(payload, context)
+    await agent_module.on_recovery(payload, context)
+
+    assert calls == [(payload, context), (payload, context)]
 
 
 def _has_workspace_auth() -> bool:

@@ -1,8 +1,8 @@
 command: ["uv", "run", "start-server"]
 # databricks apps listen by default on port 8000
 #
-# No env vars are required by default: the app runs the lean backend (in-process checkpointer,
-# tracing off). To enable tracing, add the matching env entries below (literal values):
+# Mason injects the deployed Lakebase durability endpoint. The LangGraph checkpointer remains
+# in-process unless a managed Session Store is bound. To enable tracing, add these literal values:
 #
 # env:
 #   # Tracing (set a destination + an experiment). Destination: MLFLOW_TRACKING_URI or

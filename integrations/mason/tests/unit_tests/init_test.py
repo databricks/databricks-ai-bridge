@@ -102,7 +102,7 @@ def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert "durability" not in manifest
+    assert manifest["durability"] == {"enabled": True}
 
 
 def test_init_scaffolds_durable_langgraph_agent(tmp_path: pathlib.Path):
@@ -183,6 +183,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "openai"},
+        "durability": {"enabled": True},
     }
 
 

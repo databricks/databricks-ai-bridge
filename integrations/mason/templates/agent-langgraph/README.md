@@ -1,310 +1,108 @@
-# Agent — LangGraph (FastAPI)
+# Mason LangGraph Agent
 
-A [LangGraph](https://langchain-ai.github.io/langgraph/) agent **backend** for Databricks Apps,
-served from a **FastAPI app** — no serving framework. It runs locally with **no
-database and no setup** — just an auth profile. It speaks LangGraph's **native** shape on both ends:
-`POST /invocations` takes an `input` list of LangChain message dicts (streaming via SSE, plus an
-in-memory `background` mode with `GET /invocations/{id}`) and returns LangChain messages — nothing is
-reshaped into another contract.
-
-The HTTP surface is hand-written in `runtime/runtime.py` (routes, SSE framing, tracing spans,
-background wiring), so the template shows exactly how the agent is served — request and response
-bodies are plain dicts, no wrapper types.
-
-This template is API-first. Call it with `curl` or use it from your own client.
-
-Local clients can use `/invocations`. For a deployed Databricks App, use the equivalent
-`/api/invocations` route with an OAuth Bearer token; Databricks Apps reserves `/api/*` for
-programmatic token authentication. Polling and health checks likewise have `/api` aliases.
-
-## Project layout
-
-```
-agent/                 # the agent (reasoning plane) — this is what you edit
-  agent.py             #   invoke / stream handlers + create_agent_graph() + event serialization
-  tools/               #   function tools — drop a *.py file here to add one (auto-collected)
-    sample_tool.py     #     get_current_time — a working example (@tool)
-    send_message.py    #     a side-effecting tool gated by human approval (see REQUIRE_APPROVAL)
-  mcps.py              #   MCP servers: none by default; add to build_mcp_servers() to offer some
-runtime/               # the HTTP surface — SDK-agnostic; rarely edited
-  runtime.py           #   build_app(): FastAPI routes, SSE framing, tracing spans, background wiring
-  main.py              #   entry point: loads config, builds the app, runs uvicorn
-tests/
-  test_agent.py        #   hermetic smoke tests + one gated live model call
-```
-
-You edit `agent/agent.py`, `agent/tools/`, and `agent/mcps.py`; the plumbing (session checkpointer,
-tracing, MCP tool loading, background store) lives in the `databricks-mason` package —
-framework-neutral pieces under `databricks_mason.runtime`, LangGraph-specific ones under
-`databricks_mason.langgraph` — so the template ships only your agent code. `runtime/runtime.py` is the
-SDK-agnostic HTTP surface — it wires two generic handlers (`invoke_handler`/`stream_handler`) to the
-endpoints, so the agent SDK lives entirely behind them in `agent/agent.py`. `tools/` is a drop-in
-package: add a `*.py` with a `@tool` function and it's auto-collected (no edits to existing code).
-`mcps.py` exposes `build_mcp_servers()` (empty by default — add servers to offer them).
+A LangGraph agent served by `databricks_mason.DurableAgentApp`. Mason keeps invocation state and
+events in memory during `mason dev` and in an app-owned Lakebase schema after deployment.
 
 ## Run locally
 
-No database required. Conversation state is kept in an in-process LangGraph checkpointer.
-
 ```bash
-# 1. Configure a Databricks auth profile (used only to call the model)
-cp .env.example .env
-# edit .env: set DATABRICKS_CONFIG_PROFILE=<your-profile>
-
-# 2. Start the server (installs deps via uv on first run)
-uv run start-server        # serves at http://localhost:8000
-
-# 3. Send a request
-curl -X POST http://localhost:8000/invocations \
-  -H "Content-Type: application/json" \
-  -d '{"input": [{"role": "user", "content": "What time is it? Use your tool."}]}'
+mason dev
 ```
 
-The model call goes to your Databricks workspace (via the profile). Everything else — session
-storage, tracing — is off by default and requires no setup.
-
-## Client contract
-
-The Databricks Apps `__Host-databricks-app-router` cookie is the single session identifier. It both
-keeps requests on the same App replica and keys LangGraph checkpoints, HITL resumes, and Session
-Store records. Do **not** send `session_id` in request bodies. The runtime ignores
-an old body value and injects the cookie value before calling the agent. Browsers resend the Apps
-cookie automatically; API clients must preserve it in a cookie jar. Localhost has no Apps router, so
-the server sets an HTTP-only `mason-local-session` fallback cookie instead.
-
-TODO: switch the client contract to `X-Routing-Key` when Databricks Apps supports it. Until then use
-the [documented Apps routing cookie](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/horizontal-scaling#api-clients).
+The API is available at `http://localhost:8000/api/invocations`. Every request supplies a UUID `id`.
+That ID is the invocation identifier and idempotency key. Agent-specific values live inside the
+opaque `input` object:
 
 ```bash
-curl -X POST "https://<app>.databricksapps.com/invocations" \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -b "__Host-databricks-app-router=<routing-key>" \
-  -d '{"input":[{"role":"user","content":"hi"}]}'
+SESSION_ID=$(uuidgen)
+INVOCATION_ID=$(uuidgen)
+
+curl -sS http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"What time is it? Use your tool.\"}]}}"
 ```
 
-The examples below use a localhost cookie jar so every request addresses the same session:
+Reuse `SESSION_ID` for multi-turn conversation state. Generate a new `INVOCATION_ID` for each turn.
+Retrying the same request with the same invocation ID returns the persisted result; changing the
+request while reusing the ID returns `409`.
+
+## Invocation modes
+
+- Foreground: omit `background` and `stream`; the response contains the agent result under `output`.
+- Foreground streaming: set `stream: true`; the response is SSE backed by persisted events.
+- Background: set `background: true`; poll the returned `status_url`.
+- Background streaming: set both flags; the `202` response includes `status_url` and `events_url`.
 
 ```bash
-BASE=http://localhost:8000
-COOKIE_JAR=/tmp/mason-agent.cookies
-curl -s -c "$COOKIE_JAR" "$BASE/health"
+INVOCATION_ID=$(uuidgen)
+curl -sN http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to three.\"}]},\"stream\":true}"
+
+INVOCATION_ID=$(uuidgen)
+curl -sS http://localhost:8000/api/invocations \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$INVOCATION_ID\",\"input\":{\"session_id\":\"$SESSION_ID\",\"messages\":[{\"role\":\"user\",\"content\":\"Summarize durable agents.\"}]},\"background\":true}" | jq
+curl -sS "http://localhost:8000/api/invocations/$INVOCATION_ID" | jq
 ```
 
-When the chat app is enabled, `GET /api/demo/config` returns the resolved `session_id`, process
-`instance_id`, the signed-in viewer, and the enabled state for streaming, background, Session Store,
-and Memory Store. The UI uses this response to color capability indicators automatically. Only the
-sync/streaming/background selector is a manual client choice.
+SSE records contain the events emitted by `agent/agent.py`: token `delta`s, completed `message`s,
+and HITL `interrupt`s. Replay from a cursor with
+`GET /api/invocations/{id}/events?after={sequence}`.
 
-**Non-streaming:**
+## Human approval
 
-```bash
-curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
-  -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"hi"}]}'
-```
-
-The response is `{ "output": [...], "session_id": "...", "status": "completed" }`. `output`
-contains native LangChain message dictionaries.
-
-**Streaming** adds `"stream": true` and returns SSE. Completed messages use
-`data: {"type":"message","message":{...}}`; token chunks use
-`data: {"type":"delta","content":"...","id":"..."}`; interruptions use
-`data: {"type":"interrupt",...}`; the final frame is `data: [DONE]`.
-
-```bash
-curl -sN -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
-  -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"Count to three"}],"stream":true}'
-```
-
-**Background** (add `"background": true`) returns an `inv_...` id immediately; poll it:
-
-```bash
-curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
-  -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"do something"}],"background":true}'
-# -> {"id":"inv_...","status":"in_progress"}
-
-curl -s -b "$COOKIE_JAR" "$BASE/invocations/inv_..."
-# -> in_progress, completed + output, or failed + error
-```
-
-Background runs and polling are in-memory and single-process. The routing cookie is required so the
-poll reaches the same replica, but the run itself does not survive a restart.
-
-### Chat app state APIs
-
-When initialized with the chat app (the default for `mason init --framework langgraph`, unless
-`--disable-chat-app` is passed), the browser also calls:
-
-- `POST /api/session/new` to generate a fresh session id and replace the routing cookie. The request
-  has no body-level `session_id`; the response includes the new and previous ids.
-- `POST /api/demo/sessions` to create or resolve the current cookie-backed managed session.
-- `GET /api/demo/sessions` to list recent sessions for the configured actor. In local in-memory mode
-  it returns only the current browser session.
-- `POST /api/demo/sessions/{session_id}/open` to verify an actor-scoped managed session, replace the
-  routing cookie, and load that session's transcript and pending state.
-- `GET /api/demo/session/items` to load the current transcript. Without a managed Session Store it
-  reconstructs messages and pending interrupts from the in-process LangGraph checkpoint. Managed
-  responses filter out checkpoint fragments before returning items to the UI.
-- `POST /api/demo/session/items` to mirror user, assistant, tool, and human-decision items into the
-  managed Session Store.
-- `GET /api/demo/memory/entries`, `POST /api/demo/memory/entries`, and
-  `POST /api/demo/memory/search` for managed long-term memory. Created entries are tagged with the
-  current cookie-backed session id; entries are partitioned by the signed-in user (the request's
-  forwarded-identity header), so the panel shows that user's own memory.
-
-### Human-in-the-loop (tool approval)
-
-Tools named in `REQUIRE_APPROVAL` (in `agent/agent.py`) pause for human approval before they run. The
-template ships with one gated demo tool, `send_message` — ask the agent to send a message and instead
-of running the tool, the run **pauses** and emits an `interrupt` event describing the pending call:
+`send_message` is gated by `HumanInTheLoopMiddleware`. Start a turn asking the agent to use that
+tool. When the output or event stream contains an `interrupt`, submit a new invocation with the same
+application session:
 
 ```json
-{ "type": "interrupt", "id": "int_...",
-  "value": { "action_requests": [{ "name": "send_message",
-             "args": { "recipient": "alice@x.com", "body": "hi" } }], "review_configs": [...] } }
+{
+  "id": "<new-uuid>",
+  "input": {
+    "session_id": "<same-session-id>",
+    "resume": {"decisions": [{"type": "approve"}]}
+  }
+}
 ```
 
-The paused run is checkpointed on the cookie-backed session thread. **Resume** with the same cookie
-and a native LangGraph `resume` payload — one decision per pending call:
+The default checkpointer is process-local. Bind a managed Session Store to preserve multi-turn and
+paused LangGraph state across restarts:
 
 ```bash
-# Approve — the tool runs
-curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" \
-  -H "Content-Type: application/json" \
-  -d '{"resume":{"decisions":[{"type":"approve"}]}}'
-
-# Reject — the tool is skipped; the message is fed back to the model
-#   { "type": "reject", "message": "Not allowed." }
-# Edit — run the tool with changed args
-#   { "type": "edit", "edited_action": { "name": "send_message", "args": { "recipient": "...", "body": "..." } } }
-# Respond — answer on the tool's behalf without running it
-#   { "type": "respond", "message": "..." }
+mason sessions bind my-agent-sessions
 ```
 
-Non-streaming replies to a gated turn come back with `"status": "interrupted"` and the `interrupt`
-event as the last `output` item; approved/rejected resumes return `"status": "completed"`.
+## Crash recovery
 
-To gate more tools, add their names to `REQUIRE_APPROVAL`; empty the dict to disable approval
-entirely. Which decisions are allowed per tool is configurable — see LangChain's
-`HumanInTheLoopMiddleware`.
+`runtime/main.py` registers both `@app.invoke` and `@app.on_recovery`. The initial attempt writes the
+invocation ID into LangGraph checkpoint metadata with synchronous checkpoint durability. A recovery
+attempt continues from that checkpoint when it exists; otherwise it safely replays the persisted
+application input. Invocation state and emitted events survive process loss in deployed Lakebase.
 
-> Like sessions, a paused run lives in the checkpointer — **in-memory and single-process** by default,
-> so it survives only within the running process. Back the checkpointer with a durable store (below)
-> for pauses that survive restarts / span replicas.
+External side effects are still at-least-once. Make tools idempotent because work performed between
+the last checkpoint and a crash can run again.
 
-**Multi-turn** needs no body bookkeeping: reuse the same cookie jar for each turn.
+## Chat app
+
+The browser UI is included by default. It generates a stable application session ID in local
+storage, places it inside each invocation's `input`, and generates a fresh invocation UUID per turn.
+Use `mason init --framework langgraph --disable-chat-app` for API-only output.
+
+## Configure and deploy
+
+- Change model/instructions in `agent/agent.py`.
+- Add local tools under `agent/tools/`; modules are auto-discovered.
+- Add MCP servers in `agent/mcps.py` or with `mason tools add mcp`.
+- Bind long-term memory with `mason memory bind <store>`.
 
 ```bash
-curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"My name is Alice"}]}'
-curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: application/json" \
-  -d '{"input":[{"role":"user","content":"What is my name?"}]}'
+mason --profile <profile> deploy agent-langgraph --source .
 ```
 
-## Customize the agent
+`agent.toml` contains `[durability] enabled = true`. Deployment reuses a bound Session Store's
+Lakebase database when available; otherwise Mason provisions or reuses the app's durability project.
+Only the app-owned `databricks_mason_runtime_<hash>` schema and runtime tables are added.
 
-- **Model / instructions:** `create_agent_graph()` in `agent/agent.py`.
-- **Add a tool:** drop a new file in `agent/tools/` with a `@tool`-decorated function; it's
-  collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
-- **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the
-  human-in-the-loop section above); empty the dict to disable gating.
-- **Add an MCP server:** append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py`.
-- **Make state durable:** run `mason sessions bind <store>` (see "Enable durable state" below); the
-  checkpointer lives in `databricks_mason/langgraph/session_store.py`.
-- **Add long-term memory:** run `mason memory bind <store>`; `create_agent_graph()`
-  then includes the `remember`/`recall` tools from `databricks_mason/langgraph/memory.py` (persist/search facts across
-  conversations). Unbound → the model isn't offered them.
-- **Change the HTTP surface:** `runtime/runtime.py` — routes, SSE framing, background wiring (the run
-  store itself is `databricks_mason/runtime/background.py`).
-
-## Test
-
-```bash
-uv run pytest                 # hermetic smoke tests (tools, session, event serialization)
-```
-
-The smoke tests need no auth. `tests/test_agent.py` also has one end-to-end test that calls the
-model; it runs only when a workspace profile is configured (`DATABRICKS_CONFIG_PROFILE` or
-`DATABRICKS_HOST`+`DATABRICKS_TOKEN`) and skips otherwise.
-
-## Deploy
-
-Deploy with the [Mason](../../README.md) CLI:
-
-```bash
-mason deploy agent-langgraph --source .
-```
-
-The name is recorded in `agent.toml` on first deploy, so later re-deploys can just be `mason deploy`
-(from the project dir); passing a name again updates it. The app is named `mason-<name>`.
-
-Add `--memory <name> --session <name>` to wire managed state. Mason provisions or resolves the
-stores (creating them if missing), injects the store env vars, and deploys the App. Memory and
-session data are partitioned per signed-in user automatically (see `_actor` in `agent/agent.py`).
-
-`app.yaml` carries the app's start command and env. By default the deployed app is the same lean
-backend: in-process session state, tracing off.
-
-### Enable MLflow tracing (optional)
-
-Tracing turns on when MLflow has **both a destination and an experiment** — set one of each, in
-whichever form you have. The app code needs no change; MLflow resolves the specific value.
-
-- **Destination:** `MLFLOW_TRACKING_URI` (e.g. `"databricks"`) or `MLFLOW_TRACING_DESTINATION`
-  (an experiment id or a `catalog.schema`).
-- **Experiment:** `MLFLOW_EXPERIMENT_ID` or `MLFLOW_EXPERIMENT_NAME`.
-
-Set neither half → tracing stays off. Examples:
-
-- **Local:** `MLFLOW_TRACKING_URI="databricks"` + `MLFLOW_EXPERIMENT_ID=<id>` (or `..._NAME=<name>`)
-  in `.env`, pointing at an experiment in the workspace your profile targets.
-- **Deployed:** set the same env in `app.yaml` and attach an `experiment` resource (its `valueFrom`
-  binding injects `MLFLOW_EXPERIMENT_ID`).
-
-When both halves are present the agent enables MLflow autolog (`mlflow.langchain.autolog()`) and tags
-each trace with the session id. Otherwise it disables tracing outright, so the per-request span
-`runtime/runtime.py` opens has nothing to export and no traces are created.
-
-### Enable durable state (optional)
-
-By default the agent uses an in-process LangGraph checkpointer (`InMemorySaver`) — multi-turn and
-human-in-the-loop pauses work within a running process but do not survive restarts or span replicas.
-
-Bind a managed [Session Store](../../README.md) with **`mason sessions bind <store>`** (recorded in
-`agent.toml`; `AGENT_SESSION_STORE` still overrides it if set) and
-`databricks_mason/langgraph/session_store.py` returns a `DatabricksSessionStoreSaver` instead. It's a LangGraph
-`BaseCheckpointSaver` that serializes each checkpoint into ordered **session items** and stores them
-through the managed Session Store **REST API** — no database the app connects to directly. Full graph
-state — including paused HITL runs (pending writes + interrupts) — is durable across restarts and
-replicas, over RPCs only. No agent code changes; the checkpointer swap is the only difference.
-
-> The saver is adapted from the first-party `databricks_agent_client.langgraph` prototype, over a
-> small vendored REST client (`databricks_mason/runtime/session_store_client.py`) so the template needs no
-> unpublished dependency. Swap both for the published package when it lands. The store must already
-> exist; access uses the caller's normal Databricks auth (the deployed app's service principal, or
-> your profile locally — whichever the Session Store grants).
-
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DATABRICKS_CONFIG_PROFILE` | `DEFAULT` | Auth profile used to call the model (local dev) |
-| `PORT` | `8000` | Port the server listens on |
-| `AGENT_MEMORY_STORE` | _unset_ | Managed memory store ID → registers `remember`/`recall` long-term-memory tools |
-| `AGENT_SESSION_STORE` | _unset_ | Managed Session Store name → durable checkpointer (REST-backed); unset = in-process `InMemorySaver` |
-| `MLFLOW_TRACKING_URI` | _unset_ | Trace destination (e.g. `databricks`). A destination + an experiment enables tracing |
-| `MLFLOW_TRACING_DESTINATION` | _unset_ | Alt destination — experiment id or `catalog.schema` (either destination var works) |
-| `MLFLOW_EXPERIMENT_ID` | _unset_ | Experiment to trace to (by id) |
-| `MLFLOW_EXPERIMENT_NAME` | _unset_ | Experiment to trace to (by name; alternative to the id) |
-
-## Notes
-
-- **The event serialization in `agent/agent.py` (`_serialize_events`) is LangGraph-specific** — it
-  turns LangGraph's native `astream` events into JSON dicts without reshaping them into another
-  contract. **`runtime/runtime.py` is SDK-agnostic** — it hosts any agent exposing the
-  `invoke_handler`/`stream_handler` dict contract.
-- **Background mode is in-memory** (`databricks_mason/runtime/background.py`, wired in `runtime/runtime.py`) —
-  non-durable, single-process; see the note under the client contract.
+The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
+It is not authentication and is not used as the template's application session ID.

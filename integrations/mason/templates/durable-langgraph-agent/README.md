@@ -65,5 +65,5 @@ mason --profile <profile> deploy durable-langgraph-agent --source .
 
 At deploy time Mason attaches one Lakebase database for runtime tables. It reuses a bound Session
 Store database when present; otherwise it reuses or provisions `<app>-durability`. Runtime tables
-live in the app-owned `databricks_mason_runtime_<app-hash>` schema. Existing Mason templates are
-unaffected.
+live in the app-owned `databricks_mason_runtime_<app-hash>` schema. The standard LangGraph and
+OpenAI templates use the same durable transport with their full framework/session/UI examples.
