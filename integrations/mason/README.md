@@ -112,16 +112,16 @@ transport will be replaced by the generated `WorkspaceClient.mason` service when
 is released, without changing this public surface. Deployment, sandbox, tracing, and
 the existing CLI commands remain separate.
 
-## Durable agent application
+## Agent application
 
-`DurableAgentApp` is the supported server surface. Import it directly from `databricks_mason`
-(the `databricks_mason.runtime` alias is also supported). The transport-neutral runtime remains a
-separate package layer so it can be exposed as a standalone embedding API later:
+`AgentApp` provides Mason's invocation HTTP contract, including foreground, streaming, background,
+polling, and event endpoints. By default its state is process-local. Set `durable_runtime=True` to
+use Lakebase persistence, heartbeats, and crash recovery after deployment:
 
 ```python
-from databricks_mason import DurableAgentApp, DurableAgentContext
+from databricks_mason import AgentApp, DurableAgentContext
 
-app = DurableAgentApp()
+app = AgentApp(durable_runtime=True)
 
 
 @app.invoke
@@ -134,7 +134,7 @@ async def recover(input: object, context: DurableAgentContext) -> object:
     return await recover_agent(input, session_id=context.session_id)
 ```
 
-The application exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
+The Mason server exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
 `GET /api/invocations/{invocation_id}/events?after={cursor}`. Databricks Apps bearer-token requests
 must use `/api/` routes
 ([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
@@ -148,8 +148,9 @@ The client supplies a UUID `id`, which is also the idempotency key for every inv
 `input` and `output` may be any JSON value. Transport fields are not passed to the callback. A
 top-level `session_id` is rejected, but a framework template may carry its own stable application
 session inside `input`. Polling uses only the invocation ID and relies on Databricks Apps
-authentication. The runtime persists the input, internal attempt status, heartbeats,
-`run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
+authentication. Without the durable runtime, request state and events exist only in the serving
+process and horizontally scaled clients need sticky routing. With the durable runtime, Mason
+persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
 
 Durability is enabled by default for both framework templates. Mason writes the durability binding
 to `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability,
@@ -165,11 +166,11 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold the full framework
-templates with tools, HITL, sessions, memory, and the optional chat UI. Automatic crash recovery is
-enabled by default. Pass `--no-auto-recovery` to keep the same durable Lakebase state, events,
-idempotency, and HTTP API without registering `@app.on_recovery` or retrying interrupted work. Use
-`--disable-chat-app` independently for API-only output.
+Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
+durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with
+process-local state and no Lakebase provisioning. Pass `--server custom` for a minimal FastAPI
+server with one foreground `/invocations` route and no Mason runtime SDK. Use `--disable-chat-app`
+independently for API-only Mason server output.
 
 ## Commands
 
@@ -177,8 +178,8 @@ idempotency, and HTTP API without registering `@app.on_recovery` or retrying int
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--auto-recovery|--no-auto-recovery]
-               [--disable-chat-app]
+  init         [--framework openai|langgraph] [--server mason|custom]
+               [--no-durable-runtime] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
@@ -282,7 +283,7 @@ mason init --framework langgraph \
   --profile <profile> \
   ./my-agent
 cd ./my-agent
-uv run start-server
+mason dev
 ```
 
 The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,

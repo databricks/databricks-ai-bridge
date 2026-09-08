@@ -8,14 +8,16 @@ import uvicorn
 from dotenv import load_dotenv
 from runtime.ui import install_ui
 
-from databricks_mason import DurableAgentApp, auto_recovery_enabled
+from databricks_mason import AgentApp
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 agent.agent.configure()
 
-app = DurableAgentApp()
+DURABLE_RUNTIME = True
+
+app = AgentApp(durable_runtime=DURABLE_RUNTIME)
 app.invoke(agent.agent.invoke)
-if auto_recovery_enabled():
+if DURABLE_RUNTIME:
     app.on_recovery(agent.agent.on_recovery)
 install_ui(app)
 

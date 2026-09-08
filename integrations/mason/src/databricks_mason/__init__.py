@@ -8,9 +8,9 @@ from databricks_mason.session_store import Session, SessionItem, SessionStore
 
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
+        AgentApp,
         DurableAgentApp,
         DurableAgentContext,
-        auto_recovery_enabled,
         configure_tracing,
         tag_session,
         workspace_client,
@@ -25,9 +25,9 @@ __all__ = [
     "Session",
     "SessionItem",
     "SessionStore",
+    "AgentApp",
     "DurableAgentApp",
     "DurableAgentContext",
-    "auto_recovery_enabled",
     "configure_tracing",
     "tag_session",
     "workspace_client",
@@ -36,9 +36,9 @@ __all__ = [
 
 _RUNTIME_REEXPORTS = frozenset(
     {
+        "AgentApp",
         "DurableAgentApp",
         "DurableAgentContext",
-        "auto_recovery_enabled",
         "configure_tracing",
         "tag_session",
         "workspace_client",

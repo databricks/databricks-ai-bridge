@@ -30,7 +30,6 @@ def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     args, kwargs = db.call_args
     assert args[0][:2] == ["apps", "run-local"]
     assert "DATABRICKS_MASON_RUNTIME_LOCAL=true" in args[0]
-    assert "DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED=false" in args[0]
     assert "--prepare-environment" in args[0]  # no venv yet -> build it
     assert args[1] == "ml"  # profile passed through
     assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir
@@ -193,13 +192,12 @@ def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
     assert "00000000-0000-4000-8000-000000000000" in result.output
 
 
-def test_dev_standard_template_uses_runtime_api_without_auto_recovery(tmp_path: pathlib.Path):
+def test_dev_standard_template_uses_runtime_api_without_durable_runtime(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(
         tmp_path,
         framework="langgraph",
-        durability_enabled=True,
-        auto_recovery_enabled=False,
+        durability_enabled=False,
     ).write()
     (tmp_path / ".mason").mkdir()
     (tmp_path / ".mason" / "project.toml").write_text(
@@ -211,7 +209,6 @@ def test_dev_standard_template_uses_runtime_api_without_auto_recovery(tmp_path: 
 
     assert result.exit_code == 0, result.output
     assert "http://localhost:8000/api/invocations" in result.output
-    assert "DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED=false" in db.call_args.args[0]
 
 
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(

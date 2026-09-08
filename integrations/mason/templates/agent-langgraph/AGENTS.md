@@ -1,6 +1,6 @@
 # Agent Development Guide
 
-This project is a LangGraph workload hosted by `databricks_mason.DurableAgentApp`.
+This project is a LangGraph workload hosted by `databricks_mason.AgentApp`.
 
 ## Commands
 
@@ -40,17 +40,18 @@ sticky routing and is not authentication or application session state.
 | Model, tools, HITL, event mapping | `agent/agent.py` |
 | Local tools | `agent/tools/` |
 | MCP servers | `agent/mcps.py` |
-| Durable app wiring | `runtime/main.py` |
+| Mason server and durable-runtime option | `runtime/main.py` |
 | Browser and managed-state routes | `runtime/ui.py` |
 | Browser behavior | `ui/app.js` |
 
-Do not add another HTTP runtime. `runtime/main.py` must stay a thin layer that constructs
-`DurableAgentApp`, registers `invoke`, conditionally registers `on_recovery` when automatic recovery
-is enabled, and optionally installs the UI.
+Do not add another HTTP runtime. `runtime/main.py` must stay a thin layer that constructs `AgentApp`,
+registers `invoke`, registers `on_recovery` when `DURABLE_RUNTIME` is enabled, and optionally
+installs the UI.
 
 ## State and recovery
 
-- Invocation state/events: in-memory in `mason dev`, Lakebase after `mason deploy`.
+- Invocation state/events: in-memory in `mason dev`; Lakebase after deploy when `DURABLE_RUNTIME`
+  is enabled; process-local after deploy when disabled.
 - Conversation checkpoints: in-process by default; managed Session Store when bound.
 - Long-term memory: managed Memory Store when bound.
 - LangGraph HITL: checkpointed with the conversation and durable when Session Store is bound.

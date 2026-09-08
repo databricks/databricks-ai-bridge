@@ -8,13 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from databricks_mason.runtime.durability.store import (
-    RUNTIME_AUTO_RECOVERY_ENV,
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
     InMemoryDurabilityStore,
     LakebaseDurabilityStore,
-    auto_recovery_enabled,
     default_durability_store,
 )
 from databricks_mason.runtime.durability.types import (
@@ -52,7 +50,6 @@ def mapping_result(value):
 
 
 def test_default_store_is_local_without_an_attached_resource(monkeypatch):
-    monkeypatch.delenv(RUNTIME_AUTO_RECOVERY_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
@@ -61,7 +58,6 @@ def test_default_store_is_local_without_an_attached_resource(monkeypatch):
 
 
 def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
-    monkeypatch.delenv(RUNTIME_AUTO_RECOVERY_ENV, raising=False)
     expected = MagicMock()
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
@@ -80,7 +76,6 @@ def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
 
 
 def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
-    monkeypatch.delenv(RUNTIME_AUTO_RECOVERY_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.setenv(
@@ -91,7 +86,6 @@ def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
 
 
 def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
-    monkeypatch.delenv(RUNTIME_AUTO_RECOVERY_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
@@ -101,7 +95,6 @@ def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
 
 
 def test_default_store_uses_memory_when_apps_run_local_sets_an_app_name(monkeypatch):
-    monkeypatch.delenv(RUNTIME_AUTO_RECOVERY_ENV, raising=False)
     monkeypatch.setenv(RUNTIME_LOCAL_ENV, "true")
     monkeypatch.setenv("DATABRICKS_APP_NAME", "local-durability-app")
     monkeypatch.setenv(
@@ -109,24 +102,6 @@ def test_default_store_uses_memory_when_apps_run_local_sets_an_app_name(monkeypa
     )
 
     assert isinstance(default_durability_store(), InMemoryDurabilityStore)
-
-
-def test_disabling_auto_recovery_still_requires_durable_store(monkeypatch):
-    monkeypatch.setenv(RUNTIME_AUTO_RECOVERY_ENV, "false")
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-
-    assert auto_recovery_enabled() is False
-    with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
-        default_durability_store()
-
-
-def test_auto_recovery_enabled_rejects_invalid_configuration(monkeypatch):
-    monkeypatch.setenv(RUNTIME_AUTO_RECOVERY_ENV, "sometimes")
-
-    with pytest.raises(RuntimeError, match=RUNTIME_AUTO_RECOVERY_ENV):
-        auto_recovery_enabled()
 
 
 def execution_row(**overrides):

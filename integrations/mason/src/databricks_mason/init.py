@@ -4,10 +4,9 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-Durability is enabled for every framework template. Automatic crash recovery is enabled by default;
-pass `--no-auto-recovery` to keep persisted invocation state without retrying interrupted work.
-`--repo` / `--ref` override the source, e.g. to pull from a fork or branch before a template has
-merged to its canonical repo.
+The Mason server is durable by default. Pass `--no-durable-runtime` for process-local background
+state, or `--server custom` for a minimal foreground-only FastAPI server. `--repo` / `--ref`
+override the source, e.g. to pull from a fork or branch before a template has merged.
 """
 
 from __future__ import annotations
@@ -42,6 +41,19 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "repo": _MASON_REPO,
         "ref": "main",
         "path": "integrations/mason/templates/agent-langgraph",
+    },
+}
+
+_CUSTOM_SERVER_TEMPLATES: dict[str, dict[str, str]] = {
+    "openai": {
+        "repo": _MASON_REPO,
+        "ref": "main",
+        "path": "integrations/mason/templates/custom-agent-openai",
+    },
+    "langgraph": {
+        "repo": _MASON_REPO,
+        "ref": "main",
+        "path": "integrations/mason/templates/custom-agent-langgraph",
     },
 }
 
@@ -200,6 +212,16 @@ def _pin_runtime_source(
     pyproject.write_text(tomlkit.dumps(document))
 
 
+def _configure_durable_runtime(dest: pathlib.Path, enabled: bool) -> None:
+    """Set the generated Mason server's explicit durable-runtime option."""
+    main = dest / "runtime" / "main.py"
+    marker = "DURABLE_RUNTIME = True"
+    if not main.is_file() or main.read_text().count(marker) != 1:
+        raise AgentCliError(f"Mason server template at {main} has no durable-runtime marker.")
+    if not enabled:
+        main.write_text(main.read_text().replace(marker, "DURABLE_RUNTIME = False"))
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
@@ -209,10 +231,16 @@ def _pin_runtime_source(
     help="Agent framework to scaffold (defaults to langgraph).",
 )
 @click.option(
-    "--auto-recovery/--no-auto-recovery",
-    default=True,
+    "--server",
+    type=click.Choice(["mason", "custom"]),
+    default="mason",
     show_default=True,
-    help="Automatically recover interrupted durable invocations.",
+    help="Use Mason's invocation server or a minimal custom FastAPI server.",
+)
+@click.option(
+    "--no-durable-runtime",
+    is_flag=True,
+    help="Keep Mason server background state in-process instead of provisioning Lakebase.",
 )
 @click.option(
     "--profile",
@@ -238,7 +266,8 @@ def init(
     obj,
     directory: Optional[str],
     framework: Optional[str],
-    auto_recovery: bool,
+    server: str,
+    no_durable_runtime: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -254,12 +283,20 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `mason dev` right away.
 
-    Generated projects use durable invocation storage. Pass --no-auto-recovery to retain persisted
-    state without automatically retrying work interrupted by process failure.
+    The default Mason server supports foreground, streaming, and background invocations through one
+    HTTP contract. Its runtime is durable by default; pass --no-durable-runtime to keep execution
+    state in-process. Pass --server custom for a minimal foreground-only FastAPI server.
     """
     selected_framework = framework or "langgraph"
-    spec = _TEMPLATES[selected_framework]
-    chat_app_enabled = selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    mason_server = server == "mason"
+    if not mason_server and no_durable_runtime:
+        raise click.UsageError("--no-durable-runtime only applies to --server mason")
+    durable_runtime = mason_server and not no_durable_runtime
+    templates = _TEMPLATES if mason_server else _CUSTOM_SERVER_TEMPLATES
+    spec = templates[selected_framework]
+    chat_app_enabled = (
+        mason_server and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    )
     template_path = spec["path"]
     dest = (
         pathlib.Path(directory)
@@ -283,16 +320,17 @@ def init(
         dest,
         overlay_dirs,
     )
-    if repo is not None or ref is not None:
+    if mason_server and (repo is not None or ref is not None):
         _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
+    if mason_server:
+        _configure_durable_runtime(dest, durable_runtime)
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=selected_framework, template=template_name)
     project = AgentProject.create(
         dest,
         framework=selected_framework,
-        durability_enabled=True,
-        auto_recovery_enabled=auto_recovery,
+        durability_enabled=durable_runtime,
     )
     project.write()
     env_profile = profile or obj.profile
@@ -304,9 +342,9 @@ def init(
                 "framework": selected_framework,
                 "template": template_name,
                 "directory": str(dest),
+                "server": server,
                 "chat_app_enabled": chat_app_enabled,
-                "durability_enabled": True,
-                "auto_recovery_enabled": auto_recovery,
+                "durable_runtime": durable_runtime,
                 "env_profile": env_profile if wrote_env else None,
             }
         )
@@ -314,8 +352,8 @@ def init(
 
     fields = {
         "Framework": selected_framework,
-        "Durability": "enabled",
-        "Automatic recovery": "enabled" if auto_recovery else "disabled",
+        "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
+        "Durable runtime": "enabled" if durable_runtime else "disabled",
         "Directory": str(dest),
     }
     if chat_app_enabled:

@@ -26,10 +26,17 @@ class _Ctx:
         self.profile = profile
 
 
+@pytest.fixture(autouse=True)
+def _skip_generated_runtime_rewrite(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(init_mod, "_configure_durable_runtime", lambda *_args: None)
+
+
 def test_framework_specs_have_repo_ref_path():
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
+        custom = init_mod._CUSTOM_SERVER_TEMPLATES[fw]
+        assert custom["repo"] and custom["ref"] and custom["path"]
     assert init_mod._TEMPLATES["openai"]["path"] == "integrations/mason/templates/agent-openai"
     assert (
         init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
@@ -102,31 +109,8 @@ def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     assert manifest["durability"] == {"enabled": True}
 
 
-def test_init_explicit_auto_recovery_uses_standard_framework_template(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
-    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
-        result = CliRunner().invoke(
-            init_mod.init,
-            ["--framework", "langgraph", "--auto-recovery", str(dest)],
-            obj=_Ctx(),
-        )
-    assert result.exit_code == 0, result.output
-    assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
-    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
-    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
-        metadata = tomli.load(metadata_file)
-    assert metadata == {
-        "schema_version": 1,
-        "framework": "langgraph",
-        "template": "agent-langgraph",
-    }
-    with (dest / "agent.toml").open("rb") as manifest_file:
-        manifest = tomli.load(manifest_file)
-    assert manifest["durability"] == {"enabled": True}
-
-
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
-def test_init_no_auto_recovery_keeps_durability_enabled(
+def test_init_no_durable_runtime_keeps_mason_server_without_binding(
     tmp_path: pathlib.Path,
     framework: str,
 ):
@@ -134,7 +118,7 @@ def test_init_no_auto_recovery_keeps_durability_enabled(
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
             init_mod.init,
-            ["--framework", framework, "--no-auto-recovery", str(dest)],
+            ["--framework", framework, "--no-durable-runtime", str(dest)],
             obj=_Ctx(),
         )
 
@@ -142,9 +126,44 @@ def test_init_no_auto_recovery_keeps_durability_enabled(
     assert f.call_args.args[2] == init_mod._TEMPLATES[framework]["path"]
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest["durability"] == {"enabled": True, "auto_recovery": False}
-    assert "Automatic recovery" in result.output
+    assert "durability" not in manifest
+    assert "Mason AgentApp" in result.output
+    assert "Durable runtime" in result.output
     assert "disabled" in result.output
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_custom_server_uses_minimal_template(
+    tmp_path: pathlib.Path,
+    framework: str,
+):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", framework, "--server", "custom", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[2] == init_mod._CUSTOM_SERVER_TEMPLATES[framework]["path"]
+    assert f.call_args.args[4] == ()
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert "durability" not in manifest
+    assert "Custom FastAPI" in result.output
+    assert "Chat app" not in result.output
+
+
+def test_init_rejects_no_durable_runtime_for_custom_server(tmp_path: pathlib.Path):
+    result = CliRunner().invoke(
+        init_mod.init,
+        ["--server", "custom", "--no-durable-runtime", str(tmp_path / "proj")],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "only applies to --server mason" in result.output
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
@@ -371,9 +390,9 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["framework"] == "langgraph"
     assert payload["template"] == "agent-langgraph"
     assert payload["directory"] == str(dest)
+    assert payload["server"] == "mason"
     assert payload["chat_app_enabled"] is True
-    assert payload["durability_enabled"] is True
-    assert payload["auto_recovery_enabled"] is True
+    assert payload["durable_runtime"] is True
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
