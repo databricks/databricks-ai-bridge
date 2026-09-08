@@ -16,13 +16,14 @@ Example = str | tuple[str, str]
 _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     (): (
         ("mason login --profile <profile>", "authenticate and save a default profile"),
-        ("mason init my-agent", "scaffold a new agent project"),
+        ("mason create", "interactively create an agent project"),
         ("cd my-agent", "enter the project directory"),
         ("mason dev", "run the agent locally with a chat UI"),
         ("mason deploy my-agent", "deploy the agent to Databricks Apps"),
     ),
     ("login",): (("mason login --profile <profile>", "save a profile as your default"),),
     ("logout",): (("mason logout", "forget the saved default profile"),),
+    ("create",): (("mason create", "interactively create an agent project"),),
     ("init",): (("mason init my-agent", "scaffold a new agent project"),),
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (

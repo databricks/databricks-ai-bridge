@@ -74,7 +74,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 
 | You want to… | Edit |
 | --- | --- |
-| Change model / instructions | `agent/agent.py` (`create_agent`) |
+| Change model / instructions | `agent/agent.py` (`MODEL` / `INSTRUCTIONS`) |
 | Add a function tool | new `*.py` in `agent/tools/` with a `@function_tool` function (auto-collected) |
 | Require human approval for a tool | `needs_approval=True` on the tool + its name in `REQUIRE_APPROVAL` (`agent/agent.py`) |
 | Add an MCP server | append an `McpServer` to `build_mcp_servers()` in `agent/mcps.py` |

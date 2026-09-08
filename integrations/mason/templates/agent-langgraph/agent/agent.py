@@ -25,6 +25,7 @@ from agent.tools import all_tools
 logger = logging.getLogger(__name__)
 
 MODEL = "databricks-gpt-5-2"
+INSTRUCTIONS = "You are a helpful assistant."
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -94,6 +95,7 @@ async def create_agent_graph(actor: str, model: str | None = None):
     return create_agent(
         model=_RoutedChatDatabricks(endpoint=endpoint, workspace_client=workspace_client()),
         tools=tools,
+        system_prompt=INSTRUCTIONS,
         middleware=middleware,
         checkpointer=checkpointer(),
     )

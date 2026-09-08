@@ -99,11 +99,12 @@ def test_help_examples_recommend_the_default_happy_path():
     expected_examples = {
         (): (
             "mason login --profile <profile>",
-            "mason init my-agent",
+            "mason create",
             "cd my-agent",
             "mason dev",
             "mason deploy my-agent",
         ),
+        ("create",): ("mason create",),
         ("init",): ("mason init my-agent",),
         ("dev",): ("mason dev",),
         ("memory",): (
@@ -134,11 +135,11 @@ def test_root_examples_render_inline_comments():
     result = CliRunner().invoke(cli.mason, ["--help"])
 
     assert result.exit_code == 0, result.output
-    assert "mason init my-agent" in result.output
-    assert "# scaffold a new agent project" in result.output
+    assert "mason create" in result.output
+    assert "# interactively create an agent project" in result.output
     # inline: command and its comment on the same line
-    line = next(ln for ln in result.output.splitlines() if "mason init my-agent" in ln)
-    assert "# scaffold a new agent project" in line
+    line = next(ln for ln in result.output.splitlines() if "mason create" in ln)
+    assert "# interactively create an agent project" in line
 
 
 def test_inline_comments_are_column_aligned():

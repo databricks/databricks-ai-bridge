@@ -15,6 +15,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 from typing import Optional
@@ -62,6 +63,17 @@ _CHAT_APP_TEMPLATES = {
     "langgraph": "integrations/mason/templates/ui/agent-langgraph",
     "openai": "integrations/mason/templates/ui/agent-openai",
 }
+
+
+@dataclass(frozen=True)
+class ScaffoldResult:
+    """Details about a scaffolded Mason project."""
+
+    framework: str
+    template: str
+    directory: pathlib.Path
+    chat_app_enabled: bool
+    env_profile: str | None
 
 
 def _template_ref(framework: str) -> str:
@@ -204,6 +216,63 @@ def _pin_runtime_source(
     pyproject.write_text(tomlkit.dumps(document))
 
 
+def scaffold_project(
+    dest: pathlib.Path,
+    *,
+    framework: str,
+    durability: bool = False,
+    profile: str | None = None,
+    chat_app_enabled: bool = True,
+    repo: str | None = None,
+    ref: str | None = None,
+) -> ScaffoldResult:
+    """Scaffold one Mason project without rendering CLI output."""
+    if durability and framework != "langgraph":
+        raise AgentCliError("--durability currently requires --framework langgraph.")
+    if durability and chat_app_enabled:
+        raise AgentCliError("The durability template does not support the browser chat app.")
+    if framework not in _TEMPLATES:
+        raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+    if chat_app_enabled and framework not in _CHAT_APP_TEMPLATES:
+        raise AgentCliError(f"The browser chat app is not available for framework {framework!r}.")
+    if dest.exists():
+        raise AgentCliError(
+            f"Destination '{dest}' already exists.",
+            hint="Choose a new directory or remove the existing one.",
+        )
+
+    spec = _DURABILITY_TEMPLATE if durability else _TEMPLATES[framework]
+    template_path = spec["path"]
+    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled else ()
+    selected_repo = repo or spec["repo"]
+    selected_ref = ref or _template_ref(framework)
+    resolved_ref = _fetch_template(
+        selected_repo,
+        selected_ref,
+        template_path,
+        dest,
+        overlay_dirs,
+    )
+    if repo is not None or ref is not None:
+        _pin_runtime_source(dest, framework, selected_repo, resolved_ref or selected_ref)
+
+    template_name = pathlib.PurePosixPath(template_path).name
+    write_project_metadata(dest, framework=framework, template=template_name)
+    AgentProject.create(
+        dest,
+        framework=framework,
+        durability_enabled=durability,
+    ).write()
+    wrote_env = _write_env(dest, profile) if profile else False
+    return ScaffoldResult(
+        framework=framework,
+        template=template_name,
+        directory=dest,
+        chat_app_enabled=chat_app_enabled,
+        env_profile=profile if wrote_env else None,
+    )
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
@@ -274,54 +343,34 @@ def init(
         else pathlib.Path(pathlib.PurePosixPath(template_path).name)
     )
 
-    if dest.exists():
-        raise AgentCliError(
-            f"Destination '{dest}' already exists.",
-            hint="Choose a new directory or remove the existing one.",
-        )
-
-    overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
-    selected_repo = repo or spec["repo"]
-    selected_ref = ref or _template_ref(selected_framework)
-    resolved_ref = _fetch_template(
-        selected_repo,
-        selected_ref,
-        template_path,
-        dest,
-        overlay_dirs,
-    )
-    if repo is not None or ref is not None:
-        _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
-
-    template_name = pathlib.PurePosixPath(template_path).name
-    write_project_metadata(dest, framework=selected_framework, template=template_name)
-    project = AgentProject.create(
+    result = scaffold_project(
         dest,
         framework=selected_framework,
-        durability_enabled=durability,
+        durability=durability,
+        profile=profile or obj.profile,
+        chat_app_enabled=chat_app_enabled,
+        repo=repo,
+        ref=ref,
     )
-    project.write()
-    env_profile = profile or obj.profile
-    wrote_env = _write_env(dest, env_profile) if env_profile else False
 
     if obj.output == "json":
         render.emit_json(
             {
-                "framework": selected_framework,
-                "template": template_name,
-                "directory": str(dest),
-                "chat_app_enabled": chat_app_enabled,
-                "env_profile": env_profile if wrote_env else None,
+                "framework": result.framework,
+                "template": result.template,
+                "directory": str(result.directory),
+                "chat_app_enabled": result.chat_app_enabled,
+                "env_profile": result.env_profile,
             }
         )
         return
 
-    fields = {"Framework": selected_framework, "Directory": str(dest)}
-    if chat_app_enabled:
+    fields = {"Framework": result.framework, "Directory": str(result.directory)}
+    if result.chat_app_enabled:
         fields["Chat app"] = "enabled"
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]
-    if wrote_env:
-        fields["Profile (.env)"] = env_profile
+    if result.env_profile:
+        fields["Profile (.env)"] = result.env_profile
     else:
         # No profile resolved, so no .env was seeded — call out the auth step explicitly rather
         # than burying it, since running locally fails without a Databricks profile.
@@ -330,7 +379,7 @@ def init(
             "Set DATABRICKS_CONFIG_PROFILE in .env (or re-run `mason init --profile <profile>`)",
         ]
     steps.append(("mason dev", "Run the agent locally"))
-    if chat_app_enabled:
+    if result.chat_app_enabled:
         steps.append("Open http://localhost:8000 to chat with it")
     steps.append((f"mason deploy {dest.name}", "Deploy it to Databricks (from the project dir)"))
-    render.success(f"Scaffolded '{template_name}'", fields=fields, next_steps=steps)
+    render.success(f"Scaffolded '{result.template}'", fields=fields, next_steps=steps)

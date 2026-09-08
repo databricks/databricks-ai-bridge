@@ -72,7 +72,7 @@ curl -sb "$COOKIE_JAR" -X POST http://localhost:8000/invocations \
 
 | You want to… | Edit |
 | --- | --- |
-| Change model / instructions | `agent/agent.py` (`create_agent_graph`) |
+| Change model / instructions | `agent/agent.py` (`MODEL` / `INSTRUCTIONS`) |
 | Add a function tool | new `*.py` in `agent/tools/` with a `@tool` function (auto-collected) |
 | Require human approval for a tool | add its name to `REQUIRE_APPROVAL` in `agent/agent.py` |
 | Add an MCP server | append a `DatabricksMCPServer` to `build_mcp_servers()` in `agent/mcps.py` |
