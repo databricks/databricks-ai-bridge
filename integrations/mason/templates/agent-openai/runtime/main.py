@@ -8,14 +8,15 @@ import agent.agent
 import uvicorn
 from dotenv import load_dotenv
 
-from databricks_mason import DurableAgentApp
+from databricks_mason import DurableAgentApp, auto_recovery_enabled
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 agent.agent.configure()
 
 app = DurableAgentApp()
 app.invoke(agent.agent.invoke)
-app.on_recovery(agent.agent.on_recovery)
+if auto_recovery_enabled():
+    app.on_recovery(agent.agent.on_recovery)
 
 
 def main() -> None:

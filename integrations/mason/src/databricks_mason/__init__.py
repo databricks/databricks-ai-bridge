@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from databricks_mason.runtime import (
         DurableAgentApp,
         DurableAgentContext,
+        auto_recovery_enabled,
         configure_tracing,
         tag_session,
         workspace_client,
@@ -26,6 +27,7 @@ __all__ = [
     "SessionStore",
     "DurableAgentApp",
     "DurableAgentContext",
+    "auto_recovery_enabled",
     "configure_tracing",
     "tag_session",
     "workspace_client",
@@ -36,6 +38,7 @@ _RUNTIME_REEXPORTS = frozenset(
     {
         "DurableAgentApp",
         "DurableAgentContext",
+        "auto_recovery_enabled",
         "configure_tracing",
         "tag_session",
         "workspace_client",

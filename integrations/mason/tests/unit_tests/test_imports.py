@@ -20,6 +20,7 @@ def test_public_surface() -> None:
         "DurableAgentApp",
         "DurableAgentContext",
         "configure_tracing",
+        "auto_recovery_enabled",
         "tag_session",
         "workspace_client",
         "workspace_headers",

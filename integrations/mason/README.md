@@ -151,10 +151,9 @@ session inside `input`. Polling uses only the invocation ID and relies on Databr
 authentication. The runtime persists the input, internal attempt status, heartbeats,
 `run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
 
-The new `durable-langgraph-agent` template selects an in-memory durability store locally. Initialize
-it with `mason init --framework langgraph --durability`; Mason writes its durability binding to
-`agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability, chosen
-in this order:
+Durability is enabled by default for both framework templates. Mason writes the durability binding
+to `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability,
+chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
 2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
@@ -166,10 +165,11 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-`mason init --framework langgraph --durability` scaffolds the minimal API-only example. Bare
-`mason init`, `--framework langgraph`, and `--framework openai` scaffold the full framework
-templates on the same durable runtime, including tools, HITL, sessions, memory, and the optional
-chat UI. All generated manifests opt into deployed Lakebase durability.
+Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold the full framework
+templates with tools, HITL, sessions, memory, and the optional chat UI. Automatic crash recovery is
+enabled by default. Pass `--no-auto-recovery` to keep the same durable Lakebase state, events,
+idempotency, and HTTP API without registering `@app.on_recovery` or retrying interrupted work. Use
+`--disable-chat-app` independently for API-only output.
 
 ## Commands
 
@@ -177,7 +177,8 @@ chat UI. All generated manifests opt into deployed Lakebase durability.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--durability] [--disable-chat-app]
+  init         [--framework openai|langgraph] [--auto-recovery|--no-auto-recovery]
+               [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]

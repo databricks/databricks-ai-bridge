@@ -202,14 +202,18 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
-def _durability_from_manifest(value: object) -> bool:
+def _durability_from_manifest(value: object) -> tuple[bool, bool]:
     if value is None:
-        return False
+        return False, False
     if not isinstance(value, Mapping):
         raise AgentCliError("agent.toml [durability] must be a table.")
-    if cast(Mapping[str, Any], value).get("enabled") is not True:
+    durability = cast(Mapping[str, Any], value)
+    if durability.get("enabled") is not True:
         raise AgentCliError("agent.toml [durability] must set enabled = true.")
-    return True
+    auto_recovery = durability.get("auto_recovery", True)
+    if not isinstance(auto_recovery, bool):
+        raise AgentCliError("agent.toml [durability] auto_recovery must be true or false.")
+    return True, auto_recovery
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -309,6 +313,7 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         durability_enabled: bool = False,
+        auto_recovery_enabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -323,6 +328,7 @@ class AgentProject:
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
         self.durability_enabled = durability_enabled
+        self.auto_recovery_enabled = auto_recovery_enabled
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -368,7 +374,9 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
-        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
+        durability_enabled, auto_recovery_enabled = _durability_from_manifest(
+            document.get(_DURABILITY_TABLE)
+        )
         return cls(
             project_root,
             document,
@@ -379,6 +387,7 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             durability_enabled,
+            auto_recovery_enabled,
         )
 
     @classmethod
@@ -388,9 +397,14 @@ class AgentProject:
         *,
         framework: str,
         durability_enabled: bool = False,
+        auto_recovery_enabled: bool | None = None,
     ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        if auto_recovery_enabled is None:
+            auto_recovery_enabled = durability_enabled
+        if auto_recovery_enabled and not durability_enabled:
+            raise AgentCliError("Automatic recovery requires durability to be enabled.")
         project_root = pathlib.Path(root).expanduser().resolve()
         document = tomlkit.document()
         document.add("schema_version", _SCHEMA_VERSION)
@@ -401,6 +415,8 @@ class AgentProject:
         if durability_enabled:
             durability = tomlkit.table()
             durability.add("enabled", True)
+            if not auto_recovery_enabled:
+                durability.add("auto_recovery", False)
             document.add(_DURABILITY_TABLE, durability)
         return cls(
             project_root,
@@ -408,6 +424,7 @@ class AgentProject:
             framework,
             [],
             durability_enabled=durability_enabled,
+            auto_recovery_enabled=auto_recovery_enabled,
         )
 
     def set_deployment_name(self, name: str) -> bool:

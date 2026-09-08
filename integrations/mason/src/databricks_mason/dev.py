@@ -23,11 +23,13 @@ from databricks_mason.deploy import (
     validate_stores_and_trace_env,
 )
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import load_project_metadata
 from databricks_mason.store_access import _databricks
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
 _LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
+_AUTO_RECOVERY_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -117,7 +119,18 @@ def dev(
     # `apps run-local` sets DATABRICKS_APP_NAME just like a deployment. Mark this invocation
     # explicitly so the durability SDK selects its process-local development store instead of
     # requiring the Lakebase resource that `mason deploy` attaches.
-    args = ["apps", "run-local", "--env", f"{_LOCAL_RUNTIME_ENV}=true"]
+    auto_recovery_enabled = bool(
+        (source_dir / "agent.toml").is_file()
+        and AgentProject.load(source_dir).auto_recovery_enabled
+    )
+    args = [
+        "apps",
+        "run-local",
+        "--env",
+        f"{_LOCAL_RUNTIME_ENV}=true",
+        "--env",
+        f"{_AUTO_RECOVERY_RUNTIME_ENV}={str(auto_recovery_enabled).lower()}",
+    ]
     if prepare_environment:
         args.append("--prepare-environment")
     if app_port is not None:
@@ -164,11 +177,16 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             durable = AgentProject.load(source_dir).durability_enabled
         except AgentCliError:
             durable = False
-        endpoint = f"{base}/api/invocations" if durable else f"{base}/invocations"
+        try:
+            template = load_project_metadata(source_dir).template
+        except AgentCliError:
+            template = None
+        uses_runtime_api = durable or template in {"agent-langgraph", "agent-openai"}
+        endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '
             '"input": [{"role": "user", "content": "hi"}]}'
-            if durable
+            if uses_runtime_api
             else '{"input": [{"role": "user", "content": "hi"}]}'
         )
         sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"

@@ -42,6 +42,7 @@ DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
 RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 RUNTIME_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 RUNTIME_LOCAL_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
+RUNTIME_AUTO_RECOVERY_ENV = "DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"
 _SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOKEN_CACHE_SECONDS = 15 * 60
 _POOL_RECYCLE_SECONDS = 14 * 60
@@ -766,6 +767,17 @@ class InMemoryDurabilityStore:
         if heartbeat_at.tzinfo is None:
             heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - heartbeat_at >= timedelta(seconds=stale_seconds)
+
+
+def auto_recovery_enabled() -> bool:
+    """Return whether the current Mason process should recover interrupted executions."""
+    value = os.getenv(RUNTIME_AUTO_RECOVERY_ENV)
+    if value is None:
+        return True
+    normalized = value.strip().lower()
+    if normalized not in {"true", "false"}:
+        raise RuntimeError(f"{RUNTIME_AUTO_RECOVERY_ENV} must be 'true' or 'false'")
+    return normalized == "true"
 
 
 def default_durability_store() -> DurabilityStore:

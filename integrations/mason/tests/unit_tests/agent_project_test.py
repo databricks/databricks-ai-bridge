@@ -198,3 +198,26 @@ def test_load_rejects_invalid_durability_table(tmp_path: pathlib.Path):
     )
     with pytest.raises(AgentCliError, match="enabled = true"):
         AgentProject.load(tmp_path)
+
+
+def test_auto_recovery_defaults_on_and_can_be_disabled(tmp_path: pathlib.Path):
+    default_project = AgentProject.create(
+        tmp_path,
+        framework="langgraph",
+        durability_enabled=True,
+    )
+    assert default_project.durability_enabled is True
+    assert default_project.auto_recovery_enabled is True
+
+    disabled_root = tmp_path / "disabled"
+    disabled_root.mkdir()
+    disabled_project = AgentProject.create(
+        disabled_root,
+        framework="langgraph",
+        durability_enabled=True,
+        auto_recovery_enabled=False,
+    )
+    disabled_project.write()
+    loaded = AgentProject.load(disabled_root)
+    assert loaded.durability_enabled is True
+    assert loaded.auto_recovery_enabled is False

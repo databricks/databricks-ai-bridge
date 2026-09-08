@@ -45,7 +45,8 @@ sticky routing and is not authentication or application session state.
 | Browser behavior | `ui/app.js` |
 
 Do not add another HTTP runtime. `runtime/main.py` must stay a thin layer that constructs
-`DurableAgentApp`, registers `invoke` and `on_recovery`, and optionally installs the UI.
+`DurableAgentApp`, registers `invoke`, conditionally registers `on_recovery` when automatic recovery
+is enabled, and optionally installs the UI.
 
 ## State and recovery
 

@@ -29,7 +29,6 @@ from databricks_mason import (
     session_store_access,
     timefmt,
 )
-from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
@@ -37,6 +36,7 @@ from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, def
 
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 _AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
+_AGENT_AUTO_RECOVERY_ENABLED_ENV = "DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -358,13 +358,6 @@ def _grant_store_access(
     return None
 
 
-def _has_durability_binding(source_dir: pathlib.Path) -> bool:
-    """Whether agent.toml opts this project into durable invocation storage."""
-    if not (source_dir / "agent.toml").is_file():
-        return False
-    return AgentProject.load(source_dir).durability_enabled
-
-
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -463,7 +456,10 @@ def deploy(
 
     memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
-    if _has_durability_binding(source_dir):
+    durability_enabled = bool(project and project.durability_enabled)
+    auto_recovery_enabled = bool(project and project.auto_recovery_enabled)
+    env_updates[_AGENT_AUTO_RECOVERY_ENABLED_ENV] = str(auto_recovery_enabled).lower()
+    if durability_enabled:
         durability_schema = lakebase_durability_store.get_lakebase_schema(name)
         if session_store:
             durability_backend = replace(

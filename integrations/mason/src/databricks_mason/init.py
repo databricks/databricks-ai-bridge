@@ -4,8 +4,8 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-`--durability` selects the minimal durable template for LangGraph. The standard framework templates
-also use the durable runtime, with their full tool, session, memory, and chat UI examples.
+Durability is enabled for every framework template. Automatic crash recovery is enabled by default;
+pass `--no-auto-recovery` to keep persisted invocation state without retrying interrupted work.
 `--repo` / `--ref` override the source, e.g. to pull from a fork or branch before a template has
 merged to its canonical repo.
 """
@@ -32,11 +32,6 @@ from databricks_mason.project_config import write_project_metadata
 # Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
 _MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
-_DURABILITY_TEMPLATE = {
-    "repo": _MASON_REPO,
-    "ref": "main",
-    "path": "integrations/mason/templates/durable-langgraph-agent",
-}
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {
         "repo": _MASON_REPO,
@@ -141,7 +136,7 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 
     Returns True if a `.env` was written. Skips if `.env` already exists (never clobbers). The
     template reads DATABRICKS_CONFIG_PROFILE for local model auth, so this makes the scaffolded
-    project runnable with `uv run start-server` without a manual `cp .env.example .env` step.
+    project runnable with `mason dev` without a manual `cp .env.example .env` step.
     """
     env_path = dest / ".env"
     if env_path.exists():
@@ -214,14 +209,15 @@ def _pin_runtime_source(
     help="Agent framework to scaffold (defaults to langgraph).",
 )
 @click.option(
-    "--durability",
-    is_flag=True,
-    help="Scaffold the API-only durability template (currently requires --framework langgraph).",
+    "--auto-recovery/--no-auto-recovery",
+    default=True,
+    show_default=True,
+    help="Automatically recover interrupted durable invocations.",
 )
 @click.option(
     "--profile",
     default=None,
-    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `uv run start-server` works "
+    help="Seed a local .env with this DATABRICKS_CONFIG_PROFILE so `mason dev` works "
     "immediately (defaults to the profile from -p / `mason login`).",
 )
 @click.option(
@@ -242,7 +238,7 @@ def init(
     obj,
     directory: Optional[str],
     framework: Optional[str],
-    durability: bool,
+    auto_recovery: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -256,18 +252,14 @@ def init(
     `mason deploy <name> --source <directory>`.
 
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
-    scaffolded project runs with `uv run start-server` right away.
-    """
-    if durability and framework != "langgraph":
-        raise AgentCliError("--durability currently requires --framework langgraph.")
+    scaffolded project runs with `mason dev` right away.
 
+    Generated projects use durable invocation storage. Pass --no-auto-recovery to retain persisted
+    state without automatically retrying work interrupted by process failure.
+    """
     selected_framework = framework or "langgraph"
-    spec = _DURABILITY_TEMPLATE if durability else _TEMPLATES[selected_framework]
-    # The minimal durability template is deliberately API-only. Standard framework templates retain
-    # their chat overlay behavior.
-    chat_app_enabled = (
-        not durability and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
-    )
+    spec = _TEMPLATES[selected_framework]
+    chat_app_enabled = selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
     template_path = spec["path"]
     dest = (
         pathlib.Path(directory)
@@ -300,6 +292,7 @@ def init(
         dest,
         framework=selected_framework,
         durability_enabled=True,
+        auto_recovery_enabled=auto_recovery,
     )
     project.write()
     env_profile = profile or obj.profile
@@ -312,12 +305,19 @@ def init(
                 "template": template_name,
                 "directory": str(dest),
                 "chat_app_enabled": chat_app_enabled,
+                "durability_enabled": True,
+                "auto_recovery_enabled": auto_recovery,
                 "env_profile": env_profile if wrote_env else None,
             }
         )
         return
 
-    fields = {"Framework": selected_framework, "Directory": str(dest)}
+    fields = {
+        "Framework": selected_framework,
+        "Durability": "enabled",
+        "Automatic recovery": "enabled" if auto_recovery else "disabled",
+        "Directory": str(dest),
+    }
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]

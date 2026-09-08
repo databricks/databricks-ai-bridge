@@ -133,6 +133,7 @@ def _write_agent_manifest(
     source: pathlib.Path,
     *,
     durability: bool = False,
+    auto_recovery: bool = True,
     memory: str | None = None,
     session: str | None = None,
 ) -> None:
@@ -143,6 +144,8 @@ def _write_agent_manifest(
         body += f'\n[session_store]\nname = "{session}"\n'
     if durability:
         body += "\n[durability]\nenabled = true\n"
+        if not auto_recovery:
+            body += "auto_recovery = false\n"
     (source / "agent.toml").write_text(body)
 
 
@@ -277,13 +280,13 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-def test_deploy_template_metadata_does_not_enable_runtime_store(
+def test_deploy_non_durable_template_does_not_enable_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durable-langgraph-agent")
+    _mark_template(src, "agent-langgraph")
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -309,6 +312,7 @@ def test_deploy_template_metadata_does_not_enable_runtime_store(
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
+    assert env["DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"] == "false"
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
 
 
@@ -359,6 +363,7 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+    assert env["DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"] == "true"
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
         deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     )
@@ -407,13 +412,13 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     assert events[0][1] == [selected]
 
 
-def test_deploy_durability_binding_provisions_backend_before_startup(
+def test_deploy_without_auto_recovery_still_provisions_backend_before_startup(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, durability=True)
+    _write_agent_manifest(src, durability=True, auto_recovery=False)
     selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
     events = []
 
@@ -450,6 +455,7 @@ def test_deploy_durability_binding_provisions_backend_before_startup(
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == selected.schema
+    assert env["DATABRICKS_MASON_RUNTIME_AUTO_RECOVERY_ENABLED"] == "false"
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):

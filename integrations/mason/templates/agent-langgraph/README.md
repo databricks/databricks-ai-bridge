@@ -1,7 +1,9 @@
 # Mason LangGraph Agent
 
 A LangGraph agent served by `databricks_mason.DurableAgentApp`. Mason keeps invocation state and
-events in memory during `mason dev` and in an app-owned Lakebase schema after deployment.
+events in memory during `mason dev` and in an app-owned Lakebase schema after deployment. Automatic
+crash recovery is enabled by default; initialize with `--no-auto-recovery` to keep durable state
+without retrying interrupted work.
 
 ## Run locally
 
@@ -75,10 +77,12 @@ mason sessions bind my-agent-sessions
 
 ## Crash recovery
 
-`runtime/main.py` registers both `@app.invoke` and `@app.on_recovery`. The initial attempt writes the
-invocation ID into LangGraph checkpoint metadata with synchronous checkpoint durability. A recovery
-attempt continues from that checkpoint when it exists; otherwise it safely replays the persisted
-application input. Invocation state and emitted events survive process loss in deployed Lakebase.
+When durability is enabled, `runtime/main.py` registers both `@app.invoke` and
+`@app.on_recovery`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
+with synchronous checkpoint durability. A recovery attempt continues from that checkpoint when it
+exists; otherwise it safely replays the persisted application input. Invocation state and emitted
+events survive process loss in deployed Lakebase. With `--no-auto-recovery`, only `@app.invoke` is
+registered; invocation state and events remain persisted, but interrupted work is not retried.
 
 External side effects are still at-least-once. Make tools idempotent because work performed between
 the last checkpoint and a crash can run again.
@@ -102,7 +106,8 @@ mason --profile <profile> deploy agent-langgraph --source .
 
 `agent.toml` contains `[durability] enabled = true`. Deployment reuses a bound Session Store's
 Lakebase database when available; otherwise Mason provisions or reuses the app's durability project.
-Only the app-owned `databricks_mason_runtime_<hash>` schema and runtime tables are added.
+Only the app-owned `databricks_mason_runtime_<hash>` schema and runtime tables are added. A project
+initialized with `--no-auto-recovery` additionally sets `auto_recovery = false`.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.

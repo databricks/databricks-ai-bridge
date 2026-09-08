@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from databricks_mason.runtime.durability.app import DurableAgentApp
+    from databricks_mason.runtime.durability.store import auto_recovery_enabled
     from databricks_mason.runtime.durability.types import DurableAgentContext
     from databricks_mason.runtime.tracing import configure_tracing, tag_session
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DurableAgentApp",
     "DurableAgentContext",
+    "auto_recovery_enabled",
     # MLflow tracing — call configure_tracing() once at startup (pass the framework's autolog, or use
     # a framework adapter that binds it).
     "configure_tracing",
@@ -35,6 +37,7 @@ __all__ = [
 _MODULE_BY_NAME = {
     "DurableAgentApp": "durability.app",
     "DurableAgentContext": "durability.types",
+    "auto_recovery_enabled": "durability.store",
     "configure_tracing": "tracing",
     "tag_session": "tracing",
     "workspace_client": "workspace",
