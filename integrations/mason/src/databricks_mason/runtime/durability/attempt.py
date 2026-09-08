@@ -8,7 +8,7 @@ import json
 import logging
 from typing import cast
 
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableExecutionContext,
     DurableExecutorFn,

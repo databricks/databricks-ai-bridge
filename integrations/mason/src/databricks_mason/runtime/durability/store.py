@@ -18,7 +18,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_mason.lakebase_durability_store import get_lakebase_schema
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableEvent,
     DurableExecution,

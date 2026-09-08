@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from databricks_mason.runtime.runtime import DurableRuntime
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.runtime import DurableRuntime
+from databricks_mason.runtime.durability.types import (
     DurableEvent,
     DurableExecution,
     DurableExecutionContext,

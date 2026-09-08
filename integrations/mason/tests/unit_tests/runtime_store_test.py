@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from databricks_mason.runtime.store import (
+from databricks_mason.runtime.durability.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
@@ -15,7 +15,7 @@ from databricks_mason.runtime.store import (
     LakebaseDurabilityStore,
     default_durability_store,
 )
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.types import (
     DurableExecutionStatus,
     DurableRequestConflictError,
 )

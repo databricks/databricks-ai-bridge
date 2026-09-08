@@ -11,13 +11,13 @@ import pytest
 from fastapi import FastAPI
 
 from databricks_mason import DurableAgentApp
-from databricks_mason.runtime.store import (
+from databricks_mason.runtime.durability.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
     InMemoryDurabilityStore,
 )
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.types import (
     DurableExecution,
     DurableExecutionContext,
     DurableExecutionStatus,

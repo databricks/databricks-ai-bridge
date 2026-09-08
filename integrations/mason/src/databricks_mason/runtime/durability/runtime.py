@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 
-from databricks_mason.runtime.attempt import AttemptRunner, copy_json_value
-from databricks_mason.runtime.recovery import RecoveryScheduler
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.attempt import AttemptRunner, copy_json_value
+from databricks_mason.runtime.durability.recovery import RecoveryScheduler
+from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableEvent,
     DurableExecution,

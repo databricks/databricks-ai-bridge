@@ -6,8 +6,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from databricks_mason.runtime.attempt import AttemptRunner
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.attempt import AttemptRunner
+from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableExecution,
     DurableExecutionStatus,

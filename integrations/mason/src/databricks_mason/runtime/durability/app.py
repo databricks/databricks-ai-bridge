@@ -16,9 +16,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
 
-from databricks_mason.runtime.runtime import DurableRuntime
-from databricks_mason.runtime.store import default_durability_store
-from databricks_mason.runtime.types import (
+from databricks_mason.runtime.durability.runtime import DurableRuntime
+from databricks_mason.runtime.durability.store import default_durability_store
+from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableAgentContext,
     DurableAgentHook,
