@@ -296,6 +296,7 @@ class AgentProject:
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
+        deployment_name: str | None = None,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -307,6 +308,8 @@ class AgentProject:
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
+        # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
+        self.deployment_name = deployment_name
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -333,6 +336,11 @@ class AgentProject:
         framework = _required_string(agent.get("framework"), "agent.framework")
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        deployment_name = agent.get("deployment_name")
+        if deployment_name is not None and not (
+            isinstance(deployment_name, str) and deployment_name
+        ):
+            raise AgentCliError("agent.toml [agent] deployment_name must be a non-empty string.")
         raw_tools = document.get("tools", [])
         if not isinstance(raw_tools, list):
             raise AgentCliError("agent.toml tools must be an array of tables.")
@@ -355,6 +363,7 @@ class AgentProject:
             memory_store,
             session_store,
             memory_store_id,
+            str(deployment_name) if deployment_name is not None else None,
         )
 
     @classmethod
@@ -369,6 +378,18 @@ class AgentProject:
         agent.add("framework", framework)
         document.add("agent", agent)
         return cls(project_root, document, framework, [])
+
+    def set_deployment_name(self, name: str) -> bool:
+        """Record the deployment's base name under [agent].deployment_name. True if it changed."""
+        name = _required_string(name, "[agent] deployment_name")
+        if self.deployment_name == name:
+            return False
+        agent = self._document.get("agent")
+        if not isinstance(agent, Mapping):
+            raise AgentCliError("agent.toml must declare an [agent] table.")
+        agent["deployment_name"] = name
+        self.deployment_name = name
+        return True
 
     def add_tool(self, spec: ToolSpec) -> bool:
         for existing in self.tools:
