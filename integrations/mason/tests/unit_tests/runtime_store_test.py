@@ -9,6 +9,7 @@ import pytest
 
 from databricks_mason.runtime.store import (
     RUNTIME_ENDPOINT_ENV,
+    RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
     InMemoryDurabilityStore,
     LakebaseDurabilityStore,
@@ -49,6 +50,7 @@ def mapping_result(value):
 
 
 def test_default_store_is_local_without_an_attached_resource(monkeypatch):
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
@@ -57,6 +59,7 @@ def test_default_store_is_local_without_an_attached_resource(monkeypatch):
 
 def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
     expected = MagicMock()
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
     monkeypatch.setenv(
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
@@ -73,6 +76,7 @@ def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
 
 
 def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.setenv(
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
@@ -82,11 +86,22 @@ def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
 
 
 def test_default_store_rejects_missing_resource_inside_apps(monkeypatch):
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
     with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
         default_durability_store()
+
+
+def test_default_store_uses_memory_when_apps_run_local_sets_an_app_name(monkeypatch):
+    monkeypatch.setenv(RUNTIME_LOCAL_ENV, "true")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "local-durability-app")
+    monkeypatch.setenv(
+        RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
+    )
+
+    assert isinstance(default_durability_store(), InMemoryDurabilityStore)
 
 
 def execution_row(**overrides):

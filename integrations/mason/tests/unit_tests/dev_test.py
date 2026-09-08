@@ -29,6 +29,7 @@ def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     args, kwargs = db.call_args
     assert args[0][:2] == ["apps", "run-local"]
+    assert "DATABRICKS_MASON_RUNTIME_LOCAL=true" in args[0]
     assert "--prepare-environment" in args[0]  # no venv yet -> build it
     assert args[1] == "ml"  # profile passed through
     assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir

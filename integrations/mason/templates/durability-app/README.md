@@ -7,8 +7,7 @@ keeps the durability behavior easy to inspect.
 ## Run locally
 
 ```bash
-uv sync
-uv run start-server
+mason dev
 ```
 
 Submit a background run with one client-generated UUID and one stable routing

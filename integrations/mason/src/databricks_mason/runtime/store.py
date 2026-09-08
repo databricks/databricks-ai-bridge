@@ -41,6 +41,7 @@ class _AsyncLakebase(Protocol):
 DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
 RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
 RUNTIME_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
+RUNTIME_LOCAL_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
 _SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOKEN_CACHE_SECONDS = 15 * 60
 _POOL_RECYCLE_SECONDS = 14 * 60
@@ -758,6 +759,8 @@ class InMemoryDurabilityStore:
 
 def default_durability_store() -> DurabilityStore:
     """Use the attached Lakebase resource when deployed, otherwise process-local state."""
+    if os.getenv(RUNTIME_LOCAL_ENV, "").lower() == "true":
+        return InMemoryDurabilityStore()
     app_name = os.getenv("DATABRICKS_APP_NAME")
     if not app_name:
         return InMemoryDurabilityStore()

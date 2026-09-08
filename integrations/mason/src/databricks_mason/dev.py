@@ -27,6 +27,7 @@ from databricks_mason.store_access import _databricks
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
+_LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -113,7 +114,10 @@ def dev(
     if prepare_environment is None:
         prepare_environment = not (source_dir / ".venv").exists()
 
-    args = ["apps", "run-local"]
+    # `apps run-local` sets DATABRICKS_APP_NAME just like a deployment. Mark this invocation
+    # explicitly so the durability SDK selects its process-local development store instead of
+    # requiring the Lakebase resource that `mason deploy` attaches.
+    args = ["apps", "run-local", "--env", f"{_LOCAL_RUNTIME_ENV}=true"]
     if prepare_environment:
         args.append("--prepare-environment")
     if app_port is not None:

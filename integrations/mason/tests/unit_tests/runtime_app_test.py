@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from databricks_mason import DurableAgentApp
 from databricks_mason.runtime.store import (
     RUNTIME_ENDPOINT_ENV,
+    RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
     InMemoryDurabilityStore,
 )
@@ -343,6 +344,7 @@ def test_app_exposes_only_api_invocation_routes() -> None:
 
 
 def test_durability_store_defaults_to_in_memory_outside_apps(monkeypatch) -> None:
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_SCHEMA_ENV, raising=False)
@@ -353,6 +355,7 @@ def test_durability_store_defaults_to_in_memory_outside_apps(monkeypatch) -> Non
 
 
 def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> None:
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
