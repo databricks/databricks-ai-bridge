@@ -839,9 +839,9 @@ def test_deploy_errors_when_bound_store_missing(tmp_path: pathlib.Path, monkeypa
     assert "mason memory bind ghost" in result.output
 
 
-def test_trace_env_binds_experiment_by_id_and_workspace():
-    # The agent binding is exactly two vars: the workspace (destination) and the experiment id.
-    assert deploy_mod.trace_env("exp-9") == {
+def test_mlflow_tracing_config_binds_experiment_by_id_and_workspace():
+    # The agent binding is exactly two env vars: the workspace (destination) and the experiment id.
+    assert deploy_mod.mlflow_tracing_config("exp-9").env() == {
         "MLFLOW_TRACKING_URI": "databricks",
         "MLFLOW_EXPERIMENT_ID": "exp-9",
     }

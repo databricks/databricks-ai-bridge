@@ -136,7 +136,7 @@ def _status_str(status: Any) -> Optional[str]:
     return getattr(status, "name", None) or str(status)
 
 
-def _trace_json(trace: Any) -> dict:
+def _trace_to_json(trace: Any) -> dict:
     return {
         "trace_id": _attr(trace, "info.trace_id", "info.request_id"),
         "status": _status_str(_attr(trace, "info.status", "info.state")),
@@ -188,7 +188,7 @@ def tracing_configure(obj, experiment_id, source) -> None:
         if experiment is None:
             raise AgentCliError(
                 f"No MLflow experiment found with id {experiment_id!r}.",
-                hint="Pass an existing experiment id, or omit --experiment for the per-app default.",
+                hint="Pass an existing experiment id, or omit --experiment to use the mason default.",
             )
         if _is_uc_backed(experiment):
             # Traces for a UC-backed experiment land in governed UC tables, which need a SQL warehouse
@@ -196,8 +196,8 @@ def tracing_configure(obj, experiment_id, source) -> None:
             # yet. Reject it up front rather than silently wiring a config that fails at read/deploy.
             raise AgentCliError(
                 "UC-backed MLflow tracing is not supported by mason.",
-                hint="Pass a managed (non-UC) experiment, or omit --experiment to use the per-app "
-                "experiment mason creates.",
+                hint="Pass a managed (non-UC) experiment, or omit --experiment to use the mason "
+                "default.",
             )
 
     project = AgentProject.load(pathlib.Path(source))
@@ -278,7 +278,7 @@ def tracing_list(obj, experiment_id, limit, source) -> None:
     )
 
     if obj.output == "json":
-        render.emit_json([_trace_json(t) for t in traces])
+        render.emit_json([_trace_to_json(t) for t in traces])
         return
     rows = [
         [
@@ -307,7 +307,7 @@ def tracing_get(obj, trace_id) -> None:
     if trace is None:
         raise AgentCliError(f"No trace found with id {trace_id!r}.")
     if obj.output == "json":
-        render.emit_json(_trace_json(trace))
+        render.emit_json(_trace_to_json(trace))
         return
     spans = _attr(trace, "data.spans", default=[]) or []
     render.detail(

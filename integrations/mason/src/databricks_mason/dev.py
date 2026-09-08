@@ -19,9 +19,9 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.deploy import (
     _upsert_manifest_env,
+    mlflow_tracing_config,
     resolve_trace_experiment,
     store_bindings,
-    trace_env,
     validate_stores,
 )
 from databricks_mason.errors import AgentCliError
@@ -66,11 +66,11 @@ def dev(
     ``mason deploy``. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
-    Tracing is on by default: dev sends the agent's traces to a per-app MLflow experiment (the same
-    one ``mason deploy`` uses), created on first run — configure or turn it off with ``mason tracing
-    configure`` / ``disable``. Stores bound with ``mason memory/sessions bind`` are validated here and
-    read from agent.toml at runtime. Locally you already have access, so no service-principal grant is
-    needed; that grant happens at ``mason deploy`` time.
+    Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
+    the agent name (the same one ``mason deploy`` uses), created on first run — configure or turn it
+    off with ``mason tracing configure`` / ``disable``. Stores bound with ``mason memory/sessions
+    bind`` are validated here and read from agent.toml at runtime. Locally you already have access, so
+    no service-principal grant is needed; that grant happens at ``mason deploy`` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -98,9 +98,11 @@ def dev(
             source_dir, source_dir.resolve().name, obj.client(), obj.profile
         )
         if experiment_id:
-            env_updates.update(trace_env(experiment_id))
+            env_updates.update(mlflow_tracing_config(experiment_id).env())
     except Exception as exc:  # noqa: BLE001 - tracing must never block a local run
-        render.console().print(f"[yellow]⚠[/] Tracing not enabled: {exc}. Running without traces.")
+        render.console().print(
+            f"[yellow]⚠[/] Tracing not enabled: {exc}. Proceeding without tracing."
+        )
     if env_updates:
         _upsert_manifest_env(source_dir, env_updates)
 

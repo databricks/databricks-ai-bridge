@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 import click
@@ -343,9 +343,27 @@ def resolve_trace_experiment(source: pathlib.Path, app: str, client, profile) ->
     return ensure_experiment(profile, client, default_experiment(client.current_user, app))
 
 
-def trace_env(experiment_id: str) -> dict[str, str]:
-    """The env that binds a dev/deployed agent to an experiment: the workspace + the experiment id."""
-    return {TRACES_TRACKING_URI_ENV: "databricks", TRACES_EXPERIMENT_ID_ENV: experiment_id}
+@dataclass(frozen=True)
+class MlflowTracingConfig:
+    """The MLflow config that binds a dev/deployed agent to its experiment.
+
+    The agent enables tracing when it sees both a destination (the workspace tracking uri) and an
+    experiment id; ``env`` renders them as the two env vars wired into app.yaml.
+    """
+
+    experiment_id: str
+    tracking_uri: str = "databricks"
+
+    def env(self) -> dict[str, str]:
+        return {
+            TRACES_TRACKING_URI_ENV: self.tracking_uri,
+            TRACES_EXPERIMENT_ID_ENV: self.experiment_id,
+        }
+
+
+def mlflow_tracing_config(experiment_id: str) -> MlflowTracingConfig:
+    """The tracing config binding a dev/deployed agent to ``experiment_id``."""
+    return MlflowTracingConfig(experiment_id=experiment_id)
 
 
 def _grant_store_access(
@@ -473,7 +491,7 @@ def deploy(
     if session_store:
         provisioned["Session store"] = session_store
     if trace_experiment_id:
-        env_updates.update(trace_env(trace_experiment_id))
+        env_updates.update(mlflow_tracing_config(trace_experiment_id).env())
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
