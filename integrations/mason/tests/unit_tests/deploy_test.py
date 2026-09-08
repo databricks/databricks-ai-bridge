@@ -55,8 +55,15 @@ def test_ensure_session_store_reuses_on_already_exists():
     client = mock.Mock()
     client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
     client.get_session_store.return_value = {"session_store_name": "s"}
-    assert deploy_mod._ensure_session_store(client, "s") == {"session_store_name": "s"}
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, False)
     client.create_session_store.assert_called_once_with("s", retry_transient=True)
+
+
+def test_ensure_session_store_reports_created():
+    client = mock.Mock()
+    client.create_session_store.return_value = {"session_store_name": "s"}
+    assert deploy_mod._ensure_session_store(client, "s") == ({"session_store_name": "s"}, True)
 
 
 def test_ensure_memory_store_reuses_on_already_exists():
@@ -66,11 +73,21 @@ def test_ensure_memory_store_reuses_on_already_exists():
         "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
     }
 
-    assert deploy_mod._ensure_memory_store(client, "mem") == {
-        "name": "memory-stores/mem-id-123",
-        "display_name": "mem",
-    }
+    # Reused store -> created is False.
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123", "display_name": "mem"},
+        False,
+    )
     client.create_memory_store.assert_called_once_with("mem", retry_transient=True)
+
+
+def test_ensure_memory_store_reports_created():
+    client = mock.Mock()
+    client.create_memory_store.return_value = {"name": "memory-stores/mem-id-123"}
+    assert deploy_mod._ensure_memory_store(client, "mem") == (
+        {"name": "memory-stores/mem-id-123"},
+        True,
+    )
 
 
 class _FakeClient:
@@ -104,6 +121,29 @@ class _FakeCtx:
 
     def client(self):
         return _FakeClient()
+
+
+def _mark_template(source: pathlib.Path, template: str) -> None:
+    config = source / ".mason" / "project.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'schema_version = 1\nframework = "langgraph"\ntemplate = "{template}"\n')
+
+
+def _write_agent_manifest(
+    source: pathlib.Path,
+    *,
+    durability: bool = False,
+    memory: str | None = None,
+    session: str | None = None,
+) -> None:
+    body = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    if memory:
+        body += f'\n[memory_store]\nname = "{memory}"\n'
+    if session:
+        body += f'\n[session_store]\nname = "{session}"\n'
+    if durability:
+        body += "\n[durability]\nenabled = true\n"
+    (source / "agent.toml").write_text(body)
 
 
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):
@@ -235,6 +275,181 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "sticky routing" in result.output
     assert "__Host-databricks-app-router" in result.output
     assert "Databricks Apps instances" not in result.output
+
+
+def test_deploy_template_metadata_does_not_enable_runtime_store(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _mark_template(src, "durable-langgraph-agent")
+    _write_agent_manifest(src)
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+
+
+def test_deploy_durability_binding_reuses_session_store_before_startup(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, durability=True, session="sessions")
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse session")),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    backend = events[0][1][0]
+    assert backend.database == "sessions"
+    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+    assert backend.tables == ()
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+    assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
+        deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+    )
+
+
+def test_deploy_durability_binding_does_not_reuse_memory_store(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, durability=True, memory="mem")
+    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(deploy_mod, "_memory_store_database", lambda client, store: "memory-db")
+    monkeypatch.setattr(
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    assert events[0][1] == [selected]
+
+
+def test_deploy_durability_binding_provisions_backend_before_startup(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, durability=True)
+    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    events = []
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod.lakebase_durability_store,
+        "get_or_create_backend",
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "apply_postgres_resources",
+        lambda app, backends, profile: events.append(("attach", backends)) or None,
+    )
+
+    def fake_databricks(args, profile, **kwargs):
+        if args[:2] == ["apps", "deploy"]:
+            events.append(("deploy", args))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [event[0] for event in events] == ["attach", "deploy"]
+    assert events[0][1] == [selected]
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == selected.schema
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):

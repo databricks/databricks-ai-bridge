@@ -18,6 +18,7 @@ from databricks_mason.errors import AgentCliError
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
 _SCHEMA_VERSION = 1
+_DURABILITY_TABLE = "durability"
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
@@ -201,6 +202,16 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
+def _durability_from_manifest(value: object) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, Mapping):
+        raise AgentCliError("agent.toml [durability] must be a table.")
+    if cast(Mapping[str, Any], value).get("enabled") is not True:
+        raise AgentCliError("agent.toml [durability] must set enabled = true.")
+    return True
+
+
 def _store_id_from_manifest(value: object) -> str | None:
     """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
     if not isinstance(value, Mapping):
@@ -297,6 +308,7 @@ class AgentProject:
         session_store: str | None = None,
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
+        durability_enabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -310,6 +322,7 @@ class AgentProject:
         self.memory_store_id = memory_store_id
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
+        self.durability_enabled = durability_enabled
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -355,6 +368,7 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
+        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
         return cls(
             project_root,
             document,
@@ -364,10 +378,17 @@ class AgentProject:
             session_store,
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
+            durability_enabled,
         )
 
     @classmethod
-    def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
+    def create(
+        cls,
+        root: pathlib.Path | str,
+        *,
+        framework: str,
+        durability_enabled: bool = False,
+    ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
         project_root = pathlib.Path(root).expanduser().resolve()
@@ -377,7 +398,17 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        return cls(project_root, document, framework, [])
+        if durability_enabled:
+            durability = tomlkit.table()
+            durability.add("enabled", True)
+            document.add(_DURABILITY_TABLE, durability)
+        return cls(
+            project_root,
+            document,
+            framework,
+            [],
+            durability_enabled=durability_enabled,
+        )
 
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""

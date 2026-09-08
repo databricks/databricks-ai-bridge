@@ -8,6 +8,7 @@ from unittest import mock
 from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
+from databricks_mason.agent_project import AgentProject
 
 
 class _Ctx:
@@ -28,6 +29,7 @@ def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     args, kwargs = db.call_args
     assert args[0][:2] == ["apps", "run-local"]
+    assert "DATABRICKS_MASON_RUNTIME_LOCAL=true" in args[0]
     assert "--prepare-environment" in args[0]  # no venv yet -> build it
     assert args[1] == "ml"  # profile passed through
     assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir
@@ -172,6 +174,22 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "http://localhost:8000/invocations" in result.output
     # a copy-pasteable sample request, not just the bare endpoint
     assert "curl -X POST" in " ".join(result.output.split())
+
+
+def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    AgentProject.create(
+        tmp_path,
+        framework="langgraph",
+        durability_enabled=True,
+    ).write()
+
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8000/api/invocations" in result.output
+    assert "00000000-0000-4000-8000-000000000000" in result.output
 
 
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(

@@ -4,9 +4,9 @@ Fetches one template directory out of its git repo (a sparse, blobless clone so 
 chosen template is materialized) and drops it into a local target directory, ready for
 `mason deploy --source <dir>`.
 
-`--framework` selects which template to lay down; each framework knows its own repo, ref, and
-path (see `_TEMPLATES`). `--repo` / `--ref` override those, e.g. to pull from a fork or branch
-before a template has merged to its canonical repo.
+`--durability` selects the minimal durable template for LangGraph. Without it, Mason keeps the
+existing framework templates. `--repo` / `--ref` override the source, e.g. to pull from a fork or
+branch before a template has merged to its canonical repo.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from importlib.metadata import version as _installed_version
 from typing import Optional
 
 import click
+import tomlkit
 
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
@@ -30,6 +31,11 @@ from databricks_mason.project_config import write_project_metadata
 # Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
 # `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
 _MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
+_DURABILITY_TEMPLATE = {
+    "repo": _MASON_REPO,
+    "ref": "main",
+    "path": "integrations/mason/templates/durable-langgraph-agent",
+}
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {
         "repo": _MASON_REPO,
@@ -94,7 +100,7 @@ def _fetch_template(
     template_dir: str,
     dest: pathlib.Path,
     overlay_dirs: tuple[str, ...] = (),
-) -> None:
+) -> str:
     """Sparse-clone a template and optional overlays from `repo`@`ref` into `dest`."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
         clone = pathlib.Path(tmp) / "repo"
@@ -123,6 +129,10 @@ def _fetch_template(
                     ),
                 )
             shutil.copytree(src, dest, dirs_exist_ok=index > 0)
+        resolved_ref = (_git(["rev-parse", "HEAD"], cwd=clone).stdout or "").strip()
+        if not resolved_ref:
+            raise AgentCliError(f"Could not resolve commit for {repo}@{ref}.")
+        return resolved_ref
 
 
 def _write_env(dest: pathlib.Path, profile: str) -> bool:
@@ -150,14 +160,62 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
+def _pin_runtime_source(
+    dest: pathlib.Path,
+    framework: str,
+    repo: str,
+    ref: str,
+) -> None:
+    """Use the template override's Mason runtime instead of a registry development build."""
+    pyproject = dest / "pyproject.toml"
+    if not pyproject.is_file():
+        return
+
+    document = tomlkit.parse(pyproject.read_text())
+    dependencies = document["project"]["dependencies"]
+    extra = "runtime-openai" if framework == "openai" else "runtime"
+    expected_prefix = f"databricks-mason[{extra}]"
+    if not any(str(dependency).startswith(expected_prefix) for dependency in dependencies):
+        raise AgentCliError(
+            "The selected template does not declare the expected databricks-mason runtime "
+            "dependency."
+        )
+
+    source = repo.removeprefix("git+")
+    if "://" not in source:
+        source = pathlib.Path(source).resolve().as_uri()
+    if "tool" not in document:
+        document["tool"] = tomlkit.table()
+    tool = document["tool"]
+    if "uv" not in tool:
+        tool["uv"] = tomlkit.table()
+    uv = tool["uv"]
+    if "sources" not in uv:
+        uv["sources"] = tomlkit.table()
+    runtime_source = tomlkit.inline_table()
+    runtime_source.update(
+        {
+            "git": source,
+            "rev": ref,
+            "subdirectory": "integrations/mason",
+        }
+    )
+    uv["sources"]["databricks-mason"] = runtime_source
+    pyproject.write_text(tomlkit.dumps(document))
+
+
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
     "--framework",
     type=click.Choice(sorted(_TEMPLATES)),
-    default="langgraph",
-    show_default=True,
-    help="Which basic agent template to scaffold.",
+    default=None,
+    help="Agent framework to scaffold (defaults to langgraph).",
+)
+@click.option(
+    "--durability",
+    is_flag=True,
+    help="Scaffold the API-only durability template (currently requires --framework langgraph).",
 )
 @click.option(
     "--profile",
@@ -182,7 +240,8 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
 def init(
     obj,
     directory: Optional[str],
-    framework: str,
+    framework: Optional[str],
+    durability: bool,
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
@@ -198,11 +257,16 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `uv run start-server` right away.
     """
-    # The chat app is included by default for frameworks that have one; --disable-chat-app opts out.
-    # (--enable-chat-app is a deprecated no-op kept for back-compat.)
-    chat_app_enabled = framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    if durability and framework != "langgraph":
+        raise AgentCliError("--durability currently requires --framework langgraph.")
 
-    spec = _TEMPLATES[framework]
+    selected_framework = framework or "langgraph"
+    spec = _DURABILITY_TEMPLATE if durability else _TEMPLATES[selected_framework]
+    # The durability template is deliberately API-only. Existing framework templates retain their
+    # chat overlay behavior.
+    chat_app_enabled = (
+        not durability and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
+    )
     template_path = spec["path"]
     dest = (
         pathlib.Path(directory)
@@ -216,25 +280,34 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_dirs = (_CHAT_APP_TEMPLATES[framework],) if chat_app_enabled else ()
-    _fetch_template(
-        repo or spec["repo"],
-        ref or _template_ref(framework),
+    overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
+    selected_repo = repo or spec["repo"]
+    selected_ref = ref or _template_ref(selected_framework)
+    resolved_ref = _fetch_template(
+        selected_repo,
+        selected_ref,
         template_path,
         dest,
         overlay_dirs,
     )
+    if repo is not None or ref is not None:
+        _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
 
     template_name = pathlib.PurePosixPath(template_path).name
-    write_project_metadata(dest, framework=framework, template=template_name)
-    AgentProject.create(dest, framework=framework).write()
+    write_project_metadata(dest, framework=selected_framework, template=template_name)
+    project = AgentProject.create(
+        dest,
+        framework=selected_framework,
+        durability_enabled=durability,
+    )
+    project.write()
     env_profile = profile or obj.profile
     wrote_env = _write_env(dest, env_profile) if env_profile else False
 
     if obj.output == "json":
         render.emit_json(
             {
-                "framework": framework,
+                "framework": selected_framework,
                 "template": template_name,
                 "directory": str(dest),
                 "chat_app_enabled": chat_app_enabled,
@@ -243,7 +316,7 @@ def init(
         )
         return
 
-    fields = {"Framework": framework, "Directory": str(dest)}
+    fields = {"Framework": selected_framework, "Directory": str(dest)}
     if chat_app_enabled:
         fields["Chat app"] = "enabled"
     steps: list[str | tuple[str, str]] = [(f"cd {dest}", "Enter the project directory")]

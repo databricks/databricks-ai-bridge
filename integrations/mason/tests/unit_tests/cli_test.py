@@ -41,6 +41,7 @@ def test_root_registers_supported_commands():
         "mcp",
         "tools",
     } <= names
+    assert "durability" not in names
     assert "help" not in names
     assert "add-sandbox" not in names
 

@@ -2,8 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. The stores are read from `agent.toml` at runtime, so they are not written
-into `app.yaml`. `mason deployments` covers the lifecycle verbs
+the deployment. Durable agents reuse the Session Store database or provision a dedicated
+database when no Session Store is bound. The managed stores are read from `agent.toml` at runtime,
+so they are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -15,17 +16,27 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from dataclasses import replace
 from typing import Any, Optional
 
 import click
 import yaml
 
-from databricks_mason import memory_store_access, render, session_store_access, timefmt
+from databricks_mason import (
+    lakebase_durability_store,
+    memory_store_access,
+    render,
+    session_store_access,
+    timefmt,
+)
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
 from databricks_mason.tracing import TRACES_DEST_ENV, TRACES_EXPERIMENT_ENV, default_experiment
 
+_AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -199,25 +210,27 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
             return None
 
 
-def _ensure_memory_store(client, display_name: str) -> dict:
+def _ensure_memory_store(client, display_name: str) -> tuple[dict, bool]:
+    """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_memory_store(display_name, retry_transient=True)
+        return client.create_memory_store(display_name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
     store = _resolve_memory_store(client, display_name)
     if store is None:
         raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
-    return store
+    return store, False
 
 
-def _ensure_session_store(client, name: str) -> dict:
+def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
+    """Create the session store, or resolve it if it already exists. Returns (store, created)."""
     try:
-        return client.create_session_store(name, retry_transient=True)
+        return client.create_session_store(name, retry_transient=True), True
     except AgentCliError as exc:
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    return client.get_session_store(name)
+    return client.get_session_store(name), False
 
 
 def _memory_store_database(client, memory_store: str) -> Optional[str]:
@@ -326,12 +339,7 @@ def _grant_store_access(
     memory_database: Optional[str],
     profile: Optional[str],
 ) -> Optional[str]:
-    """Give the app's SP access to the deployed stores (best-effort, two steps).
-
-    Binds every store's database as a `postgres` app resource in one update (the update replaces the
-    whole resource array, so they must be applied together), then GRANTs the SP read/write on each
-    store's tables. Returns None on success or a human-readable reason on the first failure.
-    """
+    """Bind managed-store databases and grant the app service principal table access."""
     backends = []
     if session_store:
         backends.append(session_store_access.backend(session_store))
@@ -348,6 +356,13 @@ def _grant_store_access(
         if error:
             return error
     return None
+
+
+def _has_durability_binding(source_dir: pathlib.Path) -> bool:
+    """Whether agent.toml opts this project into durable invocation storage."""
+    if not (source_dir / "agent.toml").is_file():
+        return False
+    return AgentProject.load(source_dir).durability_enabled
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -429,7 +444,7 @@ def deploy(
 
     # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them) and build any
     #    trace env. Stores are read from agent.toml at runtime, not wired into app.yaml; the bindings
-    #    also drive the store access grant (step 4).
+    #    also drive the store access grant (step 5).
     memory_store, session_store = store_bindings(source_dir)
     with render.status("Checking stores…"):
         env_updates = validate_stores_and_trace_env(
@@ -445,6 +460,24 @@ def deploy(
         provisioned["Memory store"] = memory_store
     if session_store:
         provisioned["Session store"] = session_store
+
+    memory_database = _memory_store_database(client, memory_store) if memory_store else None
+    durability_backend = None
+    if _has_durability_binding(source_dir):
+        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
+        if session_store:
+            durability_backend = replace(
+                session_store_access.backend(session_store),
+                schema=durability_schema,
+                tables=(),
+            )
+        else:
+            durability_backend = lakebase_durability_store.get_or_create_backend(
+                name, obj.profile, create=True
+            )
+        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
+        provisioned["Agent durability store"] = durability_backend.database_path
     if traces_destination:
         provisioned["Traces"] = traces_destination
     if pip_index_url:
@@ -459,7 +492,7 @@ def deploy(
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 3. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    # 3. Ensure the Databricks App exists and its compute is active. Create only when the app is new
     #    (`apps create` errors on an existing app); the compute wait runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
@@ -498,6 +531,16 @@ def deploy(
     # compute is already ACTIVE.
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
+
+    if durability_backend is not None:
+        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for durable execution.",
+                hint=resource_error,
+            )
+
+    # 4. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
@@ -513,9 +556,7 @@ def deploy(
         action=f"Could not deploy '{name}'.",
     )
 
-    # 4. Give the app's SP access to its stores (best-effort, two steps): bind each store's database
-    #    as a `postgres` resource (CONNECT), then GRANT the SP read/write on its tables. Without
-    #    both, the app runs but the durable store path fails (can't connect, or can't read tables).
+    # 5. Grant the app's service principal access to managed store tables.
     grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
@@ -524,9 +565,6 @@ def deploy(
             if sp is None:
                 grant_error = "could not resolve the app's service principal."
             else:
-                memory_database = (
-                    _memory_store_database(client, memory_store) if memory_store else None
-                )
                 grant_error = _grant_store_access(
                     name, sp, client.current_user, session_store, memory_database, obj.profile
                 )
