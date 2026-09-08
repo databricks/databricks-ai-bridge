@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from agent.agent import run_agent
 from fastapi.testclient import TestClient
-from runtime.main import app
+from runtime.main import app, recover
 
 
 async def test_langgraph_agent_emits_progress_and_marks_recovery() -> None:
@@ -33,6 +33,21 @@ async def test_langgraph_agent_requires_message() -> None:
     context = SimpleNamespace(attempt=1, is_recovery=False, emit=emit)
     with pytest.raises(ValueError, match="message must be a string"):
         await run_agent({}, context)
+
+
+@pytest.mark.asyncio
+async def test_recovery_handler_can_adapt_the_original_input() -> None:
+    async def emit(event):
+        return 1
+
+    context = SimpleNamespace(attempt=2, is_recovery=True, emit=emit)
+
+    result = await recover({"message": "hello"}, context)
+
+    assert result == {
+        "result": "Processed: hello (recovery attempt after the pod crashed)",
+        "recovered": True,
+    }
 
 
 def test_app_exposes_only_durable_invocation_routes() -> None:

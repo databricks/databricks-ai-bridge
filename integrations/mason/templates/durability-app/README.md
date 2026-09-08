@@ -23,7 +23,7 @@ curl -sS -H "Cookie: $ROUTING_COOKIE" \
   -X POST http://localhost:8000/api/invocations \
   -H 'content-type: application/json' \
   -d "$(jq -nc --arg id "$RUN_ID" \
-    '{id:$id,background:true,input:{message:"hello"}}')"
+    '{id:$id,background:true,stream:true,input:{message:"hello"}}')"
 
 curl -sS -H "Cookie: $ROUTING_COOKIE" \
   "http://localhost:8000/api/invocations/$RUN_ID"

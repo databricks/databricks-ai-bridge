@@ -149,7 +149,10 @@ class DurableAgentApp(FastAPI):
         try:
             if body.background:
                 state = await self._runtime.submit(run_id, persisted_request)
-                return JSONResponse(self._accepted_payload(state), status_code=202)
+                return JSONResponse(
+                    self._accepted_payload(state, stream=body.stream),
+                    status_code=202,
+                )
             if body.stream:
                 await self._runtime.submit(run_id, persisted_request)
                 return StreamingResponse(
@@ -192,14 +195,16 @@ class DurableAgentApp(FastAPI):
             await asyncio.sleep(self._runtime.poll_seconds)
 
     @staticmethod
-    def _accepted_payload(state: DurableExecution) -> JsonObject:
+    def _accepted_payload(state: DurableExecution, *, stream: bool) -> JsonObject:
         run_id = state.execution_id
-        return {
+        payload: JsonObject = {
             "id": run_id,
             "status": state.status.value.lower(),
             "status_url": f"{_API_ROOT}/{run_id}",
-            "events_url": f"{_API_ROOT}/{run_id}/events",
         }
+        if stream:
+            payload["events_url"] = f"{_API_ROOT}/{run_id}/events"
+        return payload
 
     @staticmethod
     def _state_payload(state: DurableExecution) -> JsonObject:

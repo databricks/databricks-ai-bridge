@@ -194,7 +194,6 @@ async def test_background_sync_returns_202_and_can_be_polled() -> None:
         "id": _RUN_1,
         "status": "queued",
         "status_url": f"/api/invocations/{_RUN_1}",
-        "events_url": f"/api/invocations/{_RUN_1}/events",
     }
     assert completed == {"id": _RUN_1, "status": "completed", "output": "hello"}
 
@@ -230,7 +229,12 @@ async def test_background_stream_returns_202_with_polling_urls() -> None:
 
     assert response.status_code == 202
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json()["events_url"] == f"/api/invocations/{_RUN_1}/events"
+    assert response.json() == {
+        "id": _RUN_1,
+        "status": "queued",
+        "status_url": f"/api/invocations/{_RUN_1}",
+        "events_url": f"/api/invocations/{_RUN_1}/events",
+    }
 
 
 @pytest.mark.asyncio

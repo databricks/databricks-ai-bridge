@@ -140,7 +140,7 @@ use `/api/` routes ([Apps documentation](https://docs.databricks.com/aws/en/dev-
 The client supplies a UUID `id`, which is also the idempotency key for every invocation mode:
 
 - foreground sync returns `200` with the result under `output`;
-- background sync returns `202` with status and event URLs;
+- background sync returns `202` with a status URL;
 - foreground streaming returns `200` server-sent events; and
 - background streaming returns `202` with status and event URLs.
 

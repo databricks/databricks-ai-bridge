@@ -10,9 +10,17 @@ app = DurableAgentApp()
 
 
 @app.invoke
-@app.on_recovery
 async def invoke(input, context):
     return await run_agent(input, context)
+
+
+@app.on_recovery
+async def recover(input, context):
+    recovery_input = {
+        **input,
+        "message": f"{input['message']} (recovery attempt after the pod crashed)",
+    }
+    return await run_agent(recovery_input, context)
 
 
 def main() -> None:
