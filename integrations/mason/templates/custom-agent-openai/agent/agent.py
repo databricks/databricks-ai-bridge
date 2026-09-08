@@ -1,17 +1,16 @@
-import os
 from typing import Any
 
 from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
-from databricks.sdk import WorkspaceClient
 from databricks_openai import AsyncDatabricksOpenAI
+
+from databricks_mason import workspace_client, workspace_headers
 
 MODEL = "databricks-gpt-5-2"
 
 
 def _configure_client() -> None:
-    workspace_id = os.getenv("DATABRICKS_WORKSPACE_ID", "").strip()
-    headers = {"X-Databricks-Org-Id": workspace_id} if workspace_id else {}
-    workspace = WorkspaceClient(custom_headers=headers) if headers else WorkspaceClient()
+    headers = workspace_headers()
+    workspace = workspace_client()
     client = (
         AsyncDatabricksOpenAI(workspace_client=workspace, default_headers=headers)
         if headers

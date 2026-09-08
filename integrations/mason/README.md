@@ -169,7 +169,7 @@ responsibility.
 Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
 durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with
 process-local state and no Lakebase provisioning. Pass `--server custom` for a minimal FastAPI
-server with one foreground `/invocations` route and no Mason runtime SDK. Use `--disable-chat-app`
+server with one foreground `/invocations` route and no Mason `AgentApp`. Use `--disable-chat-app`
 independently for API-only Mason server output.
 
 ## Commands

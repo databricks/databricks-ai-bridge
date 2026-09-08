@@ -5,6 +5,7 @@ description = "OpenAI Agents SDK agent with a custom FastAPI server"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "databricks-mason>=0.1.4.dev0",
     "databricks-openai>=0.13.0",
     "databricks-sdk>=0.79.0",
     "fastapi>=0.129.0",

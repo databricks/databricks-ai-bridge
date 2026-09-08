@@ -318,7 +318,7 @@ def test_init_uses_editable_checkout_templates_by_default(
     assert fetched.call_args.args[:2] == (repository.as_uri(), commit)
 
 
-def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
+def test_pin_mason_source_supports_runtime_extra(tmp_path: pathlib.Path):
     dest = tmp_path / "agent"
     dest.mkdir()
     (dest / "pyproject.toml").write_text(
@@ -326,7 +326,32 @@ def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
     )
     repo = tmp_path / "bridge"
 
-    init_mod._pin_runtime_source(dest, "langgraph", str(repo), "feature")
+    init_mod._pin_mason_source(dest, "langgraph", str(repo), "feature")
+
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": repo.resolve().as_uri(),
+        "rev": "feature",
+        "subdirectory": "integrations/mason",
+    }
+
+
+def test_pin_mason_source_supports_base_package(tmp_path: pathlib.Path):
+    dest = tmp_path / "agent"
+    dest.mkdir()
+    (dest / "pyproject.toml").write_text(
+        '[project]\nname = "test"\ndependencies = ["databricks-mason>=0.1"]\n'
+    )
+    repo = tmp_path / "bridge"
+
+    init_mod._pin_mason_source(
+        dest,
+        "langgraph",
+        str(repo),
+        "feature",
+        runtime_extra=False,
+    )
 
     with (dest / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomli.load(pyproject_file)

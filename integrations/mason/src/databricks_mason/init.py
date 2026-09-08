@@ -185,13 +185,15 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
-def _pin_runtime_source(
+def _pin_mason_source(
     dest: pathlib.Path,
     framework: str,
     repo: str,
     ref: str,
+    *,
+    runtime_extra: bool = True,
 ) -> None:
-    """Use the template override's Mason runtime instead of a registry development build."""
+    """Use the template override's Mason package instead of a registry development build."""
     pyproject = dest / "pyproject.toml"
     if not pyproject.is_file():
         return
@@ -199,11 +201,10 @@ def _pin_runtime_source(
     document = tomlkit.parse(pyproject.read_text())
     dependencies = document["project"]["dependencies"]
     extra = "runtime-openai" if framework == "openai" else "runtime"
-    expected_prefix = f"databricks-mason[{extra}]"
+    expected_prefix = f"databricks-mason[{extra}]" if runtime_extra else "databricks-mason"
     if not any(str(dependency).startswith(expected_prefix) for dependency in dependencies):
         raise AgentCliError(
-            "The selected template does not declare the expected databricks-mason runtime "
-            "dependency."
+            "The selected template does not declare the expected databricks-mason dependency."
         )
 
     source = repo.removeprefix("git+")
@@ -340,8 +341,14 @@ def init(
         dest,
         overlay_dirs,
     )
-    if mason_server and (repo is not None or ref is not None or editable_source is not None):
-        _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
+    if repo is not None or ref is not None or editable_source is not None:
+        _pin_mason_source(
+            dest,
+            selected_framework,
+            selected_repo,
+            resolved_ref or selected_ref,
+            runtime_extra=mason_server,
+        )
     if mason_server:
         _configure_durable_runtime(dest, durable_runtime)
 
