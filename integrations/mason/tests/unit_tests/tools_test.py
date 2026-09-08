@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import pathlib
 
@@ -121,9 +120,10 @@ def test_add_manifest_tool_works_for_any_framework(tmp_path: pathlib.Path, comma
     assert AgentProject.load(project).tools, "expected the tool to be written to the manifest"
 
 
-def test_add_python_rejects_non_langgraph_framework(tmp_path: pathlib.Path):
-    # `add python` scaffolds a framework-native tool file; only langgraph is supported so far.
-    project = _project(tmp_path, framework="openai")
+def test_add_python_is_not_a_cli_command_and_does_not_mutate_project(tmp_path: pathlib.Path):
+    project = _project(tmp_path)
+    manifest = project / "agent.toml"
+    before = manifest.read_text(encoding="utf-8")
 
     result = CliRunner().invoke(
         tools,
@@ -132,46 +132,9 @@ def test_add_python_rejects_non_langgraph_framework(tmp_path: pathlib.Path):
     )
 
     assert result.exit_code != 0
-    assert "supports only the 'langgraph' framework" in result.output
-    assert AgentProject.load(project).tools == []
-
-
-def test_add_python_writes_manifest_source_and_test_atomically(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-
-    result = CliRunner().invoke(
-        tools,
-        ["add", "python", "lookup-ticket", "--source", str(project)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    source = project / "agent" / "tools" / "lookup_ticket.py"
-    test = project / "tests" / "tools" / "test_lookup_ticket.py"
-    ast.parse(source.read_text(encoding="utf-8"))
-    ast.parse(test.read_text(encoding="utf-8"))
-    assert "from langchain_core.tools import tool" in source.read_text(encoding="utf-8")
-    assert "@tool" in source.read_text(encoding="utf-8")
-    loaded = AgentProject.load(project)
-    assert loaded.tools[0].source.entrypoint == "agent.tools.lookup_ticket:lookup_ticket"
-
-
-def test_add_python_refuses_existing_user_file_without_manifest_change(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-    source = project / "agent" / "tools" / "lookup_ticket.py"
-    source.write_text("USER_OWNED = True\n", encoding="utf-8")
-    before = (project / "agent.toml").read_text(encoding="utf-8")
-
-    result = CliRunner().invoke(
-        tools,
-        ["add", "python", "lookup-ticket", "--source", str(project)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "already exists" in result.output
-    assert source.read_text(encoding="utf-8") == "USER_OWNED = True\n"
-    assert (project / "agent.toml").read_text(encoding="utf-8") == before
+    assert "No such command 'python'" in result.output
+    assert manifest.read_text(encoding="utf-8") == before
+    assert list((project / "agent" / "tools").iterdir()) == []
 
 
 def test_add_is_idempotent_and_json_reports_changed_files(tmp_path: pathlib.Path):
@@ -272,28 +235,6 @@ def test_remove_tool_is_idempotent_and_reports_json_changes(tmp_path: pathlib.Pa
         "changed_files": [],
         "tool_id": "web_search",
     }
-
-
-def test_remove_python_tool_preserves_user_owned_files(tmp_path: pathlib.Path):
-    project = _project(tmp_path)
-    runner = CliRunner()
-    added = runner.invoke(
-        tools,
-        ["add", "python", "lookup-ticket", "--source", str(project)],
-        obj=_Ctx(),
-    )
-    assert added.exit_code == 0, added.output
-
-    result = runner.invoke(
-        tools,
-        ["remove", "lookup-ticket", "--source", str(project)],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert AgentProject.load(project).tools == []
-    assert (project / "agent" / "tools" / "lookup_ticket.py").exists()
-    assert (project / "tests" / "tools" / "test_lookup_ticket.py").exists()
 
 
 def test_tools_list_emits_manifest_records_as_json(tmp_path: pathlib.Path):

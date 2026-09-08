@@ -20,6 +20,10 @@ MEMORY_STORE_ENV = "AGENT_MEMORY_STORE"
 SESSION_STORE_ENV = "AGENT_SESSION_STORE"
 
 
+class ToolManifestError(RuntimeError):
+    """Invalid declarative tool configuration that runtime adapters must surface."""
+
+
 @dataclass(frozen=True)
 class ScopeRecord:
     kind: str
@@ -33,7 +37,6 @@ class ToolRecord:
     kind: str
     service: str | None = None
     function: str | None = None
-    entrypoint: str | None = None
     downscope: tuple[ScopeRecord, ...] = ()
 
 
@@ -93,12 +96,17 @@ def _tool(value: object) -> ToolRecord:
     raw_downscope = policy.get("downscope", [])
     if not isinstance(raw_downscope, list):
         raise RuntimeError("agent.toml policy.downscope must be an array.")
+    kind = _required_string(source.get("kind"), "a tool source kind")
+    if kind == "python":
+        raise ToolManifestError(
+            "Python tools are code-first and cannot be declared in agent.toml. "
+            "Remove this entry; decorated tools in agent/tools remain active."
+        )
     record = ToolRecord(
         id=_required_string(value.get("id"), "a tool id"),
-        kind=_required_string(source.get("kind"), "a tool source kind"),
+        kind=kind,
         service=source.get("service") if isinstance(source.get("service"), str) else None,
         function=source.get("function") if isinstance(source.get("function"), str) else None,
-        entrypoint=source.get("entrypoint") if isinstance(source.get("entrypoint"), str) else None,
         downscope=tuple(_scope(item) for item in raw_downscope),
     )
     if record.kind == "sandbox" and (record.service != "system.ai.sandbox" or not record.downscope):
@@ -107,9 +115,7 @@ def _tool(value: object) -> ToolRecord:
         raise RuntimeError("MCP bindings require source.service.")
     if record.kind == "uc_function" and not record.function:
         raise RuntimeError("UC function bindings require source.function.")
-    if record.kind == "python" and not record.entrypoint:
-        raise RuntimeError("Python bindings require source.entrypoint.")
-    if record.kind not in {"sandbox", "mcp", "uc_function", "python"}:
+    if record.kind not in {"sandbox", "mcp", "uc_function"}:
         raise RuntimeError(f"Unsupported agent.toml tool kind: {record.kind!r}.")
     if record.kind != "sandbox" and record.downscope:
         raise RuntimeError("Only sandbox bindings accept policy.downscope.")

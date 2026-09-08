@@ -210,7 +210,6 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
         ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-        ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "add", "sandbox"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
@@ -220,9 +219,6 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools", "add", "uc-function"): (
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-    ),
-    ("tools", "add", "python"): (
-        ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "remove"): (
         ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),

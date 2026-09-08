@@ -60,10 +60,10 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage tools configured in an agent project's agent.toml." in result.output
-    assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
-    assert "Remove a tool binding from this agent." in result.output
-    assert "List tools configured for this agent." in result.output
+    assert "Manage Databricks-managed tools declared in agent.toml." in result.output
+    assert "Add a managed sandbox, MCP service, or UC function." in result.output
+    assert "Remove a managed tool binding from this agent." in result.output
+    assert "List managed tool bindings for this agent." in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
     assert "mason tools remove mcp system.ai.web_search" in result.output
@@ -89,9 +89,9 @@ def test_tools_add_help_explains_types_and_project_targeting():
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
         "mason tools add mcp system.ai.web_search",
         "mason tools add uc-function catalog.schema.lookup_ticket",
-        "mason tools add python lookup-ticket",
     ):
         assert example in result.output
+    assert "python" not in result.output.lower()
 
 
 def test_help_examples_recommend_the_default_happy_path():

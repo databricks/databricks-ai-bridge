@@ -87,6 +87,31 @@ def test_load_rejects_unsupported_schema_before_mutation(tmp_path: pathlib.Path)
     assert path.read_text(encoding="utf-8") == before
 
 
+def test_load_rejects_python_tool_entries_with_code_first_migration(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+""",
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert (
+        error.value.message == "Python tools are code-first and cannot be declared in agent.toml."
+    )
+    assert error.value.hint is not None
+    assert "Remove this entry" in error.value.hint
+    assert "agent/tools" in error.value.hint
+
+
 def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch):
     path = _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
