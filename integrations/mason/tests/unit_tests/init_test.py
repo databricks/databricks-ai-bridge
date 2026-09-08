@@ -239,7 +239,15 @@ def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
 
 def test_init_repo_ref_override(tmp_path: pathlib.Path):
     dest = tmp_path / "ov"
-    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+        )
+        return "a" * 40
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as f:
         result = CliRunner().invoke(
             init_mod.init,
             [
@@ -256,6 +264,33 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert f.call_args.args[0] == "https://example.com/fork.git"  # override wins
     assert f.call_args.args[1] == "wip"
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["project"]["dependencies"] == ["databricks-mason[runtime]>=0.1"]
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": "https://example.com/fork.git",
+        "rev": "a" * 40,
+        "subdirectory": "integrations/mason",
+    }
+
+
+def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
+    dest = tmp_path / "agent"
+    dest.mkdir()
+    (dest / "pyproject.toml").write_text(
+        '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+    )
+    repo = tmp_path / "bridge"
+
+    init_mod._pin_runtime_source(dest, "langgraph", str(repo), "feature")
+
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": repo.resolve().as_uri(),
+        "rev": "feature",
+        "subdirectory": "integrations/mason",
+    }
 
 
 def test_init_langgraph_includes_chat_app_by_default(tmp_path: pathlib.Path):

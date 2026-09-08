@@ -20,6 +20,7 @@ from importlib.metadata import version as _installed_version
 from typing import Optional
 
 import click
+import tomlkit
 
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
@@ -99,7 +100,7 @@ def _fetch_template(
     template_dir: str,
     dest: pathlib.Path,
     overlay_dirs: tuple[str, ...] = (),
-) -> None:
+) -> str:
     """Sparse-clone a template and optional overlays from `repo`@`ref` into `dest`."""
     with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
         clone = pathlib.Path(tmp) / "repo"
@@ -128,6 +129,10 @@ def _fetch_template(
                     ),
                 )
             shutil.copytree(src, dest, dirs_exist_ok=index > 0)
+        resolved_ref = (_git(["rev-parse", "HEAD"], cwd=clone).stdout or "").strip()
+        if not resolved_ref:
+            raise AgentCliError(f"Could not resolve commit for {repo}@{ref}.")
+        return resolved_ref
 
 
 def _write_env(dest: pathlib.Path, profile: str) -> bool:
@@ -153,6 +158,50 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
         lines.insert(0, f"DATABRICKS_CONFIG_PROFILE={profile}")
     env_path.write_text("\n".join(lines) + "\n")
     return True
+
+
+def _pin_runtime_source(
+    dest: pathlib.Path,
+    framework: str,
+    repo: str,
+    ref: str,
+) -> None:
+    """Use the template override's Mason runtime instead of a registry development build."""
+    pyproject = dest / "pyproject.toml"
+    if not pyproject.is_file():
+        return
+
+    document = tomlkit.parse(pyproject.read_text())
+    dependencies = document["project"]["dependencies"]
+    extra = "runtime-openai" if framework == "openai" else "runtime"
+    expected_prefix = f"databricks-mason[{extra}]"
+    if not any(str(dependency).startswith(expected_prefix) for dependency in dependencies):
+        raise AgentCliError(
+            "The selected template does not declare the expected databricks-mason runtime "
+            "dependency."
+        )
+
+    source = repo.removeprefix("git+")
+    if "://" not in source:
+        source = pathlib.Path(source).resolve().as_uri()
+    if "tool" not in document:
+        document["tool"] = tomlkit.table()
+    tool = document["tool"]
+    if "uv" not in tool:
+        tool["uv"] = tomlkit.table()
+    uv = tool["uv"]
+    if "sources" not in uv:
+        uv["sources"] = tomlkit.table()
+    runtime_source = tomlkit.inline_table()
+    runtime_source.update(
+        {
+            "git": source,
+            "rev": ref,
+            "subdirectory": "integrations/mason",
+        }
+    )
+    uv["sources"]["databricks-mason"] = runtime_source
+    pyproject.write_text(tomlkit.dumps(document))
 
 
 @click.command(name="init")
@@ -232,13 +281,17 @@ def init(
         )
 
     overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
-    _fetch_template(
-        repo or spec["repo"],
-        ref or _template_ref(selected_framework),
+    selected_repo = repo or spec["repo"]
+    selected_ref = ref or _template_ref(selected_framework)
+    resolved_ref = _fetch_template(
+        selected_repo,
+        selected_ref,
         template_path,
         dest,
         overlay_dirs,
     )
+    if repo is not None or ref is not None:
+        _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
 
     template_name = pathlib.PurePosixPath(template_path).name
     write_project_metadata(dest, framework=selected_framework, template=template_name)
