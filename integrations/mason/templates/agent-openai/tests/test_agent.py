@@ -182,6 +182,37 @@ def test_configure_raises_clear_error_without_auth(monkeypatch):
         configure()
 
 
+def test_configure_routes_openai_client_to_workspace(monkeypatch):
+    import agent.agent as agent_module
+    import agents
+
+    workspace = object()
+    created = object()
+    client = MagicMock(return_value=created)
+    set_client = MagicMock()
+    set_api = MagicMock()
+
+    monkeypatch.setattr(agent_module, "workspace_client", lambda: workspace)
+    monkeypatch.setattr(
+        agent_module,
+        "workspace_headers",
+        lambda: {"X-Databricks-Org-Id": "123"},
+    )
+    monkeypatch.setattr(agent_module, "AsyncDatabricksOpenAI", client)
+    monkeypatch.setattr(agent_module, "configure_tracing", lambda: None)
+    monkeypatch.setattr(agents, "set_default_openai_client", set_client)
+    monkeypatch.setattr(agents, "set_default_openai_api", set_api)
+
+    agent_module.configure()
+
+    client.assert_called_once_with(
+        workspace_client=workspace,
+        default_headers={"X-Databricks-Org-Id": "123"},
+    )
+    set_client.assert_called_once_with(created)
+    set_api.assert_called_once_with("chat_completions")
+
+
 def test_session_store_defaults_to_in_process(monkeypatch):
     import databricks_mason.openai.sessions as ss
 

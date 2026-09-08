@@ -14,7 +14,12 @@ from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
-from databricks_mason import DurableAgentContext, tag_session, workspace_client
+from databricks_mason import (
+    DurableAgentContext,
+    tag_session,
+    workspace_client,
+    workspace_headers,
+)
 from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
 
 logger = logging.getLogger(__name__)
@@ -41,7 +46,12 @@ def configure() -> None:
     # routing and auth handled by the SDK), so `Agent(model=MODEL)` resolves to a Databricks model.
     from agents import set_default_openai_api, set_default_openai_client
 
-    set_default_openai_client(AsyncDatabricksOpenAI())
+    set_default_openai_client(
+        AsyncDatabricksOpenAI(
+            workspace_client=workspace_client(),
+            default_headers=workspace_headers() or None,
+        )
+    )
     set_default_openai_api("chat_completions")
     configure_tracing()
 
