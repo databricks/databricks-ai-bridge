@@ -102,6 +102,22 @@ def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.C
     return result
 
 
+def _editable_template_source() -> tuple[str, str] | None:
+    """Return this checkout and commit when Mason is imported from an editable repository."""
+    module = pathlib.Path(__file__).resolve()
+    try:
+        repository = pathlib.Path(
+            (_git(["rev-parse", "--show-toplevel"], cwd=module.parent).stdout or "").strip()
+        ).resolve()
+    except AgentCliError:
+        return None
+    source_module = repository / "integrations" / "mason" / "src" / "databricks_mason" / "init.py"
+    if not source_module.is_file() or source_module.resolve() != module:
+        return None
+    commit = (_git(["rev-parse", "HEAD"], cwd=repository).stdout or "").strip()
+    return (repository.as_uri(), commit) if commit else None
+
+
 def _fetch_template(
     repo: str,
     ref: str,
@@ -119,14 +135,15 @@ def _fetch_template(
                 "1",
                 "--filter=blob:none",
                 "--sparse",
-                "--branch",
-                ref,
+                "--no-checkout",
                 repo,
                 str(clone),
             ]
         )
         template_dirs = (template_dir, *overlay_dirs)
         _git(["sparse-checkout", "set", *template_dirs], cwd=clone)
+        _git(["fetch", "--depth", "1", "--filter=blob:none", "origin", ref], cwd=clone)
+        _git(["checkout", "--detach", "FETCH_HEAD"], cwd=clone)
         for index, path in enumerate(template_dirs):
             src = clone / path
             if not src.is_dir():
@@ -311,8 +328,11 @@ def init(
         )
 
     overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
-    selected_repo = repo or spec["repo"]
-    selected_ref = ref or _template_ref(selected_framework)
+    editable_source = _editable_template_source() if repo is None and ref is None else None
+    selected_repo = repo or (editable_source[0] if editable_source else spec["repo"])
+    selected_ref = ref or (
+        editable_source[1] if editable_source else _template_ref(selected_framework)
+    )
     resolved_ref = _fetch_template(
         selected_repo,
         selected_ref,
@@ -320,7 +340,7 @@ def init(
         dest,
         overlay_dirs,
     )
-    if mason_server and (repo is not None or ref is not None):
+    if mason_server and (repo is not None or ref is not None or editable_source is not None):
         _pin_runtime_source(dest, selected_framework, selected_repo, resolved_ref or selected_ref)
     if mason_server:
         _configure_durable_runtime(dest, durable_runtime)

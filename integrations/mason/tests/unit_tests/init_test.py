@@ -29,6 +29,7 @@ class _Ctx:
 @pytest.fixture(autouse=True)
 def _skip_generated_runtime_rewrite(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(init_mod, "_configure_durable_runtime", lambda *_args: None)
+    monkeypatch.setattr(init_mod, "_editable_template_source", lambda: None)
 
 
 def test_framework_specs_have_repo_ref_path():
@@ -294,6 +295,29 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     }
 
 
+def test_init_uses_editable_checkout_templates_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    dest = tmp_path / "agent"
+    repository = tmp_path / "bridge"
+    commit = "a" * 40
+    monkeypatch.setattr(
+        init_mod,
+        "_editable_template_source",
+        lambda: (repository.as_uri(), commit),
+    )
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        return commit
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert fetched.call_args.args[:2] == (repository.as_uri(), commit)
+
+
 def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
     dest = tmp_path / "agent"
     dest.mkdir()
@@ -486,3 +510,29 @@ def test_fetch_template_missing_dir_raises(tmp_path: pathlib.Path):
             raised = True
             assert "not found" in str(e)
     assert raised
+
+
+def test_fetch_template_accepts_commit_sha(tmp_path: pathlib.Path):
+    repository = tmp_path / "repository"
+    template = repository / "templates" / "agent"
+    template.mkdir(parents=True)
+    init_mod._git(["init", str(repository)])
+    init_mod._git(["config", "user.email", "test@databricks.com"], cwd=repository)
+    init_mod._git(["config", "user.name", "Mason Test"], cwd=repository)
+    (template / "value.txt").write_text("first\n")
+    init_mod._git(["add", "."], cwd=repository)
+    init_mod._git(["commit", "-m", "first"], cwd=repository)
+    commit = (init_mod._git(["rev-parse", "HEAD"], cwd=repository).stdout or "").strip()
+    (template / "value.txt").write_text("second\n")
+    init_mod._git(["commit", "-am", "second"], cwd=repository)
+
+    destination = tmp_path / "output"
+    resolved = init_mod._fetch_template(
+        repository.as_uri(),
+        commit,
+        "templates/agent",
+        destination,
+    )
+
+    assert resolved == commit
+    assert (destination / "value.txt").read_text() == "first\n"
