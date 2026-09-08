@@ -100,7 +100,7 @@ def test_ensure_experiment_reuses_existing_without_mkdir():
 def test_configure_pins_experiment_id(tmp_path: pathlib.Path):
     _project(tmp_path)
     mlflow = mock.Mock()
-    mlflow.get_experiment.return_value = mock.Mock()  # the id exists
+    mlflow.get_experiment.return_value = mock.Mock(tags={})  # exists, managed (no UC tag)
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
         mock.patch.object(tracing_mod, "_configure"),
@@ -130,6 +130,28 @@ def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
         )
     assert result.exit_code != 0
     assert "No MLflow experiment" in result.output
+    assert AgentProject.load(tmp_path).trace_experiment_id is None  # nothing persisted
+
+
+def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
+    # mason supports managed tracing only; a UC-backed experiment (carries the UC destination tag)
+    # is rejected up front rather than silently wiring a config that fails at read/deploy.
+    _project(tmp_path)
+    mlflow = mock.Mock()
+    mlflow.get_experiment.return_value = mock.Mock(
+        tags={"mlflow.experiment.databricksTraceDestinationPath": "cat.schema"}
+    )
+    with (
+        mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
+        mock.patch.object(tracing_mod, "_configure"),
+    ):
+        result = CliRunner().invoke(
+            tracing_mod.tracing_configure,
+            ["--experiment", "uc-1", "--source", str(tmp_path)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code != 0
+    assert "UC-backed MLflow tracing is not supported" in result.output
     assert AgentProject.load(tmp_path).trace_experiment_id is None  # nothing persisted
 
 

@@ -69,6 +69,16 @@ def _configure(mlflow, profile: Optional[str]) -> None:
     mlflow.set_tracking_uri(f"databricks://{profile}" if profile else "databricks")
 
 
+# An experiment linked to a UC schema for trace storage carries this tag (the destination schema);
+# managed experiments don't. mason supports managed tracing only (UC support is a follow-up).
+_UC_TRACE_TAG = "mlflow.experiment.databricksTraceDestinationPath"
+
+
+def _is_uc_backed(experiment) -> bool:
+    """True if the experiment stores traces in Unity Catalog rather than the managed MLflow backend."""
+    return _UC_TRACE_TAG in (getattr(experiment, "tags", None) or {})
+
+
 def ensure_experiment(profile: Optional[str], client, name: str) -> str:
     """Create the experiment ``name`` if missing and return its id (idempotent).
 
@@ -174,10 +184,20 @@ def tracing_configure(obj, experiment_id, source) -> None:
         # Verify the experiment exists so a wrong id fails here, not silently when the agent runs.
         mlflow = _mlflow()
         _configure(mlflow, obj.profile)
-        if mlflow.get_experiment(experiment_id) is None:
+        experiment = mlflow.get_experiment(experiment_id)
+        if experiment is None:
             raise AgentCliError(
                 f"No MLflow experiment found with id {experiment_id!r}.",
                 hint="Pass an existing experiment id, or omit --experiment for the per-app default.",
+            )
+        if _is_uc_backed(experiment):
+            # Traces for a UC-backed experiment land in governed UC tables, which need a SQL warehouse
+            # to read and UC grants for a deployed app's SP to write - neither of which mason sets up
+            # yet. Reject it up front rather than silently wiring a config that fails at read/deploy.
+            raise AgentCliError(
+                "UC-backed MLflow tracing is not supported by mason.",
+                hint="Pass a managed (non-UC) experiment, or omit --experiment to use the per-app "
+                "experiment mason creates.",
             )
 
     project = AgentProject.load(pathlib.Path(source))
