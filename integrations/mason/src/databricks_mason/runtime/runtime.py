@@ -1,14 +1,12 @@
-"""Transport-neutral durable request runtime."""
+"""Transport-neutral facade for durable request execution."""
 
 from __future__ import annotations
 
 import asyncio
 import copy
-import json
-import logging
-from datetime import datetime, timezone
-from typing import cast
 
+from databricks_mason.runtime.attempt import AttemptRunner, copy_json_value
+from databricks_mason.runtime.recovery import RecoveryScheduler
 from databricks_mason.runtime.types import (
     DurabilityStore,
     DurableEvent,
@@ -18,35 +16,19 @@ from databricks_mason.runtime.types import (
     DurableExecutionNotFoundError,
     DurableExecutionStatus,
     DurableExecutorFn,
-    JsonObject,
     JsonValue,
 )
-
-logger = logging.getLogger(__name__)
-
-
-def _copy_json_value(value: JsonValue, name: str) -> JsonValue:
-    try:
-        return cast(JsonValue, json.loads(json.dumps(value, allow_nan=False)))
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{name} must be JSON serializable") from exc
-
-
-def _copy_json_object(value: JsonObject, name: str) -> JsonObject:
-    copied = _copy_json_value(value, name)
-    if not isinstance(copied, dict):
-        raise TypeError(f"{name} must be a JSON object")
-    return copied
 
 
 class DurableRuntime:
     """Coordinate idempotent execution, leases, recovery, and event replay.
 
-    ``submit`` first records an immutable request in the configured ``DurabilityStore``. One worker
-    atomically claims the next attempt, runs ``execute_fn``, and refreshes that attempt's heartbeat
-    until output or failure is committed. When recovery is enabled, a scanner schedules queued work
-    and reclaims active work whose heartbeat has become stale. Attempt numbers fence late writes
-    from replaced workers, while persisted events let clients replay progress across processes.
+    ``submit`` first records an immutable request in the configured ``DurabilityStore``. The
+    ``RecoveryScheduler`` schedules eligible work, and ``AttemptRunner`` atomically claims one
+    attempt, runs ``execute_fn``, and refreshes its heartbeat until output or failure is committed.
+    When recovery is enabled, the scheduler also reclaims active work whose heartbeat has become
+    stale. Attempt numbers fence late writes from replaced workers, while persisted events let
+    clients replay progress across processes.
 
     Durability depends on the configured store: Mason uses process-local memory during development
     and Lakebase in deployed Apps. This runtime persists execution state only; the executor remains
@@ -63,12 +45,6 @@ class DurableRuntime:
         scan_seconds: float = 3.0,
         poll_seconds: float = 1.0,
     ) -> None:
-        if heartbeat_seconds <= 0:
-            raise ValueError("heartbeat_seconds must be positive")
-        if stale_seconds <= heartbeat_seconds:
-            raise ValueError("stale_seconds must be greater than heartbeat_seconds")
-        if scan_seconds <= 0:
-            raise ValueError("scan_seconds must be positive")
         if poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
 
@@ -78,9 +54,18 @@ class DurableRuntime:
         self.stale_seconds = stale_seconds
         self.scan_seconds = scan_seconds
         self.poll_seconds = poll_seconds
-        self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._scanner: asyncio.Task[None] | None = None
-        self._recover = False
+        self._attempt_runner = AttemptRunner(
+            self.execute,
+            durability_store=durability_store,
+            heartbeat_seconds=heartbeat_seconds,
+            stale_seconds=stale_seconds,
+        )
+        self._recovery_scheduler = RecoveryScheduler(
+            self._attempt_runner,
+            durability_store=durability_store,
+            stale_seconds=stale_seconds,
+            scan_seconds=scan_seconds,
+        )
         self._started = False
 
     async def execute(
@@ -98,31 +83,14 @@ class DurableRuntime:
         if self._started:
             return
         await self.durability_store.initialize()
-        self._recover = recover
         self._started = True
-        if recover:
-            self._scanner = asyncio.create_task(
-                self._scan_loop(),
-                name="databricks-durable-runtime-scanner",
-            )
+        self._recovery_scheduler.start(recover=recover)
 
     async def stop(self) -> None:
         """Stop local work, leaving active rows recoverable by another process."""
         if not self._started:
             return
-        tasks = list(self._tasks.values())
-        if self._scanner is not None:
-            self._scanner.cancel()
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(
-            *tasks,
-            *([self._scanner] if self._scanner is not None else []),
-            return_exceptions=True,
-        )
-        self._tasks.clear()
-        self._scanner = None
-        self._recover = False
+        await self._recovery_scheduler.stop()
         self._started = False
         await self.durability_store.close()
 
@@ -133,9 +101,9 @@ class DurableRuntime:
             raise ValueError("execution_id must not be empty")
         state = await self.durability_store.accept(
             execution_id,
-            _copy_json_value(request, "request"),
+            copy_json_value(request, "request"),
         )
-        self._ensure_scheduled(state)
+        self._recovery_scheduler.ensure_scheduled(state)
         return state
 
     async def invoke(
@@ -154,7 +122,7 @@ class DurableRuntime:
         self._require_started()
         state = await self.durability_store.get(execution_id)
         if state is not None:
-            self._ensure_scheduled(state)
+            self._recovery_scheduler.ensure_scheduled(state)
         return state
 
     async def wait(
@@ -193,138 +161,6 @@ class DurableRuntime:
         """Return persisted events after an optional replay cursor."""
         self._require_started()
         return await self.durability_store.events(execution_id, after_sequence)
-
-    def _ensure_scheduled(self, state: DurableExecution) -> None:
-        if not self._is_recoverable(state):
-            return
-        current = self._tasks.get(state.execution_id)
-        if current is not None and not current.done():
-            return
-        task = asyncio.create_task(
-            self._execute_attempt(state.execution_id),
-            name=f"durable-execution-{state.execution_id}",
-        )
-        self._tasks[state.execution_id] = task
-        task.add_done_callback(lambda completed: self._discard_task(state.execution_id, completed))
-
-    def _is_recoverable(self, state: DurableExecution) -> bool:
-        if state.status == DurableExecutionStatus.QUEUED:
-            return True
-        if state.status != DurableExecutionStatus.ACTIVE or not self._recover:
-            return False
-        if state.heartbeat_at is None:
-            return True
-        heartbeat_at = state.heartbeat_at
-        if heartbeat_at.tzinfo is None:
-            heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - heartbeat_at).total_seconds()
-        return age >= self.stale_seconds
-
-    async def _execute_attempt(self, execution_id: str) -> None:
-        try:
-            claimed = await self.durability_store.claim(execution_id, self.stale_seconds)
-        except Exception:
-            logger.exception("Failed to claim durable execution: %s", execution_id)
-            return
-        if claimed is None:
-            return
-
-        heartbeat = asyncio.create_task(
-            self._heartbeat_loop(execution_id, claimed.attempt),
-            name=f"durable-heartbeat-{execution_id}-{claimed.attempt}",
-        )
-        try:
-
-            async def emit(event: JsonObject) -> int:
-                sequence_number = await self.durability_store.append_event(
-                    execution_id,
-                    claimed.attempt,
-                    _copy_json_object(event, "event"),
-                )
-                if sequence_number is None:
-                    raise RuntimeError(
-                        f"execution {execution_id!r} no longer owns attempt {claimed.attempt}"
-                    )
-                return sequence_number
-
-            response = await self.execute(
-                copy.deepcopy(claimed.request),
-                DurableExecutionContext(
-                    execution_id=execution_id,
-                    attempt=claimed.attempt,
-                    _emit=emit,
-                ),
-            )
-            response = _copy_json_value(response, "executor response")
-            completed = await self.durability_store.complete(
-                execution_id,
-                claimed.attempt,
-                response,
-            )
-            if not completed:
-                logger.info(
-                    "Skipped completion after durability ownership changed: %s attempt=%d",
-                    execution_id,
-                    claimed.attempt,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "Durable execution failed: %s attempt=%d",
-                execution_id,
-                claimed.attempt,
-            )
-            try:
-                await self.durability_store.fail(execution_id, claimed.attempt)
-            except Exception:
-                logger.exception(
-                    "Failed to persist durable failure: %s attempt=%d",
-                    execution_id,
-                    claimed.attempt,
-                )
-        finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
-
-    async def _heartbeat_loop(self, execution_id: str, attempt: int) -> None:
-        while True:
-            try:
-                owns_attempt = await self.durability_store.heartbeat(execution_id, attempt)
-            except Exception:
-                logger.warning(
-                    "Durable heartbeat failed: %s attempt=%d",
-                    execution_id,
-                    attempt,
-                    exc_info=True,
-                )
-                await asyncio.sleep(self.heartbeat_seconds)
-                continue
-            if not owns_attempt:
-                return
-            await asyncio.sleep(self.heartbeat_seconds)
-
-    async def _scan_loop(self) -> None:
-        while True:
-            try:
-                execution_ids = await self.durability_store.recoverable_execution_ids(
-                    self.stale_seconds
-                )
-                for execution_id in execution_ids:
-                    state = await self.durability_store.get(execution_id)
-                    if state is not None:
-                        self._ensure_scheduled(state)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Databricks durable runtime recovery scan failed")
-            await asyncio.sleep(self.scan_seconds)
-
-    def _discard_task(self, execution_id: str, completed: asyncio.Task[None]) -> None:
-        if self._tasks.get(execution_id) is completed:
-            self._tasks.pop(execution_id, None)
-        if not completed.cancelled():
-            completed.exception()
 
     def _require_started(self) -> None:
         if not self._started:

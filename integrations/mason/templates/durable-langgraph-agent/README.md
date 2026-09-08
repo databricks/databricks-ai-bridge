@@ -1,4 +1,4 @@
-# Durability App
+# Durable LangGraph Agent
 
 A minimal LangGraph application hosted by `databricks_mason.DurableAgentApp`.
 It has no model dependency: the graph returns a deterministic result, which
@@ -10,28 +10,28 @@ keeps the durability behavior easy to inspect.
 mason dev
 ```
 
-Submit a background run with one client-generated UUID and one stable routing
+Submit a background invocation with one client-generated UUID and one stable routing
 cookie. Databricks Apps supplies the cookie in deployment; for plain-HTTP
 localhost `curl`, send it explicitly because the SDK marks it `Secure`:
 
 ```bash
 ROUTING_COOKIE='__Host-databricks-app-router=11111111-1111-4111-8111-111111111111'
-RUN_ID='22222222-2222-4222-8222-222222222222'
+INVOCATION_ID='22222222-2222-4222-8222-222222222222'
 
 curl -sS -H "Cookie: $ROUTING_COOKIE" \
   -X POST http://localhost:8000/api/invocations \
   -H 'content-type: application/json' \
-  -d "$(jq -nc --arg id "$RUN_ID" \
+  -d "$(jq -nc --arg id "$INVOCATION_ID" \
     '{id:$id,background:true,stream:true,input:{message:"hello"}}')"
 
 curl -sS -H "Cookie: $ROUTING_COOKIE" \
-  "http://localhost:8000/api/invocations/$RUN_ID"
+  "http://localhost:8000/api/invocations/$INVOCATION_ID"
 curl -N -H "Cookie: $ROUTING_COOKIE" \
-  "http://localhost:8000/api/invocations/$RUN_ID/events"
+  "http://localhost:8000/api/invocations/$INVOCATION_ID/events"
 ```
 
 The client owns the invocation `id`. Retrying the same request with the same ID
-returns the persisted run; reusing the ID with a different payload returns `409`.
+returns the persisted invocation; reusing the ID with a different payload returns `409`.
 
 ## Deploy
 
@@ -39,7 +39,7 @@ returns the persisted run; reusing the ID with a different payload returns `409`
 profile:
 
 ```bash
-mason --profile <profile> deploy durability-app --source .
+mason --profile <profile> deploy durable-langgraph-agent --source .
 ```
 
 The durability flag records the binding in `agent.toml`. At deploy time Mason attaches one Lakebase

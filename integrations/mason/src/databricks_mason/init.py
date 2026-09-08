@@ -33,7 +33,7 @@ _MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
 _DURABILITY_TEMPLATE = {
     "repo": _MASON_REPO,
     "ref": "main",
-    "path": "integrations/mason/templates/durability-app",
+    "path": "integrations/mason/templates/durable-langgraph-agent",
 }
 _TEMPLATES: dict[str, dict[str, str]] = {
     "openai": {

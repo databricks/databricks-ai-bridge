@@ -72,6 +72,6 @@ def test_app_exposes_only_durable_invocation_routes() -> None:
     paths = app.openapi()["paths"]
     assert set(paths) == {
         "/api/invocations",
-        "/api/invocations/{run_id}",
-        "/api/invocations/{run_id}/events",
+        "/api/invocations/{invocation_id}",
+        "/api/invocations/{invocation_id}/events",
     }

@@ -84,11 +84,15 @@ class DurableAgentApp(FastAPI):
         )
         self.middleware("http")(self._bind_session)
         self.add_api_route(_API_ROOT, self._invoke_request, methods=["POST"])
-        self.add_api_route(f"{_API_ROOT}/{{run_id}}", self._get_request, methods=["GET"])
-        self.add_api_route(f"{_API_ROOT}/{{run_id}}/events", self._events, methods=["GET"])
+        self.add_api_route(f"{_API_ROOT}/{{invocation_id}}", self._get_request, methods=["GET"])
+        self.add_api_route(
+            f"{_API_ROOT}/{{invocation_id}}/events",
+            self._events,
+            methods=["GET"],
+        )
 
     def invoke(self, function: DurableAgentHook) -> DurableAgentHook:
-        """Register the handler for a run's first attempt."""
+        """Register the handler for an invocation's first attempt."""
         if self._invoke_hook is not None:
             raise ValueError("an invocation handler is already registered")
         self._invoke_hook = function
@@ -130,7 +134,7 @@ class DurableAgentApp(FastAPI):
             raise TypeError("execution request must contain session_id and input")
 
         context = DurableAgentContext(
-            run_id=execution_context.execution_id,
+            invocation_id=execution_context.execution_id,
             session_id=session_id,
             attempt=execution_context.attempt,
             _execution_context=execution_context,
@@ -142,69 +146,69 @@ class DurableAgentApp(FastAPI):
         return await function(copy.deepcopy(execution_request["input"]), context)
 
     async def _invoke_request(self, request: Request, body: _InvocationRequest) -> Response:
-        run_id = str(body.id)
+        invocation_id = str(body.id)
         execution_request: JsonObject = {
             "session_id": request.state.session_id,
             "input": copy.deepcopy(body.input),
         }
         try:
             if body.background:
-                state = await self._runtime.submit(run_id, execution_request)
+                state = await self._runtime.submit(invocation_id, execution_request)
                 return JSONResponse(
                     self._accepted_payload(state, stream=body.stream),
                     status_code=202,
                 )
             if body.stream:
-                await self._runtime.submit(run_id, execution_request)
+                await self._runtime.submit(invocation_id, execution_request)
                 return StreamingResponse(
-                    self._event_stream(run_id),
+                    self._event_stream(invocation_id),
                     media_type="text/event-stream",
                 )
-            output = await self._runtime.invoke(run_id, execution_request)
-            return JSONResponse({"id": run_id, "status": "completed", "output": output})
+            output = await self._runtime.invoke(invocation_id, execution_request)
+            return JSONResponse({"id": invocation_id, "status": "completed", "output": output})
         except DurableRequestConflictError as exc:
             raise HTTPException(409, "id was already used for another request") from exc
         except DurableExecutionFailedError as exc:
             raise HTTPException(500, "agent execution failed") from exc
 
-    async def _get_request(self, run_id: UUID) -> JSONResponse:
-        state = await self._runtime.get_execution(str(run_id))
+    async def _get_request(self, invocation_id: UUID) -> JSONResponse:
+        state = await self._runtime.get_execution(str(invocation_id))
         if state is None:
-            raise HTTPException(404, "run not found")
+            raise HTTPException(404, "invocation not found")
         return JSONResponse(self._state_payload(state))
 
-    async def _events(self, run_id: UUID, after: int = 0) -> StreamingResponse:
-        normalized_run_id = str(run_id)
-        if await self._runtime.get_execution(normalized_run_id) is None:
-            raise HTTPException(404, "run not found")
+    async def _events(self, invocation_id: UUID, after: int = 0) -> StreamingResponse:
+        normalized_invocation_id = str(invocation_id)
+        if await self._runtime.get_execution(normalized_invocation_id) is None:
+            raise HTTPException(404, "invocation not found")
         return StreamingResponse(
-            self._event_stream(normalized_run_id, after),
+            self._event_stream(normalized_invocation_id, after),
             media_type="text/event-stream",
         )
 
-    async def _event_stream(self, run_id: str, after: int = 0) -> AsyncIterator[str]:
+    async def _event_stream(self, invocation_id: str, after: int = 0) -> AsyncIterator[str]:
         cursor = after
         while True:
-            for event in await self._runtime.get_events(run_id, after_sequence=cursor):
+            for event in await self._runtime.get_events(invocation_id, after_sequence=cursor):
                 cursor = event.sequence_number
                 event_type = event.event.get("type", "message")
                 yield f"id: {cursor}\nevent: {event_type}\ndata: {json.dumps(event.event)}\n\n"
 
-            state = await self._runtime.get_execution(run_id)
+            state = await self._runtime.get_execution(invocation_id)
             if state is None or state.is_terminal:
                 return
             await asyncio.sleep(self._runtime.poll_seconds)
 
     @staticmethod
     def _accepted_payload(state: DurableExecution, *, stream: bool) -> JsonObject:
-        run_id = state.execution_id
+        invocation_id = state.execution_id
         payload: JsonObject = {
-            "id": run_id,
+            "id": invocation_id,
             "status": state.status.value.lower(),
-            "status_url": f"{_API_ROOT}/{run_id}",
+            "status_url": f"{_API_ROOT}/{invocation_id}",
         }
         if stream:
-            payload["events_url"] = f"{_API_ROOT}/{run_id}/events"
+            payload["events_url"] = f"{_API_ROOT}/{invocation_id}/events"
         return payload
 
     @staticmethod

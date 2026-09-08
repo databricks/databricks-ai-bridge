@@ -1,7 +1,7 @@
 [project]
-name = "durability-app"
+name = "durable-langgraph-agent"
 version = "0.1.0"
-description = "Minimal LangGraph app using the Mason durability SDK"
+description = "Minimal durable LangGraph agent using the Mason runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -53,9 +53,9 @@ async def running_client(app: DurableAgentApp) -> AsyncIterator[httpx.AsyncClien
         await app._runtime.stop()
 
 
-async def poll(client: httpx.AsyncClient, run_id: str) -> dict:
+async def poll(client: httpx.AsyncClient, invocation_id: str) -> dict:
     for _ in range(100):
-        response = await client.get(f"/api/invocations/{run_id}")
+        response = await client.get(f"/api/invocations/{invocation_id}")
         if response.json()["status"] not in {"queued", "active"}:
             return response.json()
         await asyncio.sleep(0.005)
@@ -67,7 +67,7 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
     async def invoke(input, context):
         return {
             "received": input,
-            "run_id": context.run_id,
+            "invocation_id": context.invocation_id,
             "session_id": context.session_id,
         }
 
@@ -85,7 +85,7 @@ async def test_routing_cookie_is_the_only_session_source() -> None:
         "status": "completed",
         "output": {
             "received": "hello",
-            "run_id": _RUN_1,
+            "invocation_id": _RUN_1,
             "session_id": "session-1",
         },
     }
@@ -153,7 +153,7 @@ async def test_omitting_on_recovery_warns_and_disables_recovery(caplog) -> None:
     app = make_app()
     with caplog.at_level(logging.WARNING):
         async with app.router.lifespan_context(app):
-            assert app._runtime._scanner is None
+            assert app._runtime._recovery_scheduler._scanner is None
 
     assert "crash recovery is disabled" in caplog.text
     with pytest.raises(RuntimeError, match="@app.on_recovery"):
@@ -239,7 +239,7 @@ async def test_background_stream_returns_202_with_polling_urls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_id_is_idempotency_key_for_every_mode() -> None:
+async def test_invocation_id_is_idempotency_key_for_every_mode() -> None:
     calls = 0
 
     async def invoke(input, context):
@@ -269,7 +269,7 @@ async def test_run_id_is_idempotency_key_for_every_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_id_must_be_uuid() -> None:
+async def test_invocation_id_must_be_uuid() -> None:
     app = make_app()
     async with running_client(app) as client:
         submitted = await client.post("/api/invocations", json={"id": "not-a-uuid"})
@@ -337,8 +337,8 @@ def test_app_exposes_only_api_invocation_routes() -> None:
 
     assert set(paths) == {
         "/api/invocations",
-        "/api/invocations/{run_id}",
-        "/api/invocations/{run_id}/events",
+        "/api/invocations/{invocation_id}",
+        "/api/invocations/{invocation_id}/events",
     }
     assert {getattr(route, "path", None) for route in app.routes} == set(paths)
 

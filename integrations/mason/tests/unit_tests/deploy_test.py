@@ -283,7 +283,7 @@ def test_deploy_template_metadata_does_not_enable_runtime_store(
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durability-app")
+    _mark_template(src, "durable-langgraph-agent")
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)

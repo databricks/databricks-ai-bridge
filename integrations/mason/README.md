@@ -134,9 +134,10 @@ async def recover(input: object, context: DurableAgentContext) -> object:
     return await recover_agent(input, session_id=context.session_id)
 ```
 
-The application exposes `POST /api/invocations`, `GET /api/invocations/{run_id}`, and
-`GET /api/invocations/{run_id}/events?after={cursor}`. Databricks Apps bearer-token requests must
-use `/api/` routes ([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
+The application exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
+`GET /api/invocations/{invocation_id}/events?after={cursor}`. Databricks Apps bearer-token requests
+must use `/api/` routes
+([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
 The client supplies a UUID `id`, which is also the idempotency key for every invocation mode:
 
 - foreground sync returns `200` with the result under `output`;
@@ -146,12 +147,12 @@ The client supplies a UUID `id`, which is also the idempotency key for every inv
 
 `input` and `output` may be any JSON value. Transport fields are not passed to the callback. The
 Apps routing cookie is the only supported session identifier, so body `session_id` is rejected.
-Polling uses only the run ID and relies on Databricks Apps authentication. The runtime persists the
-input, internal attempt status, heartbeats, `run.started`/`run.completed`/`run.failed` lifecycle
-events, application events, and final output.
+Polling uses only the invocation ID and relies on Databricks Apps authentication. The runtime
+persists the input, internal attempt status, heartbeats,
+`run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
 
-The new `durability-app` template selects an in-memory durability store locally. Initialize it with
-`mason init --framework langgraph --durability`; Mason writes its durability binding to
+The new `durable-langgraph-agent` template selects an in-memory durability store locally. Initialize
+it with `mason init --framework langgraph --durability`; Mason writes its durability binding to
 `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability, chosen
 in this order:
 

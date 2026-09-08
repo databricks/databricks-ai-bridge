@@ -1,10 +1,11 @@
 """Public contracts shared by the durable runtime, store, and agent application.
 
 ``DurableRuntime`` accepts a ``DurableExecutorFn`` and coordinates its work through a
-``DurabilityStore``. The store returns ``DurableExecution`` snapshots and ordered ``DurableEvent``
-records. Each executor call receives a ``DurableExecutionContext`` for attempt fencing and event
-emission. ``DurableAgentApp`` adapts that lower-level context into ``DurableAgentContext`` for
-functions registered with ``@app.invoke`` and ``@app.on_recovery``.
+``DurabilityStore``. Internally, ``RecoveryScheduler`` finds eligible work and ``AttemptRunner``
+claims and executes it. The store returns ``DurableExecution`` snapshots and ordered
+``DurableEvent`` records. Each executor call receives a ``DurableExecutionContext`` for attempt
+fencing and event emission. ``DurableAgentApp`` adapts that lower-level context into
+``DurableAgentContext`` for functions registered with ``@app.invoke`` and ``@app.on_recovery``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,
 so values crossing the durability boundary can be persisted identically by in-memory and Lakebase
@@ -86,9 +87,9 @@ DurableExecutorFn = Callable[[JsonValue, DurableExecutionContext], Awaitable[Jso
 
 @dataclass(frozen=True)
 class DurableAgentContext:
-    """Run/session metadata and durable event emission for a decorated agent function."""
+    """Invocation/session metadata and durable event emission for a decorated agent function."""
 
-    run_id: str
+    invocation_id: str
     session_id: str
     attempt: int
     _execution_context: DurableExecutionContext = field(repr=False, compare=False)
