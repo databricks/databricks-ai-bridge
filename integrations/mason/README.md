@@ -94,6 +94,15 @@ memory = memory.update(content="The user prefers very concise answers.")
 memory.delete()
 ```
 
+An existing durable Mason session can also be passed directly to the OpenAI Agents SDK:
+
+```python
+from agents import Runner
+from databricks_mason.openai import OpenAISession
+
+result = await Runner.run(agent, "Hello", session=OpenAISession(session))
+```
+
 The root collections manage stores: `mason.memory_stores.create/get/list` and
 `mason.session_stores.create/get/list`. A returned store owns operations on its
 contents, such as `memory_store.add()`, `memory_store.get("memory-id")`,

@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from databricks_mason.openai.mcp import mcp_servers
     from databricks_mason.openai.memory import memory_tools
-    from databricks_mason.openai.sessions import session_store
+    from databricks_mason.openai.sessions import OpenAISession, session_store
     from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
 
 
@@ -56,6 +56,8 @@ __all__ = [
     "memory_tools",
     # Session persistence — pass session_store(session_id) to Runner.run(session=...).
     "session_store",
+    # Adapter for a Session obtained explicitly through MasonClient.session_stores.
+    "OpenAISession",
     # MLflow tracing (OpenAI autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
     "tag_session",
@@ -70,6 +72,7 @@ _MODULE_BY_NAME = {
     "mcp_servers": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "session_store": "databricks_mason.openai.sessions",
+    "OpenAISession": "databricks_mason.openai.sessions",
     "tag_session": "databricks_mason.runtime",
     "workspace_client": "databricks_mason.runtime",
     "workspace_headers": "databricks_mason.runtime",

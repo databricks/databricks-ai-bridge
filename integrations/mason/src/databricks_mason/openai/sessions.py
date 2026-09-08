@@ -32,6 +32,7 @@ from agents.memory import SessionABC
 
 from databricks_mason.runtime.session_store_client import Session as _StoreSession
 from databricks_mason.runtime.session_store_client import SessionStoreClient
+from databricks_mason.session_store import Session as MasonSession
 
 # Fetch items oldest-first so the transcript replays in write order.
 _ORDER_BY = "create_time asc"
@@ -39,6 +40,31 @@ _ORDER_BY = "create_time asc"
 # One in-process Session per session id, built lazily and shared — that's what makes multi-turn work
 # in-process (the durable store needs no cache; each call resolves the same REST-backed session).
 _local_sessions: dict[str, SQLiteSession] = {}
+
+
+class OpenAISession(SessionABC):
+    """Adapt an existing Mason ``Session`` for the OpenAI Agents SDK."""
+
+    def __init__(self, session: MasonSession) -> None:
+        self.session_id = session.session_id
+        self._session = session
+
+    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+        items = await _run_sync(
+            lambda: [item.data for item in self._session.list_items(order_by=_ORDER_BY)]
+        )
+        return items[-limit:] if limit is not None else items
+
+    async def add_items(self, items: list[TResponseInputItem]) -> None:
+        if items:
+            await _run_sync(lambda: self._session.append_items(items))
+
+    async def pop_item(self) -> TResponseInputItem | None:
+        item = await _run_sync(self._session.pop_item)
+        return item.data if item is not None else None
+
+    async def clear_session(self) -> None:
+        await _run_sync(self._session.clear_items)
 
 
 def session_store(
