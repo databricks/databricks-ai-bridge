@@ -16,6 +16,7 @@ import click
 import yaml
 
 from databricks_mason import render
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.deploy import (
     _upsert_manifest_env,
     resolve_trace_experiment,
@@ -28,6 +29,7 @@ from databricks_mason.store_access import _databricks
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
+_LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -107,7 +109,10 @@ def dev(
     if prepare_environment is None:
         prepare_environment = not (source_dir / ".venv").exists()
 
-    args = ["apps", "run-local"]
+    # `apps run-local` sets DATABRICKS_APP_NAME just like a deployment. Mark this invocation
+    # explicitly so the durability SDK selects its process-local development store instead of
+    # requiring the Lakebase resource that `mason deploy` attaches.
+    args = ["apps", "run-local", "--env", f"{_LOCAL_RUNTIME_ENV}=true"]
     if prepare_environment:
         args.append("--prepare-environment")
     if app_port is not None:
@@ -150,13 +155,21 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        sample = (
-            f"curl -X POST {base}/invocations -H 'Content-Type: application/json' "
-            '-d \'{"input": [{"role": "user", "content": "hi"}]}\''
+        try:
+            durable = AgentProject.load(source_dir).durability_enabled
+        except AgentCliError:
+            durable = False
+        endpoint = f"{base}/api/invocations" if durable else f"{base}/invocations"
+        body = (
+            '{"id": "00000000-0000-4000-8000-000000000000", '
+            '"input": [{"role": "user", "content": "hi"}]}'
+            if durable
+            else '{"input": [{"role": "user", "content": "hi"}]}'
         )
+        sample = f"curl -X POST {endpoint} -H 'Content-Type: application/json' -d '{body}'"
         render.success(
             "Starting API-only agent (no chat UI — see `mason init --help`)",
-            fields={"Invoke": f"POST {base}/invocations"},
+            fields={"Invoke": f"POST {endpoint}"},
             next_steps=[
                 (sample, "Send a test request"),
                 ("mason tools add mcp <service>", "Give the agent a tool"),

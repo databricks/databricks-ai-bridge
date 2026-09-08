@@ -22,6 +22,7 @@ from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_S
 TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
+_DURABILITY_TABLE = "durability"
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
@@ -205,6 +206,16 @@ def _store_name_from_manifest(value: object, table: str) -> str | None:
     return _required_string(cast(Mapping[str, Any], value).get("name"), f"[{table}] name")
 
 
+def _durability_from_manifest(value: object) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, Mapping):
+        raise AgentCliError("agent.toml [durability] must be a table.")
+    if cast(Mapping[str, Any], value).get("enabled") is not True:
+        raise AgentCliError("agent.toml [durability] must set enabled = true.")
+    return True
+
+
 def _store_id_from_manifest(value: object) -> str | None:
     """Read the optional bare store ``id`` from a ``[memory_store]`` table, or None if absent."""
     if not isinstance(value, Mapping):
@@ -300,6 +311,8 @@ class AgentProject:
         memory_store: str | None = None,
         session_store: str | None = None,
         memory_store_id: str | None = None,
+        deployment_name: str | None = None,
+        durability_enabled: bool = False,
         trace_experiment_id: str | None = None,
         trace_disabled: bool = False,
     ) -> None:
@@ -313,6 +326,9 @@ class AgentProject:
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
+        # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
+        self.deployment_name = deployment_name
+        self.durability_enabled = durability_enabled
         # Tracing config: an explicit experiment id override (None = default per-app experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
         self.trace_experiment_id = trace_experiment_id
@@ -343,6 +359,11 @@ class AgentProject:
         framework = _required_string(agent.get("framework"), "agent.framework")
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        deployment_name = agent.get("deployment_name")
+        if deployment_name is not None and not (
+            isinstance(deployment_name, str) and deployment_name
+        ):
+            raise AgentCliError("agent.toml [agent] deployment_name must be a non-empty string.")
         raw_tools = document.get("tools", [])
         if not isinstance(raw_tools, list):
             raise AgentCliError("agent.toml tools must be an array of tables.")
@@ -357,6 +378,7 @@ class AgentProject:
         session_store = _store_name_from_manifest(
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
+        durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
         tracing_table = document.get(TRACING_TABLE)
         trace_experiment_id: str | None = None
         trace_disabled = False
@@ -374,12 +396,20 @@ class AgentProject:
             memory_store,
             session_store,
             memory_store_id,
+            str(deployment_name) if deployment_name is not None else None,
+            durability_enabled,
             trace_experiment_id,
             trace_disabled,
         )
 
     @classmethod
-    def create(cls, root: pathlib.Path | str, *, framework: str) -> "AgentProject":
+    def create(
+        cls,
+        root: pathlib.Path | str,
+        *,
+        framework: str,
+        durability_enabled: bool = False,
+    ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
         project_root = pathlib.Path(root).expanduser().resolve()
@@ -389,7 +419,29 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        return cls(project_root, document, framework, [])
+        if durability_enabled:
+            durability = tomlkit.table()
+            durability.add("enabled", True)
+            document.add(_DURABILITY_TABLE, durability)
+        return cls(
+            project_root,
+            document,
+            framework,
+            [],
+            durability_enabled=durability_enabled,
+        )
+
+    def set_deployment_name(self, name: str) -> bool:
+        """Record the deployment's base name under [agent].deployment_name. True if it changed."""
+        name = _required_string(name, "[agent] deployment_name")
+        if self.deployment_name == name:
+            return False
+        agent = self._document.get("agent")
+        if not isinstance(agent, Mapping):
+            raise AgentCliError("agent.toml must declare an [agent] table.")
+        agent["deployment_name"] = name
+        self.deployment_name = name
+        return True
 
     def add_tool(self, spec: ToolSpec) -> bool:
         for existing in self.tools:

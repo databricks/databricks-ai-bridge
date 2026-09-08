@@ -29,9 +29,9 @@ MODEL = "databricks-gpt-5-2"
 REQUIRE_APPROVAL = {"send_message"}
 
 # Paused runs awaiting human approval, keyed by session id. In-process only — a paused run does NOT
-# survive a restart or reach another replica, even with AGENT_SESSION_STORE set: unlike a LangGraph
-# checkpoint, an Agents SDK Session persists the transcript but not paused RunState. Durable HITL
-# would stash RunState.to_json() separately; this template keeps it simple and in-memory.
+# survive a restart or reach another replica, even with AGENT_SESSION_STORE set: an Agents SDK
+# Session persists the transcript but not the paused RunState. Durable HITL would stash
+# RunState.to_json() separately; this template keeps it simple and in-memory.
 _pending_runs: dict[str, RunState] = {}
 
 
@@ -184,7 +184,7 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
 def _apply_decisions(session_id: str, resume: dict) -> RunState:
     """Apply human decisions to the session's paused run and return the RunState to re-run.
 
-    ``resume`` mirrors the LangGraph contract: ``{"decisions": [{"type": "approve"|"reject", ...}]}``,
+    ``resume`` is the runtime's approval contract: ``{"decisions": [{"type": "approve"|"reject", ...}]}``,
     one decision per pending approval, in interruption order. Raises if no paused run is loaded for
     the session (in-process only — a restart or another replica drops it).
     """
@@ -208,9 +208,9 @@ async def _serialize_events(
 ) -> AsyncGenerator[dict, None]:
     """Turn the Agents SDK run's stream events into the runtime's JSON envelope.
 
-    Emits the same shape the LangGraph template does — ``{"type": "delta", ...}`` for token chunks,
+    Emits the runtime's framework-neutral event shape — ``{"type": "delta", ...}`` for token chunks,
     ``{"type": "message", "message": {...}}`` for completed items, ``{"type": "interrupt", ...}`` for a
-    human-approval pause — so the SDK-agnostic runtime and browser UI are identical across frameworks.
+    human-approval pause — so the SDK-agnostic runtime and browser UI are identical across templates.
     Message dicts are normalized to ``{role, content, tool_calls?}`` regardless of the SDK's native
     item type.
     """
@@ -232,7 +232,7 @@ async def _serialize_events(
 
 
 def _approval_value(item: ToolApprovalItem) -> dict:
-    """The interrupt payload for one pending approval, matching the LangGraph HITL event shape."""
+    """The interrupt payload for one pending approval, in the runtime's framework-neutral shape."""
     return {
         "action_requests": [{"name": item.tool_name, "args": _tool_args(item)}],
     }
@@ -253,8 +253,9 @@ def _tool_args(item: ToolApprovalItem) -> Any:
 def _normalize_item(item: Any) -> dict | None:
     """Normalize one Agents SDK run item to the UI's ``{role, content, tool_calls?}`` message shape.
 
-    The browser renders LangChain-native message dicts; normalizing here keeps the frontend identical
-    across frameworks. Only user/assistant/tool items become messages; other run items are dropped.
+    That shape is framework-neutral — the browser renders it the same regardless of which SDK
+    produced the run — so normalizing here keeps the frontend identical across templates. Only
+    user/assistant/tool items become messages; other run items are dropped.
     """
     from agents import ItemHelpers
     from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem

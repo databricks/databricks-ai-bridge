@@ -2,8 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. The stores are read from `agent.toml` at runtime, so they are not written
-into `app.yaml`. `mason deployments` covers the lifecycle verbs
+the deployment. Durable agents reuse the Session Store database or provision a dedicated
+database when no Session Store is bound. The managed stores are read from `agent.toml` at runtime,
+so they are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -15,12 +16,20 @@ from __future__ import annotations
 import json
 import pathlib
 import time
+from dataclasses import replace
 from typing import Any, Optional
 
 import click
 import yaml
 
-from databricks_mason import memory_store_access, render, session_store_access, timefmt
+from databricks_mason import (
+    lakebase_durability_store,
+    memory_store_access,
+    render,
+    session_store_access,
+    timefmt,
+)
+from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import (
@@ -37,6 +46,8 @@ from databricks_mason.tracing import (
     experiment_url,
 )
 
+_AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
 # until the proxy is reachable from the build sandbox again, then drop this default. pip reads
@@ -245,6 +256,16 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
     return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
 
 
+def _load_project(source: pathlib.Path):
+    """The AgentProject at `source`, or None when there's no readable agent.toml."""
+    from databricks_mason.agent_project import AgentProject
+
+    try:
+        return AgentProject.load(source)
+    except AgentCliError:
+        return None
+
+
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
     """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
 
@@ -252,16 +273,28 @@ def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
     deploy` resolve through here so the store env AND the deploy-time access grant honor the same
     bindings. Missing/invalid agent.toml is ignored (no stores), so this never blocks a run.
     """
-    try:
-        from databricks_mason.agent_project import AgentProject
-
-        project = AgentProject.load(source)
-    except AgentCliError:
+    project = _load_project(source)
+    if project is None:
         return None, None
     # str(): agent.toml bindings come back as tomlkit strings, which don't serialize to app.yaml.
     memory = str(project.memory_store) if project.memory_store else None
     session = str(project.session_store) if project.session_store else None
     return memory, session
+
+
+def _resolve_deployment_name(project, name: Optional[str]) -> str:
+    """The deployment's base name: the NAME arg if given, else agent.toml's [agent].deployment_name.
+
+    Errors when neither is available, pointing the user at the one-time `mason deploy <name>`.
+    """
+    if name is not None and name.strip():
+        return name.strip()
+    if project is not None and project.deployment_name:
+        return str(project.deployment_name)
+    raise AgentCliError(
+        "No deployment name given and none recorded in agent.toml.",
+        hint="Run `mason deploy <name>` once to name the agent; later `mason deploy` can omit it.",
+    )
 
 
 def validate_stores(client, *, memory_store: Optional[str], session_store: Optional[str]) -> None:
@@ -323,12 +356,7 @@ def _grant_store_access(
     memory_database: Optional[str],
     profile: Optional[str],
 ) -> Optional[str]:
-    """Give the app's SP access to the deployed stores (best-effort, two steps).
-
-    Binds every store's database as a `postgres` app resource in one update (the update replaces the
-    whole resource array, so they must be applied together), then GRANTs the SP read/write on each
-    store's tables. Returns None on success or a human-readable reason on the first failure.
-    """
+    """Bind managed-store databases and grant the app service principal table access."""
     backends = []
     if session_store:
         backends.append(session_store_access.backend(session_store))
@@ -347,11 +375,18 @@ def _grant_store_access(
     return None
 
 
+def _has_durability_binding(source_dir: pathlib.Path) -> bool:
+    """Whether agent.toml opts this project into durable invocation storage."""
+    if not (source_dir / "agent.toml").is_file():
+        return False
+    return AgentProject.load(source_dir).durability_enabled
+
+
 # --- mason deploy -----------------------------------------------------------
 
 
 @click.command()
-@click.argument("name")
+@click.argument("name", required=False)
 @click.option(
     "--source",
     default=".",
@@ -387,8 +422,10 @@ def deploy(
 ) -> None:
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
-    The app is named `mason-<name>` (Mason adds the prefix if absent); use that full name with the
-    other `mason deployments` verbs. `deployments list` shows only apps carrying this prefix.
+    NAME is recorded in agent.toml on first deploy, so later `mason deploy` (from the project dir)
+    can omit it; passing NAME again updates the recorded name. The app is named `mason-<name>`
+    (Mason adds the prefix if absent); use that full name with the other `mason deployments` verbs.
+    `deployments list` shows only apps carrying this prefix.
 
     Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
     preserve the routing cookie automatically.
@@ -397,15 +434,20 @@ def deploy(
     API clients must reuse a stable UUID in this cookie on every request:
       __Host-databricks-app-router=<uuid>
     """
-    name = _prefixed_name(name)
-    _validate_deployment_name(name)
-    instance_args = _instance_args(instances)
     source_dir = pathlib.Path(source)
+    project = _load_project(source_dir)
+    base_name = _resolve_deployment_name(project, name)
+    name = _prefixed_name(base_name)
+    _validate_deployment_name(name)
+    # Persist the base name so a later `mason deploy` (no NAME) resolves to the same app.
+    if project is not None and project.set_deployment_name(base_name):
+        project.write()
+    instance_args = _instance_args(instances)
     client = obj.client()
 
     # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them). Stores are
     #    read from agent.toml at runtime, not wired into app.yaml; the bindings also drive the store
-    #    access grant (step 4).
+    #    access grant (step 6).
     memory_store, session_store = store_bindings(source_dir)
     with render.status("Checking stores…"):
         validate_stores(client, memory_store=memory_store, session_store=session_store)
@@ -435,6 +477,24 @@ def deploy(
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
+
+    memory_database = _memory_store_database(client, memory_store) if memory_store else None
+    durability_backend = None
+    if _has_durability_binding(source_dir):
+        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
+        if session_store:
+            durability_backend = replace(
+                session_store_access.backend(session_store),
+                schema=durability_schema,
+                tables=(),
+            )
+        else:
+            durability_backend = lakebase_durability_store.get_or_create_backend(
+                name, obj.profile, create=True
+            )
+        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
+        provisioned["Agent durability store"] = durability_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -447,7 +507,7 @@ def deploy(
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
-    # 4. Roll out the deployment (Databricks Apps runtime). Create only when the app is new
+    # 4. Ensure the Databricks App exists and its compute is active. Create only when the app is new
     #    (`apps create` errors on an existing app); the compute wait runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
@@ -486,6 +546,16 @@ def deploy(
     # compute is already ACTIVE.
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
+
+    if durability_backend is not None:
+        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
+        if resource_error:
+            raise AgentCliError(
+                "Could not attach the Lakebase resource required for durable execution.",
+                hint=resource_error,
+            )
+
+    # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
@@ -501,7 +571,7 @@ def deploy(
         action=f"Could not deploy '{name}'.",
     )
 
-    # 5. Grant the app's service principal what it needs to run (best-effort):
+    # 6. Grant the app's service principal what it needs to run (best-effort):
     #    - stores: bind each store DB as a `postgres` resource (CONNECT) + GRANT read/write on tables;
     #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
     #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
@@ -513,9 +583,6 @@ def deploy(
             if sp is None:
                 grant_error = "could not resolve the app's service principal."
             else:
-                memory_database = (
-                    _memory_store_database(client, memory_store) if memory_store else None
-                )
                 grant_error = _grant_store_access(
                     name, sp, client.current_user, session_store, memory_database, obj.profile
                 )
