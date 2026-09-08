@@ -21,6 +21,7 @@ from agent.tools import all_tools
 logger = logging.getLogger(__name__)
 
 MODEL = "databricks-gpt-5-2"
+INSTRUCTIONS = "You are a helpful assistant."
 
 # Tools that require human approval before they run. Add a tool's name here and the agent pauses when
 # the model calls it, emitting an `interrupt` event; the client resumes by sending `resume` with the
@@ -83,7 +84,7 @@ def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
     """
     return Agent(
         name="Agent",
-        instructions="You are a helpful assistant.",
+        instructions=INSTRUCTIONS,
         model=model or MODEL,
         tools=[*all_tools(), *memory_tools(actor)],
         mcp_servers=mcp or [],

@@ -206,7 +206,7 @@ curl -s -b "$COOKIE_JAR" -X POST "$BASE/invocations" -H "Content-Type: applicati
 
 ## Customize the agent
 
-- **Model / instructions:** `create_agent_graph()` in `agent/agent.py`.
+- **Model / instructions:** `MODEL` and `INSTRUCTIONS` in `agent/agent.py`.
 - **Add a tool:** drop a new file in `agent/tools/` with a `@tool`-decorated function; it's
   collected automatically (see `agent/tools/sample_tool.py`). No wiring to edit.
 - **Require approval for a tool:** add its name to `REQUIRE_APPROVAL` in `agent/agent.py` (see the

@@ -176,6 +176,8 @@ templates unchanged.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
+  create       [--framework openai|langgraph] [--model ENDPOINT] [--instructions TEXT]
+               [--chat-app|--no-chat-app] [--profile P] [--no-interactive] [directory]
   init         [--framework openai|langgraph] [--durability] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
@@ -220,11 +222,36 @@ For the shortest path from a blank directory to a running and deployed agent:
 
 ```sh
 mason login --profile <profile>
-mason init my-agent
+mason create
 cd my-agent
 mason dev
 mason deploy my-agent
 ```
+
+## Create an agent interactively
+
+`mason create` is the guided path from a blank directory to runnable agent code. It collects a
+framework, default model endpoint, system instructions, and whether to include the browser chat app.
+Mason then fetches the current framework template, renders the configuration into the generated
+source, and records the inputs in `agent.toml`.
+
+```sh
+mason create
+```
+
+Use flags to prefill individual answers, or disable prompts entirely for scripts:
+
+```sh
+mason --output json create ./support-agent \
+  --framework openai \
+  --model databricks-claude-sonnet-4 \
+  --instructions "Answer support questions with concise steps." \
+  --no-chat-app \
+  --no-interactive
+```
+
+`mason init` remains the lower-level scaffold command for selecting durability and custom template
+repositories without rendering agent-specific model or instruction choices.
 
 ## Agent tools
 
@@ -271,8 +298,8 @@ arguments controlled by the model.
 
 ## Initialize the chat app demo
 
-The chat app is a LangGraph-specific init overlay, not a command that mutates an existing project.
-It is included by default for `--framework langgraph`; pass `--disable-chat-app` to scaffold the
+The chat app is a framework-specific init overlay, not a command that mutates an existing project.
+It is included by default for both standard frameworks; pass `--disable-chat-app` to scaffold the
 API-only backend instead.
 
 ```sh
