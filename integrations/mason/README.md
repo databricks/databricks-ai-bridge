@@ -26,6 +26,12 @@ For tracing commands, install Mason with tracing extras:
 pip install 'databricks-mason[tracing]'
 ```
 
+For the SDK-hosted durable agent application, install the runtime extra:
+
+```sh
+pip install 'databricks-mason[runtime]'
+```
+
 ## Shell completion
 Add this to `~/.zshrc`:
 ```sh
@@ -106,13 +112,71 @@ transport will be replaced by the generated `WorkspaceClient.mason` service when
 is released, without changing this public surface. Deployment, sandbox, tracing, and
 the existing CLI commands remain separate.
 
+## Durable agent application
+
+`DurableAgentApp` is the supported server surface. Import it directly from `databricks_mason`
+(the `databricks_mason.runtime` alias is also supported). The transport-neutral runtime remains a
+separate package layer so it can be exposed as a standalone embedding API later:
+
+```python
+from databricks_mason import DurableAgentApp, DurableAgentContext
+
+app = DurableAgentApp()
+
+
+@app.invoke
+async def invoke(input: object, context: DurableAgentContext) -> object:
+    return await run_agent(input, session_id=context.session_id)
+
+
+@app.on_recovery
+async def recover(input: object, context: DurableAgentContext) -> object:
+    return await recover_agent(input, session_id=context.session_id)
+```
+
+The application exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
+`GET /api/invocations/{invocation_id}/events?after={cursor}`. Databricks Apps bearer-token requests
+must use `/api/` routes
+([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
+The client supplies a UUID `id`, which is also the idempotency key for every invocation mode:
+
+- foreground sync returns `200` with the result under `output`;
+- background sync returns `202` with a status URL;
+- foreground streaming returns `200` server-sent events; and
+- background streaming returns `202` with status and event URLs.
+
+`input` and `output` may be any JSON value. Transport fields are not passed to the callback. The
+Apps routing cookie is the only supported session identifier, so body `session_id` is rejected.
+Polling uses only the invocation ID and relies on Databricks Apps authentication. The runtime
+persists the input, internal attempt status, heartbeats,
+`run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
+
+The new `durable-langgraph-agent` template selects an in-memory durability store locally. Initialize
+it with `mason init --framework langgraph --durability`; Mason writes its durability binding to
+`agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability, chosen
+in this order:
+
+1. Reuse the configured Session Store's Lakebase database.
+2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
+
+Mason adds only its `databricks_mason_runtime_<app-hash>` schema and tables to the selected database,
+giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
+`@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
+is disabled; register the same function for both decorators when replaying the initial invocation is
+safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
+responsibility.
+
+`mason init --framework langgraph --durability` scaffolds this minimal, API-only app. Bare
+`mason init`, `--framework langgraph`, and `--framework openai` continue to scaffold the existing
+templates unchanged.
+
 ## Commands
 
 ```text
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--disable-chat-app]
+  init         [--framework openai|langgraph] [--durability] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
@@ -137,7 +201,7 @@ mason [-p <profile>] [-o text|json]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
     add python       NAME [--source PATH]
     list             [--source PATH]
-  deploy       <name> --source PATH [--with-traces C.S]
+  deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
 ```
 

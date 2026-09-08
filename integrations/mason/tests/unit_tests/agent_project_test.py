@@ -163,3 +163,12 @@ def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
     )
     with pytest.raises(AgentCliError, match="session_store"):
         AgentProject.load(tmp_path)
+
+
+def test_load_rejects_invalid_durability_table(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
+    )
+    with pytest.raises(AgentCliError, match="enabled = true"):
+        AgentProject.load(tmp_path)

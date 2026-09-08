@@ -27,6 +27,9 @@ class _Ctx:
 
 
 def test_framework_specs_have_repo_ref_path():
+    assert init_mod._DURABILITY_TEMPLATE["path"] == (
+        "integrations/mason/templates/durable-langgraph-agent"
+    )
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
@@ -83,13 +86,65 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai" in result.output
 
 
-def test_init_defaults_to_langgraph_framework(tmp_path: pathlib.Path):
+def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
-        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())  # no --framework
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    # omitting --framework scaffolds the langgraph template
     assert f.call_args.args[2] == init_mod._TEMPLATES["langgraph"]["path"]
+    assert f.call_args.args[4] == ("integrations/mason/templates/ui/agent-langgraph",)
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "agent-langgraph",
+    }
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert "durability" not in manifest
+
+
+def test_init_scaffolds_durable_langgraph_agent(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", "langgraph", "--durability", str(dest)],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[2] == init_mod._DURABILITY_TEMPLATE["path"]
+    assert f.call_args.args[4] == ()
+    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
+        metadata = tomli.load(metadata_file)
+    assert metadata == {
+        "schema_version": 1,
+        "framework": "langgraph",
+        "template": "durable-langgraph-agent",
+    }
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["durability"] == {"enabled": True}
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--durability"],
+        ["--framework", "openai", "--durability"],
+    ],
+)
+def test_init_durability_requires_explicit_langgraph_framework(
+    tmp_path: pathlib.Path,
+    args: list[str],
+):
+    with mock.patch.object(init_mod, "_fetch_template") as fetched:
+        result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path / "proj")], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "requires --framework langgraph" in " ".join(result.output.split())
+    fetched.assert_not_called()
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
@@ -184,7 +239,15 @@ def test_init_langgraph_fetches_from_ai_bridge(tmp_path: pathlib.Path):
 
 def test_init_repo_ref_override(tmp_path: pathlib.Path):
     dest = tmp_path / "ov"
-    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+        )
+        return "a" * 40
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as f:
         result = CliRunner().invoke(
             init_mod.init,
             [
@@ -201,6 +264,33 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     assert f.call_args.args[0] == "https://example.com/fork.git"  # override wins
     assert f.call_args.args[1] == "wip"
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["project"]["dependencies"] == ["databricks-mason[runtime]>=0.1"]
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": "https://example.com/fork.git",
+        "rev": "a" * 40,
+        "subdirectory": "integrations/mason",
+    }
+
+
+def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
+    dest = tmp_path / "agent"
+    dest.mkdir()
+    (dest / "pyproject.toml").write_text(
+        '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+    )
+    repo = tmp_path / "bridge"
+
+    init_mod._pin_runtime_source(dest, "langgraph", str(repo), "feature")
+
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": repo.resolve().as_uri(),
+        "rev": "feature",
+        "subdirectory": "integrations/mason",
+    }
 
 
 def test_init_langgraph_includes_chat_app_by_default(tmp_path: pathlib.Path):
