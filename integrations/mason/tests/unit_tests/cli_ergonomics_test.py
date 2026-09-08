@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
+from databricks_mason.cli.memory import _normalize_source_type, entries, stores
+from databricks_mason.cli.sessions import sessions
 from databricks_mason.errors import AgentCliError
-from databricks_mason.memory import _normalize_source_type, entries, stores
-from databricks_mason.sessions import sessions
 
 
 class _Ctx:

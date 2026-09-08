@@ -10,10 +10,10 @@ from uuid import uuid4
 import click
 
 from databricks_mason._api_client import _workspace_client
-from databricks_mason.deploy import _app_url, _prefixed_name
-from databricks_mason.endpoint_output import SsePrinter, render_response
-from databricks_mason.endpoint_request import build_request
-from databricks_mason.endpoint_transport import HttpSession
+from databricks_mason.cli.deploy import _app_url, _prefixed_name
+from databricks_mason.cli.endpoint_output import SsePrinter, render_response
+from databricks_mason.cli.endpoint_request import build_request
+from databricks_mason.cli.endpoint_transport import HttpSession
 from databricks_mason.errors import AgentCliError
 
 _ROUTING_COOKIE = "__Host-databricks-app-router"

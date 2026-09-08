@@ -180,7 +180,7 @@ def test_scaffolded_agent_boots_and_answers_locally(tmp_path: pathlib.Path) -> N
 
     # 3. Take mason dev's OWN local manifest env, so the boot matches what `mason dev` runs the app
     #    with (the env it injects for a local run — e.g. the local-runtime marker).
-    from databricks_mason.dev import _dev_entry_point
+    from databricks_mason.cli.dev import _dev_entry_point
 
     manifest = _dev_entry_point(project / "app.yaml")
     manifest_env = {

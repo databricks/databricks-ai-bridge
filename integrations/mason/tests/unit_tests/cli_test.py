@@ -5,8 +5,8 @@ from __future__ import annotations
 import click
 from click.testing import CliRunner
 
-from databricks_mason import cli
-from databricks_mason import help as help_mod
+import databricks_mason.cli.app as cli
+from databricks_mason.cli import help as help_mod
 
 
 def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()):

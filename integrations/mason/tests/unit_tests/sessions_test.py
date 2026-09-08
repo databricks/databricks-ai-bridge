@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from databricks_mason.sessions import items, sessions, stores
+from databricks_mason.cli.sessions import items, sessions, stores
 
 
 class _Client:
