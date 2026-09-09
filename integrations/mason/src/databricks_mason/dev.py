@@ -112,15 +112,7 @@ def dev(
     if prepare_environment is None:
         prepare_environment = not (source_dir / ".venv").exists()
 
-    # `apps run-local` sets DATABRICKS_APP_NAME just like a deployment. Mark this invocation
-    # explicitly so the durability SDK selects its process-local development store instead of
-    # requiring the Lakebase resource that `mason deploy` attaches.
-    args = [
-        "apps",
-        "run-local",
-        "--env",
-        f"{_LOCAL_RUNTIME_ENV}=true",
-    ]
+    args = ["apps", "run-local"]
     if prepare_environment:
         args.append("--prepare-environment")
     if app_port is not None:
@@ -191,23 +183,27 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
 
 
-def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
-    """Return a filtered manifest path when app.yaml pins a build index, else None.
+def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
+    """Write the local-only app manifest consumed by ``apps run-local``.
 
-    Strips the deploy-only package-index env vars and writes the result next to app.yaml as
-    ``.mason-dev.app.yaml`` (so relative paths still resolve). Returns None when there's nothing to
-    strip, so the normal ``app.yaml`` is used unchanged.
+    The manifest marks the process as local so durability uses its in-memory store. Keeping this in
+    the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
+    not mutate the deployable ``app.yaml``. Deploy-only package-index variables are also removed.
     """
     try:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
-    except yaml.YAMLError:
-        return None
+    except yaml.YAMLError as exc:
+        raise AgentCliError(f"Could not parse {app_yaml}: {exc}") from exc
     env = doc.get("env")
-    if not isinstance(env, list):
-        return None
-    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
-    if len(filtered) == len(env):
-        return None  # no index override present — run-local can use app.yaml directly
+    filtered = (
+        [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
+        if isinstance(env, list)
+        else []
+    )
+    filtered = [
+        e for e in filtered if not (isinstance(e, dict) and e.get("name") == _LOCAL_RUNTIME_ENV)
+    ]
+    filtered.append({"name": _LOCAL_RUNTIME_ENV, "value": "true"})
     doc["env"] = filtered
     dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
     try:

@@ -6,6 +6,7 @@ import pathlib
 from unittest import mock
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
@@ -37,7 +38,10 @@ def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     args, kwargs = db.call_args
     assert args[0][:2] == ["apps", "run-local"]
-    assert "DATABRICKS_MASON_RUNTIME_LOCAL=true" in args[0]
+    assert "--env" not in args[0]
+    dev_yaml = tmp_path / ".mason-dev.app.yaml"
+    env = {e["name"]: e["value"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
+    assert env["DATABRICKS_MASON_RUNTIME_LOCAL"] == "true"
     assert "--prepare-environment" in args[0]  # no venv yet -> build it
     assert args[1] == "ml"  # profile passed through
     assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir
@@ -74,7 +78,7 @@ def test_dev_no_prepare_and_custom_port(tmp_path: pathlib.Path):
     assert result.exit_code == 0, result.output
     cmd = db.call_args.args[0]
     assert "--prepare-environment" not in cmd
-    assert cmd[-2:] == ["--app-port", "9000"]
+    assert cmd[cmd.index("--app-port") : cmd.index("--app-port") + 2] == ["--app-port", "9000"]
 
 
 def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
@@ -100,20 +104,26 @@ def test_dev_filters_build_index_env_via_entry_point(tmp_path: pathlib.Path):
     dev_yaml = tmp_path / ".mason-dev.app.yaml"
     assert str(dev_yaml) in cmd
     names = {e["name"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
-    assert names == {"AGENT_SESSION_STORE"}  # index vars stripped, app env kept
+    assert names == {"AGENT_SESSION_STORE", "DATABRICKS_MASON_RUNTIME_LOCAL"}
 
 
-def test_dev_no_entry_point_when_no_index_override(tmp_path: pathlib.Path):
-    import yaml
-
+def test_dev_uses_local_entry_point_without_index_override(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text(
         yaml.safe_dump({"command": ["x"], "env": [{"name": "AGENT_SESSION_STORE", "value": "s"}]})
     )
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    assert "--entry-point" not in db.call_args.args[0]  # nothing to strip -> use app.yaml as-is
-    assert not (tmp_path / ".mason-dev.app.yaml").exists()
+    cmd = db.call_args.args[0]
+    assert "--entry-point" in cmd
+    dev_yaml = tmp_path / ".mason-dev.app.yaml"
+    env = {e["name"]: e["value"] for e in yaml.safe_load(dev_yaml.read_text())["env"]}
+    assert env == {
+        "AGENT_SESSION_STORE": "s",
+        "DATABRICKS_MASON_RUNTIME_LOCAL": "true",
+    }
+    original_env = yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    assert original_env == [{"name": "AGENT_SESSION_STORE", "value": "s"}]
 
 
 def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.Path):
