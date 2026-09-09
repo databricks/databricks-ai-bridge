@@ -259,10 +259,9 @@ def _load_project(source: pathlib.Path):
     """The AgentProject at `source`, or None when there's no readable agent.toml."""
     from databricks_mason.agent_project import AgentProject
 
-    try:
-        return AgentProject.load(source)
-    except AgentCliError:
+    if not (source / "agent.toml").is_file():
         return None
+    return AgentProject.load(source)
 
 
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:

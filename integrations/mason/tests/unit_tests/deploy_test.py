@@ -323,6 +323,26 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
 
 
+def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
+    tmp_path: pathlib.Path,
+) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (src / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "langgraph"\n\n[durability]\nenabled = "yes"\n'
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code != 0
+    assert "enabled = true or false" in result.output
+
+
 def test_deploy_durability_binding_reuses_session_store_before_startup(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
