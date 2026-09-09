@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
-# checked-in .env, which otherwise overrides the profile but not the host and breaks auth.
+# checked-in .env.
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 
 
