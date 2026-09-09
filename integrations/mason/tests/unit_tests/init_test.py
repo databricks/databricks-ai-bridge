@@ -182,6 +182,13 @@ def test_init_no_durable_runtime_keeps_mason_server_without_binding(
     assert "disabled" in result.output
 
 
+def test_init_help_hides_no_durable_runtime():
+    result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "--no-durable-runtime" not in result.output
+
+
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_init_custom_server_uses_minimal_template(
     tmp_path: pathlib.Path,

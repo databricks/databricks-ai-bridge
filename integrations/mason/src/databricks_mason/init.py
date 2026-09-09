@@ -282,6 +282,7 @@ def _configure_durable_runtime(dest: pathlib.Path, enabled: bool) -> None:
 @click.option(
     "--no-durable-runtime",
     is_flag=True,
+    hidden=True,
     help="Keep Mason server background state in-process instead of provisioning Lakebase.",
 )
 @click.option(
@@ -326,8 +327,8 @@ def init(
     scaffolded project runs with `mason dev` right away.
 
     The default Mason server supports foreground, streaming, and background invocations through one
-    HTTP contract. Its runtime is durable by default; pass --no-durable-runtime to keep execution
-    state in-process. Pass --server custom for a minimal foreground-only FastAPI server.
+    HTTP contract with a durable runtime. Pass --server custom for a minimal foreground-only
+    FastAPI server.
     """
     selected_framework = framework or "langgraph"
     mason_server = server == "mason"
