@@ -171,18 +171,19 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
     ),
     ("tracing",): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+        (
+            "mason tracing configure",
+            "use the default per-project experiment (tracing is on by default)",
+        ),
+        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
+        ("mason tracing disable", "turn tracing off"),
     ),
-    ("tracing", "setup"): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+    ("tracing", "configure"): (
+        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
     ),
-    ("tracing", "list"): (
-        ("mason tracing list --experiment /Users/me/mason-traces/my-agent", "list recent traces"),
-    ),
+    ("tracing", "disable"): (("mason tracing disable", "turn tracing off"),),
+    ("tracing", "list"): (("mason tracing list --experiment 12345", "list recent traces"),),
     ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
-    ("tracing", "instrument"): (
-        ("mason tracing instrument --destination main.agent_traces", "print instrumentation code"),
-    ),
     ("deploy",): (
         ("mason deploy my-agent", "deploy the agent"),
         ("mason deploy my-agent --instances 2", "deploy with two instances"),

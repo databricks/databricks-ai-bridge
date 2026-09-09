@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 from unittest import mock
 
+import pytest
 from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
@@ -16,8 +17,15 @@ class _Ctx:
         self.output = output
         self.profile = profile
 
-    def client(self):  # only used when --with-* flags are passed
-        return mock.Mock()
+    def client(self):
+        return mock.Mock(current_user="me@example.com")
+
+
+@pytest.fixture(autouse=True)
+def _stub_tracing(monkeypatch):
+    """Tracing is on by default and would hit MLflow/the workspace; stub the provisioning so the
+    non-tracing dev tests stay hermetic. Tracing-specific tests override this."""
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -120,7 +128,7 @@ def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks") as db,
-        mock.patch.object(dev_mod, "validate_stores_and_trace_env", return_value={}) as validate,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -132,16 +140,77 @@ def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.
 
 
 def test_dev_without_bindings_does_not_validate(tmp_path: pathlib.Path):
-    # No agent.toml store bindings (and no --with-* traces) -> nothing to validate.
+    # No agent.toml store bindings -> nothing to validate (tracing is stubbed by the autouse fixture).
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
     with (
         mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "validate_stores_and_trace_env") as validate,
+        mock.patch.object(dev_mod, "validate_stores") as validate,
     ):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     validate.assert_not_called()
+
+
+def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing is on by default: dev resolves the per-project experiment and wires the two MLflow env vars
+    # into app.yaml (the experiment id + the workspace tracking uri).
+    import yaml
+
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    env = {
+        e["name"]: e["value"] for e in yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
+    }
+    assert env["MLFLOW_EXPERIMENT_ID"] == "exp-123"
+    assert env["MLFLOW_TRACKING_URI"] == "databricks"
+
+
+def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
+    # No stores + no auth: obj.client() raises, but tracing is best-effort, so dev still runs the
+    # agent locally (it doesn't regress the offline path).
+    from databricks_mason.errors import AgentCliError
+
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / ".venv").mkdir()
+
+    class _OfflineCtx:
+        output = "text"
+        profile = None
+
+        def client(self):
+            raise AgentCliError("no databricks auth configured")
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_OfflineCtx())
+    assert result.exit_code == 0, result.output
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+
+
+def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path, monkeypatch):
+    # Tracing is best-effort locally: if provisioning raises (e.g. no mlflow), dev still runs the
+    # agent, just without wiring any MLflow env.
+    import yaml
+
+    from databricks_mason.errors import AgentCliError
+
+    (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    (tmp_path / ".venv").mkdir()
+
+    def _boom(*a, **k):
+        raise AgentCliError("MLflow is required")
+
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", _boom)
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
+    assert not any(e["name"].startswith("MLFLOW") for e in env_entries)
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
 def test_dev_requires_app_yaml(tmp_path: pathlib.Path):

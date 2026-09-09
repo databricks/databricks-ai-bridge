@@ -96,6 +96,39 @@ def _current_app_resources(app: str, profile: Optional[str]) -> list[dict]:
     return resources if isinstance(resources, list) else []
 
 
+# The app-resource name for the trace experiment (unique across an app's resources, like a store's).
+_TRACE_EXPERIMENT_RESOURCE = "mason-trace-experiment"
+
+
+def apply_experiment_resource(
+    app: str, experiment_id: str, profile: Optional[str]
+) -> Optional[str]:
+    """Bind the trace experiment as an `experiment` app resource so the SP can write traces.
+
+    This is the platform-managed grant: declaring the experiment as a `CAN_EDIT` resource lets the
+    app's service principal log traces to it (no manual SQL grant). Uses the same read-modify-write as
+    `apply_postgres_resources` — `apps update` replaces the whole resource array, so preserve every
+    resource we don't own (including the store `postgres` resources) and re-apply ours by name.
+    Returns None on success or a human-readable reason on failure.
+    """
+    ours = {
+        "name": _TRACE_EXPERIMENT_RESOURCE,
+        "experiment": {"experiment_id": experiment_id, "permission": "CAN_EDIT"},
+    }
+    preserved = [
+        r
+        for r in _current_app_resources(app, profile)
+        if isinstance(r, dict) and r.get("name") != _TRACE_EXPERIMENT_RESOURCE
+    ]
+    payload = {"resources": preserved + [ours]}
+    result = _databricks(
+        ["apps", "update", app, "--json", json.dumps(payload)], profile, capture=True, check=False
+    )
+    if result.returncode == 0:
+        return None
+    return (result.stderr or result.stdout or "").strip() or "unknown error"
+
+
 def apply_postgres_resources(
     app: str, backends: list[LakebaseBackend], profile: Optional[str]
 ) -> Optional[str]:

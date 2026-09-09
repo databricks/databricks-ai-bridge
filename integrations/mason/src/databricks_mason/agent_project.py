@@ -17,6 +17,10 @@ from tomlkit.exceptions import ParseError
 from databricks_mason.errors import AgentCliError
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
 
+# The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
+# MLflow experiment); this table only records an explicit experiment override or a disable.
+TRACING_TABLE = "tracing"
+
 _SCHEMA_VERSION = 1
 _DURABILITY_TABLE = "durability"
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
@@ -309,6 +313,8 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         durability_enabled: bool = False,
+        trace_experiment_id: str | None = None,
+        trace_disabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -323,6 +329,10 @@ class AgentProject:
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
         self.durability_enabled = durability_enabled
+        # Tracing config: an explicit experiment id override (None = default per-project experiment), and
+        # whether tracing is disabled (tracing is on by default; this flag turns it off).
+        self.trace_experiment_id = trace_experiment_id
+        self.trace_disabled = trace_disabled
 
     @classmethod
     def load(cls, root: pathlib.Path | str) -> "AgentProject":
@@ -369,6 +379,15 @@ class AgentProject:
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
         durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
+        tracing_table = document.get(TRACING_TABLE)
+        trace_experiment_id: str | None = None
+        trace_disabled = False
+        if isinstance(tracing_table, Mapping):
+            raw_experiment = tracing_table.get("experiment_id")
+            trace_experiment_id = (
+                str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
+            )
+            trace_disabled = bool(tracing_table.get("disabled"))
         return cls(
             project_root,
             document,
@@ -379,6 +398,8 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             durability_enabled,
+            trace_experiment_id,
+            trace_disabled,
         )
 
     @classmethod
@@ -480,6 +501,41 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
+
+    def configure_tracing(self, experiment_id: str | None) -> bool:
+        """Enable tracing and (optionally) pin an explicit experiment id. Returns True if changed.
+
+        ``experiment_id=None`` means "use the default per-project experiment": any prior override is
+        cleared. Enabling always clears a previous ``disabled`` flag (tracing is on by default, so an
+        absent ``[tracing]`` table is the enabled default).
+        """
+        if self.trace_experiment_id == experiment_id and not self.trace_disabled:
+            return False
+        table = self._document.get(TRACING_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            self._document.append(TRACING_TABLE, table)
+        if "disabled" in table:
+            del table["disabled"]
+        if experiment_id:
+            table["experiment_id"] = experiment_id
+        elif "experiment_id" in table:
+            del table["experiment_id"]
+        self.trace_experiment_id = experiment_id
+        self.trace_disabled = False
+        return True
+
+    def disable_tracing(self) -> bool:
+        """Turn tracing off (records ``[tracing] disabled = true``). Returns True if changed."""
+        if self.trace_disabled:
+            return False
+        table = self._document.get(TRACING_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            self._document.append(TRACING_TABLE, table)
+        table["disabled"] = True
+        self.trace_disabled = True
+        return True
 
     def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
         name = _required_string(name, f"[{table}] name")
