@@ -27,7 +27,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
-        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev/deploy)"),
+        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
+        (
+            "mason memory entries create --store <store> --actor-id alice "
+            '--path /preferences/style.md --content "Terse, code first."',
+            "add a memory entry for an actor (--store takes the store id)",
+        ),
+        (
+            'mason memory entries search --store <store> --actor-id alice --query "style"',
+            "search an actor's entries",
+        ),
     ),
     ("memory", "bind"): (
         ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
@@ -85,8 +94,21 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason mcp list --schema main.tools", "scope the list to one UC schema"),
     ),
     ("sessions",): (
-        ("mason sessions stores list", "list managed session stores"),
-        ("mason sessions list --help", "see how to list sessions"),
+        ("mason sessions stores create --name agent-sessions", "create a session store"),
+        ("mason sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
+        (
+            "mason sessions create --store agent-sessions --actor-id alice",
+            "start a session for an actor",
+        ),
+        (
+            "mason sessions items append --store agent-sessions --session-id <session-id> "
+            '--data \'{"role":"user","content":"Hello"}\'',
+            "append an item to the session",
+        ),
+        (
+            "mason sessions items list --store agent-sessions --session-id <session-id>",
+            "list the session's items",
+        ),
     ),
     ("sessions", "bind"): (
         ("mason sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
