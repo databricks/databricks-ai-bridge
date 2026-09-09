@@ -46,6 +46,31 @@ def test_root_registers_supported_commands():
     assert "add-sandbox" not in names
 
 
+def test_root_help_describes_the_product_and_links_out():
+    # The root page should say what Mason is in plain language (not lead with internal API detail)
+    # and point a reader to docs + support, per CLI help best practices.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "building and deploying custom AI agents on Databricks" in result.output
+    # No internal API path in the user-facing description.
+    assert "agents/v1" not in result.output
+    # Docs and issues links appear (root only).
+    assert help_mod._DOCS_URL in result.output
+    assert help_mod._ISSUES_URL in result.output
+
+
+def test_group_help_has_no_raw_api_paths():
+    # Group descriptions should read for users, not expose REST endpoints.
+    runner = CliRunner()
+    for path in ((), *_command_paths(cli.mason)):
+        result = runner.invoke(cli.mason, [*path, "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        # The Docs/Issues footer legitimately carries the repo URL on the root page; the offending
+        # pattern we guard against is the raw API path that used to lead group descriptions.
+        assert "/api/agents/v1" not in result.output, path
+
+
 def test_nested_command_help_shows_usage_options_and_examples():
     result = CliRunner().invoke(cli.mason, ["tools", "add", "sandbox", "--help"])
 
@@ -60,13 +85,16 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage tools configured in an agent project's agent.toml." in result.output
+    assert "Tools are what let an agent act" in result.output
+    # The supported tool types are listed on the group page.
+    for tool_type in ("sandbox", "mcp", "uc-function", "python"):
+        assert tool_type in result.output
     assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
     assert "Remove a tool binding from this agent." in result.output
     assert "List tools configured for this agent." in result.output
     assert "mason tools add --help" in result.output
-    assert "mason tools add mcp system.ai.web_search" in result.output
-    assert "mason tools remove mcp system.ai.web_search" in result.output
+    assert "mason tools add mcp system.ai.python_exec" in result.output
+    assert "mason tools remove mcp system.ai.python_exec" in result.output
 
 
 def test_tools_remove_help_shows_id_and_project_targeting():
@@ -75,8 +103,8 @@ def test_tools_remove_help_shows_id_and_project_targeting():
     assert result.exit_code == 0, result.output
     assert "Usage: mason tools remove [OPTIONS] TOOL_ID [MCP_SERVICE]" in result.output
     assert "--source DIRECTORY" in result.output
-    assert "mason tools remove mcp system.ai.web_search" in result.output
-    assert "mason tools remove web_search" in result.output
+    assert "mason tools remove mcp system.ai.python_exec" in result.output
+    assert "mason tools remove python_exec" in result.output
 
 
 def test_tools_add_help_explains_types_and_project_targeting():
@@ -87,7 +115,7 @@ def test_tools_add_help_explains_types_and_project_targeting():
     assert "Pass --source PATH to target another project." in result.output
     for example in (
         "mason tools add sandbox --scope table:samples.nyctaxi.trips",
-        "mason tools add mcp system.ai.web_search",
+        "mason tools add mcp system.ai.python_exec",
         "mason tools add uc-function catalog.schema.lookup_ticket",
         "mason tools add python lookup-ticket",
     ):

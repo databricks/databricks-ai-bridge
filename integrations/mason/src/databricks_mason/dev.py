@@ -60,18 +60,26 @@ def dev(
     prepare_environment: Optional[bool],
     app_port: Optional[int],
 ) -> None:
-    """Run a scaffolded agent locally from its app.yaml (wraps `databricks apps run-local`).
+    """Run your agent locally so you can try it before deploying.
 
-    Reads the app's command + env from ``app.yaml`` and runs it the way the Apps runtime does — so
-    local behavior matches a deployment. Auth uses the profile (``-p`` / ``mason login``), same as
-    ``mason deploy``. The environment is built on first run and reused after; pass
-    ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
+    Starts the agent on a local server — by default http://localhost:8000 — and prints where to
+    reach it: the chat UI if the project has one, otherwise a sample request against the agent's
+    API.
+
+    Auth uses your Databricks profile (`-p` / `mason login`), and the agent reaches Databricks model
+    serving through the AI Gateway on that profile — so there are no model keys to set up.
+
+    Under the hood this wraps `databricks apps run-local`: it reads the command + env from
+    `app.yaml` and runs the app the way the Apps runtime would, so local behavior matches a
+    deployment. The environment is built on the first run and reused after; pass
+    `--prepare-environment` to force a rebuild (e.g. after changing dependencies).
 
     Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
-    the project name (the same one ``mason deploy`` uses), created and pinned into agent.toml on first
-    run — configure or turn it off with ``mason tracing configure`` / ``disable``. Stores bound with ``mason memory/sessions
-    bind`` are validated here and read from agent.toml at runtime. Locally you already have access, so
-    no service-principal grant is needed; that grant happens at ``mason deploy`` time.
+    the project name (the same one `mason deploy` uses), created and pinned into agent.toml on first
+    run — configure or turn it off with `mason tracing configure` / `disable`. Stores bound with
+    `mason memory/sessions bind` are validated here and read from agent.toml at runtime. Locally you
+    already have access, so no service-principal grant is needed; that grant happens at `mason
+    deploy` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"

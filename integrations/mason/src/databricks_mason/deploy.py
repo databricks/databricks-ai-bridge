@@ -446,18 +446,22 @@ def deploy(
     workspace_path,
     instances,
 ) -> None:
-    """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
+    """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
-    NAME is recorded in agent.toml on first deploy, so later `mason deploy` (from the project dir)
-    can omit it; passing NAME again updates the recorded name. The app is named `mason-<name>`
-    (Mason adds the prefix if absent); use that full name with the other `mason deployments` verbs.
-    `deployments list` shows only apps carrying this prefix.
+    Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with)
+    can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the
+    app's own identity — no model keys to configure — and `deploy` also provisions the stores bound
+    in agent.toml and wires in any tracing.
 
-    Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
-    preserve the routing cookie automatically.
+    NAME is recorded in agent.toml on the first deploy, so a later `mason deploy` from the project
+    directory can omit it (passing NAME again updates the recorded name). The deployed app is named
+    `mason-<name>`; use that full name with the `mason deployments` commands.
+
+    Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
+    session automatically stays on one instance.
 
     \b
-    API clients must reuse a stable UUID in this cookie on every request:
+    API clients that need it must resend a stable UUID in this cookie every request:
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
@@ -685,7 +689,7 @@ def deploy(
 
 @click.group()
 def deployments() -> None:
-    """Manage agent deployments."""
+    """Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete."""
 
 
 def _deployment_status(a: dict) -> Optional[str]:

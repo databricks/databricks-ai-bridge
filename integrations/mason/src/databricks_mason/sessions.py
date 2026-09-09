@@ -25,7 +25,16 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def sessions() -> None:
-    """Manage agent session stores, sessions, and items (/api/agents/v1/session-stores)."""
+    """Manage an agent's conversations: session stores, the sessions in them, and their items.
+
+    A session is a single conversation between an actor (a user) and the agent. It holds that
+    conversation's ordered transcript of items — the messages, tool calls, and results that make up
+    its running state. A session store is the managed store that holds an agent's sessions and their
+    items, giving it durable conversation history it can list, resume, fork, or delete.
+
+    This is the short-term, per-conversation counterpart to the cross-conversation memory in
+    `mason memory`.
+    """
 
 
 @sessions.group()

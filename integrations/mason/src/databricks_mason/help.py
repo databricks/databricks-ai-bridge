@@ -27,7 +27,16 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("dev",): (("mason dev", "run the agent locally with a chat UI"),),
     ("memory",): (
         ("mason memory stores create --display-name agent-memory", "create a memory store"),
-        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev/deploy)"),
+        ("mason memory bind agent-memory", "bind it to the agent (wired in on dev / deploy)"),
+        (
+            "mason memory entries create --store <store> --actor-id alice "
+            '--path /preferences/style.md --content "Terse, code first."',
+            "add a memory entry for an actor (--store takes the store id)",
+        ),
+        (
+            'mason memory entries search --store <store> --actor-id alice --query "style"',
+            "search an actor's entries",
+        ),
     ),
     ("memory", "bind"): (
         ("mason memory bind agent-memory --source .", "declare a memory store in agent.toml"),
@@ -85,8 +94,21 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason mcp list --schema main.tools", "scope the list to one UC schema"),
     ),
     ("sessions",): (
-        ("mason sessions stores list", "list managed session stores"),
-        ("mason sessions list --help", "see how to list sessions"),
+        ("mason sessions stores create --name agent-sessions", "create a session store"),
+        ("mason sessions bind agent-sessions", "bind it to the agent (wired in on dev / deploy)"),
+        (
+            "mason sessions create --store agent-sessions --actor-id alice",
+            "start a session for an actor",
+        ),
+        (
+            "mason sessions items append --store agent-sessions --session-id <session-id> "
+            '--data \'{"role":"user","content":"Hello"}\'',
+            "append an item to the session",
+        ),
+        (
+            "mason sessions items list --store agent-sessions --session-id <session-id>",
+            "list the session's items",
+        ),
     ),
     ("sessions", "bind"): (
         ("mason sessions bind agent-sessions --source .", "declare a session store in agent.toml"),
@@ -202,13 +224,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("mason tools remove mcp system.ai.web_search", "remove a tool binding"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
+        ("mason tools remove mcp system.ai.python_exec", "remove a tool binding"),
         ("mason tools list", "list configured tools"),
     ),
     ("tools", "add"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
         ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
@@ -216,7 +238,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
     ),
     ("tools", "add", "mcp"): (
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
     ),
     ("tools", "add", "uc-function"): (
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
@@ -225,8 +247,8 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "remove"): (
-        ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
-        ("mason tools remove web_search", "remove a tool by id"),
+        ("mason tools remove mcp system.ai.python_exec", "remove an MCP tool by service"),
+        ("mason tools remove python_exec", "remove a tool by id"),
     ),
     ("tools", "list"): (("mason tools list", "list configured tools"),),
 }
@@ -234,6 +256,30 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
 # Longest command we align an inline `# comment` after. Past this, a group's comments would be
 # pushed so far right they wrap or scroll off, so we stack the comment on the line above instead.
 _INLINE_COMMENT_MAX = 46
+
+# Where to send a reader who wants more than the help text — best-practice CLI help links out to
+# docs and a support/issues path. Shown only on the root `mason --help`, so subcommand help stays
+# uncluttered.
+_DOCS_URL = "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/mason"
+_ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
+
+# Short, one-line descriptors for the root command list. Click renders that list as a scannable
+# index and truncates a long first docstring line with `…`; a curated `short_help` keeps each row
+# crisp while the command's own `--help` page still shows its full docstring. Keep these under ~45
+# chars so they never truncate.
+_SHORT_HELP: dict[CommandPath, str] = {
+    ("login",): "Authenticate and save a default profile",
+    ("logout",): "Forget the saved default profile",
+    ("init",): "Scaffold a new agent project",
+    ("dev",): "Run the agent locally with a chat UI",
+    ("deploy",): "Deploy an agent to Databricks Apps",
+    ("deployments",): "Manage deployed agents",
+    ("memory",): "Manage an agent's long-term memory",
+    ("sessions",): "Manage an agent's conversation sessions",
+    ("mcp",): "Discover managed MCP services",
+    ("tools",): "Manage an agent's tools",
+    ("tracing",): "Set up and inspect agent tracing",
+}
 
 
 def _walk(
@@ -277,10 +323,30 @@ def _example_epilog(examples: tuple[Example, ...]) -> str:
     return "\n".join(lines)
 
 
+def _root_epilog() -> str:
+    """The root help footer: the quickstart examples, an auth note, then Docs/Issues links.
+
+    Each block is its own `\\b` paragraph so Click renders it verbatim (commands and URLs intact)
+    instead of rewrapping it.
+    """
+    auth = "\n".join(
+        [
+            "\b",
+            "Not authenticated yet? Create a profile with the Databricks CLI first:",
+            "  databricks auth login --profile <profile>",
+            "Then `mason login --profile <profile>` saves it as your default.",
+        ]
+    )
+    links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])
+    return f"{_example_epilog(_EXAMPLES[()])}\n\n{auth}\n\n{links}"
+
+
 def configure_help(root: click.Group) -> None:
-    """Attach curated examples to the root and every existing command."""
-    root.epilog = _example_epilog(_EXAMPLES[()])
+    """Attach curated short help and examples to the root and every existing command."""
+    root.epilog = _root_epilog()
     for path, command in _walk(root):
+        if path in _SHORT_HELP:
+            command.short_help = _SHORT_HELP[path]
         examples = _EXAMPLES.get(path)
         if examples:
             command.epilog = _example_epilog(examples)

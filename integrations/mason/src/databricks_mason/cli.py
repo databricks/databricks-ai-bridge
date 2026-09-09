@@ -52,11 +52,33 @@ class CliContext:
 @click.version_option(package_name="databricks-mason", prog_name="mason")
 @click.pass_context
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
-    """Mason: deploy agents and manage their memory and sessions.
+    """Mason is a CLI for building and deploying custom AI agents on Databricks.
 
-    Targets the agents/v1 preview APIs served on a workspace; auth comes from a
-    .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
-    or rely on the SDK's default resolution).
+    Mason is experimental: the CLI, its commands, and the underlying agent APIs are all in preview,
+    may need to be enabled for your workspace, and are likely to change in backward-incompatible
+    ways.
+
+    Scaffold an agent project from a template, run it locally with a chat UI, and deploy it to
+    Databricks Apps — then manage the tools, memory, sessions, and tracing behind it, all from one
+    authenticated command.
+
+    New here? The examples below take you from an empty directory to a deployed agent. Mason
+    authenticates with a Databricks profile: run `mason login` once to save a default, or pass
+    --profile / -p (without one, the Databricks SDK's default authentication is used).
+
+    An agent you build with Mason can combine the platform's capabilities:
+
+    \b
+      Models       Call Databricks model serving out of the box, routed through
+                   the AI Gateway for capacity on your existing Databricks auth.
+      Tools        Data sandboxes, managed MCP services, Unity Catalog
+                   functions, and local Python tools the agent can call.
+      Memory       Long-term memory the agent recalls across conversations.
+      Sessions     The transcript, history, and state of a single conversation.
+      Tracing      MLflow traces in Unity Catalog to debug and evaluate runs.
+      Deployment   Hosting on Databricks Apps, with scaling and sticky routing.
+
+    `mason deploy` provisions and wires these into a single agent hosted on Databricks Apps.
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)

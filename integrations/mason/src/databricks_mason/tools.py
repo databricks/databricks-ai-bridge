@@ -171,7 +171,23 @@ def _write_new_files(files: dict[pathlib.Path, str]) -> list[pathlib.Path]:
 
 @click.group()
 def tools() -> None:
-    """Manage tools configured in an agent project's agent.toml."""
+    """Manage the tools an agent can call, declared in the project's agent.toml.
+
+    Tools are what let an agent act beyond the language model itself — query governed data, call a
+    service, or run a function — and each one is recorded in agent.toml so `mason dev` / `mason
+    deploy` wire it in. Mason supports these tool types out of the box:
+
+    \b
+      sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
+                    to the tables, volumes, or paths you choose.
+      mcp           A Databricks-managed MCP service (see `mason mcp list`),
+                    e.g. system.ai.python_exec.
+      uc-function   An existing Unity Catalog function (catalog.schema.function).
+      python        A local Python tool scaffolded into your project.
+
+    Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop
+    one with `mason tools remove`.
+    """
 
 
 @tools.group("add")
@@ -218,7 +234,7 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
 ) -> None:
-    """Bind system.ai.sandbox with protected downscoping."""
+    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources."""
     add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id)
 
 
@@ -233,8 +249,8 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind a Databricks managed MCP SERVICE."""
-    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
+    """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
+    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
     _add_spec(
         obj,
         source.resolve(),
@@ -253,7 +269,7 @@ def add_uc_function(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind an existing three-part Unity Catalog function."""
+    """Add an existing Unity Catalog function (catalog.schema.function) as a tool."""
     _require_arg(function_name, "Unity Catalog function name (catalog.schema.function)")
     _add_spec(
         obj,
@@ -270,7 +286,7 @@ def add_uc_function(
 @_source_option
 @click.pass_obj
 def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
-    """Scaffold a framework-native local Python tool and starter test."""
+    """Add a local Python tool: scaffold a framework-native tool file and a starter test."""
     _require_arg(name, "tool name")
     project = AgentProject.load(source)
     _require_python_tool_support(project)

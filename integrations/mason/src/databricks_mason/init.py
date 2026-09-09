@@ -326,6 +326,9 @@ def init(
     Pass --profile (or set a default via `mason login` / -p) to seed a local `.env` so the
     scaffolded project runs with `mason dev` right away.
 
+    The scaffold is preconfigured to call Databricks model serving through the AI Gateway using
+    that profile, so it can talk to a model with no separate endpoint or API key to set up.
+
     The default Mason server supports foreground, streaming, and background invocations through one
     HTTP contract with a durable runtime. Pass --server custom for a minimal foreground-only
     FastAPI server.
