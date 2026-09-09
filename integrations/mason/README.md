@@ -207,46 +207,46 @@ mason [-p <profile>] [-o text|json]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
   endpoint
-    invoke      [APP] [--url URL] [--preset mason|mason-durable]
-    loadtest    [APP] [--url URL] [--preset mason|mason-durable]
+    invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```
 
-## Invoke and load-test HTTP endpoints
+## Invoke HTTP endpoints
 
-`mason endpoint` targets any Databricks App or arbitrary HTTP URL. Generic mode does not assume an
-agent protocol: provide the method, path, headers, query parameters, and complete JSON body.
-
-```sh
-mason --profile <profile> endpoint invoke my-app \
-  --path /api/custom-agent \
-  --json '{"question":"hello"}'
-
-mason endpoint invoke --url http://localhost:8000 \
-  --path /custom-agent/run \
-  --json-file request.json
-```
-
-Presets add request defaults for Mason-owned runtimes while retaining the same HTTP transport. The
-`mason` preset targets the standard LangGraph/OpenAI templates. The `mason-durable` preset targets
-`DurableAgentApp`, generates a unique invocation id, and understands background polling.
+`mason endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
+Databricks App, or targets localhost and arbitrary servers through `--url`. It does not assume an
+agent protocol: provide the method, path, query parameters, and complete JSON body required by the
+server.
 
 ```sh
 mason --profile <profile> endpoint invoke mason-my-agent \
-  --preset mason --message "Summarize today's activity" --stream
+  --path /api/invocations \
+  --json '{"input":[{"role":"user","content":"Hello"}]}'
 
-mason --profile <profile> endpoint invoke mason-durable-agent \
-  --preset mason-durable --message "Run the report" --background --wait
+mason endpoint invoke --url http://localhost:8000 \
+  --path /api/invocations \
+  --json '{"input":[{"role":"user","content":"Hello"}]}'
 ```
 
-`loadtest` repeats the same generic or preset request and reports throughput, status codes, and
-latency percentiles. Durable preset requests receive a new id each time so persisted idempotent
-responses are not mistaken for model execution load. Its defaults are intentionally conservative:
-ten requests with concurrency one.
+The JSON body remains explicit even for Mason-generated agents. For example, durable agents require
+a client-generated invocation ID, and streaming servers require their own streaming field plus
+`--sse` so the CLI consumes the response as Server-Sent Events.
 
 ```sh
-mason --profile <profile> endpoint loadtest mason-my-agent \
-  --preset mason --message "Hello" --requests 20 --concurrency 4
+INVOCATION_ID=$(uuidgen)
+mason --profile <profile> endpoint invoke mason-durable-agent \
+  --path /api/invocations \
+  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
+
+mason --profile <profile> endpoint invoke mason-my-agent \
+  --path /api/invocations \
+  --sse \
+  --json '{"input":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
+
+`--session-id` preserves one application session across calls. Mason maps it to the Databricks Apps
+routing cookie for deployed Apps and to the generated runtime's local session cookie for `--url`.
+OAuth and session headers are managed by Mason; arbitrary custom request headers are intentionally
+not exposed by this command.
 
 ## Command help
 

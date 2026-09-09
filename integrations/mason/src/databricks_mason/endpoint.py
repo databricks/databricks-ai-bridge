@@ -1,224 +1,149 @@
-"""CLI entry point for invoking deployed HTTP endpoints."""
+"""CLI entry point for invoking arbitrary HTTP endpoints."""
 
 from __future__ import annotations
 
 import json
-import time
-import urllib.parse
-from typing import Mapping
-from uuid import UUID, uuid4
+from dataclasses import replace
+from typing import Optional
+from uuid import uuid4
 
 import click
 
-from databricks_mason.endpoint_loadtest import loadtest
-from databricks_mason.endpoint_output import StreamPrinter, render_response, success
-from databricks_mason.endpoint_presets import (
-    PRESET_NAMES,
-    EndpointPreset,
-    get_preset,
-    polling_path,
-    terminal_status,
-)
-from databricks_mason.endpoint_request import build_request, request_url, resolve_target
-from databricks_mason.endpoint_transport import EndpointRequest, EndpointResponse, HttpSession
+from databricks_mason._api_client import _workspace_client
+from databricks_mason.deploy import _app_url, _prefixed_name
+from databricks_mason.endpoint_output import SsePrinter, render_response
+from databricks_mason.endpoint_request import build_request
+from databricks_mason.endpoint_transport import HttpSession
 from databricks_mason.errors import AgentCliError
 
+_ROUTING_COOKIE = "__Host-databricks-app-router"
+_LOCAL_SESSION_COOKIE = "mason-local-session"
 
-def _wait_for_completion(
-    session: HttpSession,
-    response: EndpointResponse,
-    *,
-    preset: EndpointPreset,
-    base_url: str,
-    headers: dict[str, str],
-    timeout: float,
-    poll_interval: float,
-) -> EndpointResponse:
-    if not isinstance(response.body, Mapping):
-        raise AgentCliError("The background response did not contain a JSON object to poll.")
-    path = polling_path(preset, response.body)
-    if path is None:
+
+def _resolve_endpoint(
+    app: str | None,
+    url: str | None,
+    profile: Optional[str],
+) -> tuple[str, bool]:
+    if app and url:
+        raise AgentCliError("APP and --url are mutually exclusive.")
+    if url:
+        return url.rstrip("/"), False
+    if not app:
         raise AgentCliError(
-            "The background response did not contain an invocation id or status URL."
+            "Provide a Databricks App name or --url.",
+            hint="Use --url http://localhost:8000 when running the agent locally.",
         )
-    poll_url = request_url(base_url, path, {})
-    if _origin(poll_url) != _origin(base_url):
-        raise AgentCliError(
-            "Refusing to poll a cross-origin status URL.",
-            hint="Mason preserves OAuth and routing headers while polling, so the status URL must use the endpoint origin.",
-        )
-    deadline = time.monotonic() + timeout
-    current = response
-    while True:
-        if isinstance(current.body, Mapping) and terminal_status(current.body.get("status")):
-            return current
-        if not 200 <= current.status_code < 300:
-            return current
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise AgentCliError(f"Timed out waiting {timeout:g}s for the invocation to complete.")
-        time.sleep(min(poll_interval, remaining))
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise AgentCliError(f"Timed out waiting {timeout:g}s for the invocation to complete.")
-        current = session.send(
-            EndpointRequest(
-                url=poll_url,
-                method="GET",
-                headers=headers,
-                body=None,
-                timeout=min(remaining, 60.0),
+    app_name = _prefixed_name(app)
+    resolved_url = _app_url(app_name, profile)
+    if not resolved_url:
+        raise AgentCliError(f"Could not resolve a URL for Databricks App {app_name!r}.")
+    return resolved_url.rstrip("/"), True
+
+
+def _authorization_header(profile: Optional[str]) -> str:
+    try:
+        client = _workspace_client(profile)
+        if client.config.auth_type == "pat":
+            raise AgentCliError(
+                "Databricks Apps API routes require OAuth; the selected profile uses a PAT.",
+                hint="Authenticate the same workspace with `databricks auth login`.",
             )
-        )
+        authorization = client.config.authenticate().get("Authorization")
+    except AgentCliError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - render auth failures without a traceback
+        raise AgentCliError(f"Could not initialize endpoint authentication: {exc}.") from exc
+    if not authorization:
+        raise AgentCliError("Could not resolve an OAuth access token for the endpoint request.")
+    return authorization
 
 
-def _origin(url: str) -> tuple[str, str | None, int | None]:
-    parsed = urllib.parse.urlsplit(url)
-    port = parsed.port
-    if port is None:
-        port = (
-            443
-            if parsed.scheme.lower() == "https"
-            else 80
-            if parsed.scheme.lower() == "http"
-            else None
-        )
-    return parsed.scheme.lower(), parsed.hostname, port
+def _platform_headers(
+    *,
+    authenticate: bool,
+    profile: Optional[str],
+    session_id: str | None,
+    is_app: bool,
+) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if authenticate:
+        headers["Authorization"] = _authorization_header(profile)
+    if session_id:
+        cookie_name = _ROUTING_COOKIE if is_app else _LOCAL_SESSION_COOKIE
+        headers["Cookie"] = f"{cookie_name}={session_id}"
+    return headers
 
 
 @click.group()
 def endpoint() -> None:
-    """Invoke and load-test arbitrary HTTP endpoints."""
+    """Invoke arbitrary HTTP endpoints."""
 
 
 @click.command("invoke")
-@click.argument("target", required=False, metavar="[APP]")
-@click.option("--url", default=None, help="Base URL instead of a Databricks App name.")
-@click.option(
-    "--source",
-    default=".",
-    type=click.Path(exists=True, file_okay=False),
-    help="Project directory used when APP is omitted.",
-)
-@click.option("--preset", type=click.Choice(PRESET_NAMES), default=None)
+@click.argument("app", required=False, metavar="[APP]")
+@click.option("--url", default=None, help="Base URL for localhost or an arbitrary HTTP server.")
 @click.option("--method", default="POST", show_default=True)
-@click.option("--path", default=None, help="Request path; required without a preset.")
-@click.option("--header", "header", multiple=True, help="HTTP header as 'Name: value'.")
+@click.option("--path", required=True, help="Request path, such as /api/invocations.")
 @click.option("--query", "query", multiple=True, help="Query parameter as 'name=value'.")
 @click.option("--json", "json_value", default=None, help="Complete JSON request body.")
+@click.option("--sse", is_flag=True, help="Consume the response as Server-Sent Events.")
 @click.option(
-    "--json-file",
+    "--session-id",
     default=None,
-    type=click.Path(dir_okay=False, allow_dash=True),
-    help="Read the complete JSON body from a file, or '-' for stdin.",
+    help="Application session id (default: generated for a Databricks App).",
 )
-@click.option("--message", default=None, help="User message shorthand for a Mason preset.")
-@click.option("--stream", is_flag=True, help="Request and consume an SSE response.")
-@click.option("--background", is_flag=True, help="Submit a background invocation.")
-@click.option("--wait", is_flag=True, help="Poll a preset background invocation to completion.")
-@click.option("--id", "request_id", default=None, help="Durable invocation id (default: UUID).")
 @click.option("--timeout", type=click.FloatRange(min=0.1), default=300.0, show_default=True)
-@click.option("--poll-interval", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
-@click.option("--expect-status", type=int, multiple=True, help="Expected HTTP status (repeatable).")
-@click.option("--routing-key", default=None, help="Stable Databricks Apps routing cookie value.")
 @click.option("--auth/--no-auth", default=None, help="Inject Databricks OAuth authentication.")
 @click.pass_obj
 def invoke(
     obj,
-    target,
+    app,
     url,
-    source,
-    preset,
     method,
     path,
-    header,
     query,
     json_value,
-    json_file,
-    message,
-    stream,
-    background,
-    wait,
-    request_id,
+    sse,
+    session_id,
     timeout,
-    poll_interval,
-    expect_status,
-    routing_key,
     auth,
 ) -> None:
     """Send one HTTP request to a Databricks App or arbitrary URL."""
-    selected_preset = get_preset(preset)
-    if request_id is not None and (
-        selected_preset is None or not selected_preset.client_generated_id
-    ):
-        raise AgentCliError("--id requires --preset mason-durable.")
-    if request_id is not None:
-        try:
-            UUID(request_id)
-        except ValueError as exc:
-            raise AgentCliError("--id must be a valid UUID.") from exc
-    if wait and (not background or selected_preset is None):
-        raise AgentCliError("--wait requires --background and a Mason preset.")
-    base_url, is_app, _ = resolve_target(
-        target=target,
-        url=url,
-        source=source,
-        profile=obj.profile,
-    )
+    base_url, is_app = _resolve_endpoint(app, url, obj.profile)
     authenticate = is_app if auth is None else auth
-    routing_key = routing_key or (str(uuid4()) if is_app else None)
+    session_id = session_id or (str(uuid4()) if is_app else None)
     request = build_request(
         base_url=base_url,
-        profile=obj.profile,
-        authenticate=authenticate,
-        preset=selected_preset,
         method=method,
         path=path,
-        header=header,
         query=query,
         json_value=json_value,
-        json_file=json_file,
-        message=message,
-        stream=stream,
-        background=background,
-        request_id=request_id,
         timeout=timeout,
-        routing_key=routing_key,
+        sse=sse,
     )
-    session = HttpSession()
-    printer = StreamPrinter(enabled=stream and obj.output == "text")
-    response = session.send(request, on_event=printer)
-    printer.finish()
-    if not success(response.status_code, expect_status):
+    request = replace(
+        request,
+        headers={
+            **request.headers,
+            **_platform_headers(
+                authenticate=authenticate,
+                profile=obj.profile,
+                session_id=session_id,
+                is_app=is_app,
+            ),
+        },
+    )
+    printer = SsePrinter(enabled=sse and obj.output == "text")
+    response = HttpSession().send(request, on_event=printer)
+    if not 200 <= response.status_code < 300:
         raise AgentCliError(
             f"Endpoint returned HTTP {response.status_code}.",
             hint=json.dumps(response.body, default=str)[:1000]
             if response.body is not None
             else None,
         )
-    if wait:
-        if selected_preset is None:
-            raise AgentCliError("--wait requires a Mason preset.")
-        response = _wait_for_completion(
-            session,
-            response,
-            preset=selected_preset,
-            base_url=base_url,
-            headers=request.headers,
-            timeout=timeout,
-            poll_interval=poll_interval,
-        )
-        if not success(response.status_code, expect_status):
-            raise AgentCliError(f"Polling returned HTTP {response.status_code}.")
-        if isinstance(response.body, Mapping):
-            status = str(response.body.get("status") or "").lower()
-            if terminal_status(status) and status != "completed":
-                raise AgentCliError(
-                    f"Endpoint invocation finished with status {status!r}.",
-                    hint=json.dumps(response.body, default=str)[:1000],
-                )
-    render_response(response, output=obj.output, streamed=stream and not wait)
+    render_response(response, output=obj.output, streamed=sse)
 
 
 endpoint.add_command(invoke)
-endpoint.add_command(loadtest)

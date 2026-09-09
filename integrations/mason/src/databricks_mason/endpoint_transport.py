@@ -22,12 +22,13 @@ class EndpointRequest:
     headers: dict[str, str]
     body: Any
     timeout: float
-    stream: bool = False
+    sse: bool = False
+    body_set: bool = False
 
 
 @dataclass(frozen=True)
 class EndpointResponse:
-    """HTTP response data used by invoke and load-test rendering."""
+    """HTTP response data used by endpoint rendering."""
 
     url: str
     status_code: int
@@ -51,7 +52,7 @@ class HttpSession:
         *,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> EndpointResponse:
-        data = None if request.body is None else json.dumps(request.body).encode()
+        data = json.dumps(request.body).encode() if request.body_set else None
         http_request = urllib.request.Request(
             request.url,
             data=data,
@@ -69,7 +70,7 @@ class HttpSession:
         try:
             headers = dict(response.headers.items())
             content_type = response.headers.get_content_type()
-            if request.stream and content_type == "text/event-stream":
+            if request.sse and content_type == "text/event-stream":
                 events = tuple(iter_sse(response, on_event=on_event))
                 body: Any = None
             else:

@@ -3,18 +3,16 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
-from collections.abc import Iterator
 
 import pytest
 from click.testing import CliRunner
 
 from databricks_mason import endpoint as endpoint_mod
-from databricks_mason import endpoint_loadtest as endpoint_loadtest_mod
 from databricks_mason import endpoint_output as endpoint_output_mod
 from databricks_mason import endpoint_request as endpoint_request_mod
 from databricks_mason import endpoint_transport as endpoint_transport_mod
-from databricks_mason.endpoint import EndpointResponse, endpoint
-from databricks_mason.endpoint_presets import build_preset_body, get_preset, polling_path
+from databricks_mason.endpoint import endpoint
+from databricks_mason.endpoint_transport import EndpointRequest, EndpointResponse
 
 
 class _Ctx:
@@ -27,6 +25,7 @@ def _response(
     *,
     status_code: int = 200,
     url: str = "https://app/api/invocations",
+    events=(),
 ) -> EndpointResponse:
     return EndpointResponse(
         url=url,
@@ -34,101 +33,128 @@ def _response(
         headers={"Content-Type": "application/json"},
         body=body,
         elapsed_seconds=0.01,
+        events=events,
     )
 
 
-def test_durable_preset_builds_message_request_with_id_and_flags():
-    preset = get_preset("mason-durable")
-    assert preset is not None
-
-    body = build_preset_body(
-        preset,
-        None,
-        message="hello",
-        stream=True,
-        background=True,
-        request_id="request-id",
-    )
-
-    assert body == {
-        "id": "request-id",
-        "input": [{"role": "user", "content": "hello"}],
-        "stream": True,
-        "background": True,
-    }
-
-
-def test_mason_preset_preserves_complete_json_body():
-    preset = get_preset("mason")
-    assert preset is not None
-
-    body = build_preset_body(
-        preset,
-        {"input": {"question": "hello"}, "model": "test-model"},
-        message=None,
-        stream=False,
-        background=False,
-    )
-
-    assert body == {"input": {"question": "hello"}, "model": "test-model"}
-
-
-def test_polling_path_supports_both_mason_presets():
-    durable = get_preset("mason-durable")
-    mason = get_preset("mason")
-    assert durable is not None and mason is not None
-    assert polling_path(durable, {"status_url": "/api/invocations/one"}) == ("/api/invocations/one")
-    assert polling_path(mason, {"id": "two"}) == "/api/invocations/two"
-
-
-def test_request_url_accepts_absolute_status_url_and_merges_query():
+def test_request_url_merges_query_parameters():
     assert (
         endpoint_request_mod.request_url(
             "https://app.example/base",
-            "https://status.example/runs/one?existing=yes",
+            "/runs?existing=yes",
             {"after": "10"},
         )
-        == "https://status.example/runs/one?existing=yes&after=10"
+        == "https://app.example/runs?existing=yes&after=10"
     )
 
 
-def test_invoke_durable_preset_resolves_app_auth_and_body(monkeypatch):
+def test_request_url_rejects_absolute_path():
+    with pytest.raises(endpoint_mod.AgentCliError, match="must be relative"):
+        endpoint_request_mod.request_url(
+            "https://app.example",
+            "https://other.example/run",
+            {},
+        )
+
+
+def test_build_request_is_generic_json_http():
+    request = endpoint_request_mod.build_request(
+        base_url="https://app.example",
+        method="patch",
+        path="/custom/run",
+        query=("mode=fast",),
+        json_value='{"question":"hello"}',
+        timeout=12,
+        sse=False,
+    )
+
+    assert request == EndpointRequest(
+        url="https://app.example/custom/run?mode=fast",
+        method="PATCH",
+        headers={"Content-Type": "application/json"},
+        body={"question": "hello"},
+        timeout=12,
+        sse=False,
+        body_set=True,
+    )
+
+
+def test_build_request_without_body_does_not_set_content_type():
+    request = endpoint_request_mod.build_request(
+        base_url="https://app.example",
+        method="GET",
+        path="/health",
+        query=(),
+        json_value=None,
+        timeout=12,
+        sse=False,
+    )
+
+    assert request.body is None
+    assert request.body_set is False
+    assert request.headers == {}
+
+
+def test_json_null_is_sent_as_a_request_body():
+    request = endpoint_request_mod.build_request(
+        base_url="https://app.example",
+        method="POST",
+        path="/run",
+        query=(),
+        json_value="null",
+        timeout=12,
+        sse=False,
+    )
+
+    assert request.body is None
+    assert request.body_set is True
+
+
+def test_invalid_json_is_rejected_locally():
+    result = CliRunner().invoke(
+        endpoint,
+        ["invoke", "--url", "http://localhost:8000", "--path", "/run", "--json", "{"],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid JSON request body" in result.output
+
+
+def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
     captured = {}
 
     class FakeSession:
         def send(self, request, *, on_event=None):
             captured["request"] = request
-            return _response({"id": request.body["id"], "status": "completed", "output": "ok"})
+            return _response({"ok": True}, url=request.url)
 
-    monkeypatch.setattr(
-        endpoint_mod,
-        "resolve_target",
-        lambda **kwargs: ("https://app", True, "my-app"),
-    )
-    monkeypatch.setattr(
-        endpoint_request_mod,
-        "auth_headers",
-        lambda profile: {"Authorization": "Bearer token"},
-    )
+    monkeypatch.setattr(endpoint_mod, "_app_url", lambda name, profile: "https://app.example")
+    monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
 
     result = CliRunner().invoke(
         endpoint,
-        ["invoke", "my-app", "--preset", "mason-durable", "--message", "hello"],
+        [
+            "invoke",
+            "my-agent",
+            "--path",
+            "/api/invocations",
+            "--json",
+            '{"input":[]}',
+        ],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
     request = captured["request"]
-    assert request.url == "https://app/api/invocations"
+    assert request.url == "https://app.example/api/invocations"
     assert request.headers["Authorization"] == "Bearer token"
     assert request.headers["Cookie"].startswith("__Host-databricks-app-router=")
-    assert request.body["input"] == [{"role": "user", "content": "hello"}]
-    assert isinstance(request.body["id"], str)
-    assert json.loads(result.output)["body"]["output"] == "ok"
+    assert request.body == {"input": []}
 
 
-def test_invoke_generic_url_sends_body_without_auth(monkeypatch):
+def test_invoke_localhost_uses_explicit_session_without_auth(monkeypatch):
     captured = {}
 
     class FakeSession:
@@ -145,316 +171,107 @@ def test_invoke_generic_url_sends_body_without_auth(monkeypatch):
             "--url",
             "http://localhost:8000",
             "--path",
-            "/custom/run",
+            "/api/invocations",
+            "--session-id",
+            "local-session",
             "--json",
-            '{"question":"hello"}',
+            '{"input":[]}',
         ],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
     request = captured["request"]
-    assert request.url == "http://localhost:8000/custom/run"
     assert "Authorization" not in request.headers
-    assert request.body == {"question": "hello"}
+    assert request.headers["Cookie"] == "mason-local-session=local-session"
 
 
-def test_message_requires_preset():
+def test_url_can_explicitly_request_oauth(monkeypatch):
+    captured = {}
+
+    class FakeSession:
+        def send(self, request, *, on_event=None):
+            captured["request"] = request
+            return _response({"ok": True}, url=request.url)
+
+    monkeypatch.setattr(endpoint_mod, "_authorization_header", lambda profile: "Bearer token")
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+
     result = CliRunner().invoke(
         endpoint,
         [
             "invoke",
             "--url",
-            "http://localhost:8000",
+            "https://app.example",
             "--path",
-            "/custom/run",
-            "--message",
-            "hello",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "--message requires --preset" in result.output
-
-
-def test_background_wait_polls_to_terminal(monkeypatch):
-    responses: Iterator[EndpointResponse] = iter(
-        [
-            _response(
-                {"id": "run-1", "status": "queued", "status_url": "/api/invocations/run-1"},
-                status_code=202,
-            ),
-            _response(
-                {"id": "run-1", "status": "completed", "output": "done"},
-                url="https://app/api/invocations/run-1",
-            ),
-        ]
-    )
-    sent = []
-
-    class FakeSession:
-        def send(self, request, *, on_event=None):
-            sent.append(request)
-            return next(responses)
-
-    monkeypatch.setattr(
-        endpoint_mod,
-        "resolve_target",
-        lambda **kwargs: ("https://app", False, None),
-    )
-    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
-    monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
-
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "https://app",
-            "--preset",
-            "mason-durable",
-            "--message",
-            "hello",
-            "--background",
-            "--wait",
-            "--no-auth",
+            "/run",
+            "--auth",
         ],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
-    assert [request.method for request in sent] == ["POST", "GET"]
-    assert sent[1].url == "https://app/api/invocations/run-1"
-    assert json.loads(result.output)["body"]["output"] == "done"
+    assert captured["request"].headers["Authorization"] == "Bearer token"
 
 
-def test_background_wait_uses_absolute_status_url(monkeypatch):
-    responses: Iterator[EndpointResponse] = iter(
-        [
-            _response(
-                {
-                    "id": "run-1",
-                    "status": "queued",
-                    "status_url": "https://app/runs/run-1",
-                },
-                status_code=202,
-            ),
-            _response(
-                {"id": "run-1", "status": "completed", "output": "done"},
-                url="https://app/runs/run-1",
-            ),
-        ]
+def test_app_and_url_are_mutually_exclusive():
+    result = CliRunner().invoke(
+        endpoint,
+        ["invoke", "my-agent", "--url", "http://localhost:8000", "--path", "/run"],
+        obj=_Ctx(),
     )
-    sent = []
 
+    assert result.exit_code != 0
+    assert "APP and --url are mutually exclusive" in result.output
+
+
+def test_app_or_url_is_required():
+    result = CliRunner().invoke(endpoint, ["invoke", "--path", "/run"], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert "Provide a Databricks App name or --url" in result.output
+    assert "localhost:8000" in result.output
+
+
+def test_non_success_status_is_an_error(monkeypatch):
     class FakeSession:
         def send(self, request, *, on_event=None):
-            sent.append(request)
-            return next(responses)
+            return _response({"error": "bad request"}, status_code=400, url=request.url)
 
-    monkeypatch.setattr(
-        endpoint_mod,
-        "resolve_target",
-        lambda **kwargs: ("https://app", False, None),
-    )
     monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
-    monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
 
     result = CliRunner().invoke(
         endpoint,
-        [
-            "invoke",
-            "--url",
-            "https://app",
-            "--preset",
-            "mason-durable",
-            "--message",
-            "hello",
-            "--background",
-            "--wait",
-            "--no-auth",
-        ],
+        ["invoke", "--url", "http://localhost:8000", "--path", "/run"],
+        obj=_Ctx(),
+    )
+
+    assert result.exit_code != 0
+    assert "Endpoint returned HTTP 400" in result.output
+    assert "bad request" in result.output
+
+
+def test_sse_response_is_returned_as_generic_events(monkeypatch):
+    events = (
+        {"event": "delta", "data": {"content": "hello"}},
+        {"data": "[DONE]"},
+    )
+
+    class FakeSession:
+        def send(self, request, *, on_event=None):
+            assert request.sse is True
+            return _response(None, url=request.url, events=events)
+
+    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
+
+    result = CliRunner().invoke(
+        endpoint,
+        ["invoke", "--url", "http://localhost:8000", "--path", "/events", "--sse"],
         obj=_Ctx(),
     )
 
     assert result.exit_code == 0, result.output
-    assert sent[1].url == "https://app/runs/run-1"
-
-
-def test_background_wait_rejects_cross_origin_status_url(monkeypatch):
-    class FakeSession:
-        def send(self, request, *, on_event=None):
-            return _response(
-                {
-                    "id": "run-1",
-                    "status": "queued",
-                    "status_url": "https://status.example/runs/run-1",
-                },
-                status_code=202,
-            )
-
-    monkeypatch.setattr(
-        endpoint_mod,
-        "resolve_target",
-        lambda **kwargs: ("https://app", False, None),
-    )
-    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
-
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "https://app",
-            "--preset",
-            "mason-durable",
-            "--message",
-            "hello",
-            "--background",
-            "--wait",
-            "--no-auth",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "Refusing to poll a cross-origin status URL" in result.output
-
-
-def test_background_wait_fails_for_terminal_failure(monkeypatch):
-    responses: Iterator[EndpointResponse] = iter(
-        [
-            _response({"id": "run-1", "status": "queued"}, status_code=202),
-            _response({"id": "run-1", "status": "failed", "error": "boom"}),
-        ]
-    )
-
-    class FakeSession:
-        def send(self, request, *, on_event=None):
-            return next(responses)
-
-    monkeypatch.setattr(
-        endpoint_mod,
-        "resolve_target",
-        lambda **kwargs: ("https://app", False, None),
-    )
-    monkeypatch.setattr(endpoint_mod, "HttpSession", FakeSession)
-    monkeypatch.setattr(endpoint_mod.time, "sleep", lambda _: None)
-
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "https://app",
-            "--preset",
-            "mason-durable",
-            "--message",
-            "hello",
-            "--background",
-            "--wait",
-            "--no-auth",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "finished with status 'failed'" in result.output
-    assert "boom" in result.output
-
-
-def test_request_id_requires_durable_preset():
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "http://localhost:8000",
-            "--preset",
-            "mason",
-            "--id",
-            "request-id",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "--id requires --preset mason-durable" in result.output
-
-
-def test_request_id_requires_uuid():
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "invoke",
-            "--url",
-            "http://localhost:8000",
-            "--preset",
-            "mason-durable",
-            "--id",
-            "request-id",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code != 0
-    assert "--id must be a valid UUID" in result.output
-
-
-def test_http_session_wraps_connection_errors():
-    class FailingOpener:
-        def open(self, request, timeout):
-            raise urllib.error.URLError("connection refused")
-
-    session = endpoint_transport_mod.HttpSession()
-    session._opener = FailingOpener()
-
-    with pytest.raises(endpoint_mod.AgentCliError, match="Could not reach endpoint"):
-        session.send(
-            endpoint_mod.EndpointRequest(
-                url="http://localhost:1/run",
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                body={},
-                timeout=1,
-            )
-        )
-
-
-def test_loadtest_durable_preset_generates_unique_ids(monkeypatch):
-    bodies = []
-
-    class FakeSession:
-        def send(self, request, *, on_event=None):
-            bodies.append(request.body)
-            return _response({"status": "completed"}, url=request.url)
-
-    monkeypatch.setattr(endpoint_loadtest_mod, "HttpSession", FakeSession)
-
-    result = CliRunner().invoke(
-        endpoint,
-        [
-            "loadtest",
-            "--url",
-            "http://localhost:8000",
-            "--preset",
-            "mason-durable",
-            "--message",
-            "hello",
-            "--requests",
-            "3",
-            "--concurrency",
-            "2",
-        ],
-        obj=_Ctx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert len({body["id"] for body in bodies}) == 3
-    payload = json.loads(result.output)
-    assert payload["requests"] == 3
-    assert payload["successful"] == 3
+    assert json.loads(result.output)["events"] == list(events)
 
 
 def test_sse_parser_decodes_json_and_done_markers():
@@ -474,12 +291,56 @@ def test_sse_parser_decodes_json_and_done_markers():
     ]
 
 
-def test_stream_printer_suppresses_done_marker():
-    printer = endpoint_output_mod.StreamPrinter(enabled=True)
+def test_sse_printer_does_not_assume_an_agent_event_schema():
+    printer = endpoint_output_mod.SsePrinter(enabled=True)
 
     with CliRunner().isolation() as streams:
-        printer({"data": {"type": "delta", "content": "hello"}})
+        printer({"data": {"arbitrary": "value"}})
         printer({"data": "[DONE]"})
-        printer.finish()
 
-    assert streams[0].getvalue().decode() == "hello\n"
+    assert streams[0].getvalue().decode() == '{"arbitrary": "value"}\n[DONE]\n'
+
+
+def test_http_session_wraps_connection_errors():
+    class FailingOpener:
+        def open(self, request, timeout):
+            raise urllib.error.URLError("connection refused")
+
+    session = endpoint_transport_mod.HttpSession()
+    session._opener = FailingOpener()
+
+    with pytest.raises(endpoint_mod.AgentCliError, match="Could not reach endpoint"):
+        session.send(
+            EndpointRequest(
+                url="http://localhost:1/run",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body={},
+                timeout=1,
+            )
+        )
+
+
+def test_help_exposes_only_low_level_options():
+    result = CliRunner().invoke(endpoint, ["invoke", "--help"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    for option in ("--url", "--method", "--path", "--query", "--json", "--sse", "--session-id"):
+        assert option in result.output
+    for removed in (
+        "--preset",
+        "--message",
+        "--background",
+        "--wait",
+        "--id",
+        "--poll-interval",
+        "--expect-status",
+        "--routing-key",
+        "--header",
+        "--json-file",
+    ):
+        assert removed not in result.output
+
+
+def test_endpoint_has_no_loadtest_command():
+    assert set(endpoint.commands) == {"invoke"}

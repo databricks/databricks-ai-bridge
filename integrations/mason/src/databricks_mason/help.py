@@ -201,30 +201,21 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("endpoint",): (
         (
-            'mason endpoint invoke mason-my-agent --preset mason --message "Hello"',
-            "invoke a Mason agent",
-        ),
-        (
-            "mason endpoint loadtest mason-my-agent --preset mason --requests 20",
-            "run a lightweight HTTP load test",
+            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            '--json \'{"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
         ),
     ),
     ("endpoint", "invoke"): (
         (
-            'mason endpoint invoke mason-my-agent --preset mason --message "Hello"',
-            "invoke a known Mason runtime",
+            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            '--json \'{"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
         ),
         (
             "mason endpoint invoke --url http://localhost:8000 --path /custom/run "
             '--json \'{"input":"hello"}\'',
-            "invoke an arbitrary HTTP server",
-        ),
-    ),
-    ("endpoint", "loadtest"): (
-        (
-            "mason endpoint loadtest mason-my-agent --preset mason-durable "
-            ' --message "Hello" --requests 20 --concurrency 4',
-            "load-test a durable Mason runtime",
+            "invoke a local or arbitrary HTTP server",
         ),
     ),
     ("tools",): (
