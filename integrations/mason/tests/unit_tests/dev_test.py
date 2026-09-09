@@ -25,7 +25,7 @@ class _Ctx:
 def _stub_tracing(monkeypatch):
     """Tracing is on by default and would hit MLflow/the workspace; stub the provisioning so the
     non-tracing dev tests stay hermetic. Tracing-specific tests override this."""
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment", lambda *a, **k: None)
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
 def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
@@ -159,7 +159,7 @@ def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch
 
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     (tmp_path / ".venv").mkdir()
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment", lambda *a, **k: "exp-123")
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-123")
     with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
@@ -204,7 +204,7 @@ def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path
     def _boom(*a, **k):
         raise AgentCliError("MLflow is required")
 
-    monkeypatch.setattr(dev_mod, "resolve_trace_experiment", _boom)
+    monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", _boom)
     with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
