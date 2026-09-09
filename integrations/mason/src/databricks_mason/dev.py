@@ -64,7 +64,8 @@ def dev(
 
     Reads the app's command + env from ``app.yaml`` and runs it the way the Apps runtime does — so
     local behavior matches a deployment. Auth uses the profile (``-p`` / ``mason login``), same as
-    ``mason deploy``. The environment is built on first run and reused after; pass
+    ``mason deploy``, and the agent reaches Databricks model serving through the AI Gateway on that
+    profile — no model keys to set up. The environment is built on first run and reused after; pass
     ``--prepare-environment`` to force a rebuild (e.g. after changing dependencies).
 
     Tracing is on by default: dev sends the agent's traces to the default mason experiment based on

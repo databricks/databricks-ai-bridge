@@ -452,6 +452,9 @@ def deploy(
     directory can omit it (passing NAME again updates the recorded name). The deployed app is named
     `mason-<name>`; use that full name with the `mason deployments` commands.
 
+    The deployed agent reaches Databricks model serving through the AI Gateway using the app's own
+    identity — no model keys to configure.
+
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
 
