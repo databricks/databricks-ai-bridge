@@ -45,11 +45,11 @@ _ROUTING_COOKIE = "__Host-databricks-app-router"
 _API_ROOT = "/api/invocations"
 
 
-def _project_durability_enabled() -> bool:
+def _project_durability_enabled() -> bool | None:
     """Read the durable-runtime setting from the Mason project manifest."""
     manifest = pathlib.Path("agent.toml")
     if not manifest.is_file():
-        return False
+        return None
     with manifest.open("rb") as handle:
         durability = tomllib.load(handle).get("durability")
     if durability is None:
@@ -72,8 +72,8 @@ class AgentApp(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
     By default, the runtime reads ``[durability].enabled`` from the Mason project's ``agent.toml``.
-    Without that setting it keeps background state and events in this process. Pass
-    ``durable_runtime`` explicitly to override project configuration when using the SDK directly.
+    Without a project manifest it keeps background state and events in this process. SDK users
+    outside a Mason project can pass ``durable_runtime`` explicitly.
     """
 
     def __init__(
@@ -82,8 +82,11 @@ class AgentApp(FastAPI):
         durable_runtime: bool | None = None,
         durability_store: DurabilityStore | None = None,
     ) -> None:
-        if durable_runtime is None:
-            durable_runtime = _project_durability_enabled()
+        project_setting = _project_durability_enabled()
+        if project_setting is not None:
+            durable_runtime = project_setting
+        elif durable_runtime is None:
+            durable_runtime = False
         self.durable_runtime = durable_runtime
         self._invoke_hook: DurableAgentHook | None = None
         self._on_recovery_hook: DurableAgentHook | None = None

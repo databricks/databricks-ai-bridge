@@ -392,6 +392,19 @@ def test_agent_app_uses_disabled_project_durability_in_deployment(tmp_path, monk
     assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
 
 
+def test_project_manifest_overrides_legacy_template_flag(tmp_path, monkeypatch) -> None:
+    (tmp_path / "agent.toml").write_text("[durability]\nenabled = false\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
+    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
+
+    app = AgentApp(durable_runtime=True)
+
+    assert app.durable_runtime is False
+    assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
+
+
 def test_agent_app_uses_enabled_project_durability_in_deployment(tmp_path, monkeypatch) -> None:
     (tmp_path / "agent.toml").write_text("[durability]\nenabled = true\n")
     monkeypatch.chdir(tmp_path)
