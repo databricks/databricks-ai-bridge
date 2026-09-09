@@ -56,7 +56,11 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def memory() -> None:
-    """Manage agent memory stores and entries (/api/agents/v1/memory-stores)."""
+    """Manage an agent's long-term memory: memory stores and the entries kept in them.
+
+    Create a store, bind it to an agent so it's wired in on `mason dev` / `mason deploy`, and read
+    or edit the entries an agent remembers (partitioned per actor).
+    """
 
 
 @memory.group()

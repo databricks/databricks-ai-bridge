@@ -446,18 +446,17 @@ def deploy(
     workspace_path,
     instances,
 ) -> None:
-    """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
+    """Deploy an agent to Databricks Apps: provision its stores, wire in tracing, and roll it out.
 
-    NAME is recorded in agent.toml on first deploy, so later `mason deploy` (from the project dir)
-    can omit it; passing NAME again updates the recorded name. The app is named `mason-<name>`
-    (Mason adds the prefix if absent); use that full name with the other `mason deployments` verbs.
-    `deployments list` shows only apps carrying this prefix.
+    NAME is recorded in agent.toml on the first deploy, so a later `mason deploy` from the project
+    directory can omit it (passing NAME again updates the recorded name). The deployed app is named
+    `mason-<name>`; use that full name with the `mason deployments` commands.
 
-    Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
-    preserve the routing cookie automatically.
+    Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
+    session automatically stays on one instance.
 
     \b
-    API clients must reuse a stable UUID in this cookie on every request:
+    API clients that need it must resend a stable UUID in this cookie every request:
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
@@ -685,7 +684,7 @@ def deploy(
 
 @click.group()
 def deployments() -> None:
-    """Manage agent deployments."""
+    """Inspect and manage deployed agents: list, get, stream logs, start, stop, or delete."""
 
 
 def _deployment_status(a: dict) -> Optional[str]:

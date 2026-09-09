@@ -52,11 +52,17 @@ class CliContext:
 @click.version_option(package_name="databricks-mason", prog_name="mason")
 @click.pass_context
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
-    """Mason: deploy agents and manage their memory and sessions.
+    """Mason is a CLI for building and deploying custom AI agents on Databricks.
 
-    Targets the agents/v1 preview APIs served on a workspace; auth comes from a
-    .databrickscfg profile (pass --profile / -p, run `mason login` to save a default,
-    or rely on the SDK's default resolution).
+    Scaffold an agent project from a template, run it locally with a chat UI, and deploy it to
+    Databricks Apps — then manage the tools, memory, sessions, and tracing behind it, all from one
+    authenticated command.
+
+    New here? The Examples below take you from an empty directory to a deployed agent. Mason
+    authenticates with a Databricks profile: run `mason login` once to save a default, or pass
+    --profile / -p (without one, the Databricks SDK's default authentication is used).
+
+    The underlying agent APIs are in preview and may need to be enabled for your workspace.
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)

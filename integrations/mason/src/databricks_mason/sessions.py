@@ -25,7 +25,11 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def sessions() -> None:
-    """Manage agent session stores, sessions, and items (/api/agents/v1/session-stores)."""
+    """Manage an agent's conversations: session stores, the sessions in them, and their items.
+
+    Create a store, bind it to an agent so it's wired in on `mason dev` / `mason deploy`, and inspect
+    or edit the sessions and their transcript items (the running record of a conversation).
+    """
 
 
 @sessions.group()

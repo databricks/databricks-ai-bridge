@@ -46,6 +46,31 @@ def test_root_registers_supported_commands():
     assert "add-sandbox" not in names
 
 
+def test_root_help_describes_the_product_and_links_out():
+    # The root page should say what Mason is in plain language (not lead with internal API detail)
+    # and point a reader to docs + support, per CLI help best practices.
+    result = CliRunner().invoke(cli.mason, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "building and deploying custom AI agents on Databricks" in result.output
+    # No internal API path in the user-facing description.
+    assert "agents/v1" not in result.output
+    # Docs and issues links appear (root only).
+    assert help_mod._DOCS_URL in result.output
+    assert help_mod._ISSUES_URL in result.output
+
+
+def test_group_help_has_no_raw_api_paths():
+    # Group descriptions should read for users, not expose REST endpoints.
+    runner = CliRunner()
+    for path in ((), *_command_paths(cli.mason)):
+        result = runner.invoke(cli.mason, [*path, "--help"])
+        assert result.exit_code == 0, (path, result.output)
+        # The Docs/Issues footer legitimately carries the repo URL on the root page; the offending
+        # pattern we guard against is the raw API path that used to lead group descriptions.
+        assert "/api/agents/v1" not in result.output, path
+
+
 def test_nested_command_help_shows_usage_options_and_examples():
     result = CliRunner().invoke(cli.mason, ["tools", "add", "sandbox", "--help"])
 

@@ -218,7 +218,7 @@ def add_sandbox(
     tool_id: str,
     source: pathlib.Path,
 ) -> None:
-    """Bind system.ai.sandbox with protected downscoping."""
+    """Add a data sandbox tool (system.ai.sandbox), scoped to specific Unity Catalog resources."""
     add_sandbox_to_manifest(obj, source.resolve(), scopes, permission, tool_id=tool_id)
 
 
@@ -233,7 +233,7 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind a Databricks managed MCP SERVICE."""
+    """Add a Databricks-managed MCP SERVICE as a tool (see `mason mcp list` for available services)."""
     _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(
         obj,
@@ -253,7 +253,7 @@ def add_uc_function(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Bind an existing three-part Unity Catalog function."""
+    """Add an existing Unity Catalog function (catalog.schema.function) as a tool."""
     _require_arg(function_name, "Unity Catalog function name (catalog.schema.function)")
     _add_spec(
         obj,
@@ -270,7 +270,7 @@ def add_uc_function(
 @_source_option
 @click.pass_obj
 def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
-    """Scaffold a framework-native local Python tool and starter test."""
+    """Add a local Python tool: scaffold a framework-native tool file and a starter test."""
     _require_arg(name, "tool name")
     project = AgentProject.load(source)
     _require_python_tool_support(project)

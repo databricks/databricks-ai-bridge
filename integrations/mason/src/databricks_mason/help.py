@@ -235,6 +235,12 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
 # pushed so far right they wrap or scroll off, so we stack the comment on the line above instead.
 _INLINE_COMMENT_MAX = 46
 
+# Where to send a reader who wants more than the help text — best-practice CLI help links out to
+# docs and a support/issues path. Shown only on the root `mason --help`, so subcommand help stays
+# uncluttered.
+_DOCS_URL = "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/mason"
+_ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
+
 
 def _walk(
     command: click.Command, prefix: CommandPath = ()
@@ -277,9 +283,19 @@ def _example_epilog(examples: tuple[Example, ...]) -> str:
     return "\n".join(lines)
 
 
+def _root_epilog() -> str:
+    """The root help footer: the quickstart examples, then Docs/Issues links.
+
+    The links live in their own `\\b` paragraph so Click renders the URLs verbatim instead of
+    rewrapping them.
+    """
+    links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])
+    return f"{_example_epilog(_EXAMPLES[()])}\n\n{links}"
+
+
 def configure_help(root: click.Group) -> None:
     """Attach curated examples to the root and every existing command."""
-    root.epilog = _example_epilog(_EXAMPLES[()])
+    root.epilog = _root_epilog()
     for path, command in _walk(root):
         examples = _EXAMPLES.get(path)
         if examples:
