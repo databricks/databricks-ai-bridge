@@ -713,6 +713,23 @@ def test_convert_message_not_propagate_id() -> None:
     assert "id" not in result
 
 
+def test_convert_message_forwards_message_level_cache_control() -> None:
+    # A message-level cache_control breakpoint (stored by LangChain in
+    # additional_kwargs) must be forwarded to the request payload, so Anthropic
+    # prompt caching activates without nesting the flag inside a content block.
+    cache_control = {"type": "ephemeral"}
+    message = SystemMessage(content="foo", additional_kwargs={"cache_control": cache_control})
+    result = _convert_message_to_dict(message)
+    assert result == {"role": "system", "content": "foo", "cache_control": cache_control}
+
+
+def test_convert_message_omits_cache_control_when_absent() -> None:
+    # No cache_control key should appear when the message does not carry one.
+    message = SystemMessage(content="foo")
+    result = _convert_message_to_dict(message)
+    assert "cache_control" not in result
+
+
 def test_convert_message_with_tool_calls() -> None:
     ID = "call_fb5f5e1a-bac0-4422-95e9-d06e6022ad12"
     tool_calls = [
