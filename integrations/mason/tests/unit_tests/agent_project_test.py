@@ -109,7 +109,8 @@ source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticke
     )
     assert error.value.hint is not None
     assert "Remove this entry" in error.value.hint
-    assert "agent/tools" in error.value.hint
+    assert "framework-native agent code" in error.value.hint
+    assert "remain active" not in error.value.hint
 
 
 def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch):

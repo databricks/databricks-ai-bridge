@@ -148,7 +148,7 @@ class ToolSpec:
         elif kind == "python":
             raise AgentCliError(
                 "Python tools are code-first and cannot be declared in agent.toml.",
-                hint="Remove this entry; decorated tools in agent/tools remain active.",
+                hint="Remove this entry and wire the tool through framework-native agent code.",
             )
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")

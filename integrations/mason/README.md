@@ -152,8 +152,9 @@ authentication. Without the durable runtime, request state and events exist only
 process and horizontally scaled clients need sticky routing. With the durable runtime, Mason
 persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
 
-Durability is enabled by default for both framework templates. Mason writes the durability binding
-to `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability,
+Durability is enabled by default for both Mason-server framework templates. Mason writes the
+durability binding to `agent.toml`, and `mason deploy` then attaches one Lakebase database for
+runtime durability,
 chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
@@ -230,11 +231,11 @@ mason deploy my-agent
 
 ## Agent tools
 
-`agent.toml` is the declarative source of truth for Databricks-managed infrastructure: sandbox,
-managed MCP, and Unity Catalog function bindings, plus memory, session, and durability resources.
-`mason tools add` updates only this file; direct TOML edits have the same behavior. Both the
-LangGraph and OpenAI Agents SDK adapters read the managed bindings at runtime without generating or
-patching agent source:
+For projects created with `mason init --server mason` (the default), `agent.toml` is the declarative
+source of truth for Databricks-managed infrastructure: sandbox, managed MCP, and Unity Catalog
+function bindings, plus memory, session, and durability resources. `mason tools add` updates only
+this file; direct TOML edits have the same behavior. Both Mason-server framework adapters read the
+managed bindings at runtime without generating or patching agent source:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
@@ -258,16 +259,20 @@ mason mcp list
 mason mcp list --schema main.tools
 ```
 
-Custom Python tools are code-first. Write them with the framework's native decorator in
-`agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. Mason's templates
-auto-discover decorated tools from that package and add them to the agent; there is no CLI command
-or `agent.toml` entry to keep in sync. Existing agents may wire their native tools directly instead.
-Customer-managed MCP servers are likewise ordinary code in `agent/mcps.py` and are joined with the
-managed bindings by `mcp_tools(...)` or `mcp_servers(...)`.
+In Mason-server templates, custom Python tools are code-first. Write them with the framework's native
+decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
+templates auto-discover decorated tools from that package and add them to the agent; there is no CLI
+command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are likewise ordinary
+code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
+`mcp_servers(...)`.
 
-If an older manifest contains `source = { kind = "python", ... }`, remove that `[[tools]]` entry;
-the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy` preserve both
-user code and `agent.toml` unchanged.
+Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
+bindings from `agent.toml`, so `mason tools add` rejects those projects. Wire framework-native Python
+tools and MCP servers directly in `agent/agent.py` instead.
+
+If an older Mason-server manifest contains `source = { kind = "python", ... }`, remove that
+`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy`
+do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the
