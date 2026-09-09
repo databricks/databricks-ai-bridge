@@ -589,7 +589,7 @@ def deploy(
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
     _databricks(
-        ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
+        ["sync", str(source_dir), ws_path, "--full", "--exclude", "uv.lock"],
         obj.profile,
         action=f"Could not upload the agent source for '{name}'.",
     )
