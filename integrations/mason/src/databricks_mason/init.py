@@ -11,11 +11,13 @@ override the source, e.g. to pull from a fork or branch before a template has me
 
 from __future__ import annotations
 
+import json
 import pathlib
 import shutil
 import subprocess
 import tempfile
 from importlib.metadata import PackageNotFoundError
+from importlib.metadata import distribution as _distribution
 from importlib.metadata import version as _installed_version
 from typing import Optional
 
@@ -116,6 +118,28 @@ def _editable_template_source() -> tuple[str, str] | None:
         return None
     commit = (_git(["rev-parse", "HEAD"], cwd=repository).stdout or "").strip()
     return (repository.as_uri(), commit) if commit else None
+
+
+def _installed_git_template_source() -> tuple[str, str] | None:
+    """Return the repository and commit recorded for a Git-installed Mason package."""
+    try:
+        direct_url = _distribution("databricks-mason").read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    if not direct_url:
+        return None
+    try:
+        metadata = json.loads(direct_url)
+    except json.JSONDecodeError:
+        return None
+    vcs = metadata.get("vcs_info")
+    if not isinstance(vcs, dict) or vcs.get("vcs") != "git":
+        return None
+    repository = metadata.get("url")
+    commit = vcs.get("commit_id")
+    if not isinstance(repository, str) or not isinstance(commit, str):
+        return None
+    return repository, commit
 
 
 def _fetch_template(
@@ -329,10 +353,12 @@ def init(
         )
 
     overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
-    editable_source = _editable_template_source() if repo is None and ref is None else None
-    selected_repo = repo or (editable_source[0] if editable_source else spec["repo"])
+    installed_source = None
+    if repo is None and ref is None:
+        installed_source = _editable_template_source() or _installed_git_template_source()
+    selected_repo = repo or (installed_source[0] if installed_source else spec["repo"])
     selected_ref = ref or (
-        editable_source[1] if editable_source else _template_ref(selected_framework)
+        installed_source[1] if installed_source else _template_ref(selected_framework)
     )
     resolved_ref = _fetch_template(
         selected_repo,
@@ -341,7 +367,7 @@ def init(
         dest,
         overlay_dirs,
     )
-    if repo is not None or ref is not None or editable_source is not None:
+    if repo is not None or ref is not None or installed_source is not None:
         _pin_mason_source(
             dest,
             selected_framework,

@@ -73,6 +73,40 @@ def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.
     assert init_mod._template_ref("langgraph") == "main"
 
 
+def test_installed_git_template_source_uses_recorded_commit(monkeypatch: pytest.MonkeyPatch):
+    commit = "a" * 40
+    direct_url = json.dumps(
+        {
+            "url": "https://github.com/example/databricks-ai-bridge",
+            "vcs_info": {
+                "vcs": "git",
+                "commit_id": commit,
+                "requested_revision": "feature",
+            },
+            "subdirectory": "integrations/mason",
+        }
+    )
+    distribution = mock.Mock()
+    distribution.read_text.return_value = direct_url
+    monkeypatch.setattr(init_mod, "_distribution", lambda _: distribution)
+
+    assert init_mod._installed_git_template_source() == (
+        "https://github.com/example/databricks-ai-bridge",
+        commit,
+    )
+
+
+@pytest.mark.parametrize("direct_url", [None, "not json", '{"url": "file:///tmp/mason"}'])
+def test_installed_git_template_source_ignores_non_git_installs(
+    direct_url: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    distribution = mock.Mock()
+    distribution.read_text.return_value = direct_url
+    monkeypatch.setattr(init_mod, "_distribution", lambda _: distribution)
+
+    assert init_mod._installed_git_template_source() is None
+
+
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     dest = tmp_path / "agent-openai"
 
@@ -503,6 +537,35 @@ def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx(profile="from-login"))
     assert result.exit_code == 0, result.output
     assert "DATABRICKS_CONFIG_PROFILE=from-login" in (dest / ".env").read_text()
+
+
+def test_init_uses_git_installed_templates_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    dest = tmp_path / "agent"
+    repository = "https://github.com/example/databricks-ai-bridge"
+    commit = "a" * 40
+    monkeypatch.setattr(
+        init_mod,
+        "_installed_git_template_source",
+        lambda: (repository, commit),
+    )
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+        )
+        return commit
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert fetched.call_args.args[:2] == (repository, commit)
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"]["rev"] == commit
 
 
 def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
