@@ -20,7 +20,7 @@ from databricks_mason.agent_project import AgentProject
 from databricks_mason.deploy import (
     _upsert_manifest_env,
     mlflow_tracing_config,
-    resolve_trace_experiment,
+    resolve_trace_experiment_id,
     store_bindings,
     validate_stores,
 )
@@ -94,7 +94,7 @@ def dev(
     # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
     # local run.
     try:
-        experiment_id = resolve_trace_experiment(
+        experiment_id = resolve_trace_experiment_id(
             source_dir, source_dir.resolve().name, obj.client(), obj.profile
         )
         if experiment_id:

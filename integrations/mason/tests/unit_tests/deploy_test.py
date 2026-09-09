@@ -14,9 +14,9 @@ from click.testing import CliRunner
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
-# The autouse fixture below stubs `resolve_trace_experiment` for deploy-command tests; capture the
+# The autouse fixture below stubs `resolve_trace_experiment_id` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
-_REAL_RESOLVE_TRACE = deploy_mod.resolve_trace_experiment
+_REAL_RESOLVE_TRACE = deploy_mod.resolve_trace_experiment_id
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def _compute_active(monkeypatch):
 def _no_tracing_by_default(monkeypatch):
     # Tracing is on by default and would create an MLflow experiment (a live workspace op); stub the
     # provisioning off so non-tracing deploy tests stay hermetic. Tracing tests override this.
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment", lambda *a, **k: None)
+    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
@@ -670,7 +670,7 @@ def test_deploy_wires_tracing_env_and_grants_experiment_resource(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment", lambda *a, **k: "exp-42")
+    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: "exp-42")
     granted: dict = {}
     monkeypatch.setattr(
         deploy_mod,
@@ -705,7 +705,7 @@ def test_deploy_keys_experiment_on_source_dir_name_not_prefixed(
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
         deploy_mod,
-        "resolve_trace_experiment",
+        "resolve_trace_experiment_id",
         lambda source, app, client, profile: captured.update(app=app) or None,
     )
     monkeypatch.setattr(
@@ -731,7 +731,7 @@ def test_deploy_proceeds_when_tracing_provisioning_raises(tmp_path: pathlib.Path
         raise RuntimeError("mlflow create_experiment blew up")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment", _boom)
+    monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", _boom)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
@@ -862,7 +862,7 @@ def test_resolve_trace_experiment_uses_pinned_id_without_creating(
     )
     # A pinned id is used directly — no experiment creation.
     monkeypatch.setattr(
-        deploy_mod, "ensure_experiment", lambda *a, **k: pytest.fail("should not create")
+        deploy_mod, "create_experiment_idempotent", lambda *a, **k: pytest.fail("should not create")
     )
     assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) == "pinned-1"
 
@@ -872,7 +872,7 @@ def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.
     created: dict = {}
     monkeypatch.setattr(
         deploy_mod,
-        "ensure_experiment",
+        "create_experiment_idempotent",
         lambda profile, client, name: created.update(name=name) or "made-id",
     )
     exp_id = _REAL_RESOLVE_TRACE(tmp_path, "my-agent", _FakeClient(), None)
@@ -891,7 +891,7 @@ def test_resolve_trace_experiment_reuses_pinned_default_on_second_run(
     calls: list[str] = []
     monkeypatch.setattr(
         deploy_mod,
-        "ensure_experiment",
+        "create_experiment_idempotent",
         lambda profile, client, name: calls.append(name) or "made-id",
     )
     # First run creates + pins; the second reads the pinned id straight from agent.toml.

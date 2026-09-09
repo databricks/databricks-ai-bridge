@@ -39,7 +39,7 @@ TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 _INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
 
 
-def default_experiment(user: str, project: Optional[str]) -> str:
+def default_experiment_name(user: str, project: Optional[str]) -> str:
     """The per-project experiment path under the user's workspace home (shared by dev and deploy).
 
     ``project`` is the Mason project name (the source directory's basename), not the deployed app name
@@ -70,7 +70,7 @@ def _mlflow():
         ) from exc
 
 
-def _configure(mlflow, profile: Optional[str]) -> None:
+def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
     """Point MLflow at the workspace (honoring mason's --profile)."""
     mlflow.set_tracking_uri(f"databricks://{profile}" if profile else "databricks")
 
@@ -85,7 +85,7 @@ def _is_uc_backed(experiment) -> bool:
     return _UC_TRACE_TAG in (getattr(experiment, "tags", None) or {})
 
 
-def ensure_experiment(profile: Optional[str], client, name: str) -> str:
+def create_experiment_idempotent(profile: Optional[str], client, name: str) -> str:
     """Create the experiment ``name`` if missing and return its id (idempotent).
 
     ``create_experiment`` won't make the intermediate workspace folder for a nested path (e.g.
@@ -93,7 +93,7 @@ def ensure_experiment(profile: Optional[str], client, name: str) -> str:
     provision the managed experiment that traces log to.
     """
     mlflow = _mlflow()
-    _configure(mlflow, profile)
+    _set_tracking_uri(mlflow, profile)
     experiment = mlflow.get_experiment_by_name(name)
     if experiment:
         return experiment.experiment_id
@@ -118,7 +118,7 @@ def _project_experiment_id(obj, source: str, mlflow) -> Optional[str]:
     if project is not None and project.trace_experiment_id:
         return project.trace_experiment_id
     client = obj.client()
-    name = default_experiment(client.current_user, pathlib.Path(source).resolve().name)
+    name = default_experiment_name(client.current_user, pathlib.Path(source).resolve().name)
     experiment = mlflow.get_experiment_by_name(name)
     return experiment.experiment_id if experiment else None
 
@@ -189,7 +189,7 @@ def tracing_configure(obj, experiment_id, source) -> None:
     if experiment_id:
         # Verify the experiment exists so a wrong id fails here, not silently when the agent runs.
         mlflow = _mlflow()
-        _configure(mlflow, obj.profile)
+        _set_tracking_uri(mlflow, obj.profile)
         experiment = mlflow.get_experiment(experiment_id)
         if experiment is None:
             raise AgentCliError(
@@ -275,7 +275,7 @@ def tracing_list(obj, experiment_id, limit, source) -> None:
     one, or its per-project default). A missing experiment just lists nothing (nothing has traced yet).
     """
     mlflow = _mlflow()
-    _configure(mlflow, obj.profile)
+    _set_tracking_uri(mlflow, obj.profile)
     exp_id = experiment_id or _project_experiment_id(obj, source, mlflow)
     traces = (
         mlflow.search_traces(locations=[exp_id], max_results=limit, return_type="list")
@@ -308,7 +308,7 @@ def tracing_list(obj, experiment_id, limit, source) -> None:
 def tracing_get(obj, trace_id) -> None:
     """Get a single trace by id (status, latency, span count, previews)."""
     mlflow = _mlflow()
-    _configure(mlflow, obj.profile)
+    _set_tracking_uri(mlflow, obj.profile)
     trace = mlflow.get_trace(trace_id)
     if trace is None:
         raise AgentCliError(f"No trace found with id {trace_id!r}.")

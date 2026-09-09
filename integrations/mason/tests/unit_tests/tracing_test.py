@@ -1,8 +1,8 @@
 """Unit tests for `mason tracing`: configure/disable binding, experiment provisioning, list/get.
 
-Tracing is managed MLflow tracing, `experiment_id`-centric. The pure surface (default_experiment,
+Tracing is managed MLflow tracing, `experiment_id`-centric. The pure surface (default_experiment_name,
 experiment_url) is tested directly; the mlflow-backed paths are exercised with a mocked
-`_mlflow`/`_configure` (the hermetic env shouldn't touch a real workspace).
+`_mlflow`/`_set_tracking_uri` (the hermetic env shouldn't touch a real workspace).
 """
 
 from __future__ import annotations
@@ -48,16 +48,16 @@ def _project(tmp_path: pathlib.Path, *, experiment_id: str | None = None, disabl
 # --- pure surface -----------------------------------------------------------
 
 
-def test_default_experiment_is_per_project_under_user_home():
+def test_default_experiment_name_is_per_project_under_user_home():
     assert (
-        tracing_mod.default_experiment("me@x.com", "my-agent")
+        tracing_mod.default_experiment_name("me@x.com", "my-agent")
         == "/Users/me@x.com/mason-traces/my-agent"
     )
 
 
-def test_default_experiment_requires_project():
+def test_default_experiment_name_requires_project():
     with pytest.raises(AgentCliError):
-        tracing_mod.default_experiment("me@x.com", None)
+        tracing_mod.default_experiment_name("me@x.com", None)
 
 
 def test_experiment_url_builds_traces_tab_link():
@@ -69,27 +69,29 @@ def test_experiment_url_builds_traces_tab_link():
     assert tracing_mod.experiment_url("unknown", "123") is None
 
 
-# --- ensure_experiment ------------------------------------------------------
+# --- create_experiment_idempotent ------------------------------------------------------
 
 
-def test_ensure_experiment_creates_parent_dir_for_nested_path():
+def test_create_experiment_idempotent_creates_parent_dir_for_nested_path():
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.return_value = None  # doesn't exist yet
     mlflow.create_experiment.return_value = "eid-1"
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
-        eid = tracing_mod.ensure_experiment(None, client, "/Users/me@x.com/mason-traces/demo")
+        eid = tracing_mod.create_experiment_idempotent(
+            None, client, "/Users/me@x.com/mason-traces/demo"
+        )
     assert eid == "eid-1"
     # the intermediate workspace folder is created before the experiment (mlflow won't make it)
     client.ensure_workspace_dir.assert_called_once_with("/Users/me@x.com/mason-traces")
 
 
-def test_ensure_experiment_reuses_existing_without_mkdir():
+def test_create_experiment_idempotent_reuses_existing_without_mkdir():
     mlflow = mock.Mock()
     mlflow.get_experiment_by_name.return_value = mock.Mock(experiment_id="eid-2")
     client = mock.Mock()
     with mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow):
-        assert tracing_mod.ensure_experiment(None, client, "/Shared/x") == "eid-2"
+        assert tracing_mod.create_experiment_idempotent(None, client, "/Shared/x") == "eid-2"
     client.ensure_workspace_dir.assert_not_called()  # existing experiment -> no dir work
     mlflow.create_experiment.assert_not_called()
 
@@ -103,7 +105,7 @@ def test_configure_pins_experiment_id(tmp_path: pathlib.Path):
     mlflow.get_experiment.return_value = mock.Mock(tags={})  # exists, managed (no UC tag)
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_configure,
@@ -121,7 +123,7 @@ def test_configure_rejects_unknown_experiment_id(tmp_path: pathlib.Path):
     mlflow.get_experiment.return_value = None  # no such experiment
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_configure,
@@ -143,7 +145,7 @@ def test_configure_rejects_uc_backed_experiment(tmp_path: pathlib.Path):
     )
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_configure,
@@ -196,7 +198,7 @@ def test_list_searches_by_explicit_experiment_id(tmp_path: pathlib.Path):
     mlflow.search_traces.return_value = [_trace("tr-1")]
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list,
@@ -216,7 +218,7 @@ def test_list_defaults_to_projects_pinned_experiment(tmp_path: pathlib.Path):
     mlflow.search_traces.return_value = []
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
@@ -232,7 +234,7 @@ def test_list_empty_when_no_experiment_exists(tmp_path: pathlib.Path):
     mlflow.get_experiment_by_name.return_value = None
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(
             tracing_mod.tracing_list, ["--source", str(tmp_path)], obj=_Ctx(output="json")
@@ -247,7 +249,7 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     mlflow.get_trace.return_value = None
     with (
         mock.patch.object(tracing_mod, "_mlflow", return_value=mlflow),
-        mock.patch.object(tracing_mod, "_configure"),
+        mock.patch.object(tracing_mod, "_set_tracking_uri"),
     ):
         result = CliRunner().invoke(tracing_mod.tracing_get, ["tr-x"], obj=_Ctx())
     assert result.exit_code != 0

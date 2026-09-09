@@ -41,8 +41,8 @@ from databricks_mason.store_access import (
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
-    default_experiment,
-    ensure_experiment,
+    create_experiment_idempotent,
+    default_experiment_name,
     experiment_url,
 )
 
@@ -321,7 +321,7 @@ def validate_stores(client, *, memory_store: Optional[str], session_store: Optio
             ) from exc
 
 
-def resolve_trace_experiment(
+def resolve_trace_experiment_id(
     source: pathlib.Path, project_name: str, client, profile
 ) -> Optional[str]:
     """The MLflow experiment id an agent traces to, or None when tracing is disabled.
@@ -349,8 +349,8 @@ def resolve_trace_experiment(
     pinned = project.trace_experiment_id if project is not None else None
     if pinned:
         return pinned
-    experiment_id = ensure_experiment(
-        profile, client, default_experiment(client.current_user, project_name)
+    experiment_id = create_experiment_idempotent(
+        profile, client, default_experiment_name(client.current_user, project_name)
     )
     # Pin the resolved default so subsequent runs reuse it by id (removes the special-cased "recompute
     # the default" path). No agent.toml (raw dir) just means nowhere to pin — still trace this run.
@@ -496,7 +496,7 @@ def deploy(
     trace_experiment_id: Optional[str] = None
     trace_setup_error: Optional[str] = None
     try:
-        trace_experiment_id = resolve_trace_experiment(
+        trace_experiment_id = resolve_trace_experiment_id(
             source_dir, source_dir.resolve().name, client, obj.profile
         )
     except Exception as exc:  # noqa: BLE001 - tracing is best-effort; never block a deploy
