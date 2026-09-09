@@ -206,7 +206,47 @@ mason [-p <profile>] [-o text|json]
     list             [--source PATH]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
+  endpoint
+    invoke      [APP] --path PATH [--url URL] [--json JSON] [--sse]
 ```
+
+## Invoke HTTP endpoints
+
+`mason endpoint invoke` is a low-level HTTP command. It resolves and authenticates a deployed
+Databricks App, or targets localhost and arbitrary servers through `--url`. It does not assume an
+agent protocol: provide the method, path, query parameters, and complete JSON body required by the
+server.
+
+```sh
+mason --profile <profile> endpoint invoke mason-my-agent \
+  --path /api/invocations \
+  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+
+mason endpoint invoke --url http://localhost:8000 \
+  --path /api/invocations \
+  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
+```
+
+The JSON body remains explicit even for Mason-generated agents. For example, durable agents require
+a client-generated invocation ID, and streaming servers require their own streaming field plus
+`--sse` so the CLI consumes the response as Server-Sent Events.
+
+```sh
+INVOCATION_ID=$(uuidgen)
+mason --profile <profile> endpoint invoke mason-durable-agent \
+  --path /api/invocations \
+  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Run the report\"}]}"
+
+mason --profile <profile> endpoint invoke mason-my-agent \
+  --path /api/invocations \
+  --sse \
+  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
+```
+
+`--session-id` preserves one application session across calls by setting the Databricks Apps routing
+cookie. This also works with a direct App URL and with the generated runtime on localhost. OAuth and
+session headers are managed by Mason; arbitrary custom request headers are intentionally not exposed
+by this command.
 
 ## Command help
 

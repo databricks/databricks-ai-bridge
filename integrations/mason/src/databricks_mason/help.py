@@ -199,6 +199,29 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deployments", "delete"): (
         ("mason deployments delete mason-my-agent", "delete a deployment"),
     ),
+    ("endpoint",): (
+        (
+            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
+        ),
+    ),
+    ("endpoint", "invoke"): (
+        (
+            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
+        ),
+        (
+            "mason endpoint invoke --url http://localhost:8000 --path /custom/run "
+            '--json \'{"input":"hello"}\'',
+            "invoke a local or arbitrary HTTP server",
+        ),
+    ),
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),

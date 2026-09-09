@@ -38,6 +38,7 @@ def test_root_registers_supported_commands():
         "tracing",
         "deploy",
         "deployments",
+        "endpoint",
         "mcp",
         "tools",
     } <= names
