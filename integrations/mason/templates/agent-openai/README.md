@@ -72,7 +72,7 @@ history, but not a pending approval across restarts or replicas.
 
 ## Crash recovery
 
-When `DURABLE_RUNTIME` is enabled, `runtime/main.py` registers both `@app.invoke` and
+When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
 `@app.on_recovery`. OpenAI Agents SDK does not currently expose LangGraph-style node checkpoints, so
 recovery replays the persisted application input against the same session. Invocation state and
 emitted events survive process loss in deployed Lakebase, but tool calls and other external side

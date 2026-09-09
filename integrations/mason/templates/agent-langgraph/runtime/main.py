@@ -15,11 +15,9 @@ from databricks_mason import AgentApp
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 agent.agent.configure()
 
-DURABLE_RUNTIME = True
-
-app = AgentApp(durable_runtime=DURABLE_RUNTIME)
+app = AgentApp()
 app.invoke(agent.agent.invoke)
-if DURABLE_RUNTIME:
+if app.durable_runtime:
     app.on_recovery(agent.agent.on_recovery)
 
 

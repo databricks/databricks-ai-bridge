@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import logging
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import UUID
@@ -14,6 +15,11 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
+
+try:
+    import tomllib  # ty: ignore[unresolved-import]
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
 
 from databricks_mason.runtime.durability.runtime import DurableRuntime
 from databricks_mason.runtime.durability.store import (
@@ -39,6 +45,20 @@ _ROUTING_COOKIE = "__Host-databricks-app-router"
 _API_ROOT = "/api/invocations"
 
 
+def _project_durability_enabled() -> bool:
+    """Read the durable-runtime setting from the Mason project manifest."""
+    manifest = pathlib.Path("agent.toml")
+    if not manifest.is_file():
+        return False
+    with manifest.open("rb") as handle:
+        durability = tomllib.load(handle).get("durability")
+    if durability is None:
+        return False
+    if not isinstance(durability, dict) or not isinstance(durability.get("enabled"), bool):
+        raise RuntimeError("agent.toml [durability] must set enabled to true or false")
+    return durability["enabled"]
+
+
 class _InvocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,16 +71,19 @@ class _InvocationRequest(BaseModel):
 class AgentApp(FastAPI):
     """Expose agent handlers through Mason's invocation HTTP protocol.
 
-    The default runtime keeps background state and events in this process. Set
-    ``durable_runtime=True`` to use Mason's deployed Lakebase store, heartbeats, and crash recovery.
+    By default, the runtime reads ``[durability].enabled`` from the Mason project's ``agent.toml``.
+    Without that setting it keeps background state and events in this process. Pass
+    ``durable_runtime`` explicitly to override project configuration when using the SDK directly.
     """
 
     def __init__(
         self,
         *,
-        durable_runtime: bool = False,
+        durable_runtime: bool | None = None,
         durability_store: DurabilityStore | None = None,
     ) -> None:
+        if durable_runtime is None:
+            durable_runtime = _project_durability_enabled()
         self.durable_runtime = durable_runtime
         self._invoke_hook: DurableAgentHook | None = None
         self._on_recovery_hook: DurableAgentHook | None = None

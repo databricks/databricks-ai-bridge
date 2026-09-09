@@ -77,7 +77,7 @@ mason sessions bind my-agent-sessions
 
 ## Crash recovery
 
-When `DURABLE_RUNTIME` is enabled, `runtime/main.py` registers both `@app.invoke` and
+When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
 `@app.on_recovery`. The initial attempt writes the invocation ID into LangGraph checkpoint metadata
 with synchronous checkpoint durability. A recovery attempt continues from that checkpoint when it
 exists; otherwise it safely replays the persisted application input. Invocation state and emitted

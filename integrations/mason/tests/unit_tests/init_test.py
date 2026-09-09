@@ -28,7 +28,6 @@ class _Ctx:
 
 @pytest.fixture(autouse=True)
 def _skip_generated_runtime_rewrite(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(init_mod, "_configure_durable_runtime", lambda *_args: None)
     monkeypatch.setattr(init_mod, "_editable_template_source", lambda: None)
 
 

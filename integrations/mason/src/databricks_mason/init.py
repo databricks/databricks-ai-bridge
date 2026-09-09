@@ -254,16 +254,6 @@ def _pin_mason_source(
     pyproject.write_text(tomlkit.dumps(document))
 
 
-def _configure_durable_runtime(dest: pathlib.Path, enabled: bool) -> None:
-    """Set the generated Mason server's explicit durable-runtime option."""
-    main = dest / "runtime" / "main.py"
-    marker = "DURABLE_RUNTIME = True"
-    if not main.is_file() or main.read_text().count(marker) != 1:
-        raise AgentCliError(f"Mason server template at {main} has no durable-runtime marker.")
-    if not enabled:
-        main.write_text(main.read_text().replace(marker, "DURABLE_RUNTIME = False"))
-
-
 @click.command(name="init")
 @click.argument("directory", required=False)
 @click.option(
@@ -377,9 +367,6 @@ def init(
                 resolved_ref or selected_ref,
                 runtime_extra=mason_server,
             )
-        if mason_server:
-            _configure_durable_runtime(dest, durable_runtime)
-
         template_name = pathlib.PurePosixPath(template_path).name
         write_project_metadata(dest, framework=selected_framework, template=template_name)
         project = AgentProject.create(

@@ -211,9 +211,10 @@ def _durability_from_manifest(value: object) -> bool:
         return False
     if not isinstance(value, Mapping):
         raise AgentCliError("agent.toml [durability] must be a table.")
-    if cast(Mapping[str, Any], value).get("enabled") is not True:
-        raise AgentCliError("agent.toml [durability] must set enabled = true.")
-    return True
+    enabled = cast(Mapping[str, Any], value).get("enabled")
+    if not isinstance(enabled, bool):
+        raise AgentCliError("agent.toml [durability] must set enabled = true or false.")
+    return enabled
 
 
 def _store_id_from_manifest(value: object) -> str | None:
