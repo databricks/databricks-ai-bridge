@@ -420,10 +420,9 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        if durability_enabled:
-            durability = tomlkit.table()
-            durability.add("enabled", True)
-            document.add(_DURABILITY_TABLE, durability)
+        durability = tomlkit.table()
+        durability.add("enabled", durability_enabled)
+        document.add(_DURABILITY_TABLE, durability)
         return cls(
             project_root,
             document,

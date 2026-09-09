@@ -175,7 +175,7 @@ def test_init_no_durable_runtime_keeps_mason_server_without_binding(
     assert f.call_args.args[2] == init_mod._TEMPLATES[framework]["path"]
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert "durability" not in manifest
+    assert manifest["durability"] == {"enabled": False}
     assert "Mason AgentApp" in result.output
     assert "Durable runtime" in result.output
     assert "disabled" in result.output
@@ -206,7 +206,7 @@ def test_init_custom_server_uses_minimal_template(
     assert f.call_args.args[4] == ()
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert "durability" not in manifest
+    assert manifest["durability"] == {"enabled": False}
     assert "Custom FastAPI" in result.output
     assert "Chat app" not in result.output
 
