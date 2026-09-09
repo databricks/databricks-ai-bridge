@@ -125,6 +125,21 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai" in result.output
 
 
+def test_init_removes_partial_destination_after_failure(tmp_path: pathlib.Path):
+    dest = tmp_path / "partial"
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "runtime.py").write_text("partial\n")
+        raise AgentCliError("template validation failed")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert not dest.exists()
+
+
 def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:

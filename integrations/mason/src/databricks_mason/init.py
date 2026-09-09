@@ -360,34 +360,38 @@ def init(
     selected_ref = ref or (
         installed_source[1] if installed_source else _template_ref(selected_framework)
     )
-    resolved_ref = _fetch_template(
-        selected_repo,
-        selected_ref,
-        template_path,
-        dest,
-        overlay_dirs,
-    )
-    if repo is not None or ref is not None or installed_source is not None:
-        _pin_mason_source(
-            dest,
-            selected_framework,
+    try:
+        resolved_ref = _fetch_template(
             selected_repo,
-            resolved_ref or selected_ref,
-            runtime_extra=mason_server,
+            selected_ref,
+            template_path,
+            dest,
+            overlay_dirs,
         )
-    if mason_server:
-        _configure_durable_runtime(dest, durable_runtime)
+        if repo is not None or ref is not None or installed_source is not None:
+            _pin_mason_source(
+                dest,
+                selected_framework,
+                selected_repo,
+                resolved_ref or selected_ref,
+                runtime_extra=mason_server,
+            )
+        if mason_server:
+            _configure_durable_runtime(dest, durable_runtime)
 
-    template_name = pathlib.PurePosixPath(template_path).name
-    write_project_metadata(dest, framework=selected_framework, template=template_name)
-    project = AgentProject.create(
-        dest,
-        framework=selected_framework,
-        durability_enabled=durable_runtime,
-    )
-    project.write()
-    env_profile = profile or obj.profile
-    wrote_env = _write_env(dest, env_profile) if env_profile else False
+        template_name = pathlib.PurePosixPath(template_path).name
+        write_project_metadata(dest, framework=selected_framework, template=template_name)
+        project = AgentProject.create(
+            dest,
+            framework=selected_framework,
+            durability_enabled=durable_runtime,
+        )
+        project.write()
+        env_profile = profile or obj.profile
+        wrote_env = _write_env(dest, env_profile) if env_profile else False
+    except Exception:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
 
     if obj.output == "json":
         render.emit_json(
