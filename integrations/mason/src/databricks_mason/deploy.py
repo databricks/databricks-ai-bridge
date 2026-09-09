@@ -29,10 +29,10 @@ from databricks_mason import (
     session_store_access,
     timefmt,
 )
+from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import (
-    _databricks,
     apply_experiment_resource,
     apply_postgres_resources,
     grant_tables,
