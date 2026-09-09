@@ -446,14 +446,16 @@ def deploy(
     workspace_path,
     instances,
 ) -> None:
-    """Deploy an agent to Databricks Apps: provision its stores, wire in tracing, and roll it out.
+    """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
+
+    Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with)
+    can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the
+    app's own identity — no model keys to configure — and `deploy` also provisions the stores bound
+    in agent.toml and wires in any tracing.
 
     NAME is recorded in agent.toml on the first deploy, so a later `mason deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). The deployed app is named
     `mason-<name>`; use that full name with the `mason deployments` commands.
-
-    The deployed agent reaches Databricks model serving through the AI Gateway using the app's own
-    identity — no model keys to configure.
 
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
