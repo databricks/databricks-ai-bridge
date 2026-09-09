@@ -129,13 +129,17 @@ def dev(
     # front, keyed on whether this project actually carries the chat-app overlay.
     _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
 
-    # Run in the project dir so run-local finds the app; stream output (no capture).
-    _databricks(
-        args,
-        obj.profile,
-        cwd=str(source_dir),
-        action="Could not start the agent locally.",
-    )
+    # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
+    # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace.
+    try:
+        _databricks(
+            args,
+            obj.profile,
+            cwd=str(source_dir),
+            action="Could not start the agent locally.",
+        )
+    finally:
+        entry_point.unlink(missing_ok=True)
 
 
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
