@@ -10,7 +10,10 @@ from dotenv import load_dotenv
 
 from databricks_mason import AgentApp
 
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+# .env fills unset config only; the real environment wins (override=False). `mason dev -p` and
+# the deploy platform inject DATABRICKS_* into the process, and a checked-in .env must not clobber
+# them — overriding only the profile while leaving the injected host mismatches host and credential.
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 agent.agent.configure()
 
 DURABLE_RUNTIME = True

@@ -8,7 +8,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+# .env fills unset config only; the real environment wins (override=False). `mason dev -p` and
+# the deploy platform inject DATABRICKS_* into the process, and a checked-in .env must not clobber
+# them — overriding only the profile while leaving the injected host mismatches host and credential.
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 
 
 class InvocationRequest(BaseModel):
