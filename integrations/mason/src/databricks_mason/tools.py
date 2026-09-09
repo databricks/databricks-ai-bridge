@@ -181,7 +181,7 @@ def tools() -> None:
       sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
                     to the tables, volumes, or paths you choose.
       mcp           A Databricks-managed MCP service (see `mason mcp list`),
-                    e.g. system.ai.web_search.
+                    e.g. system.ai.python_exec.
       uc-function   An existing Unity Catalog function (catalog.schema.function).
       python        A local Python tool scaffolded into your project.
 
@@ -250,7 +250,7 @@ def add_mcp(
     source: pathlib.Path,
 ) -> None:
     """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
-    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
+    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
     _add_spec(
         obj,
         source.resolve(),

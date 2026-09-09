@@ -202,13 +202,13 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
-        ("mason tools remove mcp system.ai.web_search", "remove a tool binding"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
+        ("mason tools remove mcp system.ai.python_exec", "remove a tool binding"),
         ("mason tools list", "list configured tools"),
     ),
     ("tools", "add"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
         ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
@@ -216,7 +216,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
     ),
     ("tools", "add", "mcp"): (
-        ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
+        ("mason tools add mcp system.ai.python_exec", "add a managed MCP tool"),
     ),
     ("tools", "add", "uc-function"): (
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
@@ -225,8 +225,8 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "remove"): (
-        ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),
-        ("mason tools remove web_search", "remove a tool by id"),
+        ("mason tools remove mcp system.ai.python_exec", "remove an MCP tool by service"),
+        ("mason tools remove python_exec", "remove a tool by id"),
     ),
     ("tools", "list"): (("mason tools list", "list configured tools"),),
 }
@@ -310,9 +310,9 @@ def _root_epilog() -> str:
     auth = "\n".join(
         [
             "\b",
-            "Not authenticated yet? Set up the Databricks CLI first:",
+            "Not authenticated yet? Create a profile with the Databricks CLI first:",
             "  databricks auth login --profile <profile>",
-            "(`mason login` also does this for you if credentials are missing.)",
+            "Then `mason login --profile <profile>` saves it as your default.",
         ]
     )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])

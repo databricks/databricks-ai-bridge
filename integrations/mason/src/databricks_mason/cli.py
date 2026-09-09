@@ -54,6 +54,10 @@ class CliContext:
 def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     """Mason is a CLI for building and deploying custom AI agents on Databricks.
 
+    Mason is experimental: the CLI, its commands, and the underlying agent APIs are all in preview,
+    may need to be enabled for your workspace, and are likely to change in backward-incompatible
+    ways.
+
     Scaffold an agent project from a template, run it locally with a chat UI, and deploy it to
     Databricks Apps — then manage the tools, memory, sessions, and tracing behind it, all from one
     authenticated command.
@@ -62,18 +66,15 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     authenticates with a Databricks profile: run `mason login` once to save a default, or pass
     --profile / -p (without one, the Databricks SDK's default authentication is used).
 
-    Mason is experimental: the CLI, its commands, and the underlying agent APIs are all in preview,
-    may need to be enabled for your workspace, and are likely to change in backward-incompatible
-    ways.
-
     An agent you build with Mason can combine the platform's capabilities:
 
     \b
-      Tools      Give the agent actions: data sandboxes, managed MCP services,
-                 Unity Catalog functions, and local Python tools.
-      Memory     Long-term memory the agent recalls across conversations.
-      Sessions   The transcript, history, and state of a single conversation.
-      Tracing    MLflow traces in Unity Catalog to debug and evaluate runs.
+      Tools        Data sandboxes, managed MCP services, Unity Catalog
+                   functions, and local Python tools the agent can call.
+      Memory       Long-term memory the agent recalls across conversations.
+      Sessions     The transcript, history, and state of a single conversation.
+      Tracing      MLflow traces in Unity Catalog to debug and evaluate runs.
+      Deployment   Hosting on Databricks Apps, with scaling and sticky routing.
 
     `mason deploy` provisions and wires these into a single agent hosted on Databricks Apps.
     """

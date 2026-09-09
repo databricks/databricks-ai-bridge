@@ -60,11 +60,10 @@ def memory() -> None:
 
     Memory is what an agent remembers across separate conversations — durable facts and
     preferences (for example "prefers concise answers", or a saved profile detail), as opposed to
-    the turn-by-turn history of a single conversation (that is `mason sessions`). A memory store is
-    the workspace-scoped, managed store that holds this memory; each entry is a small document (a
+    the turn-by-turn history of a single conversation (that is `mason sessions`).
+
+    A memory store is the managed store that holds this memory; each entry is a small document (a
     path plus its content) partitioned by actor, so one store keeps every user's memories separate.
-    Bind a store to an agent and it is wired in on `mason dev` / `mason deploy` — the agent reads
-    and writes entries as it runs.
     """
 
 
