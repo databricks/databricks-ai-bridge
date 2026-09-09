@@ -10,7 +10,9 @@ from runtime.ui import install_ui
 
 from databricks_mason import AgentApp
 
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+# override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
+# checked-in .env.
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 agent.agent.configure()
 
 DURABLE_RUNTIME = True
