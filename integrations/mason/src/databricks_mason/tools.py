@@ -180,7 +180,7 @@ def add_mcp(
     source: pathlib.Path,
 ) -> None:
     """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
-    _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
+    _require_arg(service, "managed MCP service name (e.g. system.ai.python_exec)")
     _add_spec(
         obj,
         source.resolve(),
