@@ -468,6 +468,9 @@ def deploy(
     By default any memory/session store not yet bound in agent.toml is created and bound as
     `<name>-memory` / `<name>-session`; pass --no-create-stores to skip that.
 
+    The deployed agent reaches Databricks model serving through the AI Gateway using the app's own
+    identity — no model keys to configure.
+
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
 
