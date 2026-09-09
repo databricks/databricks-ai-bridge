@@ -379,43 +379,6 @@ def test_agent_app_defaults_to_process_local_state_even_inside_apps(monkeypatch)
     assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
 
 
-def test_agent_app_uses_disabled_project_durability_in_deployment(tmp_path, monkeypatch) -> None:
-    (tmp_path / "agent.toml").write_text("[durability]\nenabled = false\n")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-
-    app = AgentApp()
-
-    assert app.durable_runtime is False
-    assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
-
-
-def test_agent_toml_is_the_durability_source_of_truth(tmp_path, monkeypatch) -> None:
-    (tmp_path / "agent.toml").write_text("[durability]\nenabled = false\n")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-
-    app = AgentApp(durable_runtime=True)
-
-    assert app.durable_runtime is False
-    assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
-
-
-def test_agent_app_uses_enabled_project_durability_in_deployment(tmp_path, monkeypatch) -> None:
-    (tmp_path / "agent.toml").write_text("[durability]\nenabled = true\n")
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
-    monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
-
-    with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
-        AgentApp()
-
-
 def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")

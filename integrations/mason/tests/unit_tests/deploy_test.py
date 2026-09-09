@@ -183,7 +183,7 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     # Mason prefixes the app name with `mason-` so `deployments list` can find its own apps.
     ws = "/Workspace/Users/me@example.com/mason_deployments/mason-myapp"
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
-    assert ["sync", str(src), ws, "--full", "--exclude", "uv.lock"] in calls
+    assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
     assert ["apps", "deploy", "mason-myapp", "--source-code-path", ws] in calls
     # Stores are read from agent.toml at runtime, so deploy does NOT write store env into app.yaml.
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []

@@ -9,13 +9,15 @@ from dotenv import load_dotenv
 from runtime.ui import install_ui
 
 from databricks_mason import AgentApp
+from databricks_mason.agent_project import AgentProject
 
 # override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
 # checked-in .env.
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 agent.agent.configure()
 
-app = AgentApp()
+durable_runtime = AgentProject.load(Path(__file__).parent.parent).durability_enabled
+app = AgentApp(durable_runtime=durable_runtime)
 app.invoke(agent.agent.invoke)
 if app.durable_runtime:
     app.on_recovery(agent.agent.on_recovery)
