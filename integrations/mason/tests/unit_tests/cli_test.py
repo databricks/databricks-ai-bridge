@@ -86,10 +86,11 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage Databricks-managed tools declared in agent.toml." in result.output
-    assert "Add a managed sandbox, MCP service, or UC function." in result.output
-    assert "Remove a managed tool binding from this agent." in result.output
-    assert "List managed tool bindings for this agent." in result.output
+    assert "Tools are what let an agent act" in result.output
+    # The CLI-addable tool types are described on the group page (Python tools are code-first,
+    # written directly in the project — see #509 upstream — so they are not a `tools add` type).
+    for tool_type in ("sandbox", "mcp", "uc-function"):
+        assert tool_type in result.output
     assert "mason tools add --help" in result.output
     assert "mason tools add mcp system.ai.web_search" in result.output
     assert "mason tools remove mcp system.ai.web_search" in result.output
