@@ -220,11 +220,11 @@ server.
 ```sh
 mason --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
-  --json '{"input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 
 mason endpoint invoke --url http://localhost:8000 \
   --path /api/invocations \
-  --json '{"input":[{"role":"user","content":"Hello"}]}'
+  --json '{"id":"00000000-0000-4000-8000-000000000001","input":[{"role":"user","content":"Hello"}]}'
 ```
 
 The JSON body remains explicit even for Mason-generated agents. For example, durable agents require
@@ -240,7 +240,7 @@ mason --profile <profile> endpoint invoke mason-durable-agent \
 mason --profile <profile> endpoint invoke mason-my-agent \
   --path /api/invocations \
   --sse \
-  --json '{"input":[{"role":"user","content":"Hello"}],"stream":true}'
+  --json "{\"id\":\"$INVOCATION_ID\",\"input\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":true}"
 ```
 
 `--session-id` preserves one application session across calls by setting the Databricks Apps routing

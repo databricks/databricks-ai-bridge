@@ -202,14 +202,18 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("endpoint",): (
         (
             "mason endpoint invoke mason-my-agent --path /api/invocations "
-            '--json \'{"input":[{"role":"user","content":"Hello"}]}\'',
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
     ),
     ("endpoint", "invoke"): (
         (
             "mason endpoint invoke mason-my-agent --path /api/invocations "
-            '--json \'{"input":[{"role":"user","content":"Hello"}]}\'',
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
             "invoke a deployed HTTP agent",
         ),
         (
