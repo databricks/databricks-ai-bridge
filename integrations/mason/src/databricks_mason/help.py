@@ -189,14 +189,20 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments",): (("mason deployments list", "list agent deployments"),),
     ("deployments", "list"): (("mason deployments list", "list agent deployments"),),
-    ("deployments", "get"): (("mason deployments get mason-my-agent", "show one deployment"),),
-    ("deployments", "logs"): (
-        ("mason deployments logs mason-my-agent", "stream a deployment's logs"),
+    ("deployments", "get"): (
+        ("mason deployments get agent-mason-my-agent", "show one deployment"),
     ),
-    ("deployments", "start"): (("mason deployments start mason-my-agent", "start a deployment"),),
-    ("deployments", "stop"): (("mason deployments stop mason-my-agent", "stop a deployment"),),
+    ("deployments", "logs"): (
+        ("mason deployments logs agent-mason-my-agent", "stream a deployment's logs"),
+    ),
+    ("deployments", "start"): (
+        ("mason deployments start agent-mason-my-agent", "start a deployment"),
+    ),
+    ("deployments", "stop"): (
+        ("mason deployments stop agent-mason-my-agent", "stop a deployment"),
+    ),
     ("deployments", "delete"): (
-        ("mason deployments delete mason-my-agent", "delete a deployment"),
+        ("mason deployments delete agent-mason-my-agent", "delete a deployment"),
     ),
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
