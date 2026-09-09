@@ -56,10 +56,15 @@ def _truncate(value: Any, length: int = 60) -> str:
 
 @click.group()
 def memory() -> None:
-    """Manage an agent's long-term memory: memory stores and the entries kept in them.
+    """Manage an agent's long-term memory: memory stores and their entries.
 
-    Create a store, bind it to an agent so it's wired in on `mason dev` / `mason deploy`, and read
-    or edit the entries an agent remembers (partitioned per actor).
+    Memory is what an agent remembers across separate conversations — durable facts and
+    preferences (for example "prefers concise answers", or a saved profile detail), as opposed to
+    the turn-by-turn history of a single conversation (that is `mason sessions`). A memory store is
+    the workspace-scoped, managed store that holds this memory; each entry is a small document (a
+    path plus its content) partitioned by actor, so one store keeps every user's memories separate.
+    Bind a store to an agent and it is wired in on `mason dev` / `mason deploy` — the agent reads
+    and writes entries as it runs.
     """
 
 

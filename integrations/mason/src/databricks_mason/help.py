@@ -241,6 +241,24 @@ _INLINE_COMMENT_MAX = 46
 _DOCS_URL = "https://github.com/databricks/databricks-ai-bridge/tree/main/integrations/mason"
 _ISSUES_URL = "https://github.com/databricks/databricks-ai-bridge/issues"
 
+# Short, one-line descriptors for the root command list. Click renders that list as a scannable
+# index and truncates a long first docstring line with `…`; a curated `short_help` keeps each row
+# crisp while the command's own `--help` page still shows its full docstring. Keep these under ~45
+# chars so they never truncate.
+_SHORT_HELP: dict[CommandPath, str] = {
+    ("login",): "Authenticate and save a default profile",
+    ("logout",): "Forget the saved default profile",
+    ("init",): "Scaffold a new agent project",
+    ("dev",): "Run the agent locally with a chat UI",
+    ("deploy",): "Deploy an agent to Databricks Apps",
+    ("deployments",): "Manage deployed agents",
+    ("memory",): "Manage an agent's long-term memory",
+    ("sessions",): "Manage an agent's conversation sessions",
+    ("mcp",): "Discover managed MCP services",
+    ("tools",): "Manage an agent's tools",
+    ("tracing",): "Set up and inspect agent tracing",
+}
+
 
 def _walk(
     command: click.Command, prefix: CommandPath = ()
@@ -284,19 +302,29 @@ def _example_epilog(examples: tuple[Example, ...]) -> str:
 
 
 def _root_epilog() -> str:
-    """The root help footer: the quickstart examples, then Docs/Issues links.
+    """The root help footer: the quickstart examples, an auth note, then Docs/Issues links.
 
-    The links live in their own `\\b` paragraph so Click renders the URLs verbatim instead of
-    rewrapping them.
+    Each block is its own `\\b` paragraph so Click renders it verbatim (commands and URLs intact)
+    instead of rewrapping it.
     """
+    auth = "\n".join(
+        [
+            "\b",
+            "Not authenticated yet? Set up the Databricks CLI first:",
+            "  databricks auth login --profile <profile>",
+            "(`mason login` also does this for you if credentials are missing.)",
+        ]
+    )
     links = "\n".join(["\b", f"Docs:   {_DOCS_URL}", f"Issues: {_ISSUES_URL}"])
-    return f"{_example_epilog(_EXAMPLES[()])}\n\n{links}"
+    return f"{_example_epilog(_EXAMPLES[()])}\n\n{auth}\n\n{links}"
 
 
 def configure_help(root: click.Group) -> None:
-    """Attach curated examples to the root and every existing command."""
+    """Attach curated short help and examples to the root and every existing command."""
     root.epilog = _root_epilog()
     for path, command in _walk(root):
+        if path in _SHORT_HELP:
+            command.short_help = _SHORT_HELP[path]
         examples = _EXAMPLES.get(path)
         if examples:
             command.epilog = _example_epilog(examples)

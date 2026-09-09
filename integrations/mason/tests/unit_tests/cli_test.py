@@ -85,7 +85,10 @@ def test_tools_help_explains_add_workflow():
     result = CliRunner().invoke(cli.mason, ["tools", "--help"])
 
     assert result.exit_code == 0, result.output
-    assert "Manage tools configured in an agent project's agent.toml." in result.output
+    assert "Tools are what let an agent act" in result.output
+    # The supported tool types are listed on the group page.
+    for tool_type in ("sandbox", "mcp", "uc-function", "python"):
+        assert tool_type in result.output
     assert "Add a sandbox, MCP service, UC function, or Python tool." in result.output
     assert "Remove a tool binding from this agent." in result.output
     assert "List tools configured for this agent." in result.output

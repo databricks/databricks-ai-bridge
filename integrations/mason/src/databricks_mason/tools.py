@@ -171,7 +171,23 @@ def _write_new_files(files: dict[pathlib.Path, str]) -> list[pathlib.Path]:
 
 @click.group()
 def tools() -> None:
-    """Manage tools configured in an agent project's agent.toml."""
+    """Manage the tools an agent can call, declared in the project's agent.toml.
+
+    Tools are what let an agent act beyond the language model itself — query governed data, call a
+    service, or run a function — and each one is recorded in agent.toml so `mason dev` / `mason
+    deploy` wire it in. Mason supports these tool types out of the box:
+
+    \b
+      sandbox       Query Unity Catalog data via system.ai.sandbox, scoped
+                    to the tables, volumes, or paths you choose.
+      mcp           A Databricks-managed MCP service (see `mason mcp list`),
+                    e.g. system.ai.web_search.
+      uc-function   An existing Unity Catalog function (catalog.schema.function).
+      python        A local Python tool scaffolded into your project.
+
+    Add one with `mason tools add <type>`, see what's configured with `mason tools list`, and drop
+    one with `mason tools remove`.
+    """
 
 
 @tools.group("add")
@@ -233,7 +249,7 @@ def add_mcp(
     tool_id: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Add a Databricks-managed MCP SERVICE as a tool (see `mason mcp list` for available services)."""
+    """Add a Databricks-managed MCP service as a tool (see `mason mcp list` for available services)."""
     _require_arg(service, "managed MCP service name (e.g. system.ai.web_search)")
     _add_spec(
         obj,

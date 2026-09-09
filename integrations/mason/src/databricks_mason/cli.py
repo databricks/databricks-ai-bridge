@@ -58,11 +58,24 @@ def mason(ctx: click.Context, profile: Optional[str], output: str) -> None:
     Databricks Apps — then manage the tools, memory, sessions, and tracing behind it, all from one
     authenticated command.
 
-    New here? The Examples below take you from an empty directory to a deployed agent. Mason
+    New here? The examples below take you from an empty directory to a deployed agent. Mason
     authenticates with a Databricks profile: run `mason login` once to save a default, or pass
     --profile / -p (without one, the Databricks SDK's default authentication is used).
 
-    The underlying agent APIs are in preview and may need to be enabled for your workspace.
+    Mason is experimental: the CLI, its commands, and the underlying agent APIs are all in preview,
+    may need to be enabled for your workspace, and are likely to change in backward-incompatible
+    ways.
+
+    An agent you build with Mason can combine the platform's capabilities:
+
+    \b
+      Tools      Give the agent actions: data sandboxes, managed MCP services,
+                 Unity Catalog functions, and local Python tools.
+      Memory     Long-term memory the agent recalls across conversations.
+      Sessions   The transcript, history, and state of a single conversation.
+      Tracing    MLflow traces in Unity Catalog to debug and evaluate runs.
+
+    `mason deploy` provisions and wires these into a single agent hosted on Databricks Apps.
     """
     # Let errors render to match the selected output mode (JSON errors for -o json).
     errors.set_output_mode(output)

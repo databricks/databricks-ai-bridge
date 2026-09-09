@@ -27,8 +27,12 @@ def _truncate(value: Any, length: int = 60) -> str:
 def sessions() -> None:
     """Manage an agent's conversations: session stores, the sessions in them, and their items.
 
-    Create a store, bind it to an agent so it's wired in on `mason dev` / `mason deploy`, and inspect
-    or edit the sessions and their transcript items (the running record of a conversation).
+    A session is a single conversation between an actor (a user) and the agent. It holds that
+    conversation's ordered transcript of items — the messages, tool calls, and results that make up
+    its running state. A session store is the workspace-scoped, managed store that holds an agent's
+    sessions and their items, giving it durable conversation history it can list, resume, fork, or
+    delete. This is the short-term, per-conversation counterpart to the cross-conversation memory in
+    `mason memory`. Bind a store to an agent and it is wired in on `mason dev` / `mason deploy`.
     """
 
 
