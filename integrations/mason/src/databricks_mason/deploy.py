@@ -44,9 +44,10 @@ _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 
-# Mason names every deployment `agent-<name>` so `deployments list` can filter to its own apps.
-# The `agent-` prefix is also what the Databricks agent registry keys on to surface these apps.
-_DEPLOYMENT_PREFIX = "agent-"
+# Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
+# The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
+# `-mason-` segment narrows `deployments list` to Mason's own agents, not every `agent-*` app.
+_DEPLOYMENT_PREFIX = "agent-mason-"
 _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
 
 
@@ -125,7 +126,7 @@ def _instance_args(instances: Optional[int]) -> list[str]:
 
 
 def _prefixed_name(name: str) -> str:
-    """Mason deployments carry an `agent-` prefix so `deployments list` can find only its own apps."""
+    """Mason deployments carry an `agent-mason-` prefix so `deployments list` finds only its own apps."""
     return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
 
 
@@ -413,7 +414,7 @@ def deploy(
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
     NAME is recorded in agent.toml on first deploy, so later `mason deploy` (from the project dir)
-    can omit it; passing NAME again updates the recorded name. The app is named `agent-<name>`
+    can omit it; passing NAME again updates the recorded name. The app is named `agent-mason-<name>`
     (Mason adds the prefix if absent); use that full name with the other `mason deployments` verbs.
     `deployments list` shows only apps carrying this prefix.
 
@@ -627,7 +628,7 @@ def _deployment_status(a: dict) -> Optional[str]:
 @deployments.command("list")
 @click.pass_obj
 def deployments_list(obj) -> None:
-    """List Mason agent deployments (apps named `agent-*`) in the workspace."""
+    """List Mason agent deployments (apps named `agent-mason-*`) in the workspace."""
     result = _databricks(
         ["apps", "list", "-o", "json"],
         obj.profile,
