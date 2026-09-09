@@ -169,11 +169,11 @@ def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch)
     )
 
     assert result.exit_code == 0, result.output
-    # Mason prefixes the app name with `mason-` so `deployments list` can find its own apps.
-    ws = "/Workspace/Users/me@example.com/mason_deployments/mason-myapp"
+    # Mason prefixes the app name with `agent-` so `deployments list` can find its own apps.
+    ws = "/Workspace/Users/me@example.com/mason_deployments/agent-myapp"
     # uv.lock is excluded so the build resolves fresh against its own index (not the dev machine's).
     assert ["sync", str(src), ws, "--exclude", "uv.lock"] in calls
-    assert ["apps", "deploy", "mason-myapp", "--source-code-path", ws] in calls
+    assert ["apps", "deploy", "agent-myapp", "--source-code-path", ws] in calls
     # Stores are read from agent.toml at runtime, so deploy does NOT write store env into app.yaml.
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     env = {e["name"]: e["value"] for e in env_entries}
@@ -206,7 +206,7 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
         [
             "apps",
             "create",
-            "mason-myapp",
+            "agent-myapp",
             "--compute-min-instances",
             "2",
             "--compute-max-instances",
@@ -214,7 +214,7 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
         ],
         {
             "capture": True,
-            "action": "Could not create deployment 'mason-myapp'.",
+            "action": "Could not create deployment 'agent-myapp'.",
         },
     ) in calls
 
@@ -241,11 +241,11 @@ def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypa
 
     assert result.exit_code == 0, result.output
     update_args, update_kwargs = next(
-        call for call in calls if call[0][:3] == ["apps", "create-update", "mason-myapp"]
+        call for call in calls if call[0][:3] == ["apps", "create-update", "agent-myapp"]
     )
     assert update_kwargs == {
         "capture": True,
-        "action": "Could not update deployment 'mason-myapp'.",
+        "action": "Could not update deployment 'agent-myapp'.",
     }
     payload = json.loads(update_args[update_args.index("--json") + 1])
     assert payload == {
@@ -352,7 +352,7 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
     assert [event[0] for event in events] == ["attach", "deploy"]
     backend = events[0][1][0]
     assert backend.database == "sessions"
-    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("agent-myapp")
     assert backend.tables == ()
     env = {
         entry["name"]: entry["value"]
@@ -360,7 +360,7 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
     }
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
-        deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
+        deploy_mod.lakebase_durability_store.get_lakebase_schema("agent-myapp")
     )
 
 
@@ -371,7 +371,7 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, memory="mem")
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    selected = deploy_mod.lakebase_durability_store.backend("agent-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -437,9 +437,9 @@ def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, mo
     # reported in Mason's terms instead of echoing the raw `databricks apps` command.
     assert apps_calls[0][1] == {
         "capture": True,
-        "action": "Could not create deployment 'mason-myapp'.",
+        "action": "Could not create deployment 'agent-myapp'.",
     }
-    assert apps_calls[1][1] == {"action": "Could not deploy 'mason-myapp'."}
+    assert apps_calls[1][1] == {"action": "Could not deploy 'agent-myapp'."}
     assert "Agent compute is starting" in result.output
     assert "App compute" not in result.output
     get_call = next(call for call in calls if call[0][:2] == ["apps", "get"])
@@ -494,7 +494,7 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     assert sync[:3] == [
         "sync",
         str(src),
-        "/Workspace/Users/me@example.com/mason_deployments/mason-myapp",
+        "/Workspace/Users/me@example.com/mason_deployments/agent-myapp",
     ]
     excluded = {sync[index + 1] for index, value in enumerate(sync[:-1]) if value == "--exclude"}
     assert "agent.toml" not in excluded
@@ -527,7 +527,7 @@ def test_first_deploy_waits_for_running_before_deploying(tmp_path: pathlib.Path,
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert ["apps", "create", "mason-myapp"] in calls
+    assert ["apps", "create", "agent-myapp"] in calls
     assert waited["called"], "must wait for the new app to be running before deploying"
 
 
@@ -556,7 +556,7 @@ def test_redeploy_waits_for_running_and_skips_create(tmp_path: pathlib.Path, mon
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    assert ["apps", "create", "mason-myapp"] not in calls  # never re-create an existing app
+    assert ["apps", "create", "agent-myapp"] not in calls  # never re-create an existing app
     assert waited["called"], "re-deploy must also wait for compute"
 
 
@@ -883,8 +883,8 @@ def test_deploy_reads_deployment_name_from_toml_when_omitted(tmp_path: pathlib.P
     result = CliRunner().invoke(deploy_mod.deploy, ["--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    ws = "/Workspace/Users/me@example.com/mason_deployments/mason-stored"
-    assert ["apps", "deploy", "mason-stored", "--source-code-path", ws] in calls
+    ws = "/Workspace/Users/me@example.com/mason_deployments/agent-stored"
+    assert ["apps", "deploy", "agent-stored", "--source-code-path", ws] in calls
 
 
 def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch):
