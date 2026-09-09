@@ -192,6 +192,25 @@ def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
     assert "00000000-0000-4000-8000-000000000000" in result.output
 
 
+def test_dev_standard_template_uses_runtime_api_without_durable_runtime(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    AgentProject.create(
+        tmp_path,
+        framework="langgraph",
+        durability_enabled=False,
+    ).write()
+    (tmp_path / ".mason").mkdir()
+    (tmp_path / ".mason" / "project.toml").write_text(
+        'schema_version = 1\nframework = "langgraph"\ntemplate = "agent-langgraph"\n'
+    )
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:8000/api/invocations" in result.output
+
+
 def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     tmp_path: pathlib.Path,
 ):

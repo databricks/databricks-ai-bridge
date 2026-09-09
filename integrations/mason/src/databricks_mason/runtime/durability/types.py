@@ -4,7 +4,7 @@
 ``DurabilityStore``. Internally, ``RecoveryScheduler`` finds eligible work and ``AttemptRunner``
 claims and executes it. The store returns ``DurableExecution`` snapshots and ordered
 ``DurableEvent`` records. Each executor call receives a ``DurableExecutionContext`` for attempt
-fencing and event emission. ``DurableAgentApp`` adapts that lower-level context into
+fencing and event emission. ``AgentApp`` adapts that lower-level context into
 ``DurableAgentContext`` for functions registered with ``@app.invoke`` and ``@app.on_recovery``.
 
 All request, response, and event payloads use the recursive ``JsonValue`` / ``JsonObject`` aliases,

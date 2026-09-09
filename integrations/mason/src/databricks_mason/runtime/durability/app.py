@@ -1,4 +1,4 @@
-"""FastAPI adapter for Mason's durable runtime."""
+"""FastAPI adapter for Mason's agent runtime."""
 
 from __future__ import annotations
 
@@ -16,7 +16,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic import JsonValue as PydanticJsonValue
 
 from databricks_mason.runtime.durability.runtime import DurableRuntime
-from databricks_mason.runtime.durability.store import default_durability_store
+from databricks_mason.runtime.durability.store import (
+    InMemoryDurabilityStore,
+    default_durability_store,
+)
 from databricks_mason.runtime.durability.types import (
     DurabilityStore,
     DurableAgentContext,
@@ -45,25 +48,36 @@ class _InvocationRequest(BaseModel):
     stream: bool = False
 
 
-class DurableAgentApp(FastAPI):
-    """Expose decorated agent handlers through Mason's durable HTTP protocol."""
+class AgentApp(FastAPI):
+    """Expose agent handlers through Mason's invocation HTTP protocol.
 
-    def __init__(self, *, durability_store: DurabilityStore | None = None) -> None:
+    The default runtime keeps background state and events in this process. Set
+    ``durable_runtime=True`` to use Mason's deployed Lakebase store, heartbeats, and crash recovery.
+    """
+
+    def __init__(
+        self,
+        *,
+        durable_runtime: bool = False,
+        durability_store: DurabilityStore | None = None,
+    ) -> None:
+        self.durable_runtime = durable_runtime
         self._invoke_hook: DurableAgentHook | None = None
         self._on_recovery_hook: DurableAgentHook | None = None
+        store = durability_store
+        if store is None:
+            store = default_durability_store() if durable_runtime else InMemoryDurabilityStore()
         self._runtime = DurableRuntime(
             self._execute,
-            durability_store=(
-                durability_store if durability_store is not None else default_durability_store()
-            ),
+            durability_store=store,
         )
 
         @asynccontextmanager
         async def lifespan(_: FastAPI):
             if self._invoke_hook is None:
                 raise RuntimeError("register an invocation handler with @app.invoke")
-            recover = self._on_recovery_hook is not None
-            if not recover:
+            recover = self.durable_runtime and self._on_recovery_hook is not None
+            if self.durable_runtime and not recover:
                 logger.warning(
                     "No @app.on_recovery handler is registered; automatic crash recovery is "
                     "disabled."
@@ -75,7 +89,7 @@ class DurableAgentApp(FastAPI):
                 await self._runtime.stop()
 
         super().__init__(
-            title="Databricks Durable Agent Runtime",
+            title="Databricks Agent Runtime",
             lifespan=lifespan,
             docs_url=None,
             redoc_url=None,

@@ -4,19 +4,23 @@ import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agents import Agent, RunResultStreaming, Runner, RunState
+from agents import Agent, Runner, RunResultStreaming, RunState
 from agents.items import ToolApprovalItem
 from agents.mcp import MCPServerManager
 from databricks_openai import AsyncDatabricksOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 
-from databricks_mason import tag_session, workspace_client
-from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
-
 from agent.mcps import build_mcp_servers
 
 # Importing the tools package auto-registers every tool module.
 from agent.tools import all_tools
+from databricks_mason import (
+    DurableAgentContext,
+    tag_session,
+    workspace_client,
+    workspace_headers,
+)
+from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,12 @@ def configure() -> None:
     # routing and auth handled by the SDK), so `Agent(model=MODEL)` resolves to a Databricks model.
     from agents import set_default_openai_api, set_default_openai_client
 
-    set_default_openai_client(AsyncDatabricksOpenAI())
+    set_default_openai_client(
+        AsyncDatabricksOpenAI(
+            workspace_client=workspace_client(),
+            default_headers=workspace_headers() or None,
+        )
+    )
     set_default_openai_api("chat_completions")
     configure_tracing()
 
@@ -90,54 +99,72 @@ def create_agent(actor: str, mcp=None, model: str | None = None) -> Agent:
     )
 
 
-def _session_id(request: dict) -> str:
-    """Return the session id derived by the runtime from the Apps routing cookie.
-
-    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
-    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
-    """
-    return str(request["session_id"])
-
-
-def _actor(request: dict) -> str:
-    """The identity that owns this request's memory and session data.
-
-    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
-    deployment platform sets); it partitions long-term memory and the durable session store so each
-    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
-    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
-    """
-    return str(request.get("actor") or "agent")
+def _payload(value: Any) -> dict[str, Any]:
+    """Normalize the application payload carried inside the durable request's ``input`` field."""
+    if isinstance(value, list):
+        return {"messages": value}
+    if not isinstance(value, dict):
+        raise ValueError("input must be a message list or an object")
+    return value
 
 
-async def invoke_handler(request: dict) -> dict:
-    """Run one turn to completion. Called by the runtime for POST /invocations.
+def _session_id(payload: dict[str, Any], context: DurableAgentContext) -> str:
+    value = payload.get("session_id") or context.session_id
+    if not isinstance(value, str) or not value:
+        raise ValueError("session_id must be a non-empty string")
+    return value
 
-    ``request`` is a dict with an ``input`` list of Responses message dicts; the returned dict carries
-    the run's new items (normalized message shape) and the ``session_id`` to pass back next turn. If a
-    gated tool needs approval the run pauses: ``output`` then ends with an ``interrupt`` event and
-    ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
-    payload.
-    """
-    request = {**request, "session_id": _session_id(request)}
+
+def _actor(payload: dict[str, Any], session_id: str) -> str:
+    value = payload.get("actor") or session_id
+    if not isinstance(value, str) or not value:
+        raise ValueError("actor must be a non-empty string")
+    return value
+
+
+async def invoke(value: Any, context: DurableAgentContext) -> dict:
+    """Run the first attempt for one durable invocation."""
+    return await _run_agent(_payload(value), context)
+
+
+async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
+    """Replay the persisted application input after the runtime replaces a stale worker."""
+    return await _run_agent(_payload(value), context)
+
+
+async def _run_agent(payload: dict[str, Any], context: DurableAgentContext) -> dict:
+    session_id = _session_id(payload, context)
+    actor = _actor(payload, session_id)
+    tag_session(session_id)
+
     outputs = [
         event
-        async for event in stream_handler(request)
+        async for event in _persisted_agent_events(payload, context, session_id, actor)
         if event.get("type") in ("message", "interrupt")
     ]
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
-        "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": request["session_id"],
+        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
+        "session_id": session_id,
         "status": "interrupted" if interrupted else "completed",
     }
 
 
-async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
-    """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
-    session_id = _session_id(request)
-    actor = _actor(request)
-    tag_session(session_id)
+async def _persisted_agent_events(
+    payload: dict[str, Any],
+    context: DurableAgentContext,
+    session_id: str,
+    actor: str,
+) -> AsyncGenerator[dict, None]:
+    async for event in _agent_events(payload, session_id, actor):
+        await context.emit(event)
+        yield event
+
+
+async def _agent_events(
+    payload: dict[str, Any], session_id: str, actor: str
+) -> AsyncGenerator[dict, None]:
+    """Translate one Agents SDK run into persisted runtime events."""
 
     servers = await mcp_servers(build_mcp_servers())
     async with MCPServerManager(servers) as manager:
@@ -161,19 +188,25 @@ async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
             finally:
                 server.tool_filter = tool_filter
 
-        agent = create_agent(actor, mcp, model=request.get("model"))
+        model = payload.get("model")
+        agent = create_agent(actor, mcp, model=model if isinstance(model, str) else None)
 
         # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn
-        # from `input`. A resumed run re-runs the stashed RunState (with decisions applied); a new
+        # from `messages`. A resumed run re-runs the stashed RunState (with decisions applied); a new
         # turn passes the messages plus the session store so prior history is loaded automatically.
-        resume = request.get("resume")
+        resume = payload.get("resume")
         if resume is not None:
+            if not isinstance(resume, dict):
+                raise ValueError("resume must be an object")
             run_input: Any = _apply_decisions(session_id, resume)
             result = Runner.run_streamed(agent, run_input)
         else:
+            messages = payload.get("messages") or []
+            if not isinstance(messages, list):
+                raise ValueError("messages must be a list")
             result = Runner.run_streamed(
                 agent,
-                request.get("input") or [],
+                messages,
                 session=session_store(session_id, actor),
             )
 
@@ -195,7 +228,7 @@ def _apply_decisions(session_id: str, resume: dict) -> RunState:
             "different replica loses them; retry the turn."
         )
     decisions = resume.get("decisions") or []
-    for decision, item in zip(decisions, state.get_interruptions()):
+    for decision, item in zip(decisions, state.get_interruptions(), strict=False):
         if decision.get("type") == "approve":
             state.approve(item)
         else:

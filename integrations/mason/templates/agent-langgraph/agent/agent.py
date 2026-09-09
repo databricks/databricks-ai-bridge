@@ -9,7 +9,12 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.messages import AIMessageChunk
 from langgraph.types import Command
 
+from agent.mcps import build_mcp_servers
+
+# Importing the tools package auto-registers every tool module.
+from agent.tools import all_tools
 from databricks_mason import (
+    DurableAgentContext,
     configure_tracing,
     tag_session,
     workspace_client,
@@ -17,14 +22,10 @@ from databricks_mason import (
 )
 from databricks_mason.langgraph import checkpointer, mcp_tools, memory_tools, thread_config
 
-from agent.mcps import build_mcp_servers
-
-# Importing the tools package auto-registers every tool module.
-from agent.tools import all_tools
-
 logger = logging.getLogger(__name__)
 
 MODEL = "databricks-gpt-5-2"
+_INVOCATION_METADATA_KEY = "databricks_mason.invocation_id"
 
 # Tools that require human approval before they run. Map a tool name to True to allow every decision
 # (approve / edit / reject / respond), or to a config dict to restrict them (see HumanInTheLoopMiddleware).
@@ -99,71 +100,106 @@ async def create_agent_graph(actor: str, model: str | None = None):
     )
 
 
-def _session_id(request: dict) -> str:
-    """Return the session id derived by the runtime from the Apps routing cookie.
-
-    Clients do not send ``session_id`` in the body. The runtime makes the cookie value available to
-    the handler after resolving the deployed Apps cookie or the local-development fallback cookie.
-    """
-    return str(request["session_id"])
-
-
-def _actor(request: dict) -> str:
-    """The identity that owns this request's memory and session data.
-
-    The runtime injects ``actor`` from the request's signed-in user (a forwarded-identity header the
-    deployment platform sets); it partitions long-term memory and the durable session store so each
-    user's data stays separate. Falls back to ``"agent"`` (one shared identity) when no user is
-    present — e.g. local development. Change this to key off a tenant id or anything else you prefer.
-    """
-    return str(request.get("actor") or "agent")
+def _payload(value: Any) -> dict[str, Any]:
+    """Normalize the application payload carried inside the durable request's ``input`` field."""
+    if isinstance(value, list):
+        return {"messages": value}
+    if not isinstance(value, dict):
+        raise ValueError("input must be a message list or an object")
+    return value
 
 
-async def invoke_handler(request: dict) -> dict:
-    """Run one turn to completion. Called by the runtime for POST /invocations.
+def _session_id(payload: dict[str, Any], context: DurableAgentContext) -> str:
+    value = payload.get("session_id") or context.session_id
+    if not isinstance(value, str) or not value:
+        raise ValueError("session_id must be a non-empty string")
+    return value
 
-    ``request`` is a dict with an ``input`` list of LangChain message dicts; the returned dict carries
-    the run's new messages (LangChain-native shape) and the ``session_id`` to pass back next turn. If a
-    gated tool needs approval the run pauses: ``output`` then ends with an ``interrupt`` event and
-    ``status`` is ``"interrupted"`` — resume by calling again with the same session id and a ``resume``
-    payload.
-    """
-    request = {**request, "session_id": _session_id(request)}
+
+def _actor(payload: dict[str, Any], session_id: str) -> str:
+    value = payload.get("actor") or session_id
+    if not isinstance(value, str) or not value:
+        raise ValueError("actor must be a non-empty string")
+    return value
+
+
+def _invocation_input(payload: dict[str, Any]) -> Any:
+    resume = payload.get("resume")
+    if resume is not None:
+        return Command(resume=resume)
+    messages = payload.get("messages") or []
+    if not isinstance(messages, list):
+        raise ValueError("messages must be a list")
+    return {"messages": messages}
+
+
+async def invoke(value: Any, context: DurableAgentContext) -> dict:
+    """Run the first attempt for one durable invocation."""
+    payload = _payload(value)
+    return await _run_agent(_invocation_input(payload), payload, context)
+
+
+async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
+    """Continue from a checkpoint after the durable runtime replaces a stale worker."""
+    payload = _payload(value)
+    session_id = _session_id(payload, context)
+    actor = _actor(payload, session_id)
+    checkpoint = await checkpointer().aget_tuple(thread_config(session_id, actor))
+    current_invocation_checkpointed = bool(
+        checkpoint and checkpoint.metadata.get(_INVOCATION_METADATA_KEY) == context.invocation_id
+    )
+    agent_input = None if current_invocation_checkpointed else _invocation_input(payload)
+    return await _run_agent(agent_input, payload, context)
+
+
+async def _run_agent(
+    agent_input: Any,
+    payload: dict[str, Any],
+    context: DurableAgentContext,
+) -> dict:
+    session_id = _session_id(payload, context)
+    actor = _actor(payload, session_id)
+    tag_session(session_id)
     outputs = [
         event
-        async for event in stream_handler(request)
+        async for event in _persisted_agent_events(
+            agent_input,
+            context,
+            session_id=session_id,
+            actor=actor,
+            model=payload.get("model"),
+        )
         if event.get("type") in ("message", "interrupt")
     ]
     interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
     return {
-        "output": [e["message"] if e["type"] == "message" else e for e in outputs],
-        "session_id": request["session_id"],
+        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
+        "session_id": session_id,
         "status": "interrupted" if interrupted else "completed",
     }
 
 
-async def stream_handler(request: dict) -> AsyncGenerator[dict, None]:
-    """Stream the agent's run events as JSON dicts. Called by the runtime when stream=true."""
-    session_id = _session_id(request)
-    actor = _actor(request)
-    tag_session(session_id)
-
-    agent = await create_agent_graph(actor, request.get("model"))
-    # A `resume` payload continues a session paused awaiting approval; otherwise start a new turn from
-    # `input`. Either way the checkpointer keys off session_id's thread for prior history / paused state.
-    # LangChain accepts message dicts natively, so `input` is passed straight through (new turn only).
-    resume = request.get("resume")
-    agent_input = (
-        Command(resume=resume) if resume is not None else {"messages": request.get("input") or []}
-    )
-
+async def _persisted_agent_events(
+    agent_input: Any,
+    context: DurableAgentContext,
+    *,
+    session_id: str,
+    actor: str,
+    model: Any,
+) -> AsyncGenerator[dict, None]:
+    agent = await create_agent_graph(actor, model if isinstance(model, str) else None)
     async for event in _serialize_events(
         agent.astream(
             input=agent_input,
-            config=thread_config(session_id, actor),
+            config={
+                **thread_config(session_id, actor),
+                "metadata": {_INVOCATION_METADATA_KEY: context.invocation_id},
+            },
             stream_mode=["updates", "messages"],
+            durability="sync",
         )
     ):
+        await context.emit(event)
         yield event
 
 

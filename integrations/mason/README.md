@@ -112,16 +112,16 @@ transport will be replaced by the generated `WorkspaceClient.mason` service when
 is released, without changing this public surface. Deployment, sandbox, tracing, and
 the existing CLI commands remain separate.
 
-## Durable agent application
+## Agent application
 
-`DurableAgentApp` is the supported server surface. Import it directly from `databricks_mason`
-(the `databricks_mason.runtime` alias is also supported). The transport-neutral runtime remains a
-separate package layer so it can be exposed as a standalone embedding API later:
+`AgentApp` provides Mason's invocation HTTP contract, including foreground, streaming, background,
+polling, and event endpoints. By default its state is process-local. Set `durable_runtime=True` to
+use Lakebase persistence, heartbeats, and crash recovery after deployment:
 
 ```python
-from databricks_mason import DurableAgentApp, DurableAgentContext
+from databricks_mason import AgentApp, DurableAgentContext
 
-app = DurableAgentApp()
+app = AgentApp(durable_runtime=True)
 
 
 @app.invoke
@@ -134,7 +134,7 @@ async def recover(input: object, context: DurableAgentContext) -> object:
     return await recover_agent(input, session_id=context.session_id)
 ```
 
-The application exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
+The Mason server exposes `POST /api/invocations`, `GET /api/invocations/{invocation_id}`, and
 `GET /api/invocations/{invocation_id}/events?after={cursor}`. Databricks Apps bearer-token requests
 must use `/api/` routes
 ([Apps documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/connect-local)).
@@ -145,16 +145,16 @@ The client supplies a UUID `id`, which is also the idempotency key for every inv
 - foreground streaming returns `200` server-sent events; and
 - background streaming returns `202` with status and event URLs.
 
-`input` and `output` may be any JSON value. Transport fields are not passed to the callback. The
-Apps routing cookie is the only supported session identifier, so body `session_id` is rejected.
-Polling uses only the invocation ID and relies on Databricks Apps authentication. The runtime
-persists the input, internal attempt status, heartbeats,
-`run.started`/`run.completed`/`run.failed` lifecycle events, application events, and final output.
+`input` and `output` may be any JSON value. Transport fields are not passed to the callback. A
+top-level `session_id` is rejected, but a framework template may carry its own stable application
+session inside `input`. Polling uses only the invocation ID and relies on Databricks Apps
+authentication. Without the durable runtime, request state and events exist only in the serving
+process and horizontally scaled clients need sticky routing. With the durable runtime, Mason
+persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
 
-The new `durable-langgraph-agent` template selects an in-memory durability store locally. Initialize
-it with `mason init --framework langgraph --durability`; Mason writes its durability binding to
-`agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability, chosen
-in this order:
+Durability is enabled by default for both framework templates. Mason writes the durability binding
+to `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability,
+chosen in this order:
 
 1. Reuse the configured Session Store's Lakebase database.
 2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
@@ -166,9 +166,11 @@ is disabled; register the same function for both decorators when replaying the i
 safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
 responsibility.
 
-`mason init --framework langgraph --durability` scaffolds this minimal, API-only app. Bare
-`mason init`, `--framework langgraph`, and `--framework openai` continue to scaffold the existing
-templates unchanged.
+Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
+durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with
+process-local state and no Lakebase provisioning. Pass `--server custom` for a minimal FastAPI
+server with one foreground `/invocations` route and no Mason `AgentApp`. Use `--disable-chat-app`
+independently for API-only Mason server output.
 
 ## Commands
 
@@ -176,7 +178,8 @@ templates unchanged.
 mason [-p <profile>] [-o text|json]
   login        [--profile P]
   logout
-  init         [--framework openai|langgraph] [--durability] [--disable-chat-app]
+  init         [--framework openai|langgraph] [--server mason|custom]
+               [--no-durable-runtime] [--disable-chat-app]
                [--profile P] [--repo URL] [--ref REF] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
@@ -280,7 +283,7 @@ mason init --framework langgraph \
   --profile <profile> \
   ./my-agent
 cd ./my-agent
-uv run start-server
+mason dev
 ```
 
 The chat app includes synchronous, SSE streaming, background polling, Session Store, Memory Store,
@@ -299,10 +302,10 @@ mason --profile <profile> deploy mason-agent-demo --source .
 exists. The agent reads the bound stores from `agent.toml` at runtime; `deploy` grants the app's
 service principal access to them.)
 
-The Databricks Apps `__Host-databricks-app-router` cookie is both the sticky routing key and the
-application session id. The browser sends it automatically; API clients must reuse it as a cookie.
-Request bodies never carry `session_id`. A localhost-only `mason-local-session` cookie provides the
-same behavior outside Databricks Apps. TODO: move to `X-Routing-Key` when Apps supports it.
+The chat UI generates a stable application session UUID in browser local storage, places it inside
+the durable invocation's opaque `input`, and creates a fresh invocation UUID per turn. The
+`__Host-databricks-app-router` cookie remains independent: API clients may reuse it for sticky
+replica routing, but it is neither authentication nor the template's application session state.
 
 The generated `README.md` documents every request the client makes: config discovery, sync and SSE
 invocations, background submission and polling, session transcript loading, HITL resume, and memory

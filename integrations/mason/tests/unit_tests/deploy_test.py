@@ -277,13 +277,13 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-def test_deploy_template_metadata_does_not_enable_runtime_store(
+def test_deploy_non_durable_template_does_not_enable_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "durable-langgraph-agent")
+    _mark_template(src, "agent-langgraph")
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -405,51 +405,6 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     assert result.exit_code == 0, result.output
     assert [event[0] for event in events] == ["attach", "deploy"]
     assert events[0][1] == [selected]
-
-
-def test_deploy_durability_binding_provisions_backend_before_startup(
-    tmp_path: pathlib.Path, monkeypatch
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, durability=True)
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
-    events = []
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
-        "get_or_create_backend",
-        lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_postgres_resources",
-        lambda app, backends, profile: events.append(("attach", backends)) or None,
-    )
-
-    def fake_databricks(args, profile, **kwargs):
-        if args[:2] == ["apps", "deploy"]:
-            events.append(("deploy", args))
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert [event[0] for event in events] == ["attach", "deploy"]
-    assert events[0][1] == [selected]
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-    }
-    assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == selected.schema
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):

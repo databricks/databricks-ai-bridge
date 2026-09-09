@@ -1,6 +1,6 @@
 [project]
 name = "databricks-mason"
-version = "0.1.4.dev0"
+version = "0.1.5.dev0"
 description = "Databricks integration for Mason"
 authors = [
     { name="Databricks", email="agent-feedback@databricks.com" },
@@ -34,7 +34,6 @@ runtime = [
     "langchain-mcp-adapters>=0.2.1",
     "fastapi>=0.129.0",
     "mlflow>=3.10.1",
-    "uuid-utils>=0.10.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",
     "uvicorn>=0.20.0",
@@ -45,7 +44,6 @@ runtime-openai = [
     "databricks-openai>=0.13.0",
     "fastapi>=0.129.0",
     "mlflow>=3.10.1",
-    "uuid-utils>=0.10.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.25.0",
     "databricks-agents>=1.9.3",
     "uvicorn>=0.20.0",

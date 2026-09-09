@@ -36,6 +36,12 @@ const elements = {
   viewerValue: document.querySelector("#viewer-value"),
 };
 
+const SESSION_STORAGE_KEY = "databricks-mason-session-id";
+
+function newSessionId() {
+  return crypto.randomUUID();
+}
+
 const state = {
   busy: false,
   config: null,
@@ -48,7 +54,7 @@ const state = {
   model: "",
   mode: "streaming",
   pendingInterrupt: null,
-  sessionId: "",
+  sessionId: localStorage.getItem(SESSION_STORAGE_KEY) || newSessionId(),
 };
 
 function ensureSessionId() {
@@ -61,7 +67,14 @@ function setSessionId(value) {
   if (!nextSessionId) return;
   if (state.sessionId !== nextSessionId) state.managedSessionId = "";
   state.sessionId = nextSessionId;
+  localStorage.setItem(SESSION_STORAGE_KEY, state.sessionId);
   elements.sessionId.textContent = state.sessionId;
+}
+
+function demoUrl(path) {
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("session_id", ensureSessionId());
+  return `${url.pathname}${url.search}`;
 }
 
 function setStatus(label, type = "ready") {
@@ -318,10 +331,19 @@ function invocationHeaders() {
   };
 }
 
-function invocationPayload(payload) {
-  // Carry the picker's model so the runtime builds the agent on the selected endpoint. Omit it when
-  // unset so the agent falls back to its configured default.
-  return state.model ? { ...payload, model: state.model } : { ...payload };
+function invocationPayload(payload, transport = {}) {
+  const sessionId = ensureSessionId();
+  const input = {
+    session_id: sessionId,
+    actor: state.config?.session.actor || sessionId,
+    ...payload,
+  };
+  if (state.model) input.model = state.model;
+  return { id: newSessionId(), input, ...transport };
+}
+
+function agentResult(result) {
+  return result?.output && !Array.isArray(result.output) ? result.output : result;
 }
 
 async function jsonResponse(response) {
@@ -420,7 +442,7 @@ function renderSessions(items) {
     meta.textContent = [
       session.actor_id,
       session.last_activity_time || session.create_time,
-      current ? "active routing cookie" : "",
+      current ? "active browser session" : "",
     ].filter(Boolean).join(" · ");
     item.append(heading, content, meta);
     elements.sessionList.append(item);
@@ -458,7 +480,7 @@ async function ensureManagedSession() {
   const sessionId = ensureSessionId();
   if (state.managedSessionId === sessionId) return sessionId;
   stateMessage(elements.sessionItems, "Connecting managed session…", "loading");
-  const response = await fetch("/api/demo/sessions", {
+  const response = await fetch(demoUrl("/api/demo/sessions"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
@@ -476,7 +498,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
   }
   try {
     const sessionId = state.config.session.managed ? await ensureManagedSession() : ensureSessionId();
-    const response = await fetch("/api/demo/session/items", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/session/items"), { cache: "no-store" });
     const result = await jsonResponse(response);
     const items = sessionItems(result);
     renderSessionItems(items);
@@ -494,7 +516,7 @@ async function refreshSession({ hydrateChat = false } = {}) {
 async function refreshSessions() {
   stateMessage(elements.sessionList, "Loading sessions…", "loading");
   try {
-    const response = await fetch("/api/demo/sessions", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/sessions"), { cache: "no-store" });
     const result = await jsonResponse(response);
     renderSessions(sessions(result));
     addEvent("sessions.list", result);
@@ -513,7 +535,7 @@ async function recordSessionItems(items) {
   if (!state.config?.session.managed || !items.length) return;
   try {
     const sessionId = await ensureManagedSession();
-    const response = await fetch("/api/demo/session/items", {
+    const response = await fetch(demoUrl("/api/demo/session/items"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -531,7 +553,7 @@ async function listMemoryEntries() {
   if (!state.config?.memory.enabled) return;
   stateMessage(elements.memoryResults, "Loading memory entries…", "loading");
   try {
-    const response = await fetch("/api/demo/memory/entries", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/memory/entries"), { cache: "no-store" });
     const result = await jsonResponse(response);
     renderMemoryEntries(memoryEntries(result), "No memory entries for this actor yet.");
     addEvent("memory.entries.list", result);
@@ -542,17 +564,18 @@ async function listMemoryEntries() {
 }
 
 async function invokeSync(payload) {
-  const response = await fetch("/invocations", {
+  const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
     body: JSON.stringify(invocationPayload(payload)),
   });
   const result = await jsonResponse(response);
+  const output = agentResult(result);
   addEvent("response", result);
-  if (result.session_id) setSessionId(result.session_id);
-  handleOutput(result.output);
-  return result;
+  if (output.session_id) setSessionId(output.session_id);
+  handleOutput(output.output);
+  return output;
 }
 
 function parseSseFrame(frame) {
@@ -566,11 +589,11 @@ function parseSseFrame(frame) {
 }
 
 async function invokeStreaming(payload) {
-  const response = await fetch("/invocations", {
+  const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload({ ...payload, stream: true })),
+    body: JSON.stringify(invocationPayload(payload, { stream: true })),
   });
   if (!response.ok || !response.body) await jsonResponse(response);
   const reader = response.body.getReader();
@@ -599,16 +622,17 @@ async function pollBackground(invocationId) {
   const deadline = Date.now() + 180000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 850));
-    const response = await fetch(`/invocations/${encodeURIComponent(invocationId)}`, {
+    const response = await fetch(`/api/invocations/${encodeURIComponent(invocationId)}`, {
       cache: "no-store",
       credentials: "same-origin",
     });
     const result = await jsonResponse(response);
     addEvent("background.poll", result);
     if (result.status === "completed") {
-      if (result.session_id) setSessionId(result.session_id);
-      handleOutput(result.output);
-      return result;
+      const output = agentResult(result);
+      if (output.session_id) setSessionId(output.session_id);
+      handleOutput(output.output);
+      return output;
     }
     if (result.status === "failed") throw new Error(result.error || "Background invocation failed");
     setStatus(`Background · ${result.status}`, "busy");
@@ -617,11 +641,11 @@ async function pollBackground(invocationId) {
 }
 
 async function invokeBackground(payload) {
-  const response = await fetch("/invocations", {
+  const response = await fetch("/api/invocations", {
     method: "POST",
     credentials: "same-origin",
     headers: invocationHeaders(),
-    body: JSON.stringify(invocationPayload({ ...payload, background: true })),
+    body: JSON.stringify(invocationPayload(payload, { background: true })),
   });
   const started = await jsonResponse(response);
   addEvent("background.started", started);
@@ -644,7 +668,7 @@ async function sendText(text, mode = state.mode) {
   appendMessage("user", content, "You");
   setBusy(true, mode === "background" ? "Starting background run" : mode === "streaming" ? "Streaming" : "Running");
   try {
-    await dispatch({ input: [{ role: "user", content }] }, mode);
+    await dispatch({ messages: [{ role: "user", content }] }, mode);
     const items = [{ role: "user", content, transport: mode, instance_id: state.instanceId }];
     if (state.lastAssistantText) {
       items.push({
@@ -720,14 +744,10 @@ async function createNewSession() {
   if (state.busy) return;
   setBusy(true, "Creating session");
   try {
-    const response = await fetch("/api/session/new", {
-      method: "POST",
-      credentials: "same-origin",
-    });
-    const result = await jsonResponse(response);
-    setSessionId(result.session_id);
+    const previousSessionId = ensureSessionId();
+    setSessionId(newSessionId());
     resetSessionState();
-    addEvent("session.new", result);
+    addEvent("session.new", { session_id: state.sessionId, previous_session_id: previousSessionId });
     if (state.config?.session.managed) await ensureManagedSession();
     await refreshSessionView({ hydrateChat: true });
   } catch (error) {
@@ -741,7 +761,7 @@ async function openSession(sessionId) {
   if (state.busy || !sessionId || sessionId === state.sessionId) return;
   setBusy(true, "Opening session");
   try {
-    const response = await fetch(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`, {
+    const response = await fetch(demoUrl(`/api/demo/sessions/${encodeURIComponent(sessionId)}/open`), {
       method: "POST",
       credentials: "same-origin",
     });
@@ -772,14 +792,20 @@ function renderModels(models) {
   elements.modelSelect.disabled = state.busy || available.length <= 1;
 }
 
+async function loadModels() {
+  const response = await fetch(demoUrl("/api/demo/models"), { cache: "no-store" });
+  renderModels(await jsonResponse(response));
+}
+
 async function loadConfig() {
   try {
-    const response = await fetch("/api/demo/config", { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/demo/config"), { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
     setSessionId(config.session_id);
     renderModels(config.models);
+    void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     elements.viewerValue.textContent = config.viewer;
     elements.streamingMode.textContent = config.streaming.transport;
     elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
@@ -824,9 +850,9 @@ async function loadConfig() {
       ? `${config.memory.store} · actor ${config.memory.actor}`
       : "Run from the project directory: mason memory bind <store-name>. Mason creates the store if needed.";
     elements.sessionStoreLabel.textContent = config.session.managed
-      ? `${config.session.store} · actor ${config.session.actor} · the Apps routing cookie keys transcript and checkpoint state.`
+      ? `${config.session.store} · actor ${config.session.actor} · the browser session ID keys transcript and checkpoint state.`
       : config.session.history
-        ? "Messages load from the in-process LangGraph checkpoint for the current routing cookie."
+        ? "Messages load from the in-process LangGraph checkpoint for the current browser session."
         : "Session history is unavailable.";
     addEvent("runtime.config", config);
     void refreshSessionView({ hydrateChat: true });

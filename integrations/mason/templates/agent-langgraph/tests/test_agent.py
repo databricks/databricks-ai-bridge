@@ -6,15 +6,13 @@ model; it is skipped unless a workspace profile is configured.
 """
 
 import os
-from uuid import UUID
+from types import SimpleNamespace
 
 import pytest
-from agent.agent import _serialize_events, _session_id
-from databricks_mason.langgraph.session_store import checkpointer, thread_config
+from agent.agent import _serialize_events
 from agent.tools import all_tools
-from fastapi.testclient import TestClient
+from databricks_mason.langgraph.session_store import checkpointer, thread_config
 from langchain_core.tools import BaseTool
-from runtime.runtime import build_app
 
 
 def test_tools_autoregister():
@@ -111,116 +109,55 @@ class _FakeStoreClient:
         return self
 
 
-def test_session_id_from_request():
-    request = {"input": [{"role": "user", "content": "hi"}], "session_id": "abc-123"}
-    assert _session_id(request) == "abc-123"
+@pytest.mark.asyncio
+async def test_invoke_starts_turn_and_recovery_resumes_current_checkpoint(monkeypatch):
+    import agent.agent as agent_module
+
+    calls = []
+
+    async def fake_run_agent(agent_input, payload, context):
+        calls.append((agent_input, payload, context))
+        return {"output": []}
+
+    class Saver:
+        async def aget_tuple(self, config):
+            return SimpleNamespace(metadata={"databricks_mason.invocation_id": "inv-1"})
+
+    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
+    context = SimpleNamespace(invocation_id="inv-1", session_id="runtime-session")
+    payload = {"session_id": "session-1", "messages": [{"role": "user", "content": "hi"}]}
+
+    await agent_module.invoke(payload, context)
+    await agent_module.on_recovery(payload, context)
+
+    assert calls[0][0] == {"messages": payload["messages"]}
+    assert calls[1][0] is None
 
 
-def test_session_id_is_required_from_runtime():
-    with pytest.raises(KeyError):
-        _session_id({"input": [{"role": "user", "content": "hi"}]})
+@pytest.mark.asyncio
+async def test_recovery_replays_input_without_current_checkpoint(monkeypatch):
+    import agent.agent as agent_module
 
+    calls = []
 
-def test_runtime_uses_apps_routing_cookie_for_resume_request():
-    captured = {}
+    async def fake_run_agent(agent_input, payload, context):
+        calls.append(agent_input)
+        return {"output": []}
 
-    async def invoke_handler(request):
-        captured.update(request)
-        return {"output": [], "session_id": request["session_id"], "status": "completed"}
+    class Saver:
+        async def aget_tuple(self, config):
+            return None
 
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    client = TestClient(build_app(invoke_handler, stream_handler))
-    client.cookies.set("__Host-databricks-app-router", "same-session-id")
-    response = client.post(
-        "/invocations",
-        json={
-            "session_id": "body-value-is-ignored",
-            "resume": {"decisions": [{"type": "approve"}]},
-        },
+    monkeypatch.setattr(agent_module, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(agent_module, "checkpointer", lambda: Saver())
+    messages = [{"role": "user", "content": "hi"}]
+    await agent_module.on_recovery(
+        {"session_id": "session-1", "messages": messages},
+        SimpleNamespace(invocation_id="inv-1", session_id="runtime-session"),
     )
 
-    assert response.status_code == 200
-    assert captured == {
-        "resume": {"decisions": [{"type": "approve"}]},
-        "session_id": "same-session-id",
-    }
-
-
-def test_runtime_sets_local_session_cookie_when_apps_router_is_absent():
-    async def invoke_handler(request):
-        return {"output": [], "session_id": request["session_id"], "status": "completed"}
-
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    client = TestClient(build_app(invoke_handler, stream_handler))
-    first = client.post("/invocations", json={"input": []})
-    second = client.post("/invocations", json={"input": []})
-
-    assert first.status_code == 200
-    assert first.cookies.get("mason-local-session") == first.json()["session_id"]
-    assert second.json()["session_id"] == first.json()["session_id"]
-
-
-def test_runtime_rotates_local_session_cookie():
-    async def invoke_handler(request):
-        return {"output": [], "session_id": request["session_id"], "status": "completed"}
-
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    client = TestClient(build_app(invoke_handler, stream_handler))
-    current = client.post("/invocations", json={"input": []}).json()["session_id"]
-    created = client.post("/api/session/new")
-
-    assert created.status_code == 200
-    assert created.json()["previous_session_id"] == current
-    assert created.json()["session_id"] != current
-    UUID(created.json()["session_id"])
-    assert created.cookies.get("mason-local-session") == created.json()["session_id"]
-    assert (
-        client.post("/invocations", json={"input": []}).json()["session_id"]
-        == created.json()["session_id"]
-    )
-
-
-def test_runtime_rotates_apps_routing_cookie_and_clears_local_fallback():
-    async def invoke_handler(request):
-        return {"output": [], "session_id": request["session_id"], "status": "completed"}
-
-    async def stream_handler(request):
-        if False:
-            yield request
-
-    client = TestClient(build_app(invoke_handler, stream_handler), base_url="https://testserver")
-    created = client.post(
-        "/api/session/new",
-        headers={"cookie": "__Host-databricks-app-router=old-session; mason-local-session=stale"},
-    )
-
-    assert created.status_code == 200
-    assert created.json()["previous_session_id"] == "old-session"
-    session_id = created.json()["session_id"]
-    set_cookie_headers = created.headers.get_list("set-cookie")
-    routing_cookie = next(
-        header
-        for header in set_cookie_headers
-        if header.startswith("__Host-databricks-app-router=")
-    ).lower()
-    assert "httponly" in routing_cookie
-    assert "path=/" in routing_cookie
-    assert "samesite=lax" in routing_cookie
-    assert "secure" in routing_cookie
-    assert any(
-        header.startswith('mason-local-session=""') and "Max-Age=0" in header
-        for header in set_cookie_headers
-    )
-    assert client.post("/invocations", json={"input": []}).json()["session_id"] == session_id
+    assert calls == [{"messages": messages}]
 
 
 def _has_workspace_auth() -> bool:

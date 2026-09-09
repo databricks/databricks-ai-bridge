@@ -1,4 +1,4 @@
-"""Agent server entry point with the optional Mason chat app installed."""
+"""Run the durable LangGraph agent with the optional Mason chat app."""
 
 import os
 from pathlib import Path
@@ -6,16 +6,21 @@ from pathlib import Path
 import agent.agent
 import uvicorn
 from dotenv import load_dotenv
-
-from runtime.runtime import build_app
 from runtime.ui import install_ui
+
+from databricks_mason import AgentApp
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 agent.agent.configure()
 
-app = build_app(agent.agent.invoke_handler, agent.agent.stream_handler)
+DURABLE_RUNTIME = True
+
+app = AgentApp(durable_runtime=DURABLE_RUNTIME)
+app.invoke(agent.agent.invoke)
+if DURABLE_RUNTIME:
+    app.on_recovery(agent.agent.on_recovery)
 install_ui(app)
 
 
-def main():
+def main() -> None:
     uvicorn.run("runtime.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

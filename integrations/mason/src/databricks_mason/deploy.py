@@ -29,7 +29,6 @@ from databricks_mason import (
     session_store_access,
     timefmt,
 )
-from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.render import field
 from databricks_mason.store_access import _databricks, apply_postgres_resources, grant_tables
@@ -358,13 +357,6 @@ def _grant_store_access(
     return None
 
 
-def _has_durability_binding(source_dir: pathlib.Path) -> bool:
-    """Whether agent.toml opts this project into durable invocation storage."""
-    if not (source_dir / "agent.toml").is_file():
-        return False
-    return AgentProject.load(source_dir).durability_enabled
-
-
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -463,7 +455,8 @@ def deploy(
 
     memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
-    if _has_durability_binding(source_dir):
+    durability_enabled = bool(project and project.durability_enabled)
+    if durability_enabled:
         durability_schema = lakebase_durability_store.get_lakebase_schema(name)
         if session_store:
             durability_backend = replace(

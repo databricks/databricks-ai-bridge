@@ -1,4 +1,4 @@
-"""Tests for the SDK-provided durable agent application."""
+"""Tests for the SDK-provided agent application."""
 
 import asyncio
 import logging
@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from databricks_mason import DurableAgentApp
+from databricks_mason import AgentApp
 from databricks_mason.runtime.durability.store import (
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
@@ -31,8 +31,8 @@ async def echo(input, context):
     return input
 
 
-def make_app(invoke=echo, *, on_recovery=None) -> DurableAgentApp:
-    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
+def make_app(invoke=echo, *, on_recovery=None) -> AgentApp:
+    app = AgentApp(durable_runtime=True, durability_store=InMemoryDurabilityStore())
     app.invoke(invoke)
     if on_recovery is not None:
         app.on_recovery(on_recovery)
@@ -40,8 +40,8 @@ def make_app(invoke=echo, *, on_recovery=None) -> DurableAgentApp:
 
 
 @asynccontextmanager
-async def running_client(app: DurableAgentApp) -> AsyncIterator[httpx.AsyncClient]:
-    await app._runtime.start(recover=app._on_recovery_hook is not None)
+async def running_client(app: AgentApp) -> AsyncIterator[httpx.AsyncClient]:
+    await app._runtime.start(recover=app.durable_runtime and app._on_recovery_hook is not None)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
@@ -338,7 +338,7 @@ async def test_agent_failure_returns_500_and_failed_event() -> None:
 
 
 def test_app_is_asgi_app_with_instance_scoped_decorators() -> None:
-    app = DurableAgentApp(durability_store=InMemoryDurabilityStore())
+    app = AgentApp(durability_store=InMemoryDurabilityStore())
 
     @app.invoke
     async def invoke(input, context):
@@ -367,14 +367,15 @@ def test_app_exposes_only_api_invocation_routes() -> None:
     assert {getattr(route, "path", None) for route in app.routes} == set(paths)
 
 
-def test_durability_store_defaults_to_in_memory_outside_apps(monkeypatch) -> None:
+def test_agent_app_defaults_to_process_local_state_even_inside_apps(monkeypatch) -> None:
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
-    monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-agent")
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(RUNTIME_SCHEMA_ENV, raising=False)
 
-    app = DurableAgentApp()
+    app = AgentApp()
 
+    assert app.durable_runtime is False
     assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
 
 
@@ -384,7 +385,7 @@ def test_deployed_app_without_durability_resource_fails_startup(monkeypatch) -> 
     monkeypatch.delenv(RUNTIME_ENDPOINT_ENV, raising=False)
 
     with pytest.raises(RuntimeError, match=RUNTIME_ENDPOINT_ENV):
-        DurableAgentApp()
+        AgentApp(durable_runtime=True)
 
 
 def test_state_payload_nests_completed_application_response() -> None:
@@ -397,7 +398,7 @@ def test_state_payload_nests_completed_application_response() -> None:
         response={"id": "application-id", "status": "application-status"},
     )
 
-    assert DurableAgentApp._state_payload(state) == {
+    assert AgentApp._state_payload(state) == {
         "id": _RUN_2,
         "status": "completed",
         "output": {"id": "application-id", "status": "application-status"},

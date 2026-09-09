@@ -580,7 +580,7 @@ class Runner:
         log_path: pathlib.Path,
         app_name: str | None = None,
     ) -> None:
-        invocation_url = f"{base_url}{'/api' if runtime == 'deploy' else ''}/invocations"
+        invocation_url = f"{base_url}/api/invocations"
         for tool_kind in TOOL_KINDS:
             started = time.monotonic()
             prompt = PROMPTS[tool_kind]
@@ -629,13 +629,19 @@ class Runner:
         self, label: str, url: str, prompt: str, headers: dict[str, str]
     ) -> dict[str, Any]:
         last: Exception | None = None
+        invocation_id = str(uuid.uuid4())
+        body = {
+            "id": invocation_id,
+            "input": {
+                "session_id": invocation_id,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        }
         for attempt in range(1, 4):
             try:
                 return _monitored(
                     label,
-                    lambda: _http_json(
-                        url, {"input": [{"role": "user", "content": prompt}]}, headers
-                    ),
+                    lambda: _http_json(url, body, headers),
                     self.transcript,
                     timeout=360,
                 )
@@ -787,7 +793,15 @@ def _assert_semantics(tool_kind: str, serialized: str) -> None:
 
 def _curl_command(invocation_url: str, prompt: str, authenticated: bool) -> str:
     auth = " -H 'Authorization: Bearer <redacted>'" if authenticated else ""
-    body = json.dumps({"input": [{"role": "user", "content": prompt}]})
+    body = json.dumps(
+        {
+            "id": "<client-generated-uuid>",
+            "input": {
+                "session_id": "<stable-session-id>",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        }
+    )
     return (
         f"curl -sS -X POST {shlex.quote(invocation_url)}"
         f" -H 'Content-Type: application/json'{auth} --data {shlex.quote(body)}"

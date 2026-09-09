@@ -26,13 +26,18 @@ class _Ctx:
         self.profile = profile
 
 
+@pytest.fixture(autouse=True)
+def _skip_generated_runtime_rewrite(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(init_mod, "_configure_durable_runtime", lambda *_args: None)
+    monkeypatch.setattr(init_mod, "_editable_template_source", lambda: None)
+
+
 def test_framework_specs_have_repo_ref_path():
-    assert init_mod._DURABILITY_TEMPLATE["path"] == (
-        "integrations/mason/templates/durable-langgraph-agent"
-    )
     for fw in ("openai", "langgraph"):
         spec = init_mod._TEMPLATES[fw]
         assert spec["repo"] and spec["ref"] and spec["path"]
+        custom = init_mod._CUSTOM_SERVER_TEMPLATES[fw]
+        assert custom["repo"] and custom["ref"] and custom["path"]
     assert init_mod._TEMPLATES["openai"]["path"] == "integrations/mason/templates/agent-openai"
     assert (
         init_mod._TEMPLATES["langgraph"]["path"] == "integrations/mason/templates/agent-langgraph"
@@ -68,6 +73,40 @@ def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.
     assert init_mod._template_ref("langgraph") == "main"
 
 
+def test_installed_git_template_source_uses_recorded_commit(monkeypatch: pytest.MonkeyPatch):
+    commit = "a" * 40
+    direct_url = json.dumps(
+        {
+            "url": "https://github.com/example/databricks-ai-bridge",
+            "vcs_info": {
+                "vcs": "git",
+                "commit_id": commit,
+                "requested_revision": "feature",
+            },
+            "subdirectory": "integrations/mason",
+        }
+    )
+    distribution = mock.Mock()
+    distribution.read_text.return_value = direct_url
+    monkeypatch.setattr(init_mod, "_distribution", lambda _: distribution)
+
+    assert init_mod._installed_git_template_source() == (
+        "https://github.com/example/databricks-ai-bridge",
+        commit,
+    )
+
+
+@pytest.mark.parametrize("direct_url", [None, "not json", '{"url": "file:///tmp/mason"}'])
+def test_installed_git_template_source_ignores_non_git_installs(
+    direct_url: str | None, monkeypatch: pytest.MonkeyPatch
+):
+    distribution = mock.Mock()
+    distribution.read_text.return_value = direct_url
+    monkeypatch.setattr(init_mod, "_distribution", lambda _: distribution)
+
+    assert init_mod._installed_git_template_source() is None
+
+
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     dest = tmp_path / "agent-openai"
 
@@ -86,6 +125,21 @@ def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
     assert "agent-openai" in result.output
 
 
+def test_init_removes_partial_destination_after_failure(tmp_path: pathlib.Path):
+    dest = tmp_path / "partial"
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "runtime.py").write_text("partial\n")
+        raise AgentCliError("template validation failed")
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch):
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code != 0
+    assert not dest.exists()
+
+
 def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
@@ -102,49 +156,71 @@ def test_init_defaults_to_existing_langgraph_app(tmp_path: pathlib.Path):
     }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert "durability" not in manifest
+    assert manifest["durability"] == {"enabled": True}
 
 
-def test_init_scaffolds_durable_langgraph_agent(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_no_durable_runtime_keeps_mason_server_without_binding(
+    tmp_path: pathlib.Path,
+    framework: str,
+):
     dest = tmp_path / "proj"
     with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
         result = CliRunner().invoke(
             init_mod.init,
-            ["--framework", "langgraph", "--durability", str(dest)],
+            ["--framework", framework, "--no-durable-runtime", str(dest)],
             obj=_Ctx(),
         )
+
     assert result.exit_code == 0, result.output
-    assert f.call_args.args[2] == init_mod._DURABILITY_TEMPLATE["path"]
-    assert f.call_args.args[4] == ()
-    with (dest / ".mason" / "project.toml").open("rb") as metadata_file:
-        metadata = tomli.load(metadata_file)
-    assert metadata == {
-        "schema_version": 1,
-        "framework": "langgraph",
-        "template": "durable-langgraph-agent",
-    }
+    assert f.call_args.args[2] == init_mod._TEMPLATES[framework]["path"]
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest["durability"] == {"enabled": True}
+    assert "durability" not in manifest
+    assert "Mason AgentApp" in result.output
+    assert "Durable runtime" in result.output
+    assert "disabled" in result.output
 
 
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["--durability"],
-        ["--framework", "openai", "--durability"],
-    ],
-)
-def test_init_durability_requires_explicit_langgraph_framework(
+def test_init_help_hides_no_durable_runtime():
+    result = CliRunner().invoke(init_mod.init, ["--help"], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "--no-durable-runtime" not in result.output
+
+
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
+def test_init_custom_server_uses_minimal_template(
     tmp_path: pathlib.Path,
-    args: list[str],
+    framework: str,
 ):
-    with mock.patch.object(init_mod, "_fetch_template") as fetched:
-        result = CliRunner().invoke(init_mod.init, [*args, str(tmp_path / "proj")], obj=_Ctx())
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()) as f:
+        result = CliRunner().invoke(
+            init_mod.init,
+            ["--framework", framework, "--server", "custom", str(dest)],
+            obj=_Ctx(),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f.call_args.args[2] == init_mod._CUSTOM_SERVER_TEMPLATES[framework]["path"]
+    assert f.call_args.args[4] == ()
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert "durability" not in manifest
+    assert "Custom FastAPI" in result.output
+    assert "Chat app" not in result.output
+
+
+def test_init_rejects_no_durable_runtime_for_custom_server(tmp_path: pathlib.Path):
+    result = CliRunner().invoke(
+        init_mod.init,
+        ["--server", "custom", "--no-durable-runtime", str(tmp_path / "proj")],
+        obj=_Ctx(),
+    )
 
     assert result.exit_code != 0
-    assert "requires --framework langgraph" in " ".join(result.output.split())
-    fetched.assert_not_called()
+    assert "only applies to --server mason" in result.output
 
 
 def test_init_persists_selected_framework_and_template(tmp_path: pathlib.Path):
@@ -183,6 +259,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
     assert manifest == {
         "schema_version": 1,
         "agent": {"framework": "openai"},
+        "durability": {"enabled": True},
     }
 
 
@@ -274,7 +351,30 @@ def test_init_repo_ref_override(tmp_path: pathlib.Path):
     }
 
 
-def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
+def test_init_uses_editable_checkout_templates_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    dest = tmp_path / "agent"
+    repository = tmp_path / "bridge"
+    commit = "a" * 40
+    monkeypatch.setattr(
+        init_mod,
+        "_editable_template_source",
+        lambda: (repository.as_uri(), commit),
+    )
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        return commit
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert fetched.call_args.args[:2] == (repository.as_uri(), commit)
+
+
+def test_pin_mason_source_supports_runtime_extra(tmp_path: pathlib.Path):
     dest = tmp_path / "agent"
     dest.mkdir()
     (dest / "pyproject.toml").write_text(
@@ -282,7 +382,32 @@ def test_pin_runtime_source_supports_local_repo(tmp_path: pathlib.Path):
     )
     repo = tmp_path / "bridge"
 
-    init_mod._pin_runtime_source(dest, "langgraph", str(repo), "feature")
+    init_mod._pin_mason_source(dest, "langgraph", str(repo), "feature")
+
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"] == {
+        "git": repo.resolve().as_uri(),
+        "rev": "feature",
+        "subdirectory": "integrations/mason",
+    }
+
+
+def test_pin_mason_source_supports_base_package(tmp_path: pathlib.Path):
+    dest = tmp_path / "agent"
+    dest.mkdir()
+    (dest / "pyproject.toml").write_text(
+        '[project]\nname = "test"\ndependencies = ["databricks-mason>=0.1"]\n'
+    )
+    repo = tmp_path / "bridge"
+
+    init_mod._pin_mason_source(
+        dest,
+        "langgraph",
+        str(repo),
+        "feature",
+        runtime_extra=False,
+    )
 
     with (dest / "pyproject.toml").open("rb") as pyproject_file:
         pyproject = tomli.load(pyproject_file)
@@ -370,7 +495,9 @@ def test_init_json_output(tmp_path: pathlib.Path):
     assert payload["framework"] == "langgraph"
     assert payload["template"] == "agent-langgraph"
     assert payload["directory"] == str(dest)
+    assert payload["server"] == "mason"
     assert payload["chat_app_enabled"] is True
+    assert payload["durable_runtime"] is True
 
 
 def test_init_refuses_existing_destination(tmp_path: pathlib.Path):
@@ -434,6 +561,35 @@ def test_init_uses_ctx_profile_when_flag_absent(tmp_path: pathlib.Path):
     assert "DATABRICKS_CONFIG_PROFILE=from-login" in (dest / ".env").read_text()
 
 
+def test_init_uses_git_installed_templates_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    dest = tmp_path / "agent"
+    repository = "https://github.com/example/databricks-ai-bridge"
+    commit = "a" * 40
+    monkeypatch.setattr(
+        init_mod,
+        "_installed_git_template_source",
+        lambda: (repository, commit),
+    )
+
+    def fake_fetch(repo, ref, template_path, target, overlay_dirs=()):
+        target.mkdir()
+        (target / "pyproject.toml").write_text(
+            '[project]\nname = "test"\ndependencies = ["databricks-mason[runtime]>=0.1"]\n'
+        )
+        return commit
+
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=fake_fetch) as fetched:
+        result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert fetched.call_args.args[:2] == (repository, commit)
+    with (dest / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomli.load(pyproject_file)
+    assert pyproject["tool"]["uv"]["sources"]["databricks-mason"]["rev"] == commit
+
+
 def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
     dest = tmp_path / "proj"
 
@@ -464,3 +620,29 @@ def test_fetch_template_missing_dir_raises(tmp_path: pathlib.Path):
             raised = True
             assert "not found" in str(e)
     assert raised
+
+
+def test_fetch_template_accepts_commit_sha(tmp_path: pathlib.Path):
+    repository = tmp_path / "repository"
+    template = repository / "templates" / "agent"
+    template.mkdir(parents=True)
+    init_mod._git(["init", str(repository)])
+    init_mod._git(["config", "user.email", "test@databricks.com"], cwd=repository)
+    init_mod._git(["config", "user.name", "Mason Test"], cwd=repository)
+    (template / "value.txt").write_text("first\n")
+    init_mod._git(["add", "."], cwd=repository)
+    init_mod._git(["commit", "-m", "first"], cwd=repository)
+    commit = (init_mod._git(["rev-parse", "HEAD"], cwd=repository).stdout or "").strip()
+    (template / "value.txt").write_text("second\n")
+    init_mod._git(["commit", "-am", "second"], cwd=repository)
+
+    destination = tmp_path / "output"
+    resolved = init_mod._fetch_template(
+        repository.as_uri(),
+        commit,
+        "templates/agent",
+        destination,
+    )
+
+    assert resolved == commit
+    assert (destination / "value.txt").read_text() == "first\n"
