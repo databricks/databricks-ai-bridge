@@ -154,7 +154,7 @@ def test_invoke_deployed_app_resolves_oauth_and_generated_session(monkeypatch):
     assert request.body == {"input": []}
 
 
-def test_invoke_localhost_uses_explicit_session_without_auth(monkeypatch):
+def test_invoke_url_uses_explicit_routing_session_without_auth(monkeypatch):
     captured = {}
 
     class FakeSession:
@@ -183,7 +183,7 @@ def test_invoke_localhost_uses_explicit_session_without_auth(monkeypatch):
     assert result.exit_code == 0, result.output
     request = captured["request"]
     assert "Authorization" not in request.headers
-    assert request.headers["Cookie"] == "mason-local-session=local-session"
+    assert request.headers["Cookie"] == "__Host-databricks-app-router=local-session"
 
 
 def test_url_can_explicitly_request_oauth(monkeypatch):

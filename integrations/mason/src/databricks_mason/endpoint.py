@@ -17,7 +17,6 @@ from databricks_mason.endpoint_transport import HttpSession
 from databricks_mason.errors import AgentCliError
 
 _ROUTING_COOKIE = "__Host-databricks-app-router"
-_LOCAL_SESSION_COOKIE = "mason-local-session"
 
 
 def _resolve_endpoint(
@@ -64,14 +63,12 @@ def _platform_headers(
     authenticate: bool,
     profile: Optional[str],
     session_id: str | None,
-    is_app: bool,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if authenticate:
         headers["Authorization"] = _authorization_header(profile)
     if session_id:
-        cookie_name = _ROUTING_COOKIE if is_app else _LOCAL_SESSION_COOKIE
-        headers["Cookie"] = f"{cookie_name}={session_id}"
+        headers["Cookie"] = f"{_ROUTING_COOKIE}={session_id}"
     return headers
 
 
@@ -130,7 +127,6 @@ def invoke(
                 authenticate=authenticate,
                 profile=obj.profile,
                 session_id=session_id,
-                is_app=is_app,
             ),
         },
     )

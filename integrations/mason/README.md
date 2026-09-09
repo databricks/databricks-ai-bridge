@@ -243,10 +243,10 @@ mason --profile <profile> endpoint invoke mason-my-agent \
   --json '{"input":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
-`--session-id` preserves one application session across calls. Mason maps it to the Databricks Apps
-routing cookie for deployed Apps and to the generated runtime's local session cookie for `--url`.
-OAuth and session headers are managed by Mason; arbitrary custom request headers are intentionally
-not exposed by this command.
+`--session-id` preserves one application session across calls by setting the Databricks Apps routing
+cookie. This also works with a direct App URL and with the generated runtime on localhost. OAuth and
+session headers are managed by Mason; arbitrary custom request headers are intentionally not exposed
+by this command.
 
 ## Command help
 
