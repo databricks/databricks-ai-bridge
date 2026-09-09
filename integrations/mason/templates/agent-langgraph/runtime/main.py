@@ -10,9 +10,8 @@ from dotenv import load_dotenv
 
 from databricks_mason import AgentApp
 
-# .env fills unset config only; the real environment wins (override=False). `mason dev -p` and
-# the deploy platform inject DATABRICKS_* into the process, and a checked-in .env must not clobber
-# them — overriding only the profile while leaving the injected host mismatches host and credential.
+# override=False so injected DATABRICKS_* (from `mason dev -p` or the deploy platform) win over a
+# checked-in .env, which otherwise overrides the profile but not the host and breaks auth.
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=False)
 agent.agent.configure()
 
