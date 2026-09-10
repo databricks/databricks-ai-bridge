@@ -763,7 +763,7 @@ async function loadModels() {
 
 async function loadConfig() {
   try {
-    const response = await fetch(demoUrl("/api/demo/config"), { cache: "no-store" });
+    const response = await fetch(demoUrl("/api/ui/config"), { cache: "no-store" });
     const config = await jsonResponse(response);
     state.config = config;
     state.instanceId = config.instance_id;
@@ -771,15 +771,15 @@ async function loadConfig() {
     renderModels(config.models);
     void loadModels().catch((error) => addEvent("models.error", { message: String(error) }));
     elements.viewerValue.textContent = config.viewer;
-    elements.streamingMode.textContent = config.streaming.transport;
-    elements.backgroundMode.textContent = config.background.durable ? "Durable run store" : "In-process run store";
+    elements.streamingMode.textContent = config.streaming.mode;
+    elements.backgroundMode.textContent = config.background.mode;
     elements.sessionMode.textContent = config.session.mode;
     elements.memoryMode.textContent = config.memory.enabled ? `Managed · actor ${config.memory.actor}` : "Not connected";
     setCapability(
       elements.streamingStatus,
       config.streaming.enabled,
       config.streaming.enabled
-        ? `Streaming responses over ${config.streaming.transport}.`
+        ? `Streaming responses over ${config.streaming.transport} use the ${config.streaming.durable ? "durable" : "in-process"} run store.`
         : "Streaming is disabled for this deployment.",
     );
     setCapability(
@@ -895,5 +895,9 @@ elements.refreshMemory.addEventListener("click", listMemoryEntries);
 
 loadConfig().catch((error) => {
   appendError(error);
+  elements.streamingMode.textContent = "Unavailable";
+  elements.backgroundMode.textContent = "Unavailable";
+  elements.sessionMode.textContent = "Unavailable";
+  elements.memoryMode.textContent = "Unavailable";
   elements.memoryHelp.textContent = "Runtime configuration is unavailable.";
 });

@@ -67,6 +67,10 @@ class AgentApp(FastAPI):
         store = durability_store
         if store is None:
             store = default_durability_store() if durable_runtime else InMemoryDurabilityStore()
+        # Report the effective backend, which may differ from ``durable_runtime`` locally:
+        # ``mason dev`` deliberately uses process-local storage even when deployed durability is
+        # enabled in agent.toml.
+        self.run_store_durable = not isinstance(store, InMemoryDurabilityStore)
         self._runtime = DurableRuntime(
             self._execute,
             durability_store=store,

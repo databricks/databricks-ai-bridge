@@ -376,6 +376,7 @@ def test_agent_app_defaults_to_process_local_state_even_inside_apps(monkeypatch)
     app = AgentApp()
 
     assert app.durable_runtime is False
+    assert app.run_store_durable is False
     assert isinstance(app._runtime.durability_store, InMemoryDurabilityStore)
 
 
