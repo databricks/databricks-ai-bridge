@@ -15,7 +15,11 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
+from databricks_mason.runtime import tool_manifest
+from databricks_mason.runtime.tool_manifest import (
+    MEMORY_STORE_TABLE,
+    SESSION_STORE_TABLE,
+)
 
 # The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
@@ -198,9 +202,10 @@ def _durability_from_manifest(value: object) -> bool:
         return False
     if not isinstance(value, Mapping):
         raise AgentCliError("agent.toml [durability] must be a table.")
-    if cast(Mapping[str, Any], value).get("enabled") is not True:
-        raise AgentCliError("agent.toml [durability] must set enabled = true.")
-    return True
+    enabled = cast(Mapping[str, Any], value).get("enabled")
+    if not isinstance(enabled, bool):
+        raise AgentCliError("agent.toml [durability] must set enabled = true or false.")
+    return enabled
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -319,8 +324,15 @@ class AgentProject:
         self.trace_disabled = trace_disabled
 
     @classmethod
-    def load(cls, root: pathlib.Path | str) -> "AgentProject":
-        project_root = pathlib.Path(root).expanduser().resolve()
+    def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
+        try:
+            project_root = (
+                tool_manifest.project_root()
+                if root is None
+                else pathlib.Path(root).expanduser().resolve()
+            )
+        except RuntimeError as exc:
+            raise AgentCliError(str(exc)) from exc
         path = project_root / "agent.toml"
         try:
             document = tomlkit.parse(path.read_text(encoding="utf-8"))
@@ -403,10 +415,9 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        if durability_enabled:
-            durability = tomlkit.table()
-            durability.add("enabled", True)
-            document.add(_DURABILITY_TABLE, durability)
+        durability = tomlkit.table()
+        durability.add("enabled", durability_enabled)
+        document.add(_DURABILITY_TABLE, durability)
         return cls(
             project_root,
             document,

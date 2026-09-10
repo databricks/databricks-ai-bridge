@@ -72,7 +72,7 @@ history, but not a pending approval across restarts or replicas.
 
 ## Crash recovery
 
-When `DURABLE_RUNTIME` is enabled, `runtime/main.py` registers both `@app.invoke` and
+When `[durability] enabled = true` in `agent.toml`, `runtime/main.py` registers both `@app.invoke` and
 `@app.on_recovery`. OpenAI Agents SDK does not currently expose LangGraph-style node checkpoints, so
 recovery replays the persisted application input against the same session. Invocation state and
 emitted events survive process loss in deployed Lakebase, but tool calls and other external side
@@ -97,10 +97,10 @@ Use `mason init --framework openai --disable-chat-app` for API-only output.
 mason --profile <profile> deploy agent-openai --source .
 ```
 
-By default, `agent.toml` contains `[durability] enabled = true`. Deployment reuses a bound Session Store's
-Lakebase database when available; otherwise Mason provisions or reuses the app's durability project.
-Only the app-owned `databricks_mason_runtime_<hash>` schema and runtime tables are added. A project
-initialized with `--no-durable-runtime` omits the durability binding and provisions no Lakebase.
+By default, `agent.toml` contains `[durability] enabled = true`. Deployment provisions or reuses the
+app's dedicated durability Lakebase project. Only the app-owned
+`databricks_mason_runtime_<hash>` schema and runtime tables are added. A project initialized with
+`--no-durable-runtime` records `enabled = false` and provisions no durability Lakebase.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.

@@ -45,12 +45,12 @@ sticky routing and is not authentication or application session state.
 | Browser behavior | `ui/app.js` |
 
 Do not add another HTTP runtime. `runtime/main.py` must stay a thin layer that constructs `AgentApp`,
-registers `invoke`, registers `on_recovery` when `DURABLE_RUNTIME` is enabled, and optionally
+registers `invoke`, registers `on_recovery` when durability is enabled in `agent.toml`, and optionally
 installs the UI.
 
 ## State and recovery
 
-- Invocation state/events: in-memory in `mason dev`; Lakebase after deploy when `DURABLE_RUNTIME`
+- Invocation state/events: in-memory in `mason dev`; Lakebase after deploy when runtime durability
   is enabled; process-local after deploy when disabled.
 - Conversation transcript: in-process by default; managed Session Store when bound.
 - Long-term memory: managed Memory Store when bound.

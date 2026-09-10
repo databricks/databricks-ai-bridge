@@ -31,7 +31,7 @@ from databricks_mason import (
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import require_managed_tool_support, uses_custom_server
+from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
 from databricks_mason.store_access import (
     apply_experiment_resource,
@@ -256,16 +256,13 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
     return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
 
 
-def _load_project(source: pathlib.Path, *, strict: bool = False):
-    """The AgentProject at `source`, or None when there's no readable agent.toml."""
+def _load_project(source: pathlib.Path):
+    """The AgentProject at `source`, or None when agent.toml is absent."""
     from databricks_mason.agent_project import AgentProject
 
-    try:
-        return AgentProject.load(source)
-    except AgentCliError:
-        if strict:
-            raise
+    if not (source / "agent.toml").is_file():
         return None
+    return AgentProject.load(source)
 
 
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
@@ -273,7 +270,7 @@ def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
 
     agent.toml is the single source of truth for an agent's stores. Both `mason dev` and `mason
     deploy` resolve through here so the store env AND the deploy-time access grant honor the same
-    bindings. Missing/invalid agent.toml is ignored (no stores), so this never blocks a run.
+    bindings. A missing agent.toml means no stores; an invalid manifest fails with a clear error.
     """
     project = _load_project(source)
     if project is None:
@@ -497,8 +494,7 @@ def deploy(
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
-    strict_manifest = uses_custom_server(source_dir) and (source_dir / "agent.toml").is_file()
-    project = _load_project(source_dir, strict=strict_manifest)
+    project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
     base_name = _resolve_deployment_name(project, name)

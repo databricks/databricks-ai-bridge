@@ -31,12 +31,12 @@ from databricks_mason.project_config import (
     is_custom_server_template,
     load_project_metadata,
     require_managed_tool_support,
-    uses_custom_server,
 )
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
 _LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
+_LOCAL_APP_YAML = "app.masondev.yaml"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -87,8 +87,7 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
-    strict_manifest = uses_custom_server(source_dir) and (source_dir / "agent.toml").is_file()
-    project = _load_project(source_dir, strict=strict_manifest)
+    project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
@@ -134,38 +133,34 @@ def dev(
     if prepare_environment is None:
         prepare_environment = not (source_dir / ".venv").exists()
 
-    # `apps run-local` sets DATABRICKS_APP_NAME just like a deployment. Mark this invocation
-    # explicitly so the durability SDK selects its process-local development store instead of
-    # requiring the Lakebase resource that `mason deploy` attaches.
-    args = [
-        "apps",
-        "run-local",
-        "--env",
-        f"{_LOCAL_RUNTIME_ENV}=true",
-    ]
+    args = ["apps", "run-local"]
     if prepare_environment:
         args.append("--prepare-environment")
     if app_port is not None:
         args += ["--app-port", str(app_port)]
 
-    # If the manifest carries a deploy-only package-index override, run against a filtered copy so
-    # the local build uses this machine's index instead of one it may not be able to reach.
+    # Run against a local-only manifest that marks durability as in-memory and removes deploy-only
+    # package-index overrides.
     entry_point = _dev_entry_point(app_yaml)
-    if entry_point is not None:
-        args += ["--entry-point", str(entry_point)]
+    # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
+    args += ["--entry-point", entry_point.name]
 
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
     _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
 
-    # Run in the project dir so run-local finds the app; stream output (no capture).
-    _databricks(
-        args,
-        obj.profile,
-        cwd=str(source_dir),
-        action="Could not start the agent locally.",
-    )
+    # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
+    # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace.
+    try:
+        _databricks(
+            args,
+            obj.profile,
+            cwd=str(source_dir),
+            action="Could not start the agent locally.",
+        )
+    finally:
+        entry_point.unlink(missing_ok=True)
 
 
 def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
@@ -218,25 +213,32 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
 
 
-def _dev_entry_point(app_yaml: pathlib.Path) -> Optional[pathlib.Path]:
-    """Return a filtered manifest path when app.yaml pins a build index, else None.
+def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
+    """Write the local-only app manifest consumed by ``apps run-local``.
 
-    Strips the deploy-only package-index env vars and writes the result next to app.yaml as
-    ``.mason-dev.app.yaml`` (so relative paths still resolve). Returns None when there's nothing to
-    strip, so the normal ``app.yaml`` is used unchanged.
+    The manifest marks the process as local so durability uses its in-memory store. Keeping this in
+    the entry point is more reliable than forwarding ``--env`` through the Databricks CLI and does
+    not mutate the deployable ``app.yaml``. Deploy-only package-index variables are also removed.
     """
     try:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
-    except yaml.YAMLError:
-        return None
+    except yaml.YAMLError as exc:
+        raise AgentCliError(f"Could not parse {app_yaml}: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise AgentCliError(f"Invalid {app_yaml}: top level must be an object.")
     env = doc.get("env")
-    if not isinstance(env, list):
-        return None
-    filtered = [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
-    if len(filtered) == len(env):
-        return None  # no index override present — run-local can use app.yaml directly
+    if env is not None and not isinstance(env, list):
+        raise AgentCliError(f"Invalid {app_yaml}: env must be a list.")
+    filtered = [
+        e for e in (env or []) if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)
+    ]
+    filtered = [
+        e for e in filtered if not (isinstance(e, dict) and e.get("name") == _LOCAL_RUNTIME_ENV)
+    ]
+    filtered.append({"name": _LOCAL_RUNTIME_ENV, "value": "true"})
     doc["env"] = filtered
-    dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
+    # The Apps CLI rejects hidden or hyphenated entry-point filenames.
+    dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
     try:
         dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
     except OSError as exc:
