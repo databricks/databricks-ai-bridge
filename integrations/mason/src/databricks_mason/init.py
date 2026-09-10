@@ -77,10 +77,13 @@ _CHAT_APP_TEMPLATES = {
 def _template_ref(framework: str) -> str:
     """The git ref to fetch a framework's template from, absent a `--ref` override.
 
-    For a versioned framework, fetch the tag matching the installed CLI so the scaffold's pinned
-    `databricks-mason` matches what the user has. Fall back to the default ref when the version
-    isn't a published release — an editable/dev build (e.g. `0.1.0.dev0`, or a local `+`
-    local-version install) has no corresponding tag, so those keep fetching `main`.
+    A registry install pins the scaffold's `databricks-mason` at its own version, so fetch the
+    template from the matching `databricks-mason-v<version>` release tag — the template as it
+    shipped with that release — rather than `main`, which may have drifted ahead. Pre-release
+    versions (`0.1.4.dev0`) are tagged like any other release, so they pin too. Fall back to `main`
+    only when no matching tag exists, e.g. a version built and installed locally that was never
+    tagged. Editable and Git installs never reach here — `init` resolves those to their exact
+    source checkout before consulting this.
     """
     default_ref = _TEMPLATES[framework]["ref"]
     if framework not in _VERSIONED_TEMPLATES:
@@ -89,9 +92,24 @@ def _template_ref(framework: str) -> str:
         installed = _installed_version("databricks-mason")
     except PackageNotFoundError:
         return default_ref
-    if "dev" in installed or "+" in installed:
-        return default_ref
-    return f"{_RELEASE_TAG_PREFIX}{installed}"
+    tag = f"{_RELEASE_TAG_PREFIX}{installed}"
+    return tag if _remote_ref_exists(_TEMPLATES[framework]["repo"], tag) else default_ref
+
+
+def _remote_ref_exists(repo: str, tag: str) -> bool:
+    """Whether `tag` exists in `repo`, via a lightweight `git ls-remote` (no clone).
+
+    A missing tag exits non-zero (2), which is an expected answer here rather than an error, so
+    this checks the return code directly instead of going through `_git`. Any failure to confirm
+    the tag (missing, or an unreachable remote) returns False, falling back to the default ref.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--tags", repo, f"refs/tags/{tag}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
