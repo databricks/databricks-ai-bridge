@@ -152,6 +152,18 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     assert final.memory_store == "mem"
 
 
+def test_create_scaffolds_commented_store_examples(tmp_path: pathlib.Path):
+    AgentProject.create(tmp_path, framework="openai").write()
+    text = (tmp_path / "agent.toml").read_text(encoding="utf-8")
+    # Commented example bindings show the shape without activating a store.
+    assert "# [memory_store]" in text
+    assert "# [session_store]" in text
+    assert "mason memory bind" in text and "mason sessions bind" in text
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store is None
+    assert reloaded.session_store is None
+
+
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
     _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
