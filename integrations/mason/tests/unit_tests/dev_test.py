@@ -390,3 +390,29 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
     assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+
+
+def test_dev_warns_when_stores_unbound(tmp_path: pathlib.Path):
+    # `mason dev` never provisions stores (unlike deploy); it warns so the gap isn't silent.
+    (tmp_path / "app.yaml").write_text("command: []\n")  # no agent.toml -> both unbound
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "No memory store bound" in result.output
+    assert "No session store bound" in result.output
+
+
+def test_dev_silent_when_stores_bound(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+        '\n[memory_store]\nname = "mem"\n\n[session_store]\nname = "sess"\n'
+    )
+    with (
+        mock.patch.object(dev_mod, "_databricks"),
+        mock.patch.object(dev_mod, "validate_stores"),
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "No memory store bound" not in result.output
+    assert "No session store bound" not in result.output

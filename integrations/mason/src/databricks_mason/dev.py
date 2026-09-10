@@ -97,6 +97,17 @@ def dev(
     # per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set up
     # (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
+    # `mason dev` never provisions stores (unlike `mason deploy`); warn so the missing durability /
+    # long-term memory isn't a silent surprise.
+    if not memory_store:
+        render.warning(
+            "No memory store bound — long-term memory is disabled. Run 'mason memory bind <name>'."
+        )
+    if not session_store:
+        render.warning(
+            "No session store bound — conversation history is in-memory (not durable). "
+            "Run 'mason sessions bind <name>'."
+        )
     env_updates: dict[str, str] = {}
     # Stores legitimately require auth, so build the client eagerly only when stores are bound.
     if memory_store or session_store:

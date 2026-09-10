@@ -47,6 +47,14 @@ def test_hyperlink_carries_url_and_plain_text():
     assert "link https://example.com/app" in str(link.style)
 
 
+def test_warning_prints_yellow_message():
+    con, buf = _console()
+    render.warning("careful now", con=con)
+    out = buf.getvalue()
+    assert "careful now" in out
+    assert "⚠" in out
+
+
 def test_hyperlink_without_url_is_plain():
     link = render.hyperlink("my-app", None)
     assert link.plain == "my-app"

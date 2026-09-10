@@ -111,6 +111,11 @@ def status_pill(status: Optional[str]) -> Text:
     return Text("● ", style=MUTED) + Text(value.title() or "Unknown", style=MUTED)
 
 
+def warning(message: str, con: Optional[Console] = None) -> None:
+    """Print a yellow ⚠ warning line (non-fatal; the command keeps running)."""
+    (con or _stdout).print(Text("⚠ ", style="yellow") + Text(message, style="yellow"))
+
+
 def hyperlink(text: str, url: Optional[str]) -> Text:
     """A terminal hyperlink (OSC 8): renders `text`, opens `url` on click; plain text if no url.
 

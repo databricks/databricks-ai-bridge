@@ -299,6 +299,30 @@ def _resolve_deployment_name(project, name: Optional[str]) -> str:
     )
 
 
+def _ensure_default_stores(project, base_name: str, client) -> None:
+    """Create + bind default memory/session stores for any slot not already bound in agent.toml.
+
+    Fills only the gaps: a store already bound is left untouched. Defaults are named
+    ``<base_name>-memory`` / ``<base_name>-session`` (create-or-reuse), and the new bindings are
+    persisted so later deploys reuse them and the validate/grant steps pick them up. There is no way
+    to tell from the agent's code whether it uses a store — the binding is the signal — so
+    `mason deploy` provisions both by default; pass --no-create-stores to skip.
+    """
+    changed = False
+    if not project.memory_store:
+        store = f"{base_name}-memory"
+        resolved, _ = _ensure_memory_store(client, store)
+        store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
+        project.bind_memory_store(store, store_id)
+        changed = True
+    if not project.session_store:
+        _ensure_session_store(client, f"{base_name}-session")
+        project.bind_session_store(f"{base_name}-session")
+        changed = True
+    if changed:
+        project.write()
+
+
 def validate_stores(client, *, memory_store: Optional[str], session_store: Optional[str]) -> None:
     """Validate the agent's bound stores exist. Shared by `mason deploy` and `mason dev`.
 
@@ -440,6 +464,11 @@ def _grant_store_access(
     default=None,
     help="Number of deployment instances.",
 )
+@click.option(
+    "--no-create-stores",
+    is_flag=True,
+    help="Don't auto-create the default memory/session stores for slots unbound in agent.toml.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -448,6 +477,7 @@ def deploy(
     pip_index_url,
     workspace_path,
     instances,
+    no_create_stores,
 ) -> None:
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
@@ -455,6 +485,9 @@ def deploy(
     can omit it; passing NAME again updates the recorded name. The app is named `mason-<name>`
     (Mason adds the prefix if absent); use that full name with the other `mason deployments` verbs.
     `deployments list` shows only apps carrying this prefix.
+
+    By default any memory/session store not yet bound in agent.toml is created and bound as
+    `<name>-memory` / `<name>-session`; pass --no-create-stores to skip that.
 
     Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
     preserve the routing cookie automatically.
@@ -476,6 +509,16 @@ def deploy(
         project.write()
     instance_args = _instance_args(instances)
     client = obj.client()
+
+    # 0. Create + bind default memory/session stores for any slot unbound in agent.toml (unless
+    #    --no-create-stores). Writes the bindings so the store_bindings read below picks them up.
+    if (
+        project is not None
+        and not no_create_stores
+        and not (project.memory_store and project.session_store)
+    ):
+        with render.status("Provisioning default memory/session stores…"):
+            _ensure_default_stores(project, base_name, client)
 
     # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them). Stores are
     #    read from agent.toml at runtime, not wired into app.yaml; the bindings also drive the store

@@ -107,19 +107,21 @@ class _FakeClient:
     host = "https://ws"
     current_user = "me@example.com"
 
+    def __init__(self):
+        # Seeded with one pre-existing store ("mem", whose id differs from its display name as the
+        # real API returns); created stores are appended so deploy's auto-create can then resolve them.
+        self._memory_stores = [{"name": "memory-stores/mem-id-123", "display_name": "mem"}]
+
     def get_memory_store(self, name):
         return {"name": f"memory-stores/{name}"}
 
     def list_memory_stores(self, page_size=None, page_token=None):
-        # One page; the store's resource name is an id distinct from its display name (as the real
-        # API returns), so resolution must match on display_name, not id.
-        return {
-            "managed_memory_stores": [{"name": "memory-stores/mem-id-123", "display_name": "mem"}],
-            "next_page_token": "",
-        }
+        return {"managed_memory_stores": list(self._memory_stores), "next_page_token": ""}
 
     def create_memory_store(self, display_name, *, retry_transient=False):
-        return {"name": "memory-stores/mem-id-123", "display_name": display_name}
+        store = {"name": f"memory-stores/{display_name}", "display_name": display_name}
+        self._memory_stores.append(store)
+        return store
 
     def get_session_store(self, name):
         return {"session_store_name": name}
@@ -452,7 +454,7 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
+        ["myapp", "--source", str(src), "--no-create-stores"],
         obj=_FakeCtx(),
     )
 
@@ -508,7 +510,7 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
+        ["myapp", "--source", str(src), "--no-create-stores"],
         obj=_FakeCtx(),
     )
 
@@ -1037,8 +1039,6 @@ def test_store_bindings_ignores_missing_manifest(tmp_path: pathlib.Path):
 
 
 def test_deploy_writes_deployment_name_to_toml(tmp_path: pathlib.Path, monkeypatch):
-    from databricks_mason.agent_project import AgentProject
-
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -1093,6 +1093,73 @@ def test_deploy_without_name_or_toml_errors(tmp_path: pathlib.Path, monkeypatch)
     assert result.exit_code != 0
     assert "No deployment name" in result.output
     assert called == []  # errored before shelling out to `databricks apps`
+
+
+def test_ensure_default_stores_creates_and_binds_unbound(tmp_path: pathlib.Path):
+    _agent_toml(tmp_path)  # a project with no stores bound
+    project = AgentProject.load(tmp_path)
+
+    deploy_mod._ensure_default_stores(project, "foo", _FakeClient())
+
+    assert project.memory_store == "foo-memory"
+    assert project.session_store == "foo-session"
+    reloaded = AgentProject.load(tmp_path)  # persisted for later deploys
+    assert reloaded.memory_store == "foo-memory"
+    assert reloaded.session_store == "foo-session"
+
+
+def test_ensure_default_stores_leaves_a_bound_store_alone(tmp_path: pathlib.Path):
+    _agent_toml(tmp_path, memory="existing-mem")  # memory bound, session unbound
+    project = AgentProject.load(tmp_path)
+
+    deploy_mod._ensure_default_stores(project, "foo", _FakeClient())
+
+    assert project.memory_store == "existing-mem"  # untouched
+    assert project.session_store == "foo-session"  # only the missing one filled in
+
+
+def test_deploy_auto_creates_default_stores(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src)  # no stores bound
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+
+    assert result.exit_code == 0, result.output
+    project = AgentProject.load(src)
+    assert project.memory_store == "myapp-memory"
+    assert project.session_store == "myapp-session"
+
+
+def test_deploy_no_create_stores_leaves_stores_unbound(tmp_path: pathlib.Path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _agent_toml(src)  # no stores bound
+
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src), "--no-create-stores"], obj=_FakeCtx()
+    )
+
+    assert result.exit_code == 0, result.output
+    project = AgentProject.load(src)
+    assert project.memory_store is None
+    assert project.session_store is None
 
 
 def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
