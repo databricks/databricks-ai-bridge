@@ -16,11 +16,17 @@ from agent.mcps import build_mcp_servers
 from agent.tools import all_tools
 from databricks_mason import (
     DurableAgentContext,
-    tag_session,
     workspace_client,
     workspace_headers,
 )
-from databricks_mason.openai import configure_tracing, mcp_servers, memory_tools, session_store
+from databricks_mason.openai import (
+    configure_tracing,
+    mcp_servers,
+    memory_tools,
+    request_span,
+    session_store,
+    tag_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,19 +141,27 @@ async def on_recovery(value: Any, context: DurableAgentContext) -> dict:
 async def _run_agent(payload: dict[str, Any], context: DurableAgentContext) -> dict:
     session_id = _session_id(payload, context)
     actor = _actor(payload, session_id)
-    tag_session(session_id)
-
-    outputs = [
-        event
-        async for event in _persisted_agent_events(payload, context, session_id, actor)
-        if event.get("type") in ("message", "interrupt")
-    ]
-    interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
-    return {
-        "output": [event["message"] if event["type"] == "message" else event for event in outputs],
-        "session_id": session_id,
-        "status": "interrupted" if interrupted else "completed",
-    }
+    # Open a root MLflow span around the invocation so a trace is recorded: OpenAI autolog only nests
+    # spans under an active trace and does not start one for a streamed run. tag_session tags this
+    # trace; the agent's LLM/tool spans nest under it. No-op when tracing is disabled.
+    with request_span(name="agent", inputs=payload) as span:
+        tag_session(session_id)
+        outputs = [
+            event
+            async for event in _persisted_agent_events(payload, context, session_id, actor)
+            if event.get("type") in ("message", "interrupt")
+        ]
+        interrupted = bool(outputs and outputs[-1].get("type") == "interrupt")
+        result = {
+            "output": [
+                event["message"] if event["type"] == "message" else event for event in outputs
+            ],
+            "session_id": session_id,
+            "status": "interrupted" if interrupted else "completed",
+        }
+        if span is not None:
+            span.set_outputs(result)
+        return result
 
 
 async def _persisted_agent_events(
