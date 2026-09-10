@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 from typing import Any
 
 import click
@@ -197,10 +198,10 @@ def _render_store_detail(obj, store: dict) -> None:
         _BREADCRUMB,
         field(store, "display_name") or _store_id(store),
         {
-            "Name": field(store, "name"),
-            "Store ID": _store_id(store),
+            "Name": field(store, "display_name"),
+            "Resource name": field(store, "name"),
             "Workspace": field(store, "workspace_id"),
-            "Owner": field(store, "owner_user_id"),
+            "Creator": field(store, "owner_user_id"),
             "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
             "Created": timefmt.absolute(_store_created(store)),
@@ -247,38 +248,50 @@ def stores_create(obj, display_name, description) -> None:
 
 
 @stores.command("list")
-@click.option("--page-size", type=int, default=None)
+@click.option("--page-size", type=int, default=25, show_default=True)
 @click.option("--page-token", default=None)
 @click.pass_obj
 def stores_list(obj, page_size, page_token) -> None:
-    """List memory stores in the workspace."""
-    data = obj.client().list_memory_stores(page_size, page_token)
+    """List memory stores in the workspace (25 per page; paginates interactively on a terminal)."""
+    client = obj.client()
     if obj.output == "json":
-        render.emit_json(data)
+        render.emit_json(client.list_memory_stores(page_size, page_token))
         return
-    items = field(data, "managed_memory_stores") or []
-    rows = [
-        [
-            field(s, "display_name"),
-            _store_id(s),
-            timefmt.relative(_store_created(s)),
-            timefmt.relative(_store_updated(s)),
-            _truncate(field(s, "description"), 40),
+    # On a terminal, offer to fetch the next page instead of only printing the --page-token hint.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    while True:
+        data = client.list_memory_stores(page_size, page_token)
+        items = field(data, "managed_memory_stores") or []
+        rows = [
+            [
+                field(s, "display_name"),
+                _store_id(s),
+                timefmt.relative(_store_created(s)),
+                timefmt.relative(_store_updated(s)),
+                _truncate(field(s, "description"), 40),
+            ]
+            for s in items
         ]
-        for s in items
-    ]
-    render.resource_table(
-        "Managed Memory Stores",
-        [
-            ("Name", "left"),
-            ("Store ID", "left"),
-            ("Created", "left"),
-            ("Updated", "left"),
-            ("Description", "left"),
-        ],
-        rows,
-        subtitle=_page_note(data),
-    )
+        token = field(data, "next_page_token")
+        render.resource_table(
+            "Managed Memory Stores",
+            [
+                ("Name", "left"),
+                ("Resource name", "left"),
+                ("Created", "left"),
+                ("Updated", "left"),
+                ("Description", "left"),
+            ],
+            rows,
+            # In an interactive session the prompt below replaces the token hint.
+            subtitle=None if (interactive and token) else _page_note(data),
+            no_wrap=[1],  # keep the resource name full-width; other columns narrow to fit
+        )
+        if not token or not interactive:
+            break
+        if not click.confirm("Show next page?", default=False):
+            break
+        page_token = token
 
 
 @stores.command("get")

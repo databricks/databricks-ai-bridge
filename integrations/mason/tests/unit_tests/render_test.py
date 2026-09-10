@@ -81,6 +81,22 @@ def test_resource_table_renders_title_and_count():
     assert "1 item" in out
 
 
+def test_resource_table_keeps_no_wrap_column_full_width_when_narrow():
+    buf = io.StringIO()
+    con = Console(file=buf, width=60, no_color=True)
+    long_name = "memory-store-with-a-long-id"
+    render.resource_table(
+        "Stores",
+        [("Name", "left"), ("Resource name", "left"), ("Description", "left")],
+        [["demo", long_name, "some long description text here"]],
+        con=con,
+        no_wrap=[1],
+    )
+    out = buf.getvalue()
+    assert long_name in out  # resource name reserved full-width, never truncated
+    assert "DESCRIPTION" in out.upper()  # no column is dropped; it just narrows/wraps
+
+
 def test_success_next_steps_render_command_and_description():
     con, buf = _console()
     render.success(
