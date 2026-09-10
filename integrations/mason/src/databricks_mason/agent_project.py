@@ -341,11 +341,14 @@ class AgentProject:
 
     @classmethod
     def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
-        project_root = (
-            tool_manifest.project_root()
-            if root is None
-            else pathlib.Path(root).expanduser().resolve()
-        )
+        try:
+            project_root = (
+                tool_manifest.project_root()
+                if root is None
+                else pathlib.Path(root).expanduser().resolve()
+            )
+        except RuntimeError as exc:
+            raise AgentCliError(str(exc)) from exc
         path = project_root / "agent.toml"
         try:
             document = tomlkit.parse(path.read_text(encoding="utf-8"))

@@ -213,6 +213,15 @@ def test_load_without_root_finds_project_from_working_directory(
     assert AgentProject.load().durability_enabled is True
 
 
+def test_load_without_discoverable_project_uses_cli_error(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AgentCliError, match="Could not locate agent.toml"):
+        AgentProject.load()
+
+
 def test_load_rejects_non_boolean_durability_setting(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,

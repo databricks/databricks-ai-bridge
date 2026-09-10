@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
 from databricks_mason.agent_project import AgentProject
+from databricks_mason.errors import AgentCliError
 
 
 class _Ctx:
@@ -110,6 +111,20 @@ def test_dev_uses_local_entry_point_without_index_override(tmp_path: pathlib.Pat
     }
     original_env = yaml.safe_load((tmp_path / "app.yaml").read_text())["env"]
     assert original_env == [{"name": "AGENT_SESSION_STORE", "value": "s"}]
+
+
+def test_dev_entry_point_rejects_non_list_env(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("env:\n  KEY: value\n")
+
+    with pytest.raises(AgentCliError, match="env must be a list"):
+        dev_mod._dev_entry_point(tmp_path / "app.yaml")
+
+
+def test_dev_entry_point_rejects_non_object_manifest(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("- command\n- uv\n")
+
+    with pytest.raises(AgentCliError, match="top level must be an object"):
+        dev_mod._dev_entry_point(tmp_path / "app.yaml")
 
 
 def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Path):

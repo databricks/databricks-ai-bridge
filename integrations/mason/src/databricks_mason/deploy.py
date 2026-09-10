@@ -256,7 +256,7 @@ def _memory_store_database(client, memory_store: str) -> Optional[str]:
 
 
 def _load_project(source: pathlib.Path):
-    """The AgentProject at `source`, or None when there's no readable agent.toml."""
+    """The AgentProject at `source`, or None when agent.toml is absent."""
     from databricks_mason.agent_project import AgentProject
 
     if not (source / "agent.toml").is_file():
@@ -269,7 +269,7 @@ def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
 
     agent.toml is the single source of truth for an agent's stores. Both `mason dev` and `mason
     deploy` resolve through here so the store env AND the deploy-time access grant honor the same
-    bindings. Missing/invalid agent.toml is ignored (no stores), so this never blocks a run.
+    bindings. A missing agent.toml means no stores; an invalid manifest fails with a clear error.
     """
     project = _load_project(source)
     if project is None:

@@ -118,11 +118,10 @@ def dev(
     if app_port is not None:
         args += ["--app-port", str(app_port)]
 
-    # If the manifest carries a deploy-only package-index override, run against a filtered copy so
-    # the local build uses this machine's index instead of one it may not be able to reach.
+    # Run against a local-only manifest that marks durability as in-memory and removes deploy-only
+    # package-index overrides.
     entry_point = _dev_entry_point(app_yaml)
-    if entry_point is not None:
-        args += ["--entry-point", str(entry_point)]
+    args += ["--entry-point", str(entry_point)]
 
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
@@ -198,12 +197,14 @@ def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
         doc = yaml.safe_load(app_yaml.read_text()) or {}
     except yaml.YAMLError as exc:
         raise AgentCliError(f"Could not parse {app_yaml}: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise AgentCliError(f"Invalid {app_yaml}: top level must be an object.")
     env = doc.get("env")
-    filtered = (
-        [e for e in env if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)]
-        if isinstance(env, list)
-        else []
-    )
+    if env is not None and not isinstance(env, list):
+        raise AgentCliError(f"Invalid {app_yaml}: env must be a list.")
+    filtered = [
+        e for e in (env or []) if not (isinstance(e, dict) and e.get("name") in _BUILD_INDEX_ENVS)
+    ]
     filtered = [
         e for e in filtered if not (isinstance(e, dict) and e.get("name") == _LOCAL_RUNTIME_ENV)
     ]
