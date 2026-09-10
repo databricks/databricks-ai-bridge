@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import types
+from typing import Any
 
 from databricks_mason import app_resources as sa
 from databricks_mason import lakebase_durability_store
@@ -38,7 +39,10 @@ def test_apply_postgres_resources_sends_all_backends_in_one_update(monkeypatch):
 
 
 def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
-    resources = [{"name": "user-owned", "secret": {}}, {"name": "postgres-durability", "old": True}]
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "postgres-durability", "old": True},
+    ]
 
     def fake_db(args, profile, **kw):
         if args[:2] == ["apps", "get"]:
@@ -75,7 +79,7 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
 
 
 def test_durability_resource_coexists_with_a_second_managed_resource(monkeypatch):
-    resources = []
+    resources: list[dict[str, Any]] = []
 
     def fake_db(args, profile, **kw):
         if args[:2] == ["apps", "get"]:
