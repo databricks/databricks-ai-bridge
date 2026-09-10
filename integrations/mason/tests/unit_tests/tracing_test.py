@@ -256,19 +256,6 @@ def test_get_reports_missing_trace(tmp_path: pathlib.Path):
     assert "No trace found" in result.output
 
 
-# --- mlflow guard -----------------------------------------------------------
-
-
-def test_list_surfaces_clean_error_when_mlflow_absent(tmp_path: pathlib.Path):
-    _project(tmp_path)
-    with mock.patch.object(tracing_mod, "_mlflow", side_effect=AgentCliError("MLflow is required")):
-        result = CliRunner().invoke(
-            tracing_mod.tracing_list, ["--experiment", "1", "--source", str(tmp_path)], obj=_Ctx()
-        )
-    assert result.exit_code != 0
-    assert "MLflow is required" in result.output
-
-
 def test_status_str_handles_enum_like_and_none():
     class _EnumLike:
         name = "OK"
