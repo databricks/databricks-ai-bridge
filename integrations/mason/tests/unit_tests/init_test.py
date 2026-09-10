@@ -35,8 +35,10 @@ class _Ctx:
 def _skip_generated_runtime_rewrite(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(init_mod, "_editable_template_source", lambda: None)
     # Keep the release-tag lookup off the network in unit tests; the _template_ref tests below
-    # override this explicitly.
+    # override this explicitly. The False path warns, so silence that here (a dedicated test
+    # re-patches render.warning to assert it) to keep it out of scaffold tests' captured output.
     monkeypatch.setattr(init_mod, "_remote_ref_exists", lambda *_: False)
+    monkeypatch.setattr(init_mod.render, "warning", lambda *_a, **_k: None)
 
 
 def test_framework_specs_have_repo_ref_path():
@@ -69,10 +71,14 @@ def test_template_ref_pins_versioned_template_to_release_tag(
 
 
 def test_template_ref_falls_back_to_main_when_no_matching_tag(monkeypatch: pytest.MonkeyPatch):
-    # A locally built, never-tagged version has no matching release tag, so fetch `main`.
+    # A locally built, never-tagged version has no matching release tag, so fetch `main` — and warn,
+    # since that template may be ahead of the installed package.
     monkeypatch.setattr(init_mod, "_installed_version", lambda _: "0.9.9.dev0+g1234abc")
     monkeypatch.setattr(init_mod, "_remote_ref_exists", lambda *_: False)
+    warnings: list[str] = []
+    monkeypatch.setattr(init_mod.render, "warning", lambda message, **_: warnings.append(message))
     assert init_mod._template_ref("langgraph") == "main"
+    assert warnings and "0.9.9.dev0+g1234abc" in warnings[0]
 
 
 def test_template_ref_falls_back_when_package_not_installed(monkeypatch: pytest.MonkeyPatch):
@@ -107,6 +113,18 @@ def test_remote_ref_exists_false_when_tag_absent(monkeypatch: pytest.MonkeyPatch
         init_mod.subprocess, "run", lambda cmd, **_: subprocess.CompletedProcess(cmd, 2)
     )
     assert _real_remote_ref_exists("https://repo.git", "databricks-mason-v9.9.9") is False
+
+
+def test_remote_ref_exists_raises_on_unexpected_exit(monkeypatch: pytest.MonkeyPatch):
+    # A non-0/2 exit (e.g. 128 for an unreachable remote) is a real failure, not "tag absent" — so
+    # surface it rather than silently falling back to a possibly-drifted `main`.
+    monkeypatch.setattr(
+        init_mod.subprocess,
+        "run",
+        lambda cmd, **_: subprocess.CompletedProcess(cmd, 128, stderr="fatal: could not read"),
+    )
+    with pytest.raises(AgentCliError, match="Could not check for release tag"):
+        _real_remote_ref_exists("https://repo.git", "databricks-mason-v0.3.0")
 
 
 def test_installed_git_template_source_uses_recorded_commit(monkeypatch: pytest.MonkeyPatch):

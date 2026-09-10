@@ -93,15 +93,22 @@ def _template_ref(framework: str) -> str:
     except PackageNotFoundError:
         return default_ref
     tag = f"{_RELEASE_TAG_PREFIX}{installed}"
-    return tag if _remote_ref_exists(_TEMPLATES[framework]["repo"], tag) else default_ref
+    if _remote_ref_exists(_TEMPLATES[framework]["repo"], tag):
+        return tag
+    render.warning(
+        f"No release tag '{tag}' for installed databricks-mason {installed}; scaffolding from "
+        f"'{default_ref}', which may be ahead of your installed package."
+    )
+    return default_ref
 
 
 def _remote_ref_exists(repo: str, tag: str) -> bool:
     """Whether `tag` exists in `repo`, via a lightweight `git ls-remote` (no clone).
 
-    A missing tag exits non-zero (2), which is an expected answer here rather than an error, so
-    this checks the return code directly instead of going through `_git`. Any failure to confirm
-    the tag (missing, or an unreachable remote) returns False, falling back to the default ref.
+    `git ls-remote --exit-code` exits 0 when the tag is found and 2 when it is genuinely absent (an
+    untagged local build — a legitimate `main` fallback). Any other exit is a real failure (an
+    unreachable remote, auth) that we surface rather than silently treating as "absent" and fetching
+    a possibly-drifted `main`.
     """
     result = subprocess.run(
         ["git", "ls-remote", "--exit-code", "--tags", repo, f"refs/tags/{tag}"],
@@ -109,7 +116,14 @@ def _remote_ref_exists(repo: str, tag: str) -> bool:
         capture_output=True,
         check=False,
     )
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True
+    if result.returncode == 2:
+        return False
+    raise AgentCliError(
+        f"Could not check for release tag '{tag}'.",
+        hint=(result.stderr or result.stdout or "").strip(),
+    )
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
@@ -404,6 +418,7 @@ def init(
             {
                 "framework": selected_framework,
                 "template": template_name,
+                "template_ref": resolved_ref or selected_ref,
                 "directory": str(dest),
                 "server": server,
                 "chat_app_enabled": chat_app_enabled,
@@ -413,9 +428,11 @@ def init(
         )
         return
 
+    template_ref = f"{selected_ref} ({resolved_ref[:12]})" if resolved_ref else selected_ref
     fields = {
         "Framework": selected_framework,
         "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
+        "Template ref": template_ref,
         "Durable runtime": "enabled" if durable_runtime else "disabled",
         "Directory": str(dest),
     }
