@@ -137,13 +137,16 @@ def resource_table(
     *,
     subtitle: Optional[str] = None,
     con: Optional[Console] = None,
+    no_wrap: Optional[Sequence[int]] = None,
 ) -> None:
     """Render a titled list table.
 
     `columns` is a sequence of (header, justify) where justify is left/right/center.
+    `no_wrap` column indexes are kept full-width; the rest narrow to fit the terminal.
     """
     con = con or _stdout
     rows = list(rows)
+    no_wrap = set(no_wrap or ())
 
     con.print()
     con.print(Text(title, style=f"bold {ACCENT}"))
@@ -151,13 +154,31 @@ def resource_table(
         con.print(Text(subtitle, style=MUTED))
 
     table = Table(box=box.SIMPLE_HEAD, expand=False, pad_edge=False, show_edge=False)
-    for header, justify in columns:
-        table.add_column(header.upper(), justify=justify, header_style=f"bold {MUTED}")
+    for i, (header, justify) in enumerate(columns):
+        # Reserve a no_wrap column's full content width so Rich narrows the others instead.
+        min_width = (
+            max([len(header)] + [_cell_len(row[i]) for row in rows], default=0)
+            if i in no_wrap
+            else None
+        )
+        table.add_column(
+            header.upper(),
+            justify=justify,
+            header_style=f"bold {MUTED}",
+            no_wrap=i in no_wrap,
+            min_width=min_width,
+        )
     for row in rows:
         table.add_row(*[_cell(v) for v in row])
     con.print(table)
 
     con.print(Text(f"{len(rows)} item{'s' if len(rows) != 1 else ''}", style=MUTED))
+
+
+def _cell_len(value: Any) -> int:
+    if value is None:
+        return 1  # em-dash placeholder
+    return len(value.plain if isinstance(value, Text) else str(value))
 
 
 def _cell(value: Any) -> Any:

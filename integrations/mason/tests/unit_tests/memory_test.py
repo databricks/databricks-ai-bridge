@@ -90,6 +90,39 @@ def test_store_list_renders_timestamps_from_create_time():
     assert "ago" in result.output or "just now" in result.output
 
 
+def test_store_list_shows_bare_resource_name_without_prefix():
+    page = {"managed_memory_stores": [{"name": "memory-stores/abc123", "display_name": "demo"}]}
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_Client(page=page)))
+    assert result.exit_code == 0, result.output
+    assert "abc123" in result.output  # resource name shown without the memory-stores/ prefix
+    assert "memory-stores/abc123" not in result.output
+    assert "STORE ID" not in result.output.upper()  # column renamed to "Resource name"
+
+
+def test_store_list_defaults_page_size_to_25():
+    calls = []
+
+    class _RecClient(_Client):
+        def list_memory_stores(self, page_size=None, page_token=None):
+            calls.append((page_size, page_token))
+            return {"managed_memory_stores": []}
+
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_RecClient()))
+    assert result.exit_code == 0, result.output
+    assert calls == [(25, None)]  # defaults to a 25-result page
+
+
+def test_store_list_hints_next_page_when_not_interactive():
+    page = {
+        "managed_memory_stores": [{"name": "memory-stores/a", "display_name": "d"}],
+        "next_page_token": "tok-2",
+    }
+    # CliRunner has no TTY, so it prints the --page-token hint rather than prompting.
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_Client(page=page)))
+    assert result.exit_code == 0, result.output
+    assert "--page-token tok-2" in result.output
+
+
 def _bind_ctx(tmp_path):
     """A CLI context whose client records memory-store creation, over a scaffolded agent.toml."""
     (tmp_path / "agent.toml").write_text(
