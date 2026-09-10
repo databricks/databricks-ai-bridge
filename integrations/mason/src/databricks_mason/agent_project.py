@@ -27,6 +27,19 @@ TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
 _DURABILITY_TABLE = "durability"
+# Commented-out store bindings written into a freshly scaffolded agent.toml (None = blank line).
+_STORE_EXAMPLE_LINES = (
+    None,
+    "Managed long-term memory (optional): `mason deploy` creates + binds one by default;",
+    "run `mason memory bind <name>`, or uncomment and set a store name here:",
+    "[memory_store]",
+    'name = "my-memory-store"',
+    None,
+    "Durable conversation history (optional): `mason deploy` creates + binds one by default;",
+    "run `mason sessions bind <name>`, or uncomment and set a store name here:",
+    "[session_store]",
+    'name = "my-session-store"',
+)
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
@@ -418,6 +431,11 @@ class AgentProject:
         durability = tomlkit.table()
         durability.add("enabled", durability_enabled)
         document.add(_DURABILITY_TABLE, durability)
+        # Commented examples so a fresh project shows how managed stores are bound. `mason deploy`
+        # creates + binds these by default; uncomment (or run `mason memory/sessions bind`) to pin
+        # specific store names. They're comments, so `load` treats the project as unbound until then.
+        for line in _STORE_EXAMPLE_LINES:
+            document.add(tomlkit.nl() if line is None else tomlkit.comment(line))
         return cls(
             project_root,
             document,
