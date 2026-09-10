@@ -104,10 +104,10 @@ Use `mason init --framework langgraph --disable-chat-app` for API-only output.
 mason --profile <profile> deploy agent-langgraph --source .
 ```
 
-By default, `agent.toml` contains `[durability] enabled = true`. Deployment reuses a bound Session Store's
-Lakebase database when available; otherwise Mason provisions or reuses the app's durability project.
-Only the app-owned `databricks_mason_runtime_<hash>` schema and runtime tables are added. A project
-initialized with `--no-durable-runtime` omits the durability binding and provisions no Lakebase.
+By default, `agent.toml` contains `[durability] enabled = true`. Deployment provisions or reuses the
+app's dedicated durability Lakebase project. Only the app-owned
+`databricks_mason_runtime_<hash>` schema and runtime tables are added. A project initialized with
+`--no-durable-runtime` records `enabled = false` and provisions no durability Lakebase.
 
 The `__Host-databricks-app-router` cookie may be supplied independently for sticky replica routing.
 It is not authentication and is not used as the template's application session ID.

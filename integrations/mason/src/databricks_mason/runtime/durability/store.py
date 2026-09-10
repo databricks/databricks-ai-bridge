@@ -141,9 +141,9 @@ class LakebaseDurabilityStore:
     app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
     next attempt, and continue after process or pod loss.
 
-    This store requires a Lakebase Postgres database. ``mason deploy`` reuses the Session Store
-    database when configured or provisions one durability database, then assigns each app its own
-    schema. ``mason dev`` uses ``InMemoryDurabilityStore`` instead.
+    This store requires a Lakebase Postgres database. ``mason deploy`` reuses or provisions a
+    dedicated app-owned durability project, then assigns the app its own schema. ``mason dev`` uses
+    ``InMemoryDurabilityStore`` instead.
     """
 
     def __init__(

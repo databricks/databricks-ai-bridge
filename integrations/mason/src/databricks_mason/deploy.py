@@ -2,9 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents reuse the Session Store database or provision a dedicated
-database when no Session Store is bound. The managed stores are read from `agent.toml` at runtime,
-so they are not written into `app.yaml`. `mason deployments` covers the lifecycle verbs
+the deployment. Durable agents use a dedicated, app-owned Lakebase project. The managed stores
+are read from `agent.toml` at runtime, so they are not written into `app.yaml`. `mason deployments`
+covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
 Deployments run on the Databricks Apps runtime, which this module drives via the
@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import pathlib
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import click
@@ -509,16 +509,9 @@ def deploy(
     durability_enabled = bool(project and project.durability_enabled)
     if durability_enabled:
         durability_schema = lakebase_durability_store.get_lakebase_schema(name)
-        if session_store:
-            durability_backend = replace(
-                session_store_access.backend(session_store),
-                schema=durability_schema,
-                tables=(),
-            )
-        else:
-            durability_backend = lakebase_durability_store.get_or_create_backend(
-                name, obj.profile, create=True
-            )
+        durability_backend = lakebase_durability_store.get_or_create_backend(
+            name, obj.profile, create=True
+        )
         env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
         env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
         provisioned["Agent durability store"] = durability_backend.database_path

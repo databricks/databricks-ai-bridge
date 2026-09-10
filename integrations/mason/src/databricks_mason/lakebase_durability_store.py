@@ -13,7 +13,7 @@ from databricks_mason.store_access import LakebaseBackend, _databricks
 _BRANCH = "production"
 _ENDPOINT = "primary"
 _DATABASE = "databricks-postgres"
-_RESOURCE_NAME = "postgres"
+_RESOURCE_NAME = "postgres-durability"
 
 
 def backend(app: str) -> LakebaseBackend:

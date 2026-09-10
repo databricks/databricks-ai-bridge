@@ -152,14 +152,9 @@ authentication. Without the durable runtime, request state and events exist only
 process and horizontally scaled clients need sticky routing. With the durable runtime, Mason
 persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
 
-Durability is enabled by default for both framework templates. Mason writes the durability binding
-to `agent.toml`, and `mason deploy` then attaches one Lakebase database for runtime durability,
-chosen in this order:
-
-1. Reuse the configured Session Store's Lakebase database.
-2. Otherwise reuse or provision a dedicated `<app>-durability` Lakebase project.
-
-Mason adds only its `databricks_mason_runtime_<app-hash>` schema and tables to the selected database,
+Durability is enabled by default for both framework templates. Mason writes the durability setting
+to `agent.toml`, and `mason deploy` reuses or provisions a dedicated `<app>-durability` Lakebase
+project. Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database,
 giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
 `@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
 is disabled; register the same function for both decorators when replaying the initial invocation is

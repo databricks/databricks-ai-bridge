@@ -343,20 +343,29 @@ def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
     assert "enabled = true or false" in result.output
 
 
-def test_deploy_durability_binding_reuses_session_store_before_startup(
+def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, session="sessions")
+    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
+    session_backend = deploy_mod.session_store_access.backend("sessions")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
         deploy_mod.lakebase_durability_store,
         "get_or_create_backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must reuse session")),
+        lambda app, profile, create: selected,
+    )
+    monkeypatch.setattr(
+        deploy_mod.session_store_access,
+        "backend",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("must not use session store for durability")
+        ),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -382,7 +391,9 @@ def test_deploy_durability_binding_reuses_session_store_before_startup(
     assert result.exit_code == 0, result.output
     assert [event[0] for event in events] == ["attach", "deploy"]
     backend = events[0][1][0]
-    assert backend.database == "sessions"
+    assert backend == selected
+    assert backend.database != "sessions"
+    assert backend.resource_name != session_backend.resource_name
     assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     assert backend.tables == ()
     env = {
