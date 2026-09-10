@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import Any, Optional
 
 import click
@@ -182,38 +183,49 @@ def stores_create(obj, name, description, metadata) -> None:
 
 
 @stores.command("list")
-@click.option("--page-size", type=int, default=None)
+@click.option("--page-size", type=int, default=25, show_default=True)
 @click.option("--page-token", default=None)
 @click.pass_obj
 def stores_list(obj, page_size, page_token) -> None:
-    """List session stores in the workspace."""
-    data = obj.client().list_session_stores(page_size, page_token)
+    """List session stores in the workspace (25 per page; paginates interactively on a terminal)."""
+    client = obj.client()
     if obj.output == "json":
-        render.emit_json(data)
+        render.emit_json(client.list_session_stores(page_size, page_token))
         return
-    items_ = field(data, "session_stores") or []
-    rows = [
-        [
-            field(s, "session_store_name"),
-            field(s, "creator_user_id"),
-            timefmt.relative(field(s, "create_time")),
-            timefmt.relative(field(s, "update_time")),
-            _truncate(field(s, "description"), 40),
+    # On a terminal, offer to fetch the next page instead of only printing the --page-token hint.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    while True:
+        data = client.list_session_stores(page_size, page_token)
+        items_ = field(data, "session_stores") or []
+        rows = [
+            [
+                field(s, "session_store_name"),
+                timefmt.relative(field(s, "create_time")),
+                timefmt.relative(field(s, "update_time")),
+                _truncate(field(s, "description"), 40),
+            ]
+            for s in items_
         ]
-        for s in items_
-    ]
-    render.resource_table(
-        "Session Stores",
-        [
-            ("Name", "left"),
-            ("Creator", "left"),
-            ("Created", "left"),
-            ("Updated", "left"),
-            ("Description", "left"),
-        ],
-        rows,
-        subtitle=_page_note(data),
-    )
+        token = field(data, "next_page_token")
+        render.resource_table(
+            "Session Stores",
+            [
+                # A session store's resource name is its workspace-unique, human-readable name.
+                ("Resource name", "left"),
+                ("Created", "left"),
+                ("Updated", "left"),
+                ("Description", "left"),
+            ],
+            rows,
+            # In an interactive session the prompt below replaces the token hint.
+            subtitle=None if (interactive and token) else _page_note(data),
+            no_wrap=[0],  # keep the resource name full-width; other columns narrow to fit
+        )
+        if not token or not interactive:
+            break
+        if not click.confirm("Show next page?", default=False):
+            break
+        page_token = token
 
 
 @stores.command("get")
