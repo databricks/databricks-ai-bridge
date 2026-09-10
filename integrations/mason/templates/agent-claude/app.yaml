@@ -1,0 +1,17 @@
+command: ["uv", "run", "start-server"]
+# databricks apps listen by default on port 8000
+#
+# The agent calls Claude through the Anthropic API, so it needs a credential — set ANTHROPIC_API_KEY,
+# or CLAUDE_CODE_USE_BEDROCK=1 to use the app's AWS identity via Amazon Bedrock. Mason injects the
+# deployed Lakebase durability endpoint. To enable tracing, add the literal values below.
+#
+# env:
+#   - name: ANTHROPIC_API_KEY
+#     value: "<your-anthropic-api-key>"    # or set CLAUDE_CODE_USE_BEDROCK below instead
+#   # - name: CLAUDE_CODE_USE_BEDROCK
+#   #   value: "1"
+#   # Tracing (set a destination + an experiment).
+#   - name: MLFLOW_TRACKING_URI
+#     value: "databricks"
+#   - name: MLFLOW_EXPERIMENT_ID
+#     value: "<experiment-id>"

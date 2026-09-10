@@ -14,7 +14,7 @@ from databricks_mason.errors import AgentCliError
 
 _CONFIG_PATH = pathlib.Path(".mason/project.toml")
 _SCHEMA_VERSION = 1
-_SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
+_SUPPORTED_FRAMEWORKS = {"langgraph", "openai", "claude"}
 _CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-openai"})
 
 
@@ -108,6 +108,7 @@ def _infer_legacy_framework(project: pathlib.Path) -> ProjectMetadata:
         for package, framework in (
             ("databricks-openai", "openai"),
             ("databricks-langchain", "langgraph"),
+            ("anthropic", "claude"),
         )
         if package in packages
     }
