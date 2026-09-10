@@ -12,7 +12,6 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
-from databricks_mason import session_store_access
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
@@ -454,7 +453,6 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, session="sessions")
     selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
-    session_backend = session_store_access.backend("sessions")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -490,8 +488,10 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     assert [event[0] for event in events] == ["attach", "deploy"]
     backend = events[0][1][0]
     assert backend == selected
-    assert backend.database != "sessions"
-    assert backend.resource_name != session_backend.resource_name
+    assert backend.database != "sessions"  # dedicated durability db, not the session store's
+    assert (
+        backend.resource_name == "postgres-durability"
+    )  # distinct from a session store's resource
     assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     assert backend.tables == ()
     deployed_env = events[1][1]

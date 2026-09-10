@@ -27,14 +27,14 @@ from databricks_mason import (
     render,
     timefmt,
 )
+from databricks_mason.app_resources import (
+    apply_experiment_resource,
+    apply_postgres_resources,
+)
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
-from databricks_mason.store_access import (
-    apply_experiment_resource,
-    apply_postgres_resources,
-)
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,

@@ -20,7 +20,7 @@ from databricks_mason.databricks_cli import _databricks
 
 @dataclass(frozen=True)
 class LakebaseBackend:
-    """A per-store Lakebase database: its shared project/branch, its endpoint, and its schema/tables."""
+    """A Lakebase database + endpoint bound as a `postgres` app resource (the durable runtime's store)."""
 
     project: str
     branch: str
