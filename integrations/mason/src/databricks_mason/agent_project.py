@@ -336,7 +336,7 @@ class AgentProject:
         self.trace_disabled = trace_disabled
 
     @classmethod
-    def load(cls, root: pathlib.Path | str) -> "AgentProject":
+    def load(cls, root: pathlib.Path | str = ".") -> "AgentProject":
         project_root = pathlib.Path(root).expanduser().resolve()
         path = project_root / "agent.toml"
         try:
