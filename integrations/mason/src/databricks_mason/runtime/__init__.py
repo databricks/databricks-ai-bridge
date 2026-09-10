@@ -17,15 +17,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from databricks_mason.runtime.durability.app import AgentApp
     from databricks_mason.runtime.durability.types import DurableAgentContext
-    from databricks_mason.runtime.tracing import configure_tracing, tag_session
+    from databricks_mason.runtime.tracing import configure_tracing, request_span, tag_session
     from databricks_mason.runtime.workspace import workspace_client, workspace_headers
 
 __all__ = [
     "AgentApp",
     "DurableAgentContext",
     # MLflow tracing — call configure_tracing() once at startup (pass the framework's autolog, or use
-    # a framework adapter that binds it).
+    # a framework adapter that binds it). Wrap each invocation in request_span() so a trace is
+    # recorded (framework autolog only nests under an active trace); tag_session() tags it.
     "configure_tracing",
+    "request_span",
     "tag_session",
     # Workspace SDK client construction (account-host / run-local routing handled).
     "workspace_client",
@@ -36,6 +38,7 @@ _MODULE_BY_NAME = {
     "AgentApp": "durability.app",
     "DurableAgentContext": "durability.types",
     "configure_tracing": "tracing",
+    "request_span": "tracing",
     "tag_session": "tracing",
     "workspace_client": "workspace",
     "workspace_headers": "workspace",
