@@ -92,6 +92,10 @@ stores bound in `agent.toml`, and grants the app's service principal access to t
 `mason deployments list` shows what you have deployed, and `mason deployments get
 my-agent` prints its URL and status.
 
+To exercise the agent — locally under `mason dev` or once deployed — `mason endpoint
+invoke` sends it an HTTP request, and `mason tracing list` shows the traces it produced
+once tracing is configured (`mason tracing setup`).
+
 A fresh project has no memory or session stores bound. To give the agent long-term
 memory and durable conversation history, bind stores before deploying — `mason memory
 bind <name>` and `mason sessions bind <name>` (see [Initialize the chat app
@@ -163,6 +167,12 @@ from databricks_mason import AgentApp, DurableAgentContext
 app = AgentApp(durable_runtime=True)
 
 
+# run_agent / recover_agent are your own agent code; the decorated handlers are
+# the only Mason contract.
+async def run_agent(input: object, session_id: str) -> object: ...
+async def recover_agent(input: object, session_id: str) -> object: ...
+
+
 @app.invoke
 async def invoke(input: object, context: DurableAgentContext) -> object:
     return await run_agent(input, session_id=context.session_id)
@@ -193,7 +203,8 @@ persists the input, attempt status, heartbeats, lifecycle events, application ev
 
 Durability is enabled by default for both framework templates. Mason writes the durability setting
 to `agent.toml`, and `mason deploy` reuses or provisions a dedicated `<app>-durability` Lakebase
-project. Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database,
+project as the durability store for automatic crash detection and recovery. Mason adds its
+`databricks_mason_runtime_<app-hash>` schema and tables to that database,
 giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
 `@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
 is disabled; register the same function for both decorators when replaying the initial invocation is
