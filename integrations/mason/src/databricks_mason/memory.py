@@ -198,10 +198,10 @@ def _render_store_detail(obj, store: dict) -> None:
         _BREADCRUMB,
         field(store, "display_name") or _store_id(store),
         {
-            "Name": field(store, "name"),
-            "Store ID": _store_id(store),
+            "Name": field(store, "display_name"),
+            "Resource name": field(store, "name"),
             "Workspace": field(store, "workspace_id"),
-            "Owner": field(store, "owner_user_id"),
+            "Creator": field(store, "owner_user_id"),
             "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
             "Created": timefmt.absolute(_store_created(store)),

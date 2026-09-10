@@ -132,13 +132,16 @@ def sessions_unbind(obj, source: pathlib.Path) -> None:
 
 
 def _render_store_detail(store: dict) -> None:
+    name = field(store, "session_store_name")
     render.detail(
         f"{_BREADCRUMB} Store",
-        field(store, "session_store_name") or "—",
+        name or "—",
         {
-            "Name": field(store, "session_store_name"),
+            "Name": name,
+            "Resource name": f"session-stores/{name}" if name else None,
             "Store ID": field(store, "session_store_id"),
             "Creator": field(store, "creator_user_id"),
+            "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
             "Created": timefmt.absolute(field(store, "create_time")),
             "Updated": timefmt.absolute(field(store, "update_time")),

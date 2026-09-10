@@ -79,3 +79,31 @@ def test_store_list_defaults_page_size_to_25():
     result = CliRunner().invoke(stores, ["list"], obj=_Ctx(client))
     assert result.exit_code == 0, result.output
     assert client.calls == [(25, None)]
+
+
+class _StoreGetClient:
+    def __init__(self, store):
+        self._store = store
+
+    def get_session_store(self, name):
+        return self._store
+
+
+def test_store_get_unifies_name_resource_name_store_id_and_storage():
+    store = {
+        "session_store_name": "ann-session-store",
+        "session_store_id": "847efa51-dc53-4cf7",
+        "creator_user_id": "299811638972008",
+        "storage_backend": {"backend_id": "projects/.../databases/ann"},
+        "create_time": "2026-09-03T21:47:00Z",
+        "update_time": "2026-09-03T21:47:00Z",
+    }
+    result = CliRunner().invoke(
+        stores, ["get", "ann-session-store"], obj=_Ctx(_StoreGetClient(store))
+    )
+    assert result.exit_code == 0, result.output
+    assert "ann-session-store" in result.output  # human-readable name
+    # Resource name is the session-stores/<name> path.
+    assert "session-stores/ann-session-store" in result.output
+    assert "Store ID" in result.output and "847efa51-dc53-4cf7" in result.output
+    assert "Storage" in result.output  # storage now shown for session stores

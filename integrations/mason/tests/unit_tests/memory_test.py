@@ -64,6 +64,24 @@ def test_store_get_renders_timestamps_from_create_time():
     assert "2026" in result.output
 
 
+def test_store_get_unifies_name_resource_name_and_creator():
+    store = {
+        "name": "memory-stores/abc123",
+        "display_name": "demo",
+        "owner_user_id": "owner-1",
+        "storage_backend": {"backend_id": "projects/.../databases/abc123"},
+        "create_time": "2026-08-15T01:29:00Z",
+        "update_time": "2026-08-16T01:29:00Z",
+    }
+    result = CliRunner().invoke(stores, ["get", "abc123"], obj=_Ctx(_Client(store=store)))
+    assert result.exit_code == 0, result.output
+    assert "Name" in result.output and "demo" in result.output  # human-readable name
+    assert "Resource name" in result.output and "memory-stores/abc123" in result.output
+    assert "Creator" in result.output and "owner-1" in result.output  # was "Owner"
+    assert "Owner" not in result.output
+    assert "Store ID" not in result.output  # memory has no separate id row
+
+
 def test_store_create_suggests_binding_the_store():
     store = {"name": "memory-stores/abc123", "display_name": "demo"}
     result = CliRunner().invoke(
