@@ -15,7 +15,13 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
+from databricks_mason.runtime.tool_manifest import (
+    MEMORY_STORE_TABLE,
+    SESSION_STORE_TABLE,
+)
+from databricks_mason.runtime.tool_manifest import (
+    project_root as find_project_root,
+)
 
 # The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
 # MLflow experiment); this table only records an explicit experiment override or a disable.
@@ -336,8 +342,10 @@ class AgentProject:
         self.trace_disabled = trace_disabled
 
     @classmethod
-    def load(cls, root: pathlib.Path | str = ".") -> "AgentProject":
-        project_root = pathlib.Path(root).expanduser().resolve()
+    def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
+        project_root = (
+            find_project_root() if root is None else pathlib.Path(root).expanduser().resolve()
+        )
         path = project_root / "agent.toml"
         try:
             document = tomlkit.parse(path.read_text(encoding="utf-8"))
