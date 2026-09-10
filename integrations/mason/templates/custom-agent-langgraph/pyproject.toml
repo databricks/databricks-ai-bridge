@@ -5,7 +5,7 @@ description = "LangGraph agent with a custom FastAPI server"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "databricks-mason>=0.1.5.dev0",
+    "databricks-mason>=0.1.6.dev0",
     "databricks-langchain>=0.17.0",
     "databricks-sdk>=0.79.0",
     "fastapi>=0.129.0",
