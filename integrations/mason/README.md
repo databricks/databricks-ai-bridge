@@ -96,10 +96,12 @@ To exercise the agent — locally under `mason dev` or once deployed — `mason 
 invoke` sends it an HTTP request, and `mason tracing list` shows the traces it produced
 once tracing is configured (`mason tracing setup`).
 
-A fresh project has no memory or session stores bound. To give the agent long-term
-memory and durable conversation history, bind stores before deploying — `mason memory
-bind <name>` and `mason sessions bind <name>` (see [Initialize the chat app
-demo](#initialize-the-chat-app-demo)).
+A fresh project binds no stores: `mason dev` runs stateless (and warns that none are
+bound). `mason deploy` then creates and binds default `<name>-memory` and
+`<name>-session` stores, giving the deployed agent long-term memory and durable
+conversation history — bind your own first with `mason memory bind <name>` /
+`mason sessions bind <name>`, or pass `--no-create-stores` to skip (see [Initialize the
+chat app demo](#initialize-the-chat-app-demo)).
 
 ## Python SDK
 
