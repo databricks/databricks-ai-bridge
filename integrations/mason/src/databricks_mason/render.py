@@ -146,7 +146,7 @@ def resource_table(
     """
     con = con or _stdout
     rows = list(rows)
-    no_wrap = set(no_wrap or ())
+    no_wrap_cols = set(no_wrap or ())
 
     con.print()
     con.print(Text(title, style=f"bold {ACCENT}"))
@@ -158,14 +158,14 @@ def resource_table(
         # Reserve a no_wrap column's full content width so Rich narrows the others instead.
         min_width = (
             max([len(header)] + [_cell_len(row[i]) for row in rows], default=0)
-            if i in no_wrap
+            if i in no_wrap_cols
             else None
         )
         table.add_column(
             header.upper(),
             justify=justify,
             header_style=f"bold {MUTED}",
-            no_wrap=i in no_wrap,
+            no_wrap=i in no_wrap_cols,
             min_width=min_width,
         )
     for row in rows:
