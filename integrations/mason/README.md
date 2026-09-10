@@ -197,7 +197,6 @@ mason [-p <profile>] [-o text|json]
     add sandbox      --scope SCOPE [--scope SCOPE ...] [--source PATH]
     add mcp          SERVICE [--name NAME] [--source PATH]
     add uc-function  FUNCTION [--name NAME] [--source PATH]
-    add python       NAME [--source PATH]
     list             [--source PATH]
   deploy       <name> --source PATH [--with-traces C.S] [--instances N]
   deployments  list | get | logs | start | stop | delete
@@ -266,27 +265,23 @@ mason deploy my-agent
 
 ## Agent tools
 
-`mason init` writes portable tool intent to `agent.toml` and template provenance to
-`.mason/project.toml`. The manifest runtime is currently implemented only by the in-repository
-`agent-langgraph` template; `mason tools add` fails explicitly for other frameworks until they
-provide an adapter at the same runtime seam.
-
-Remote tools update only `agent.toml`; they do not generate framework source. The LangGraph runtime
-loads the manifest and materializes its native MCP tools when the agent runs, so a direct manifest
-edit and a CLI edit have the same behavior:
+For projects created with `mason init --server mason` (the default), `agent.toml` is the declarative
+source of truth for Databricks-managed infrastructure: sandbox, managed MCP, and Unity Catalog
+function bindings, plus memory, session, and durability resources. `mason tools add` updates only
+this file; direct TOML edits have the same behavior. Both Mason-server framework adapters read the
+managed bindings at runtime without generating or patching agent source:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
 mason tools add mcp system.ai.web_search
 mason tools add uc-function catalog.schema.lookup_ticket
-mason tools add python lookup-ticket
 mason tools remove mcp system.ai.web_search
 mason tools list
 ```
 
 For MCP services, the remove command accepts the same service name as the add command. You can also
 remove any binding by the ID shown in `mason tools list`, for example `mason tools remove
-web_search`. Removal updates only `agent.toml`; Python source and test files remain user-owned.
+web_search`. `mason tools list` reports these managed bindings; it does not inventory custom code.
 
 Discover the MCP Services available to your user before adding one. By default Mason lists the
 Databricks-managed services in `system.ai`; pass `--schema catalog.schema` for another Unity Catalog
@@ -298,9 +293,20 @@ mason mcp list
 mason mcp list --schema main.tools
 ```
 
-The Python command additionally creates user-owned `agent/tools/<name>.py` and
-`tests/tools/test_<name>.py` files using the LangGraph-native `@tool` decorator. `mason dev` and
-`mason deploy` preserve `agent.toml`; they do not generate or patch agent source.
+In Mason-server templates, custom Python tools are code-first. Write them with the framework's native
+decorator in `agent/tools/`: LangGraph uses `@tool`, while OpenAI Agents uses `@function_tool`. The
+templates auto-discover decorated tools from that package and add them to the agent; there is no CLI
+command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are likewise ordinary
+code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
+`mcp_servers(...)`.
+
+Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
+bindings from `agent.toml`, so `mason tools add` rejects those projects. Wire framework-native Python
+tools and MCP servers directly in `agent/agent.py` instead.
+
+If an older Mason-server manifest contains `source = { kind = "python", ... }`, remove that
+`[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy`
+do not generate or patch Python tool code, and do not alter the manifest's `[[tools]]` bindings.
 
 Sandbox scopes default to read-only access. Repeat `--scope` to allow more than one resource, use
 `volume:` or `workspace:` for those resource types, and use `--permission read_write` only when the

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import pathlib
 import re
-import tempfile
-from importlib import resources
 from typing import Any
 
 import click
@@ -14,9 +11,7 @@ import click
 from databricks_mason import render
 from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
 from databricks_mason.errors import AgentCliError
-
-_PYTHON_TOOL_TEMPLATE = "python_tool_langgraph.py"
-_PYTHON_TEST_TEMPLATE = "python_tool_test.py"
+from databricks_mason.project_config import require_managed_tool_support
 
 
 def _identifier(value: str) -> str:
@@ -42,7 +37,7 @@ def _source_value(spec: ToolSpec) -> str:
     # 'system.ai.sandbox' service name that duplicates the KIND column.
     if spec.source.kind == "sandbox" and spec.policy.downscope:
         return ", ".join(s.resource for s in spec.policy.downscope)
-    return spec.source.service or spec.source.function or spec.source.entrypoint or spec.source.kind
+    return spec.source.service or spec.source.function or spec.source.kind
 
 
 def _tool_record(spec: ToolSpec) -> dict[str, str]:
@@ -75,23 +70,13 @@ def _emit_change(
 
 
 def _add_spec(obj: Any, source: pathlib.Path, spec: ToolSpec) -> None:
-    # mcp / uc_function / sandbox are framework-neutral agent.toml entries — every runtime adapter
-    # reads them from the manifest — so they are added regardless of framework. Only `add python`
-    # scaffolds framework-specific code (see add_python) and is gated separately.
+    # MCP / UC-function / sandbox bindings are framework-neutral agent.toml entries. Both Mason
+    # server runtime adapters read them; custom-server projects wire tools directly in agent code.
     project = AgentProject.load(source)
+    require_managed_tool_support(project.root)
     changed = project.add_tool(spec)
     changed_files = [project.write()] if changed else []
     _emit_change(obj, project, spec, changed_files)
-
-
-def _require_python_tool_support(project: AgentProject) -> None:
-    # `tools add python` scaffolds a framework-native tool file; only the LangGraph template is
-    # supported so far (the OpenAI template's tools use @function_tool — a follow-up).
-    if project.framework != "langgraph":
-        raise AgentCliError(
-            f"Mason `tools add python` supports only the 'langgraph' framework; "
-            f"found {project.framework!r}."
-        )
 
 
 def add_sandbox_to_manifest(
@@ -114,69 +99,14 @@ def add_sandbox_to_manifest(
     _add_spec(obj, source, ToolSpec.sandbox(tool_id, scopes=parsed))
 
 
-def _read_template(name: str) -> str:
-    try:
-        return (
-            resources.files("databricks_mason")
-            .joinpath("templates")
-            .joinpath(name)
-            .read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError) as exc:
-        raise AgentCliError(f"Could not read packaged Python tool template {name!r}.") from exc
-
-
-def _render_python_template(name: str, *, module: str, function: str) -> str:
-    return (
-        _read_template(name)
-        .replace("__MASON_TOOL_MODULE__", module)
-        .replace("__MASON_TOOL_FUNCTION__", function)
-    )
-
-
-def _write_new_files(files: dict[pathlib.Path, str]) -> list[pathlib.Path]:
-    for path in files:
-        if path.exists():
-            raise AgentCliError(f"Refusing to overwrite user-owned file {path}; it already exists.")
-
-    temporary: dict[pathlib.Path, pathlib.Path] = {}
-    created: list[pathlib.Path] = []
-    try:
-        for path, content in files.items():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as output:
-                output.write(content)
-                output.flush()
-                os.fsync(output.fileno())
-                temporary[path] = pathlib.Path(output.name)
-        for target, staged in temporary.items():
-            os.replace(staged, target)
-            created.append(target)
-        return created
-    except OSError as exc:
-        for path in created:
-            path.unlink(missing_ok=True)
-        raise AgentCliError(f"Could not create Python tool scaffold: {exc}.") from exc
-    finally:
-        for staged in temporary.values():
-            staged.unlink(missing_ok=True)
-
-
 @click.group()
 def tools() -> None:
-    """Manage tools configured in an agent project's agent.toml."""
+    """Manage Databricks-managed tools declared in agent.toml."""
 
 
 @tools.group("add")
 def add() -> None:
-    """Add a sandbox, MCP service, UC function, or Python tool.
+    """Add a managed sandbox, MCP service, or UC function.
 
     Subcommands target the current directory by default.
 
@@ -265,72 +195,11 @@ def add_uc_function(
     )
 
 
-@add.command("python")
-@click.argument("name")
-@_source_option
-@click.pass_obj
-def add_python(obj: Any, name: str, source: pathlib.Path) -> None:
-    """Scaffold a framework-native local Python tool and starter test."""
-    _require_arg(name, "tool name")
-    project = AgentProject.load(source)
-    _require_python_tool_support(project)
-    function = _identifier(name)
-    spec = ToolSpec.python(
-        name,
-        entrypoint=f"agent.tools.{function}:{function}",
-    )
-    existing = next((tool for tool in project.tools if tool.id == spec.id), None)
-    source_path = project.root / "agent" / "tools" / f"{function}.py"
-    test_path = project.root / "tests" / "tools" / f"test_{function}.py"
-    if existing == spec:
-        # Manifest already declares this tool; recreate any scaffold files that went
-        # missing (deleted by the user) rather than silently no-op'ing.
-        missing = {}
-        if not source_path.exists():
-            missing[source_path] = _render_python_template(
-                _PYTHON_TOOL_TEMPLATE, module=function, function=function
-            )
-        if not test_path.exists():
-            missing[test_path] = _render_python_template(
-                _PYTHON_TEST_TEMPLATE, module=function, function=function
-            )
-        recreated = _write_new_files(missing) if missing else []
-        _emit_change(obj, project, spec, recreated)
-        return
-    if source_path.exists() or test_path.exists():
-        existing_path = source_path if source_path.exists() else test_path
-        raise AgentCliError(
-            f"Refusing to overwrite user-owned file {existing_path}; it already exists."
-        )
-
-    project.add_tool(spec)
-    files = {
-        source_path: _render_python_template(
-            _PYTHON_TOOL_TEMPLATE,
-            module=function,
-            function=function,
-        ),
-        test_path: _render_python_template(
-            _PYTHON_TEST_TEMPLATE,
-            module=function,
-            function=function,
-        ),
-    }
-    created = _write_new_files(files)
-    try:
-        project.write()
-    except AgentCliError:
-        for path in created:
-            path.unlink(missing_ok=True)
-        raise
-    _emit_change(obj, project, spec, [project.path, *created])
-
-
 @tools.command("list")
 @_source_option
 @click.pass_obj
 def list_tools(obj: Any, source: pathlib.Path) -> None:
-    """List tools configured for this agent."""
+    """List managed tool bindings for this agent."""
     project = AgentProject.load(source)
     rows = [_tool_record(spec) for spec in project.tools]
     if getattr(obj, "output", "text") == "json":
@@ -354,7 +223,7 @@ def remove_tool(
     mcp_service: str | None,
     source: pathlib.Path,
 ) -> None:
-    """Remove a tool binding from this agent."""
+    """Remove a managed tool binding from this agent."""
     project = AgentProject.load(source)
     if mcp_service is not None:
         if tool_id != "mcp":

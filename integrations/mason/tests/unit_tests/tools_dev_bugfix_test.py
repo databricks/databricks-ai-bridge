@@ -1,4 +1,4 @@
-"""Unit tests for the tools/dev ergonomics fixes (ML-69251/69254/69255/69256/69258)."""
+"""Unit tests for the tools/dev ergonomics fixes (ML-69254/69255/69256/69258)."""
 
 from __future__ import annotations
 
@@ -36,29 +36,6 @@ def test_add_mcp_empty_service_is_rejected_clearly(tmp_path):
     assert "managed MCP service name" in result.output and "is required" in result.output
     # Not the cryptic identifier error.
     assert "Could not derive a Python identifier" not in result.output
-
-
-def test_add_python_empty_name_is_rejected_clearly(tmp_path):
-    project = _project(tmp_path)
-    result = CliRunner().invoke(tools, ["add", "python", "", "--source", str(project)], obj=_Ctx())
-    assert result.exit_code != 0
-    assert "tool name is required" in result.output
-
-
-# --- ML-69251: idempotency (recreate missing scaffold files) -----------------
-
-
-def test_add_python_recreates_deleted_scaffold_file(tmp_path):
-    project = _project(tmp_path)
-    r1 = CliRunner().invoke(tools, ["add", "python", "greet", "--source", str(project)], obj=_Ctx())
-    assert r1.exit_code == 0, r1.output
-    tool_file = project / "agent" / "tools" / "greet.py"
-    assert tool_file.exists()
-
-    tool_file.unlink()  # user deletes the scaffold file
-    r2 = CliRunner().invoke(tools, ["add", "python", "greet", "--source", str(project)], obj=_Ctx())
-    assert r2.exit_code == 0, r2.output
-    assert tool_file.exists(), "re-running add python should recreate the missing scaffold file"
 
 
 # --- ML-69258: tools list shows sandbox scopes in SOURCE ---------------------

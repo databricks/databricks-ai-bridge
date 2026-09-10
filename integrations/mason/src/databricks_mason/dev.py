@@ -19,6 +19,7 @@ from databricks_mason import render
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.deploy import (
+    _load_project,
     _upsert_manifest_env,
     mlflow_tracing_config,
     resolve_trace_experiment_id,
@@ -26,7 +27,11 @@ from databricks_mason.deploy import (
     validate_stores,
 )
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import load_project_metadata
+from databricks_mason.project_config import (
+    is_custom_server_template,
+    load_project_metadata,
+    require_managed_tool_support,
+)
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -82,11 +87,26 @@ def dev(
             hint="Run from a scaffolded project, or pass --source <dir> (see `mason init`).",
         )
 
+    project = _load_project(source_dir)
+    if project is not None and project.tools:
+        require_managed_tool_support(source_dir)
+
     # Validate the agent.toml store bindings and wire tracing into app.yaml. Stores are read from
     # agent.toml at runtime (not written here); tracing is on by default, so resolve/create the
     # per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set up
     # (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
+    # `mason dev` never provisions stores (unlike `mason deploy`); warn so the missing durability /
+    # long-term memory isn't a silent surprise.
+    if not memory_store:
+        render.warning(
+            "No memory store bound — long-term memory is disabled. Run 'mason memory bind <name>'."
+        )
+    if not session_store:
+        render.warning(
+            "No session store bound — conversation history is in-memory (not durable). "
+            "Run 'mason sessions bind <name>'."
+        )
     env_updates: dict[str, str] = {}
     # Stores legitimately require auth, so build the client eagerly only when stores are bound.
     if memory_store or session_store:
@@ -147,13 +167,22 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
+    try:
+        template = load_project_metadata(source_dir).template
+    except AgentCliError:
+        template = None
+    tool_step: str | tuple[str, str] = (
+        "Edit agent/agent.py to give the agent a tool"
+        if is_custom_server_template(template)
+        else ("mason tools add mcp <service>", "Give the agent a tool")
+    )
     if (source_dir / "runtime" / "ui.py").is_file():
         render.success(
             "Starting agent",
             fields={"Chat UI": base},
             next_steps=[
                 f"Open {base} to chat with your agent",
-                ("mason tools add mcp <service>", "Give the agent a tool"),
+                tool_step,
                 ("mason memory bind <store>", "Attach a memory / session store"),
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
@@ -164,10 +193,6 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             durable = AgentProject.load(source_dir).durability_enabled
         except AgentCliError:
             durable = False
-        try:
-            template = load_project_metadata(source_dir).template
-        except AgentCliError:
-            template = None
         uses_runtime_api = durable or template in {"agent-langgraph", "agent-openai"}
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
@@ -182,7 +207,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
             fields={"Invoke": f"POST {endpoint}"},
             next_steps=[
                 (sample, "Send a test request"),
-                ("mason tools add mcp <service>", "Give the agent a tool"),
+                tool_step,
                 (f"mason deploy {deploy_name}", "Deploy it to Databricks"),
             ],
         )

@@ -20,7 +20,12 @@ from typing import Any
 
 from databricks_openai.agents import McpServer
 
-from databricks_mason.runtime.tool_manifest import ToolRecord, downscope_wire, load_tools
+from databricks_mason.runtime.tool_manifest import (
+    ToolManifestError,
+    ToolRecord,
+    downscope_wire,
+    load_tools,
+)
 from databricks_mason.runtime.workspace import workspace_client
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,8 @@ async def mcp_servers(extra_servers: list[McpServer] | None = None) -> list[McpS
     """
     try:
         return [*_declared_servers(), *(extra_servers or [])]
+    except ToolManifestError:
+        raise
     except Exception:
         logger.warning("Failed to build MCP servers; continuing without them.", exc_info=True)
         return []

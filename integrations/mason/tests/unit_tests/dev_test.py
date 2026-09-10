@@ -10,8 +10,9 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason import dev as dev_mod
-from databricks_mason.agent_project import AgentProject
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 
 class _Ctx:
@@ -265,6 +266,102 @@ def test_dev_announces_api_endpoint_when_no_ui(tmp_path: pathlib.Path):
     assert "curl -X POST" in " ".join(result.output.split())
 
 
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
+def test_dev_custom_server_recommends_wiring_tools_in_agent_code(
+    tmp_path: pathlib.Path,
+    framework: str,
+    template: str,
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    AgentProject.create(tmp_path, framework=framework).write()
+    write_project_metadata(tmp_path, framework=framework, template=template)
+
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    output = " ".join(result.output.split())
+    assert "agent/agent.py" in output
+    assert "mason tools add" not in output
+
+
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
+def test_dev_rejects_custom_server_manifest_tools_before_starting(
+    tmp_path: pathlib.Path,
+    framework: str,
+    template: str,
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    project = AgentProject.create(tmp_path, framework=framework)
+    project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
+    project.write()
+    write_project_metadata(tmp_path, framework=framework, template=template)
+    manifest = tmp_path / "agent.toml"
+    before = manifest.read_text(encoding="utf-8")
+    ctx = _Ctx()
+
+    with (
+        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(ctx, "client") as client,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
+
+    assert result.exit_code != 0
+    assert "require a Mason server template" in " ".join(result.output.split())
+    assert manifest.read_text(encoding="utf-8") == before
+    client.assert_not_called()
+    db.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
+def test_dev_surfaces_invalid_custom_server_manifest_before_starting(
+    tmp_path: pathlib.Path,
+    framework: str,
+    template: str,
+):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\n'
+        '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
+        'entrypoint = "agent.tools:legacy" }\n',
+        encoding="utf-8",
+    )
+    write_project_metadata(tmp_path, framework=framework, template=template)
+    ctx = _Ctx()
+
+    with (
+        mock.patch.object(dev_mod, "_databricks") as db,
+        mock.patch.object(ctx, "client") as client,
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=ctx)
+
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "Python tools are code-first" in output
+    assert "framework-native agent code" in output
+    assert "remain active" not in output
+    client.assert_not_called()
+    db.assert_not_called()
+
+
 def test_dev_announces_durable_api_endpoint(tmp_path: pathlib.Path):
     (tmp_path / "app.yaml").write_text("command: []\n")
     AgentProject.create(
@@ -313,3 +410,29 @@ def test_dev_runs_from_project_containing_directly_edited_agent_manifest(
     assert result.exit_code == 0, result.output
     assert db.call_args.kwargs["cwd"] == str(tmp_path)
     assert manifest.read_text() == 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+
+
+def test_dev_warns_when_stores_unbound(tmp_path: pathlib.Path):
+    # `mason dev` never provisions stores (unlike deploy); it warns so the gap isn't silent.
+    (tmp_path / "app.yaml").write_text("command: []\n")  # no agent.toml -> both unbound
+    with mock.patch.object(dev_mod, "_databricks"):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "No memory store bound" in result.output
+    assert "No session store bound" in result.output
+
+
+def test_dev_silent_when_stores_bound(tmp_path: pathlib.Path):
+    (tmp_path / "app.yaml").write_text("command: []\n")
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+        '\n[memory_store]\nname = "mem"\n\n[session_store]\nname = "sess"\n'
+    )
+    with (
+        mock.patch.object(dev_mod, "_databricks"),
+        mock.patch.object(dev_mod, "validate_stores"),
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
+    assert result.exit_code == 0, result.output
+    assert "No memory store bound" not in result.output
+    assert "No session store bound" not in result.output

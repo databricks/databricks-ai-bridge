@@ -111,7 +111,6 @@ class ToolSource:
     kind: str
     service: str | None = None
     function: str | None = None
-    entrypoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -151,15 +150,10 @@ class ToolSpec:
             if self.policy.downscope:
                 raise AgentCliError("UC function tools do not accept sandbox scopes.")
         elif kind == "python":
-            entrypoint = self.source.entrypoint or ""
-            module, separator, callable_name = entrypoint.partition(":")
-            if not separator or not module or not callable_name.isidentifier():
-                raise AgentCliError(
-                    f"Invalid Python tool entrypoint {entrypoint!r}.",
-                    hint="Use module.path:callable_name.",
-                )
-            if self.policy.downscope:
-                raise AgentCliError("Python tools do not accept sandbox scopes.")
+            raise AgentCliError(
+                "Python tools are code-first and cannot be declared in agent.toml.",
+                hint="Remove this entry and wire the tool through framework-native agent code.",
+            )
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")
 
@@ -185,13 +179,6 @@ class ToolSpec:
         return cls(
             id=tool_id,
             source=ToolSource(kind="uc_function", function=function),
-        )
-
-    @classmethod
-    def python(cls, tool_id: str, *, entrypoint: str) -> "ToolSpec":
-        return cls(
-            id=tool_id,
-            source=ToolSource(kind="python", entrypoint=entrypoint),
         )
 
 
@@ -268,9 +255,6 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             kind=kind,
             service=source.get("service") if isinstance(source.get("service"), str) else None,
             function=source.get("function") if isinstance(source.get("function"), str) else None,
-            entrypoint=source.get("entrypoint")
-            if isinstance(source.get("entrypoint"), str)
-            else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
@@ -287,7 +271,7 @@ def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
     source_values = {"kind": spec.source.kind}
-    for key in ("service", "function", "entrypoint"):
+    for key in ("service", "function"):
         value = getattr(spec.source, key)
         if value is not None:
             source_values[key] = value
@@ -463,7 +447,7 @@ class AgentProject:
 
             def _summary(s: ToolSpec) -> str:
                 src = s.source
-                return src.service or src.function or src.entrypoint or src.kind
+                return src.service or src.function or src.kind
 
             raise AgentCliError(
                 f"Tool id {spec.id!r} already exists with a different configuration "
