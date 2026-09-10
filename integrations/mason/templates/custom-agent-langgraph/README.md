@@ -3,6 +3,9 @@
 This template shows how to serve a LangGraph agent with an ordinary FastAPI application. It does
 not use Mason's `AgentApp` HTTP server or durable runtime.
 
+This template does not load managed tool bindings from `agent.toml`, so `mason tools add` is not
+supported. Wire framework-native Python tools and MCP servers directly in `agent/agent.py`.
+
 ```bash
 mason dev
 ```

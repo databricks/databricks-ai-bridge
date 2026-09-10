@@ -208,6 +208,9 @@ def test_init_custom_server_uses_minimal_template(
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
     assert "durability" not in manifest
+    with (dest / ".mason" / "project.toml").open("rb") as config_file:
+        config = tomli.load(config_file)
+    assert config["template"] == f"custom-agent-{framework}"
     assert "Custom FastAPI" in result.output
     assert "Chat app" not in result.output
 

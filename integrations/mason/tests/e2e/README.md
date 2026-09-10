@@ -30,9 +30,10 @@ The template repo/ref flags make `mason init` read the exact checkout under test
 clone throttling; provide both or omit both to test the default upstream template.
 
 Direct authoring does not call `mason tools add`: it replaces `agent.toml` with
-`fixtures/direct_agent.toml` and creates the user-owned Python tool file. CLI authoring invokes all
-four `mason tools add ...` commands, then implements the generated Python stub. Every exact command
-and generated-file step is captured in `commands.log`.
+`fixtures/direct_agent.toml`. CLI authoring invokes the three managed `mason tools add ...`
+commands. Both paths then create the same user-owned, framework-native Python tool file with no
+Python entry in `agent.toml`. Every exact command and code-authoring step is captured in
+`commands.log`.
 
 The CLI path first adds an unavailable MCP service and removes it by ID. The subsequent dev and
 deployed tool matrix proves the recovered manifest no longer bricks agent startup.

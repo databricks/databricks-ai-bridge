@@ -12,7 +12,9 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
+from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
+from databricks_mason.project_config import write_project_metadata
 
 # The autouse fixture below stubs `resolve_trace_experiment_id` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
@@ -155,6 +157,92 @@ def _write_agent_manifest(
     if durability:
         body += "\n[durability]\nenabled = true\n"
     (source / "agent.toml").write_text(body)
+
+
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
+def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
+    tmp_path: pathlib.Path,
+    framework: str,
+    template: str,
+):
+    source = tmp_path / template
+    source.mkdir()
+    (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    project = AgentProject.create(source, framework=framework)
+    project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
+    project.write()
+    write_project_metadata(source, framework=framework, template=template)
+    manifest = source / "agent.toml"
+    before = manifest.read_text(encoding="utf-8")
+    ctx = _FakeCtx()
+
+    with (
+        mock.patch.object(deploy_mod, "_databricks") as db,
+        mock.patch.object(ctx, "client") as client,
+    ):
+        result = CliRunner().invoke(
+            deploy_mod.deploy,
+            ["custom", "--source", str(source)],
+            obj=ctx,
+        )
+
+    assert result.exit_code != 0
+    assert "require a Mason server template" in " ".join(result.output.split())
+    assert manifest.read_text(encoding="utf-8") == before
+    client.assert_not_called()
+    db.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("framework", "template"),
+    [
+        ("langgraph", "custom-agent-langgraph"),
+        ("openai", "custom-agent-openai"),
+    ],
+)
+def test_deploy_surfaces_invalid_custom_server_manifest_before_mutation_or_network(
+    tmp_path: pathlib.Path,
+    framework: str,
+    template: str,
+):
+    source = tmp_path / template
+    source.mkdir()
+    (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    manifest = source / "agent.toml"
+    manifest.write_text(
+        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\n'
+        '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
+        'entrypoint = "agent.tools:legacy" }\n',
+        encoding="utf-8",
+    )
+    write_project_metadata(source, framework=framework, template=template)
+    before = manifest.read_text(encoding="utf-8")
+    ctx = _FakeCtx()
+
+    with (
+        mock.patch.object(deploy_mod, "_databricks") as db,
+        mock.patch.object(ctx, "client") as client,
+    ):
+        result = CliRunner().invoke(
+            deploy_mod.deploy,
+            ["custom", "--source", str(source)],
+            obj=ctx,
+        )
+
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "Python tools are code-first" in output
+    assert "framework-native agent code" in output
+    assert "remain active" not in output
+    assert manifest.read_text(encoding="utf-8") == before
+    client.assert_not_called()
+    db.assert_not_called()
 
 
 def test_deploy_drives_sync_and_apps_deploy(tmp_path: pathlib.Path, monkeypatch):

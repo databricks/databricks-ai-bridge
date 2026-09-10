@@ -15,8 +15,3 @@ source = { kind = "mcp", service = "system.ai.web_search" }
 [[tools]]
 id = "mason_uc_marker"
 source = { kind = "uc_function", function = "__UC_FUNCTION__" }
-
-[[tools]]
-id = "matrix-marker"
-source = { kind = "python", entrypoint = "agent.tools.matrix_marker:matrix_marker" }
-
