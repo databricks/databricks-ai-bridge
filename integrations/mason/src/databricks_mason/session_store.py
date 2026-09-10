@@ -137,6 +137,14 @@ class SessionStore:
     def get(self, session_id: str) -> Session:
         return self._client._get_session(self, session_id=session_id)
 
+    def grant_permission(self, principal_id: str, *, permission: str = "WRITE") -> None:
+        """Grant a service principal READ/WRITE access to this session store.
+
+        ``principal_id`` is the service principal's application (client) id. The grant is applied
+        server-side, so the caller needs neither store ownership nor Lakebase MANAGE.
+        """
+        self._client._grant_permission(self, principal_id, permission=permission)
+
 
 class SessionStores:
     def __init__(self, api: _MasonApiClient):
@@ -191,6 +199,9 @@ class SessionStores:
 
     def _delete_store(self, store: SessionStore) -> None:
         self._api.delete_session_store(store.name)
+
+    def _grant_permission(self, store: SessionStore, principal_id: str, *, permission: str) -> None:
+        self._api.grant_session_store_permission(store.name, principal_id, permission=permission)
 
     def _add_session(
         self,

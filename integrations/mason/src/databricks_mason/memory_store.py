@@ -156,6 +156,14 @@ class MemoryStore:
             read_mask=read_mask,
         )
 
+    def grant_permission(self, principal_id: str, *, permission: str = "WRITE") -> None:
+        """Grant a service principal READ/WRITE access to this memory store.
+
+        ``principal_id`` is the service principal's application (client) id. The grant is applied
+        server-side, so the caller needs neither store ownership nor Lakebase MANAGE.
+        """
+        self._client._grant_permission(self, principal_id, permission=permission)
+
 
 class MemoryStores:
     def __init__(self, api: _MasonApiClient):
@@ -205,6 +213,9 @@ class MemoryStores:
 
     def _delete_store(self, store: MemoryStore) -> None:
         self._api.delete_memory_store(store.id)
+
+    def _grant_permission(self, store: MemoryStore, principal_id: str, *, permission: str) -> None:
+        self._api.grant_memory_store_permission(store.id, principal_id, permission=permission)
 
     def _add_memory(
         self,
