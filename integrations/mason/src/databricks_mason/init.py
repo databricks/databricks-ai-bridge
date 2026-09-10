@@ -44,6 +44,11 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "ref": "main",
         "path": "integrations/mason/templates/agent-langgraph",
     },
+    "claude": {
+        "repo": _MASON_REPO,
+        "ref": "main",
+        "path": "integrations/mason/templates/agent-claude",
+    },
 }
 
 _CUSTOM_SERVER_TEMPLATES: dict[str, dict[str, str]] = {

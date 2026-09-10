@@ -23,7 +23,7 @@ TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
 _DURABILITY_TABLE = "durability"
-_SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
+_SUPPORTED_FRAMEWORKS = {"langgraph", "openai", "claude"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
