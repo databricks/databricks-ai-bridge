@@ -1,11 +1,9 @@
-"""Unit tests for the store-access grant plumbing (postgres resource + owner-issued GRANT)."""
+"""Unit tests for the store-access resource plumbing (postgres app resource)."""
 
 from __future__ import annotations
 
 import json
 import types
-
-import psycopg
 
 from databricks_mason import lakebase_durability_store, memory_store_access, session_store_access
 from databricks_mason import store_access as sa
@@ -71,70 +69,3 @@ def test_session_store_update_preserves_dedicated_durability_resource(monkeypatc
         "postgres-durability",
         "postgres",
     }
-
-
-class _FakeConn:
-    """Stand-in for a psycopg connection: records the connect kwargs and executed SQL."""
-
-    def __init__(self, captured):
-        self._captured = captured
-
-    def execute(self, sql):
-        # store_access encodes the composed GRANT to bytes; decode so assertions read as text.
-        self._captured["sql"] = sql.decode() if isinstance(sql, bytes) else sql
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def test_grant_tables_runs_scoped_grant_over_psycopg(monkeypatch):
-    monkeypatch.setattr(sa, "_resolve_pg_host", lambda b, p: "ep-x.databricks.com")
-    monkeypatch.setattr(sa, "_mint_token", lambda b, p: "tok")
-    captured = {}
-
-    def fake_connect(**kwargs):
-        captured["connect"] = kwargs
-        return _FakeConn(captured)
-
-    monkeypatch.setattr(sa.psycopg, "connect", fake_connect)
-
-    err = sa.grant_tables(memory_store_access.backend("memory-x"), "sp-1", "me@x.com", "prof")
-
-    assert err is None
-    assert captured["connect"]["dbname"] == "memory-x"  # connects to the per-store database
-    assert captured["connect"]["password"] == "tok"
-    assert captured["connect"]["user"] == "me@x.com"
-    assert captured["connect"]["autocommit"] is True  # DDL applies without an explicit commit
-    sql = captured["sql"]
-    # tables are schema-qualified so the SP's search_path doesn't matter.
-    assert 'ON memory.memory_entries TO "sp-1"' in sql
-    assert "USAGE ON SCHEMA memory" in sql
-
-
-def test_grant_tables_reports_connection_error(monkeypatch):
-    monkeypatch.setattr(sa, "_resolve_pg_host", lambda b, p: "ep-x.databricks.com")
-    monkeypatch.setattr(sa, "_mint_token", lambda b, p: "tok")
-
-    def fake_connect(**kwargs):
-        raise psycopg.OperationalError("connection refused")
-
-    monkeypatch.setattr(sa.psycopg, "connect", fake_connect)
-    err = sa.grant_tables(session_store_access.backend("s"), "sp", "me@x.com", "prof")
-    assert err is not None and "connection refused" in err
-
-
-def test_resolve_pg_host_reads_endpoint(monkeypatch):
-    endpoint_json = json.dumps({"status": {"hosts": {"host": "ep-plain.databricks.com"}}})
-    monkeypatch.setattr(
-        sa,
-        "_databricks",
-        lambda args, profile, **kw: types.SimpleNamespace(
-            returncode=0, stdout=endpoint_json, stderr=""
-        ),
-    )
-    assert (
-        sa._resolve_pg_host(session_store_access.backend("s"), "prof") == "ep-plain.databricks.com"
-    )

@@ -1,16 +1,12 @@
-"""Shared Lakebase access plumbing for granting a deployed app's service principal store access.
+"""Lakebase/Apps resource plumbing for a deployed app.
 
-A managed store (session or memory) is backed by a per-store Lakebase database in a shared,
-service-managed project. The store's tables are owned by whoever created the store (the deploying
-user), so giving the deployed app's service principal access takes TWO steps:
-  1. a `postgres` app resource so the SP gets a Lakebase role and CONNECT on the database, and
-  2. a table GRANT (issued over a Postgres connection as the store owner) so the SP can read/write
-     the tables.
-With only (1) the SP connects but hits "permission denied" on the tables; with only (2) it can't
-connect at all. Both are best-effort — deploy proceeds and reports if either step can't be applied.
+Binds Databricks Apps resources onto an app so its service principal gets the platform-managed
+grant: a `postgres` `database` resource for the durable runtime's Lakebase (see
+`lakebase_durability_store`) and the tracing `experiment` resource.
 
-This module holds the store-agnostic mechanics; `session_store_access` and `memory_store_access`
-supply the per-store project/schema/table specifics.
+Managed-store (session/memory) table access is NOT granted here. The deployed app reaches those
+stores over the conversation-store REST API, which grants the app's service principal read/write
+server-side (see `deploy._grant_store_access`), so no direct Lakebase grant is needed.
 """
 
 from __future__ import annotations
@@ -18,8 +14,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Optional
-
-import psycopg
 
 from databricks_mason.databricks_cli import _databricks
 
@@ -129,82 +123,3 @@ def apply_postgres_resources(
     if result.returncode == 0:
         return None
     return (result.stderr or result.stdout or "").strip() or "unknown error"
-
-
-def _resolve_pg_host(backend: LakebaseBackend, profile: Optional[str]) -> Optional[str]:
-    """Read the backend branch's read-write endpoint host, or None if it can't be resolved."""
-    result = _databricks(
-        ["postgres", "get-endpoint", backend.endpoint_path, "-o", "json"],
-        profile,
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        hosts = json.loads(result.stdout).get("status", {}).get("hosts", {})
-    except (json.JSONDecodeError, AttributeError):
-        return None
-    return hosts.get("host") if isinstance(hosts, dict) else None
-
-
-def _mint_token(backend: LakebaseBackend, profile: Optional[str]) -> Optional[str]:
-    """Mint an owner OAuth token for the backend endpoint (used as the psql password)."""
-    result = _databricks(
-        ["postgres", "generate-database-credential", backend.endpoint_path, "-o", "json"],
-        profile,
-        capture=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout).get("token")
-    except json.JSONDecodeError:
-        return None
-
-
-def grant_tables(
-    backend: LakebaseBackend, sp_client_id: str, owner: str, profile: Optional[str]
-) -> Optional[str]:
-    """Grant the app's SP read/write on the backend's tables (owner-issued, over a pg connection).
-
-    Uses psycopg (a bundled dependency) rather than the psql binary so no system Postgres client is
-    required. Returns None on success, or a human-readable reason if the grant couldn't be applied.
-    Deploy proceeds regardless — the app runs, but the store's durable path fails until the SP has
-    access.
-    """
-    host = _resolve_pg_host(backend, profile)
-    if not host:
-        return "could not resolve the store's Lakebase endpoint."
-    token = _mint_token(backend, profile)
-    if not token:
-        return "could not mint a Lakebase credential for the store (need store ownership)."
-
-    # The SP's Postgres role is its application id, verbatim. Qualify tables with their schema (the
-    # SP's search_path may not include it), and add default privileges so tables the service creates
-    # later are covered too.
-    qualified = ", ".join(f"{backend.schema}.{t}" for t in backend.tables)
-    grants = (
-        f'GRANT USAGE ON SCHEMA {backend.schema} TO "{sp_client_id}";'
-        f' GRANT SELECT, INSERT, UPDATE, DELETE ON {qualified} TO "{sp_client_id}";'
-        f" ALTER DEFAULT PRIVILEGES IN SCHEMA {backend.schema}"
-        f' GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{sp_client_id}";'
-    )
-    try:
-        # The password token is scoped to this endpoint; the SP's role name is its client id.
-        with psycopg.connect(
-            host=host,
-            port=5432,
-            dbname=backend.database,
-            user=owner,
-            password=token,
-            sslmode="require",
-            autocommit=True,
-        ) as conn:
-            # Encode to bytes: the GRANT is composed at runtime (not a LiteralString), which the
-            # str overload of execute() rejects; the bytes overload takes a composed query as-is.
-            conn.execute(grants.encode())
-    except psycopg.Error as exc:
-        return str(exc).strip() or "unknown error"
-    return None

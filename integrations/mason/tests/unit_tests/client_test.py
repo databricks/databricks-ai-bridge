@@ -207,6 +207,30 @@ def test_delete_session_with_force(workspace_client):
 
 
 @mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_grant_session_store_permission(workspace_client):
+    c, do = _client(workspace_client)
+    c.grant_session_store_permission("sess-1", "sp-abc")
+    do.assert_called_once_with(
+        "POST",
+        "/api/agents/v1/session-stores/sess-1/permissions:grant",
+        query=None,
+        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "WRITE"},
+    )
+
+
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
+def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_client):
+    c, do = _client(workspace_client)
+    c.grant_memory_store_permission("memory-stores/uuid-x", "sp-abc", permission="READ")
+    do.assert_called_once_with(
+        "POST",
+        "/api/agents/v1/memory-stores/uuid-x/permissions:grant",
+        query=None,
+        body={"principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-abc"}, "permission": "READ"},
+    )
+
+
+@mock.patch("databricks_mason._api_client.WorkspaceClient")
 def test_preview_error_is_mapped_with_hint(workspace_client):
     c, do = _client(workspace_client)
 

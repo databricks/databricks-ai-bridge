@@ -405,6 +405,40 @@ class _MasonApiClient:
     def delete_session_store(self, name: str) -> dict:
         return self._do("DELETE", f"{_BASE}/{session_store_path(name)}")
 
+    # --- store permission grants --------------------------------------------
+
+    def grant_session_store_permission(
+        self, name: str, principal_client_id: str, permission: str = "WRITE"
+    ) -> dict:
+        """Grant a service principal READ/WRITE on a session store.
+
+        The store service performs the underlying Lakebase role provisioning and GRANTs itself, so
+        this succeeds without the caller owning the store or holding MANAGE on its Lakebase.
+        """
+        return self._do(
+            "POST",
+            f"{_BASE}/{session_store_path(name)}/permissions:grant",
+            body={
+                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "permission": permission,
+            },
+            safe_to_retry=True,
+        )
+
+    def grant_memory_store_permission(
+        self, name: str, principal_client_id: str, permission: str = "WRITE"
+    ) -> dict:
+        """Grant a service principal READ/WRITE on a memory store (``name`` is its resource id)."""
+        return self._do(
+            "POST",
+            f"{_BASE}/{memory_store_path(name)}/permissions:grant",
+            body={
+                "principal": {"type": "SERVICE_PRINCIPAL", "name": principal_client_id},
+                "permission": permission,
+            },
+            safe_to_retry=True,
+        )
+
     # --- sessions ------------------------------------------------------------
 
     def create_session(

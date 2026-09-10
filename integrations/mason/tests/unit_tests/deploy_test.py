@@ -12,6 +12,7 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
+from databricks_mason import session_store_access
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
@@ -292,8 +293,10 @@ def test_deploy_creates_with_instance_count(tmp_path: pathlib.Path, monkeypatch)
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kwargs: calls.append((args, kwargs))
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kwargs: (
+            calls.append((args, kwargs))
+            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     result = CliRunner().invoke(
@@ -330,8 +333,10 @@ def test_deploy_updates_existing_instance_count(tmp_path: pathlib.Path, monkeypa
     monkeypatch.setattr(
         deploy_mod,
         "_databricks",
-        lambda args, profile, **kwargs: calls.append((args, kwargs))
-        or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        lambda args, profile, **kwargs: (
+            calls.append((args, kwargs))
+            or types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        ),
     )
 
     result = CliRunner().invoke(
@@ -449,7 +454,7 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, session="sessions")
     selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
-    session_backend = deploy_mod.session_store_access.backend("sessions")
+    session_backend = session_store_access.backend("sessions")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -457,13 +462,6 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
         deploy_mod.lakebase_durability_store,
         "get_or_create_backend",
         lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod.session_store_access,
-        "backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("must not use session store for durability")
-        ),
     )
     monkeypatch.setattr(
         deploy_mod,
@@ -520,7 +518,6 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(deploy_mod, "_memory_store_database", lambda client, store: "memory-db")
     monkeypatch.setattr(
         deploy_mod.lakebase_durability_store,
         "get_or_create_backend",
@@ -867,25 +864,38 @@ def test_resolve_memory_store_returns_none_when_absent():
     assert deploy_mod._resolve_memory_store(_EmptyClient(), "nope") is None
 
 
-def test_memory_store_database_resolves_by_display_name():
-    # The grant step derives the Lakebase db from the store; it must resolve by display name
-    # (list+match), not get_memory_store (by id), or it 404s on the deploy flag's value.
-    class _Client:
-        def list_memory_stores(self, page_size=None, page_token=None):
-            return {
-                "managed_memory_stores": [
-                    {
-                        "name": "memory-stores/uuid-x",
-                        "display_name": "mem",
-                        "storage_backend": {
-                            "backend_id": "projects/p/branches/production/databases/memory-uuidx"
-                        },
-                    }
-                ],
-                "next_page_token": "",
-            }
+def test_grant_store_access_grants_both_stores_via_api(monkeypatch):
+    # Grants go through the managed store API (the store service does the Lakebase grant server-side),
+    # not a direct Lakebase resource attach — so a non-owner/non-admin deployer can still grant.
+    calls = []
 
-    assert deploy_mod._memory_store_database(_Client(), "mem") == "memory-uuidx"
+    class _Client:
+        def grant_session_store_permission(self, name, sp):
+            calls.append(("session", name, sp))
+
+        def grant_memory_store_permission(self, name, sp):
+            calls.append(("memory", name, sp))
+
+    # Memory is granted by resource id, so the display-name binding is resolved first.
+    monkeypatch.setattr(
+        deploy_mod, "_resolve_memory_store", lambda client, name: {"name": "memory-stores/uuid-x"}
+    )
+    err = deploy_mod._grant_store_access(_Client(), "sp-1", "sess-1", "mem-display")
+
+    assert err is None
+    assert calls == [
+        ("session", "sess-1", "sp-1"),
+        ("memory", "memory-stores/uuid-x", "sp-1"),
+    ]
+
+
+def test_grant_store_access_surfaces_api_error(monkeypatch):
+    class _Client:
+        def grant_session_store_permission(self, name, sp):
+            raise AgentCliError("grant failed", hint="the store service refused the grant")
+
+    err = deploy_mod._grant_store_access(_Client(), "sp", "sess-1", None)
+    assert err == "the store service refused the grant"
 
 
 def test_deploy_validates_bound_memory_store_by_display_name(tmp_path: pathlib.Path, monkeypatch):
@@ -1214,16 +1224,17 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     monkeypatch.setattr(
         deploy_mod,
         "_grant_store_access",
-        lambda name, sp, user, session_store, memory_database, profile: (
-            grant_args.update(sp=sp, session_store=session_store, memory_database=memory_database)
-            or None
+        lambda client, sp, session_store, memory_store: (
+            grant_args.update(sp=sp, session_store=session_store, memory_store=memory_store) or None
         ),
     )
 
-    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
+    result = CliRunner().invoke(
+        deploy_mod.deploy, ["myapp", "--source", str(src), "--no-create-stores"], obj=_FakeCtx()
+    )
 
     assert result.exit_code == 0, result.output
     # The grant fired for the bound session store, resolved from agent.toml — no store env in app.yaml.
-    assert grant_args == {"sp": "sp-123", "session_store": "bound-sess", "memory_database": None}
+    assert grant_args == {"sp": "sp-123", "session_store": "bound-sess", "memory_store": None}
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     assert "AGENT_SESSION_STORE" not in {e["name"] for e in env_entries}
