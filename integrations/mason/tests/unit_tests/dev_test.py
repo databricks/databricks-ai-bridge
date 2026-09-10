@@ -192,8 +192,8 @@ def test_dev_runs_offline_when_client_unavailable(tmp_path: pathlib.Path):
 
 
 def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path, monkeypatch):
-    # Tracing is best-effort locally: if provisioning raises (e.g. no mlflow), dev still runs the
-    # agent, just without wiring any MLflow env.
+    # Tracing is best-effort locally: if provisioning raises (e.g. offline / no workspace access),
+    # dev still runs the agent, just without wiring any MLflow env.
     import yaml
 
     from databricks_mason.errors import AgentCliError
@@ -202,7 +202,7 @@ def test_dev_runs_without_traces_when_tracing_setup_fails(tmp_path: pathlib.Path
     (tmp_path / ".venv").mkdir()
 
     def _boom(*a, **k):
-        raise AgentCliError("MLflow is required")
+        raise AgentCliError("could not reach the workspace")
 
     monkeypatch.setattr(dev_mod, "resolve_trace_experiment_id", _boom)
     with mock.patch.object(dev_mod, "_databricks") as db:

@@ -20,12 +20,6 @@ From source:
 pip install 'git+https://github.com/databricks/databricks-ai-bridge.git#subdirectory=integrations/mason'
 ```
 
-For tracing commands, install Mason with tracing extras:
-
-```sh
-pip install 'databricks-mason[tracing]'
-```
-
 For the SDK-hosted durable agent application, install the runtime extra:
 
 ```sh

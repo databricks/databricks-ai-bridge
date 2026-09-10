@@ -11,8 +11,9 @@ experiment app resource), reads traces, and builds the UI link.
 after
 a disable); ``mason tracing disable`` turns tracing off; ``list`` / ``get`` read traces back.
 
-MLflow is an optional dependency: ``configure``/``list``/``get`` and the dev/deploy experiment
-provisioning import it lazily and need ``mlflow[databricks]``; nothing else does.
+MLflow (``mlflow-skinny``) is a base dependency, but ``configure``/``list``/``get`` and the dev/deploy
+experiment provisioning still import it lazily — ``cli.py`` imports this module at startup, so a
+top-level import would pay mlflow's heavy import cost on every ``mason`` command.
 """
 
 from __future__ import annotations
@@ -34,10 +35,6 @@ _TRACES_DIR = "mason-traces"
 TRACES_TRACKING_URI_ENV = "MLFLOW_TRACKING_URI"
 TRACES_EXPERIMENT_ID_ENV = "MLFLOW_EXPERIMENT_ID"
 
-# Installing the `tracing` extra (rather than a bare mlflow) resolves both the missing- and
-# too-old-mlflow cases: the extra carries the version floor `mason tracing` needs.
-_INSTALL_HINT = "Install the tracing extra: pip install 'databricks-mason[tracing]'"
-
 
 def default_experiment_name(user: str, project: Optional[str]) -> str:
     """The per-project experiment path under the user's workspace home (shared by dev and deploy).
@@ -58,16 +55,14 @@ def experiment_url(host: Optional[str], experiment_id: str) -> Optional[str]:
 
 
 def _mlflow():
-    """Import mlflow lazily so the core CLI (and offline wheel) don't depend on it."""
-    try:
-        import mlflow  # noqa: PLC0415 - intentional lazy import
+    """Import mlflow lazily and return the module.
 
-        return mlflow
-    except ImportError as exc:
-        raise AgentCliError(
-            "MLflow is required for `mason tracing` configure/list/get.",
-            hint=_INSTALL_HINT,
-        ) from exc
+    mlflow-skinny is a base dependency, so this can't fail on a correct install; the lazy import
+    exists only to keep it off the CLI startup path (``cli.py`` imports this module eagerly).
+    """
+    import mlflow  # noqa: PLC0415 - intentional lazy import (startup cost, not optionality)
+
+    return mlflow
 
 
 def _set_tracking_uri(mlflow, profile: Optional[str]) -> None:
