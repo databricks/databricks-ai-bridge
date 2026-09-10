@@ -393,11 +393,16 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
         "get_or_create_backend",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
     )
-    monkeypatch.setattr(
-        deploy_mod,
-        "_databricks",
-        lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    deployed_env = None
+
+    def fake_databricks(args, profile, **kwargs):
+        nonlocal deployed_env
+        if args[:2] == ["apps", "deploy"]:
+            manifest = yaml.safe_load((src / "app.yaml").read_text())
+            deployed_env = {entry["name"]: entry["value"] for entry in manifest.get("env", [])}
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
 
     result = CliRunner().invoke(
         deploy_mod.deploy,
@@ -411,6 +416,9 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+    assert deployed_env is not None
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in deployed_env
+    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in deployed_env
 
 
 def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
@@ -467,7 +475,9 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
 
     def fake_databricks(args, profile, **kwargs):
         if args[:2] == ["apps", "deploy"]:
-            events.append(("deploy", args))
+            manifest = yaml.safe_load((src / "app.yaml").read_text())
+            deployed_env = {entry["name"]: entry["value"] for entry in manifest.get("env", [])}
+            events.append(("deploy", deployed_env))
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
@@ -486,6 +496,9 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     assert backend.resource_name != session_backend.resource_name
     assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     assert backend.tables == ()
+    deployed_env = events[1][1]
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == backend.schema
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
