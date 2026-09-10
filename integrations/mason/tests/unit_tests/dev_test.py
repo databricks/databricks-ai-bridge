@@ -41,7 +41,8 @@ def test_dev_prepares_when_no_venv(tmp_path: pathlib.Path):
     assert args[0][:2] == ["apps", "run-local"]
     assert "--env" not in args[0]
     assert "--entry-point" in args[0]
-    assert not (tmp_path / ".mason-dev.app.yaml").exists()
+    assert args[0][args[0].index("--entry-point") + 1] == "app.masondev.yaml"
+    assert not (tmp_path / "app.masondev.yaml").exists()
     assert "--prepare-environment" in args[0]  # no venv yet -> build it
     assert args[1] == "ml"  # profile passed through
     assert kwargs["cwd"] == str(tmp_path)  # runs in the project dir
@@ -132,7 +133,7 @@ def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Pa
     with mock.patch.object(dev_mod, "_databricks", side_effect=RuntimeError("failed")):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code != 0
-    assert not (tmp_path / ".mason-dev.app.yaml").exists()
+    assert not (tmp_path / "app.masondev.yaml").exists()
 
 
 def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.Path):

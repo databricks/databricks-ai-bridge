@@ -31,6 +31,7 @@ from databricks_mason.project_config import load_project_metadata
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
 _LOCAL_RUNTIME_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
+_LOCAL_APP_YAML = "app.masondev.yaml"
 
 # Env vars that pin a package index for the *deployed* Apps build (a cloud-only workaround, see
 # `mason deploy`). They point at an index the deploying environment can reach, which is not
@@ -121,7 +122,8 @@ def dev(
     # Run against a local-only manifest that marks durability as in-memory and removes deploy-only
     # package-index overrides.
     entry_point = _dev_entry_point(app_yaml)
-    args += ["--entry-point", str(entry_point)]
+    # run-local resolves this relative to cwd and rejects an absolute alternate-manifest path.
+    args += ["--entry-point", entry_point.name]
 
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
@@ -210,7 +212,8 @@ def _dev_entry_point(app_yaml: pathlib.Path) -> pathlib.Path:
     ]
     filtered.append({"name": _LOCAL_RUNTIME_ENV, "value": "true"})
     doc["env"] = filtered
-    dev_yaml = app_yaml.parent / ".mason-dev.app.yaml"
+    # The Apps CLI rejects hidden or hyphenated entry-point filenames.
+    dev_yaml = app_yaml.parent / _LOCAL_APP_YAML
     try:
         dev_yaml.write_text(yaml.safe_dump(doc, sort_keys=False))
     except OSError as exc:
