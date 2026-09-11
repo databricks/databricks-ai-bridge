@@ -1,12 +1,11 @@
 """`mason init` — scaffold a local agent project from a mason template.
 
-Fetches one template directory out of its git repo (a sparse, blobless clone so only the
-chosen template is materialized) and drops it into a local target directory, ready for
-`mason deploy --source <dir>`.
+Copies one template bundled in the databricks_mason package into a local target directory, ready
+for `mason deploy --source <dir>`. Because the template ships with the package, the scaffold always
+matches the installed CLI; to try a fork or branch, install that mason and re-run init.
 
 The Mason server is durable by default. Pass `--no-durable-runtime` for process-local background
-state, or `--server custom` for a minimal foreground-only FastAPI server. `--repo` / `--ref`
-override the source, e.g. to pull from a fork or branch before a template has merged.
+state, or `--server custom` for a minimal foreground-only FastAPI server.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import json
 import pathlib
 import shutil
 import subprocess
-import tempfile
+from importlib import resources
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import distribution as _distribution
 from importlib.metadata import version as _installed_version
@@ -24,106 +23,20 @@ from typing import Optional
 import click
 import tomlkit
 
-from databricks_mason import render
+from databricks_mason import mason_source, render
 from databricks_mason.agent_project import AgentProject
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
 
-# Each framework's template has its own home: the git repo, ref, and path-within-repo to fetch.
-# Both basic templates live in this repo, versioned in lockstep with the CLI (see below).
-# `--repo` / `--ref` override the repo/ref here, e.g. to pull from a fork or branch before merge.
-_MASON_REPO = "https://github.com/databricks/databricks-ai-bridge.git"
-_TEMPLATES: dict[str, dict[str, str]] = {
-    "openai": {
-        "repo": _MASON_REPO,
-        "ref": "main",
-        "path": "integrations/mason/templates/agent-openai",
-    },
-    "langgraph": {
-        "repo": _MASON_REPO,
-        "ref": "main",
-        "path": "integrations/mason/templates/agent-langgraph",
-    },
-}
+# Templates ship inside this package (databricks_mason/templates/), so `mason init` always copies
+# the one for the installed CLI — the scaffold can't drift from the databricks-mason it runs
+# against. To try a fork/branch, install that mason (`pip install -e` or `pip install git+…@ref`);
+# init then copies its bundled template and pins the SDK to that same source.
 
-_CUSTOM_SERVER_TEMPLATES: dict[str, dict[str, str]] = {
-    "openai": {
-        "repo": _MASON_REPO,
-        "ref": "main",
-        "path": "integrations/mason/templates/custom-agent-openai",
-    },
-    "langgraph": {
-        "repo": _MASON_REPO,
-        "ref": "main",
-        "path": "integrations/mason/templates/custom-agent-langgraph",
-    },
-}
-
-# Frameworks whose template lives in this repo and is released in lockstep with the CLI: a scaffold
-# they produce pins `databricks-mason[runtime]` at this package's version, so init fetches the
-# template tagged for the installed CLI (see `_template_ref`) rather than `main`. That keeps a
-# user's scaffold from outrunning the `databricks-mason` they have installed.
-_VERSIONED_TEMPLATES = frozenset({"langgraph", "openai"})
-
-# The release workflow tags each published version `databricks-mason-v<version>`.
-_RELEASE_TAG_PREFIX = "databricks-mason-v"
-
-_CHAT_APP_TEMPLATES = {
-    "langgraph": "integrations/mason/templates/ui/agent-langgraph",
-    "openai": "integrations/mason/templates/ui/agent-openai",
-}
-
-
-def _template_ref(framework: str) -> str:
-    """The git ref to fetch a framework's template from, absent a `--ref` override.
-
-    A registry install pins the scaffold's `databricks-mason` at its own version, so fetch the
-    template from the matching `databricks-mason-v<version>` release tag — the template as it
-    shipped with that release — rather than `main`, which may have drifted ahead. Pre-release
-    versions (`0.1.4.dev0`) are tagged like any other release, so they pin too. Fall back to `main`
-    only when no matching tag exists, e.g. a version built and installed locally that was never
-    tagged. Editable and Git installs never reach here — `init` resolves those to their exact
-    source checkout before consulting this.
-    """
-    default_ref = _TEMPLATES[framework]["ref"]
-    if framework not in _VERSIONED_TEMPLATES:
-        return default_ref
-    try:
-        installed = _installed_version("databricks-mason")
-    except PackageNotFoundError:
-        return default_ref
-    tag = f"{_RELEASE_TAG_PREFIX}{installed}"
-    if _remote_ref_exists(_TEMPLATES[framework]["repo"], tag):
-        return tag
-    render.warning(
-        f"No release tag '{tag}' for installed databricks-mason {installed}; scaffolding from "
-        f"'{default_ref}', which may be ahead of your installed package."
-    )
-    return default_ref
-
-
-def _remote_ref_exists(repo: str, tag: str) -> bool:
-    """Whether `tag` exists in `repo`, via a lightweight `git ls-remote` (no clone).
-
-    `git ls-remote --exit-code` exits 0 when the tag is found and 2 when it is genuinely absent (an
-    untagged local build — a legitimate `main` fallback). Any other exit is a real failure (an
-    unreachable remote, auth) that we surface rather than silently treating as "absent" and fetching
-    a possibly-drifted `main`.
-    """
-    result = subprocess.run(
-        ["git", "ls-remote", "--exit-code", "--tags", repo, f"refs/tags/{tag}"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return True
-    if result.returncode == 2:
-        return False
-    raise AgentCliError(
-        f"Could not check for release tag '{tag}'.",
-        hint=(result.stderr or result.stdout or "").strip(),
-    )
+# Framework -> template name (a directory under databricks_mason/templates/).
+_TEMPLATES = {"openai": "agent-openai", "langgraph": "agent-langgraph"}
+_CUSTOM_SERVER_TEMPLATES = {"openai": "custom-agent-openai", "langgraph": "custom-agent-langgraph"}
+_CHAT_APP_TEMPLATES = {"langgraph": "ui/agent-langgraph", "openai": "ui/agent-openai"}
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
@@ -136,20 +49,26 @@ def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.C
     return result
 
 
-def _editable_template_source() -> tuple[str, str] | None:
-    """Return this checkout and commit when Mason is imported from an editable repository."""
+def _editable_checkout_root() -> pathlib.Path | None:
+    """The repo root when Mason is imported from an editable checkout of databricks-ai-bridge.
+
+    True only for a `pip install -e` from a clone of this repo: the running init.py must be the
+    very file tracked in that checkout. A registry (wheel) install lives in site-packages, outside
+    any repo, so this returns None and `init` uses the released tag / `main` instead. This is what
+    turns on the editable dev loop — templates copied from the working tree, databricks-mason
+    linked back to it — so a Mason developer's uncommitted edits show up without a commit.
+    """
     module = pathlib.Path(__file__).resolve()
     try:
-        repository = pathlib.Path(
+        root = pathlib.Path(
             (_git(["rev-parse", "--show-toplevel"], cwd=module.parent).stdout or "").strip()
         ).resolve()
     except AgentCliError:
         return None
-    source_module = repository / "integrations" / "mason" / "src" / "databricks_mason" / "init.py"
+    source_module = root / "integrations" / "mason" / "src" / "databricks_mason" / "init.py"
     if not source_module.is_file() or source_module.resolve() != module:
         return None
-    commit = (_git(["rev-parse", "HEAD"], cwd=repository).stdout or "").strip()
-    return (repository.as_uri(), commit) if commit else None
+    return root
 
 
 def _installed_git_template_source() -> tuple[str, str] | None:
@@ -174,46 +93,33 @@ def _installed_git_template_source() -> tuple[str, str] | None:
     return repository, commit
 
 
-def _fetch_template(
-    repo: str,
-    ref: str,
-    template_dir: str,
+def _copy_packaged_template(
+    name: str,
     dest: pathlib.Path,
-    overlay_dirs: tuple[str, ...] = (),
-) -> str:
-    """Sparse-clone a template and optional overlays from `repo`@`ref` into `dest`."""
-    with tempfile.TemporaryDirectory(prefix="mason-init-") as tmp:
-        clone = pathlib.Path(tmp) / "repo"
-        _git(
-            [
-                "clone",
-                "--depth",
-                "1",
-                "--filter=blob:none",
-                "--sparse",
-                "--no-checkout",
-                repo,
-                str(clone),
-            ]
+    overlay_names: tuple[str, ...] = (),
+) -> None:
+    """Copy a template (and any overlays) bundled in the databricks_mason package into `dest`.
+
+    The templates ship with the package, so a scaffold always matches the installed CLI. For an
+    editable install `resources.files` resolves to the source tree, so a Mason developer's
+    uncommitted template edits are scaffolded too — no git fetch, no version matching.
+    """
+    root = resources.files("databricks_mason").joinpath("templates")
+    for index, rel in enumerate((name, *overlay_names)):
+        src = root.joinpath(*rel.split("/"))
+        if not src.is_dir():
+            raise AgentCliError(f"Template '{rel}' is not bundled in databricks-mason.")
+        shutil.copytree(
+            str(src), dest, dirs_exist_ok=index > 0, ignore=shutil.ignore_patterns("__pycache__")
         )
-        template_dirs = (template_dir, *overlay_dirs)
-        _git(["sparse-checkout", "set", *template_dirs], cwd=clone)
-        _git(["fetch", "--depth", "1", "--filter=blob:none", "origin", ref], cwd=clone)
-        _git(["checkout", "--detach", "FETCH_HEAD"], cwd=clone)
-        for index, path in enumerate(template_dirs):
-            src = clone / path
-            if not src.is_dir():
-                raise AgentCliError(
-                    f"Template '{path}' not found in {repo}@{ref}.",
-                    hint=(
-                        "It may not have merged yet — pass --repo/--ref to target a fork or branch."
-                    ),
-                )
-            shutil.copytree(src, dest, dirs_exist_ok=index > 0)
-        resolved_ref = (_git(["rev-parse", "HEAD"], cwd=clone).stdout or "").strip()
-        if not resolved_ref:
-            raise AgentCliError(f"Could not resolve commit for {repo}@{ref}.")
-        return resolved_ref
+
+
+def _bundled_template_ref() -> str:
+    """A label for the packaged template's origin — the installed databricks-mason version."""
+    try:
+        return f"bundled (databricks-mason {_installed_version('databricks-mason')})"
+    except PackageNotFoundError:
+        return "bundled"
 
 
 def _write_env(dest: pathlib.Path, profile: str) -> bool:
@@ -241,49 +147,46 @@ def _write_env(dest: pathlib.Path, profile: str) -> bool:
     return True
 
 
-def _pin_mason_source(
+def _pin_mason(
     dest: pathlib.Path,
     framework: str,
-    repo: str,
-    ref: str,
+    source: dict,
     *,
     runtime_extra: bool = True,
 ) -> None:
-    """Use the template override's Mason package instead of a registry development build."""
+    """Write databricks-mason's [tool.uv.sources] pin, after checking the template declares it.
+
+    `source` is a pin table built by `mason_source` (git / editable / wheel).
+    """
     pyproject = dest / "pyproject.toml"
     if not pyproject.is_file():
         return
-
-    document = tomlkit.parse(pyproject.read_text())
-    dependencies = document["project"]["dependencies"]
+    dependencies = tomlkit.parse(pyproject.read_text())["project"]["dependencies"]
     extra = "runtime-openai" if framework == "openai" else "runtime"
     expected_prefix = f"databricks-mason[{extra}]" if runtime_extra else "databricks-mason"
     if not any(str(dependency).startswith(expected_prefix) for dependency in dependencies):
         raise AgentCliError(
             "The selected template does not declare the expected databricks-mason dependency."
         )
+    mason_source.write(pyproject, source)
 
-    source = repo.removeprefix("git+")
-    if "://" not in source:
-        source = pathlib.Path(source).resolve().as_uri()
-    if "tool" not in document:
-        document["tool"] = tomlkit.table()
-    tool = document["tool"]
-    if "uv" not in tool:
-        tool["uv"] = tomlkit.table()
-    uv = tool["uv"]
-    if "sources" not in uv:
-        uv["sources"] = tomlkit.table()
-    runtime_source = tomlkit.inline_table()
-    runtime_source.update(
-        {
-            "git": source,
-            "rev": ref,
-            "subdirectory": "integrations/mason",
-        }
-    )
-    uv["sources"]["databricks-mason"] = runtime_source
-    pyproject.write_text(tomlkit.dumps(document))
+
+def _resolve_mason_pin() -> Optional[dict]:
+    """The scaffold's databricks-mason [tool.uv.sources] pin, or None to keep the template's PyPI pin.
+
+    The template always comes from the installed package; only the SDK source varies by install:
+      - editable checkout (`pip install -e`) → editable-path pin, so a Mason developer's edits show
+        up in `mason dev`;
+      - Git install (`pip install git+…@sha`) → git pin to the recorded commit;
+      - a plain registry install → None.
+    """
+    checkout = _editable_checkout_root()
+    if checkout is not None:
+        return mason_source.editable(checkout / "integrations" / "mason")
+    git_install = _installed_git_template_source()
+    if git_install is not None:
+        return mason_source.git(*git_install)
+    return None
 
 
 @click.command(name="init")
@@ -324,8 +227,6 @@ def _pin_mason_source(
     hidden=True,
     help="Deprecated: the chat app is included by default; this flag is a no-op.",
 )
-@click.option("--repo", default=None, help="Override the git repo URL to fetch the template from.")
-@click.option("--ref", default=None, help="Override the branch, tag, or ref to fetch.")
 @click.pass_obj
 def init(
     obj,
@@ -336,8 +237,6 @@ def init(
     profile: Optional[str],
     disable_chat_app: bool,
     enable_chat_app: bool,
-    repo: Optional[str],
-    ref: Optional[str],
 ) -> None:
     """Scaffold a local agent project from a mason template.
 
@@ -358,16 +257,11 @@ def init(
         raise click.UsageError("--no-durable-runtime only applies to --server mason")
     durable_runtime = mason_server and not no_durable_runtime
     templates = _TEMPLATES if mason_server else _CUSTOM_SERVER_TEMPLATES
-    spec = templates[selected_framework]
+    template_name = templates[selected_framework]
     chat_app_enabled = (
         mason_server and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
     )
-    template_path = spec["path"]
-    dest = (
-        pathlib.Path(directory)
-        if directory
-        else pathlib.Path(pathlib.PurePosixPath(template_path).name)
-    )
+    dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
         raise AgentCliError(
@@ -375,31 +269,15 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_dirs = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
-    installed_source = None
-    if repo is None and ref is None:
-        installed_source = _editable_template_source() or _installed_git_template_source()
-    selected_repo = repo or (installed_source[0] if installed_source else spec["repo"])
-    selected_ref = ref or (
-        installed_source[1] if installed_source else _template_ref(selected_framework)
-    )
+    overlay_names = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
+    mason_pin = _resolve_mason_pin()
     try:
-        resolved_ref = _fetch_template(
-            selected_repo,
-            selected_ref,
-            template_path,
-            dest,
-            overlay_dirs,
-        )
-        if repo is not None or ref is not None or installed_source is not None:
-            _pin_mason_source(
-                dest,
-                selected_framework,
-                selected_repo,
-                resolved_ref or selected_ref,
-                runtime_extra=mason_server,
-            )
-        template_name = pathlib.PurePosixPath(template_path).name
+        # Copy the template bundled with the installed CLI, then pin databricks-mason per how that
+        # CLI is installed (editable / git checkout, else the template's own PyPI pin).
+        _copy_packaged_template(template_name, dest, overlay_names)
+        if mason_pin is not None:
+            _pin_mason(dest, selected_framework, mason_pin, runtime_extra=mason_server)
+        template_ref = _bundled_template_ref()
         write_project_metadata(dest, framework=selected_framework, template=template_name)
         project = AgentProject.create(
             dest,
@@ -418,7 +296,7 @@ def init(
             {
                 "framework": selected_framework,
                 "template": template_name,
-                "template_ref": resolved_ref or selected_ref,
+                "template_ref": template_ref,
                 "directory": str(dest),
                 "server": server,
                 "chat_app_enabled": chat_app_enabled,
@@ -428,7 +306,6 @@ def init(
         )
         return
 
-    template_ref = f"{selected_ref} ({resolved_ref[:12]})" if resolved_ref else selected_ref
     fields = {
         "Framework": selected_framework,
         "Server": "Mason AgentApp" if mason_server else "Custom FastAPI",
