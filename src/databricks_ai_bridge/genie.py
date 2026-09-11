@@ -38,6 +38,17 @@ class GenieResponse:
     conversation_id: Optional[str] = None
     suggested_questions: Optional[List[str]] = None
     text_attachment_content: Optional[str] = ""
+    visualizations: Optional[List["GenieVizAttachment"]] = None
+
+
+@dataclass
+class GenieVizAttachment:
+    """A Genie visualization attachment with its rendered PNG content."""
+
+    attachment_id: str
+    query_attachment_id: Optional[str] = None
+    title: Optional[str] = None
+    content: bytes = b""
 
 
 @mlflow_trace(span_type="PARSER")
@@ -196,6 +207,7 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
         "query_attachment": None,
         "text_attachments": [],
         "suggested_questions_attachment": None,
+        "visualization_attachments": [],
     }
 
     attachments = resp.get("attachments") or []
@@ -217,6 +229,8 @@ def _parse_attachments(resp: Dict[str, Any]) -> Dict[str, Any]:
             result["text_attachments"].append(a)
         elif "suggested_questions" in a:
             result["suggested_questions_attachment"] = a
+        elif "viz" in a:
+            result["visualization_attachments"].append(a)
 
     return result
 
@@ -263,6 +277,7 @@ class Genie:
         client: Optional["WorkspaceClient"] = None,
         truncate_results=False,
         return_pandas: bool = False,
+        enable_visualization: bool = False,
     ):
         self.space_id = space_id
         workspace_client = client or WorkspaceClient()
@@ -274,26 +289,64 @@ class Genie:
         }
         self.truncate_results = truncate_results
         self.return_pandas = return_pandas
+        self.enable_visualization = enable_visualization
 
     @mlflow_trace
     def start_conversation(self, content):
+        body = {"content": content}
+        if self.enable_visualization:
+            body["enable_visualization"] = True
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
-            body={"content": content},
+            body=body,
             headers=self.headers,
         )
         return resp
 
     @mlflow_trace
     def create_message(self, conversation_id, content):
+        body = {"content": content}
+        if self.enable_visualization:
+            body["enable_visualization"] = True
         resp = self.genie._api.do(
             "POST",
             f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages",
-            body={"content": content},
+            body=body,
             headers=self.headers,
         )
         return resp
+
+    @mlflow_trace
+    def download_visualization(
+        self,
+        conversation_id: str,
+        message_id: str,
+        attachment: Dict[str, Any],
+    ) -> GenieVizAttachment:
+        """Download a visualization attachment and materialize its PNG bytes."""
+        attachment_id = attachment.get("attachment_id")
+        if not attachment_id:
+            raise ValueError("Visualization attachment is missing attachment_id")
+
+        resp = self.genie._api.do(
+            "GET",
+            f"/api/2.0/genie/spaces/{self.space_id}/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}/download-visualization",
+            headers={"Accept": "application/octet-stream"},
+            raw=True,
+        )
+        contents = resp.get("contents") if isinstance(resp, dict) else resp
+        content = contents.read() if hasattr(contents, "read") else contents
+        if not isinstance(content, bytes):
+            raise TypeError("Visualization download did not return PNG bytes")
+
+        viz = attachment.get("viz") or {}
+        return GenieVizAttachment(
+            attachment_id=attachment_id,
+            query_attachment_id=viz.get("query_attachment_id"),
+            title=viz.get("title"),
+            content=content,
+        )
 
     @mlflow_trace
     def poll_for_result(self, conversation_id, message_id):
@@ -305,6 +358,7 @@ class Genie:
             conversation_id=conversation_id,
             suggested_questions=None,
             text_attachment_content=None,
+            visualizations=None,
         ):
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
@@ -325,6 +379,7 @@ class Genie:
                         returned_conversation_id,
                         suggested_questions,
                         text_attachment_content,
+                        visualizations,
                     )
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
@@ -337,6 +392,7 @@ class Genie:
                         returned_conversation_id,
                         suggested_questions,
                         text_attachment_content,
+                        visualizations,
                     )
             return GenieResponse(
                 f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
@@ -345,6 +401,7 @@ class Genie:
                 conversation_id,
                 suggested_questions,
                 text_attachment_content,
+                visualizations,
             )
 
         @mlflow_trace
@@ -413,6 +470,14 @@ class Genie:
                         text_attachment_content = _extract_text_attachment_content_from_attachments(
                             parsed["text_attachments"]
                         )
+                        visualizations = [
+                            self.download_visualization(
+                                returned_conversation_id or conversation_id,
+                                message_id,
+                                attachment,
+                            )
+                            for attachment in parsed["visualization_attachments"]
+                        ] or None
 
                         if parsed["query_attachment"]:
                             query_obj = parsed["query_attachment"].get("query") or {}
@@ -426,6 +491,7 @@ class Genie:
                                     suggested_questions=suggested_questions,
                                     conversation_id=returned_conversation_id,
                                     text_attachment_content=text_attachment_content,
+                                    visualizations=visualizations,
                                 )
 
                         # if there is no query attachment, use text attachment as result
@@ -434,6 +500,7 @@ class Genie:
                             suggested_questions=suggested_questions,
                             conversation_id=returned_conversation_id,
                             text_attachment_content=text_attachment_content,
+                            visualizations=visualizations,
                         )
 
                     elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
