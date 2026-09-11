@@ -103,6 +103,29 @@ def test_ensure_memory_store_reports_created():
     )
 
 
+@pytest.mark.parametrize(
+    ("pin_toml", "rejected"),
+    [
+        ('[tool.uv.sources]\ndatabricks-mason = { path = "/repo", editable = true }\n', True),
+        ('[tool.uv.sources]\ndatabricks-mason = { git = "file:///repo" }\n', True),
+        (
+            '[tool.uv.sources]\ndatabricks-mason = { git = "https://github.com/x/y", rev = "a" }\n',
+            False,
+        ),
+        ("", False),  # no pin (a plain PyPI dependency)
+    ],
+)
+def test_reject_local_mason_source(tmp_path: pathlib.Path, pin_toml: str, rejected: bool):
+    # A local editable path or a file:// git pin can't be reached by the Apps build, so deploy must
+    # fail fast; a remote git pin or a plain PyPI dependency deploys fine.
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nname = "t"\n\n{pin_toml}')
+    if rejected:
+        with pytest.raises(AgentCliError, match="local checkout"):
+            deploy_mod._reject_local_mason_source(tmp_path)
+    else:
+        deploy_mod._reject_local_mason_source(tmp_path)  # no raise
+
+
 class _FakeClient:
     host = "https://ws"
     current_user = "me@example.com"
