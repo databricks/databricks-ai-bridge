@@ -263,6 +263,25 @@ def test_chat_session_items_exclude_non_message_items():
     }
 
 
+def test_chat_session_items_keep_assistant_tool_call_without_content():
+    # An assistant tool-call turn carries tool_calls but no content. It must survive the
+    # session-items filter so the transcript keeps its "Tool request" bubble on re-hydrate.
+    result = ui._chat_session_items(
+        {
+            "session_items": [
+                {"item_id": "1", "data": {"role": "assistant", "tool_calls": [{"id": "t1"}]}},
+                {"item_id": "2", "data": {"role": "assistant"}},
+            ],
+        }
+    )
+
+    assert result == {
+        "session_items": [
+            {"item_id": "1", "data": {"role": "assistant", "tool_calls": [{"id": "t1"}]}},
+        ],
+    }
+
+
 def _endpoint(name, task="llm/v1/chat", ready="READY"):
     state = type("State", (), {"ready": type("Ready", (), {"value": ready})()})()
     return type("Endpoint", (), {"name": name, "task": task, "state": state})()
