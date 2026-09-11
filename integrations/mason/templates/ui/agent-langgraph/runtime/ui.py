@@ -347,7 +347,9 @@ def _chat_session_items(result: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         data = item.get("data")
-        if not isinstance(data, dict) or data.get("event_type") or "content" not in data:
+        if not isinstance(data, dict) or data.get("event_type") or (
+            "content" not in data and not data.get("tool_calls")
+        ):
             continue
         role = str(data.get("role") or data.get("type") or "").lower()
         if role in _MESSAGE_ROLES:
