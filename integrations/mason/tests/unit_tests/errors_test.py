@@ -73,3 +73,24 @@ def test_non_transient_error_keeps_original_message():
     mapped = wrap_api_error(NotFoundError("store not found"))
     assert mapped.message == "store not found"
     assert mapped.hint is None
+
+
+def test_retry_timeout_surfaces_original_service_error():
+    # When the SDK exhausts its retry budget it raises TimeoutError chaining the last underlying
+    # error; the wrapped error must surface that original service error, not the retry wrapper.
+    class ResourceExhausted(RuntimeError):
+        error_code = "RESOURCE_EXHAUSTED"
+
+    original = ResourceExhausted("Workspace has reached the maximum of 50 managed memory stores")
+    timeout = TimeoutError("Timed out after 0:01:00")
+    timeout.__cause__ = original
+
+    mapped = wrap_api_error(timeout)
+    assert mapped.error_code == "RESOURCE_EXHAUSTED"
+    assert "maximum of 50" in mapped.message
+    assert "Timed out" not in mapped.message
+
+
+def test_retry_timeout_without_cause_falls_through():
+    mapped = wrap_api_error(TimeoutError("Timed out after 0:01:00"))
+    assert "Timed out" in mapped.message
