@@ -28,6 +28,11 @@ _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 _MAX_ATTEMPTS = 2
 _RETRY_BASE_DELAY_S = 0.2
 
+# Bound the SDK's own retry budget (default 300s). The SDK retries every HTTP 429/503 as platform
+# throttling, so an interactive command otherwise hangs up to 5 minutes on a sustained 429 before
+# surfacing anything; cap it so throttling fails fast with a clear error.
+_CLI_RETRY_TIMEOUT_S = 60
+
 
 def _query(**kwargs: Any) -> dict[str, Any]:
     """Build a query dict, dropping None and empty values."""
@@ -92,8 +97,17 @@ def _profile_host(profile: str) -> Optional[str]:
     return parser.get(profile, "host", fallback=None)
 
 
+def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
+    # Shorten the SDK's default 300s retry budget so 429/503 throttling fails in ~1 min, not ~5.
+    try:
+        client.api_client._api_client._retry_timeout_seconds = _CLI_RETRY_TIMEOUT_S
+    except AttributeError:
+        pass
+    return client
+
+
 def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
-    client = WorkspaceClient(profile=profile)
+    client = _bound_retry_timeout(WorkspaceClient(profile=profile))
     if not profile or not client.config.workspace_id:
         return client
 
@@ -103,10 +117,12 @@ def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
         return client
 
     workspace_id = str(client.config.workspace_id)
-    return WorkspaceClient(
-        profile=profile,
-        host=configured_host,
-        custom_headers={"X-Databricks-Org-Id": workspace_id},
+    return _bound_retry_timeout(
+        WorkspaceClient(
+            profile=profile,
+            host=configured_host,
+            custom_headers={"X-Databricks-Org-Id": workspace_id},
+        )
     )
 
 

@@ -317,6 +317,8 @@ def test_profile_auth_is_forwarded_when_multiple_profiles_share_a_host(
         client = _workspace_client("selected")
 
     assert client.config.profile == "selected"
+    # The interactive client caps the SDK's retry budget so throttling fails fast, not after ~5 min.
+    assert client.api_client._api_client._retry_timeout_seconds == 60
 
 
 class _TransientError(RuntimeError):
