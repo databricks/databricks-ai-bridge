@@ -7,8 +7,8 @@ import json
 import re
 from typing import Optional
 
+from databricks_mason.app_resources import LakebaseBackend, _databricks
 from databricks_mason.errors import AgentCliError
-from databricks_mason.store_access import LakebaseBackend, _databricks
 
 _BRANCH = "production"
 _ENDPOINT = "primary"

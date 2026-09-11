@@ -9,9 +9,8 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
+from databricks_mason import app_resources as sa
 from databricks_mason import deploy as deploy_mod
-from databricks_mason import session_store_access
-from databricks_mason import store_access as sa
 from databricks_mason.errors import AgentCliError
 
 
@@ -119,8 +118,16 @@ def test_validate_stores_raises_when_session_store_missing():
 
 
 def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
-    # A real (typed) backend; its postgres_resource() is named "postgres".
-    backend = session_store_access.backend("db-new")
+    # A typed backend whose postgres_resource() is named "postgres".
+    backend = sa.LakebaseBackend(
+        project="p",
+        branch="production",
+        endpoint_id="primary",
+        database="db-new",
+        schema="public",
+        tables=(),
+        resource_name="postgres",
+    )
     existing = {
         "resources": [
             {"name": "sql-warehouse", "sql_warehouse": {"id": "w1"}},  # user-owned, must survive

@@ -24,20 +24,17 @@ import yaml
 
 from databricks_mason import (
     lakebase_durability_store,
-    memory_store_access,
     render,
-    session_store_access,
     timefmt,
+)
+from databricks_mason.app_resources import (
+    apply_experiment_resource,
+    apply_postgres_resources,
 )
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
-from databricks_mason.store_access import (
-    apply_experiment_resource,
-    apply_postgres_resources,
-    grant_tables,
-)
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -244,18 +241,6 @@ def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
     return client.get_session_store(name), False
 
 
-def _memory_store_database(client, memory_store: str) -> Optional[str]:
-    """Resolve the memory store's per-store Lakebase database name from its storage backend.
-
-    Resolves by display name (what the deploy flag carries), not get_memory_store (which is by id).
-    """
-    store = _resolve_memory_store(client, memory_store)
-    if store is None:
-        return None
-    backend_id = field(field(store, "storage_backend") or {}, "backend_id")
-    return memory_store_access.database_from_backend_id(backend_id) if backend_id else None
-
-
 def _load_project(source: pathlib.Path):
     """The AgentProject at `source`, or None when agent.toml is absent."""
     from databricks_mason.agent_project import AgentProject
@@ -406,29 +391,27 @@ def mlflow_tracing_config(experiment_id: str) -> MlflowTracingConfig:
 
 
 def _grant_store_access(
-    app: str,
+    client,
     sp: str,
-    owner: str,
     session_store: Optional[str],
-    memory_database: Optional[str],
-    profile: Optional[str],
+    memory_store: Optional[str],
 ) -> Optional[str]:
-    """Bind managed-store databases and grant the app service principal table access."""
-    backends = []
-    if session_store:
-        backends.append(session_store_access.backend(session_store))
-    if memory_database:
-        backends.append(memory_store_access.backend(memory_database))
-    if not backends:
-        return None
+    """Grant the app's service principal read/write on its bound stores, via the managed store API.
 
-    error = apply_postgres_resources(app, backends, profile)
-    if error:
-        return error
-    for backend in backends:
-        error = grant_tables(backend, sp, owner, profile)
-        if error:
-            return error
+    The conversation-store service owns the (service-managed) store Lakebase, so it provisions the
+    SP's role and runs the GRANTs itself. Unlike a direct Lakebase grant, this needs neither store
+    ownership nor MANAGE on the store's Lakebase project, so it works for non-admin deployers.
+    """
+    try:
+        if session_store:
+            client.grant_session_store_permission(session_store, sp)
+        if memory_store:
+            store = _resolve_memory_store(client, memory_store)
+            if store is None:
+                return f"memory store {memory_store!r} could not be resolved."
+            client.grant_memory_store_permission(field(store, "name"), sp)
+    except AgentCliError as exc:
+        return exc.hint or str(exc)
     return None
 
 
@@ -550,7 +533,6 @@ def deploy(
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
 
-    memory_database = _memory_store_database(client, memory_store) if memory_store else None
     durability_backend = None
     durability_enabled = bool(project and project.durability_enabled)
     if durability_enabled:
@@ -638,7 +620,8 @@ def deploy(
     )
 
     # 6. Grant the app's service principal what it needs to run (best-effort):
-    #    - stores: bind each store DB as a `postgres` resource (CONNECT) + GRANT read/write on tables;
+    #    - stores: grant the SP read/write via the managed store API (the store service does the
+    #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
     #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
     #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
     grants_stores = bool(session_store or memory_store)
@@ -649,9 +632,7 @@ def deploy(
             if sp is None:
                 grant_error = "could not resolve the app's service principal."
             else:
-                grant_error = _grant_store_access(
-                    name, sp, client.current_user, session_store, memory_database, obj.profile
-                )
+                grant_error = _grant_store_access(client, sp, session_store, memory_store)
     trace_grant_error: Optional[str] = None
     if trace_experiment_id:
         with render.status("Granting the app access to its trace experiment…"):

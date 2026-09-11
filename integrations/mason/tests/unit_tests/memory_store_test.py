@@ -75,6 +75,16 @@ def test_bound_store_update_and_delete() -> None:
     api.delete_memory_store.assert_called_once_with(STORE_ID)
 
 
+def test_grant_permission() -> None:
+    client, api = resource_client()
+    api.get_memory_store.return_value = mem_store_payload()
+    store = client.memory_stores.get(STORE_ID)
+
+    store.grant_permission("sp-123", permission="READ")
+
+    api.grant_memory_store_permission.assert_called_once_with(STORE_ID, "sp-123", permission="READ")
+
+
 def test_bound_store_add_memory() -> None:
     client, api = resource_client()
     api.get_memory_store.return_value = mem_store_payload()

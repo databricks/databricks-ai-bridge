@@ -74,6 +74,18 @@ def test_update_and_delete_store() -> None:
     api.delete_session_store.assert_called_once_with(SESSION_STORE)
 
 
+def test_grant_permission() -> None:
+    client, api = resource_client()
+    api.get_session_store.return_value = session_store_payload()
+    store = client.session_stores.get(SESSION_STORE)
+
+    store.grant_permission("sp-123")
+
+    api.grant_session_store_permission.assert_called_once_with(
+        SESSION_STORE, "sp-123", permission="WRITE"
+    )
+
+
 def test_add_get_and_list_sessions() -> None:
     client, api = resource_client()
     api.get_session_store.return_value = session_store_payload()
