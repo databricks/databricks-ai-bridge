@@ -6,6 +6,18 @@ authenticated command.
 
 > The underlying APIs are in preview and may need workspace enablement.
 
+## Prerequisites
+
+- **Python ≥3.10** — the mason CLI installs and runs on any Python 3.10+. The
+  `memory`, `sessions`, `tracing`, and `mcp` commands need nothing else.
+- **[`uv`](https://docs.astral.sh/uv/)** — needed to scaffold, run, and deploy an
+  agent (`mason init` → `mason dev` → `mason deploy`): the scaffolded project builds
+  its environment and launches with `uv run`, both locally and in the deployed Apps
+  runtime. Not needed for the store/session/tracing/mcp commands above.
+- **[Databricks CLI](https://docs.databricks.com/dev-tools/cli/)** — needed for
+  browser-based `mason login`. If a profile is already authenticated, Mason uses it
+  directly and the Databricks CLI is optional.
+
 ## Installation
 
 From PyPI:
@@ -51,6 +63,39 @@ Mason. `mason logout` forgets the saved selection without revoking the underlyin
 If Databricks SDK default authentication is already configured, you can skip `mason login`.
 You can also pass the global `--profile/-p` option before an individual command, for example
 `mason --profile <profile> mcp list`. Use `--output json` for scripting.
+
+## Quickstart
+
+The shortest path from a blank directory to a running and deployed agent:
+
+```sh
+mason login --profile <profile>
+mason init my-agent
+cd my-agent
+mason dev                 # run locally
+mason deploy my-agent     # deploy to Databricks
+```
+
+`mason dev` serves the agent on two local ports: the app itself on
+`http://localhost:8000`, and a proxy that mirrors the deployed Databricks Apps routing
+layer on `http://localhost:8001`. Both work; use `8001` to exercise the same
+routing-cookie behavior as a real deployment.
+
+`mason deploy my-agent` creates a Databricks App named `mason-my-agent`, provisions any
+stores bound in `agent.toml`, and grants the app's service principal access to them.
+`mason deployments list` shows what you have deployed, and `mason deployments get
+my-agent` prints its URL and status.
+
+To exercise the agent — locally under `mason dev` or once deployed — `mason endpoint
+invoke` sends it an HTTP request, and `mason tracing list` shows the traces it produced
+once tracing is configured (`mason tracing setup`).
+
+A fresh project binds no stores: `mason dev` runs stateless (and warns that none are
+bound). `mason deploy` then creates and binds default `<name>-memory` and
+`<name>-session` stores, giving the deployed agent long-term memory and durable
+conversation history — bind your own first with `mason memory bind <name>` /
+`mason sessions bind <name>`, or pass `--no-create-stores` to skip (see [Initialize the
+chat app demo](#initialize-the-chat-app-demo)).
 
 ## Python SDK
 
@@ -118,6 +163,12 @@ from databricks_mason import AgentApp, DurableAgentContext
 app = AgentApp(durable_runtime=True)
 
 
+# run_agent / recover_agent are your own agent code; the decorated handlers are
+# the only Mason contract.
+async def run_agent(input: object, session_id: str) -> object: ...
+async def recover_agent(input: object, session_id: str) -> object: ...
+
+
 @app.invoke
 async def invoke(input: object, context: DurableAgentContext) -> object:
     return await run_agent(input, session_id=context.session_id)
@@ -148,7 +199,8 @@ persists the input, attempt status, heartbeats, lifecycle events, application ev
 
 Durability is enabled by default for both framework templates. Mason writes the durability setting
 to `agent.toml`, and `mason deploy` reuses or provisions a dedicated `<app>-durability` Lakebase
-project. Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database,
+project as the durability store for automatic crash detection and recovery. Mason adds its
+`databricks_mason_runtime_<app-hash>` schema and tables to that database,
 giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
 `@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
 is disabled; register the same function for both decorators when replaying the initial invocation is
@@ -245,16 +297,6 @@ examples:
 mason --help
 mason deploy --help
 mason sessions items append --help
-```
-
-For the shortest path from a blank directory to a running and deployed agent:
-
-```sh
-mason login --profile <profile>
-mason init my-agent
-cd my-agent
-mason dev
-mason deploy my-agent
 ```
 
 ## Agent tools
