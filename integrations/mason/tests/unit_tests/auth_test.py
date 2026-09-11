@@ -12,7 +12,7 @@ from unittest import mock
 
 from click.testing import CliRunner
 
-from databricks_mason import auth
+from databricks_mason.cli import auth
 
 
 class _Ctx:

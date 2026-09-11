@@ -6,7 +6,7 @@ from typing import Any
 
 import click
 
-from databricks_mason import render
+from databricks_mason.cli import render
 from databricks_mason.errors import AgentCliError
 
 _RESOURCE_PREFIX = "mcp-services/"

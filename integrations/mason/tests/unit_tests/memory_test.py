@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from databricks_mason import memory as memory_mod
-from databricks_mason.memory import stores
+from databricks_mason.cli import memory as memory_mod
+from databricks_mason.cli.memory import stores
 
 
 class _Client:
@@ -166,7 +166,7 @@ def _bind_ctx(tmp_path):
 
 def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.memory import memory as memory_group
+    from databricks_mason.cli.memory import memory as memory_group
 
     ctx = _bind_ctx(tmp_path)
     result = CliRunner().invoke(
@@ -184,7 +184,7 @@ def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
 
 def test_memory_unbind_clears_agent_toml(tmp_path):
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.memory import memory as memory_group
+    from databricks_mason.cli.memory import memory as memory_group
 
     (tmp_path / "agent.toml").write_text(
         'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[memory_store]\nname = "m"\n',

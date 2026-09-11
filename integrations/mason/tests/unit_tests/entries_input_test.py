@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from databricks_mason.memory import entries
+from databricks_mason.cli.memory import entries
 
 
 class _Client:

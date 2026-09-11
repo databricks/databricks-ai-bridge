@@ -7,8 +7,8 @@ from typing import Any
 
 import click
 
-from databricks_mason import render
-from databricks_mason.endpoint_transport import EndpointResponse
+from databricks_mason.cli import render
+from databricks_mason.cli.endpoint_transport import EndpointResponse
 
 
 def render_response(response: EndpointResponse, *, output: str, streamed: bool) -> None:
