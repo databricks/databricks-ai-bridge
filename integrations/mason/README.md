@@ -169,7 +169,7 @@ mason [-p <profile>] [-o text|json]
   logout
   init         [--framework openai|langgraph] [--server mason|custom]
                [--no-durable-runtime] [--disable-chat-app]
-               [--profile P] [--repo URL] [--ref REF] [directory]
+               [--profile P] [directory]
   dev          [--source PATH] [--prepare-environment] [--app-port PORT]
                [--with-traces C.S]
   memory
@@ -346,3 +346,61 @@ The generated `README.md` documents every request the client makes: config disco
 invocations, background submission and polling, session transcript loading, HITL resume, and memory
 entry operations. Capability colors are automatic from `/api/demo/config`; only the
 sync/streaming/background transport selector is manual.
+
+## Developing Mason
+
+Mason has three layers a contributor might edit, and the local dev loop is designed so that an
+editable install (`pip install -e integrations/mason`) reflects edits to all three without a commit,
+push, or version bump:
+
+- **CLI** — the `mason` command (`databricks_mason.cli` and the command modules). Runs straight from
+  the working tree, since the editable install is the entrypoint.
+- **Templates** — the project scaffolds under `src/databricks_mason/templates/`. They ship inside the
+  package, so `mason init` copies them via `importlib.resources`, which for an editable install
+  resolves to the source tree. Editing a template file changes the next scaffold immediately.
+- **SDK** — the runtime helpers a scaffolded agent imports (`databricks_mason.runtime`, `.langgraph`,
+  `.openai`). When Mason is an editable install, `mason init` pins the scaffold's
+  `[tool.uv.sources] databricks-mason` to that checkout (`{ path = ..., editable = true }`), so the
+  generated project imports the SDK from your working tree.
+
+`mason init` detects the editable checkout by confirming the running `init.py` is the one tracked in
+a `databricks-ai-bridge` clone. A plain registry (`pip install databricks-mason`) or a git install
+(`pip install 'git+…@ref'`) is not editable: init still copies the bundled template, but pins the SDK
+to the released version or the recorded commit instead.
+
+| Command | Template edits | SDK edits | How |
+| --- | --- | --- | --- |
+| `mason init` | picked up from the working tree | writes an editable-path pin into the scaffold | `importlib.resources` resolves to the source tree |
+| `mason dev` | (already in the scaffold) | live, no reinstall | `uv` follows the editable pin |
+| `mason deploy` | (already in the scaffold) | needs a git-installed Mason | see below |
+
+`mason dev` is the fast local loop for iterating on the SDK — an editable install, no reinstall per
+edit. `mason deploy`, though, ships the source to the Databricks Apps build sandbox, which **can't
+reach your local editable checkout**, so deploy rejects an editable (or `file://`) pin with guidance.
+To deploy SDK changes onto Apps compute, install Mason from git and re-run `init` so the scaffold
+pins a reachable git ref the build can clone:
+
+```sh
+pip install 'git+https://github.com/<you>/databricks-ai-bridge@<pushed-sha>#subdirectory=integrations/mason'
+```
+
+`mason init` then writes a `{ git = …, rev = <sha> }` pin, and `mason deploy` syncs it as-is.
+
+To iterate on Mason:
+
+```sh
+pip install -e integrations/mason        # editable install of the CLI + SDK
+mason init /tmp/scratch-agent            # scaffolds from your working-tree template, pins the checkout
+cd /tmp/scratch-agent
+mason dev                                # imports the SDK from your checkout
+```
+
+Edits to the CLI, a template, or the SDK all show up on the next run of the relevant command — the
+editable install is one-and-done per venv and follows the working tree, so switching branches needs
+no reinstall. The exception is a **dependency change**: when a branch adds or bumps a package in
+`integrations/mason/pyproject.toml` (including a branch switch that lands you on different deps), the
+venv won't have it until you reinstall:
+
+```sh
+pip install -e integrations/mason        # only when dependencies changed
+```

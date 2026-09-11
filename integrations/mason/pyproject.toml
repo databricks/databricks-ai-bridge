@@ -90,6 +90,9 @@ databricks-ai-bridge = { path = "../..", editable = true }
 
 [tool.ruff]
 include = ["pyproject.toml", "src/**/*.py", "tests/**/*.py"]
+# Templates under src/databricks_mason/templates/ are code-as-data (scaffold snippets, not package
+# modules) — they import scaffold-relative paths that never resolve here, so don't lint them.
+extend-exclude = ["src/databricks_mason/templates"]
 extend = "../../pyproject.toml"
 
 [tool.pytest.ini_options]

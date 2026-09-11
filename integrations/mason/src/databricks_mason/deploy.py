@@ -24,6 +24,7 @@ import yaml
 
 from databricks_mason import (
     lakebase_durability_store,
+    mason_source,
     render,
     timefmt,
 )
@@ -248,6 +249,27 @@ def _load_project(source: pathlib.Path):
     if not (source / "agent.toml").is_file():
         return None
     return AgentProject.load(source)
+
+
+def _reject_local_mason_source(source: pathlib.Path) -> None:
+    """Fail fast on a machine-local databricks-mason pin the Apps build can't reach.
+
+    `mason init` from an editable checkout pins databricks-mason to a local `path` for the fast
+    `mason dev` loop; a `file://` git pin is the same problem. The in-sandbox Apps build can't see
+    the developer's filesystem, so surface the fix up front instead of a cryptic build failure.
+    To deploy unreleased Mason, install it from git and re-run init so the scaffold pins a git ref.
+    """
+    pin = mason_source.read(source / "pyproject.toml")
+    if not pin:
+        return
+    if isinstance(pin.get("path"), str) or str(pin.get("git", "")).startswith("file://"):
+        raise AgentCliError(
+            "This project pins databricks-mason to a local checkout, which the Apps build can't "
+            "reach.",
+            hint="Install Mason from git and re-run `mason init` to deploy your changes: "
+            "pip install 'git+<repo>@<pushed-sha>#subdirectory=integrations/mason'. "
+            "The editable checkout stays for `mason dev`.",
+        )
 
 
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
@@ -477,6 +499,7 @@ def deploy(
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
+    _reject_local_mason_source(source_dir)
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
