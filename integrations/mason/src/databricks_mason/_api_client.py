@@ -124,10 +124,21 @@ class _MasonApiClient:
         try:
             self._w = workspace_client or _workspace_client(profile)
         except Exception as exc:  # noqa: BLE001 - surfaced as a clean CLI error
+            hint = (
+                "Select an existing profile with `mason --profile <name> <command>` "
+                "or authenticate and save it with `mason login --profile <name>`."
+            )
+            # A stray DATABRICKS_TOKEN takes precedence over the profile in the SDK's default
+            # auth resolution, so auth can fail against the wrong host even when the profile is
+            # correct. Surface it — the fix (unset the token) isn't evident from the SDK error.
+            if os.environ.get("DATABRICKS_TOKEN"):
+                hint += (
+                    " DATABRICKS_TOKEN is set in the environment and overrides the profile — "
+                    "unset it if you meant to authenticate with a profile."
+                )
             raise AgentCliError(
                 f"Could not initialize Databricks auth: {exc}",
-                hint="Select an existing profile with `mason --profile <name> <command>` "
-                "or authenticate and save it with `mason login --profile <name>`.",
+                hint=hint,
             ) from exc
 
     @property
