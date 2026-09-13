@@ -53,33 +53,33 @@ def test_configure_tracing_requires_both_halves(monkeypatch):
     assert tracing._enabled is False
 
 
-def test_request_span_is_noop_when_disabled(monkeypatch):
+def test_root_span_is_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", False)
     with mock.patch.object(tracing.mlflow, "start_span") as start:
-        with tracing.request_span(name="agent", inputs={"a": 1}) as span:
+        with tracing.root_span(name="agent", inputs={"a": 1}) as span:
             assert span is None
     start.assert_not_called()  # no span, no mlflow touched when tracing is off
 
 
-def test_request_span_opens_span_and_sets_inputs_when_enabled(monkeypatch):
+def test_root_span_opens_span_and_sets_inputs_when_enabled(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
     fake_span = mock.Mock()
     cm = mock.MagicMock()
     cm.__enter__.return_value = fake_span
     with mock.patch.object(tracing.mlflow, "start_span", return_value=cm) as start:
-        with tracing.request_span(name="agent", inputs={"a": 1}) as span:
+        with tracing.root_span(name="agent", inputs={"a": 1}) as span:
             assert span is fake_span
     start.assert_called_once_with(name="agent")
     fake_span.set_inputs.assert_called_once_with({"a": 1})
 
 
-def test_request_span_skips_inputs_when_none(monkeypatch):
+def test_root_span_skips_inputs_when_none(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
     fake_span = mock.Mock()
     cm = mock.MagicMock()
     cm.__enter__.return_value = fake_span
     with mock.patch.object(tracing.mlflow, "start_span", return_value=cm):
-        with tracing.request_span() as span:
+        with tracing.root_span() as span:
             assert span is fake_span
     fake_span.set_inputs.assert_not_called()
 

@@ -23,7 +23,7 @@ from databricks_mason.langgraph import (
     configure_tracing,
     mcp_tools,
     memory_tools,
-    request_span,
+    root_span,
     tag_session,
     thread_config,
 )
@@ -168,7 +168,7 @@ async def _run_agent(
     # Open a root MLflow span around the invocation so a trace is recorded: langchain autolog only
     # nests spans under an active trace and does not start one for astream. tag_session tags this
     # trace; the graph's LLM/tool spans nest under it. No-op when tracing is disabled.
-    with request_span(name="agent", inputs=agent_input) as span:
+    with root_span(name="invoke", inputs=agent_input) as span:
         tag_session(session_id)
         outputs = [
             event

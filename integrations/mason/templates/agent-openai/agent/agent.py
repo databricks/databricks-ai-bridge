@@ -23,7 +23,7 @@ from databricks_mason.openai import (
     configure_tracing,
     mcp_servers,
     memory_tools,
-    request_span,
+    root_span,
     session_store,
     tag_session,
 )
@@ -144,7 +144,7 @@ async def _run_agent(payload: dict[str, Any], context: DurableAgentContext) -> d
     # Open a root MLflow span around the invocation so a trace is recorded: OpenAI autolog only nests
     # spans under an active trace and does not start one for a streamed run. tag_session tags this
     # trace; the agent's LLM/tool spans nest under it. No-op when tracing is disabled.
-    with request_span(name="agent", inputs=payload) as span:
+    with root_span(name="invoke", inputs=payload) as span:
         tag_session(session_id)
         outputs = [
             event

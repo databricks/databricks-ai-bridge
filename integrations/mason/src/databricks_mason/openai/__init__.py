@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from databricks_mason.openai.memory import memory_tools
     from databricks_mason.openai.sessions import session_store
     from databricks_mason.runtime import (
-        request_span,
+        root_span,
         tag_session,
         workspace_client,
         workspace_headers,
@@ -63,8 +63,8 @@ __all__ = [
     "session_store",
     # MLflow tracing (OpenAI autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
-    # Wrap each invocation in request_span() so a trace is recorded; tag_session() tags it.
-    "request_span",
+    # Wrap each invocation in root_span() so a trace is recorded; tag_session() tags it.
+    "root_span",
     "tag_session",
     # Workspace SDK client construction.
     "workspace_client",
@@ -77,7 +77,7 @@ _MODULE_BY_NAME = {
     "mcp_servers": "databricks_mason.openai.mcp",
     "memory_tools": "databricks_mason.openai.memory",
     "session_store": "databricks_mason.openai.sessions",
-    "request_span": "databricks_mason.runtime",
+    "root_span": "databricks_mason.runtime",
     "tag_session": "databricks_mason.runtime",
     "workspace_client": "databricks_mason.runtime",
     "workspace_headers": "databricks_mason.runtime",
