@@ -470,6 +470,40 @@ def test_dev_warns_when_declared_store_is_missing(tmp_path: pathlib.Path, monkey
     assert "declared-mem" in result.output and "not created" in result.output.lower()
 
 
+def test_dev_degrades_gracefully_when_store_client_raises_offline(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # When a store is declared but the client RAISES (offline / no auth), dev must exit 0 with a
+    # warning and must NOT abort — mirrors the tracing block's best-effort pattern.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, memory="my-memory", session="my-session")
+    (src / ".venv").mkdir()
+
+    def _boom_resolve(client, name):
+        raise RuntimeError("offline: could not reach the workspace")
+
+    monkeypatch.setattr(dev_mod, "_resolve_memory_store", _boom_resolve)
+
+    class _OfflineCtx:
+        output = "text"
+        profile = None
+
+        def client(self):
+            raise AgentCliError("no databricks auth configured")
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(src)], obj=_OfflineCtx())
+
+    assert result.exit_code == 0, result.output
+    assert "not created" in result.output.lower()  # warning, not abort
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+    # No AGENT_MEMORY_STORE injected when client/resolve failed
+    dev_yaml_path = src / "app.masondev.yaml"
+    assert not dev_yaml_path.exists()  # cleaned up by finally block after run
+
+
 def test_dev_injects_memory_id_into_dev_manifest_only(tmp_path: pathlib.Path, monkeypatch):
     # When the memory store exists, its bare id is injected into the dev-only manifest
     # (app.masondev.yaml) but NOT into the deployable app.yaml.

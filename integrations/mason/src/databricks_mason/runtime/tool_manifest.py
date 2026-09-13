@@ -152,9 +152,10 @@ def store_binding(table: str, prefer: Literal["name", "id"] = "name") -> str | N
     """The store binding declared in agent.toml's ``[memory_store]`` / ``[session_store]``, or None.
 
     Read at runtime so `mason memory/sessions bind` (which writes these tables) takes effect without
-    any env plumbing. With ``prefer="id"`` the table's ``id`` is returned when present, falling back
-    to ``name``; otherwise the ``name`` is returned. Returns None when the project has no agent.toml,
-    no such table, or no value — the adapters treat that as "unbound" and fall back to their default.
+    any env plumbing. With ``prefer="id"`` the table's ``id`` field is returned when present (a
+    legacy/hand-written binding that already carries the store id), falling back to ``name``; otherwise
+    the ``name`` is returned. Returns None when the project has no agent.toml, no such table, or no
+    value — the adapters treat that as "unbound" and fall back to their default.
     Never raises: a malformed or missing manifest just means "no binding here".
     """
     try:
@@ -180,15 +181,21 @@ def resolve_memory_store(explicit: str | None = None) -> str | None:
     The one place the store-resolution precedence lives, shared by the framework adapters and the
     chat-app UI so they always agree on which store is in effect. None means "no memory store".
 
-    The entries API is keyed by store id, not display name, so the binding's ``id`` is preferred
-    (`mason memory bind` records it); the display ``name`` is only a fallback for a hand-written
-    binding without an id.
+    Normal flow post-deploy/dev: ``mason deploy`` resolves the store id at deploy time and injects it
+    via the ``AGENT_MEMORY_STORE`` env var into ``app.yaml``; ``mason dev`` injects it into the
+    dev-only manifest (``app.masondev.yaml``) so local runs also pick up the correct id without
+    any persistent change to ``agent.toml``. The env var is therefore the expected id carrier at
+    runtime. An ``id`` field in ``agent.toml [memory_store]`` is only honoured for legacy or
+    hand-written bindings that already include the store id explicitly.  The display ``name`` is
+    a last-resort fallback for the rare case where neither the env nor an explicit id is present.
     """
     if explicit:
         return explicit
     env = os.getenv(MEMORY_STORE_ENV)
     if env:
         return env
+    # Name fallback: the env is the normal id carrier post-deploy/dev; reaching here means neither
+    # the env was injected nor a hand-written id field is present in agent.toml.
     return store_binding(MEMORY_STORE_TABLE, prefer="id")
 
 

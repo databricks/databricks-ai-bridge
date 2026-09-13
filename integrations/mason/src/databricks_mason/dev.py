@@ -113,27 +113,40 @@ def dev(
     # Stores are declared in agent.toml but created by `mason deploy`; dev never creates them. Check
     # existence for a friendly warning, and wire the memory store's id (the entries API key) into the
     # local-only manifest so long-term memory works locally when the store already exists.
+    # Best-effort: if the client/auth is unavailable (offline, no credentials), degrade to the same
+    # "declared but not created yet" warning and keep running, mirroring the tracing block below.
     if memory_store:
-        with render.status("Checking memory store…"):
-            resolved = _resolve_memory_store(obj.client(), memory_store)
-        if resolved is None:
+        try:
+            with render.status("Checking memory store…"):
+                resolved = _resolve_memory_store(obj.client(), memory_store)
+            if resolved is None:
+                render.warning(
+                    f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
+                    "is disabled locally. Run `mason deploy` to create it."
+                )
+            else:
+                store_id = (render.field(resolved, "name") or "").split("/", 1)[-1] or None
+                if store_id:
+                    local_env[MEMORY_STORE_ENV] = store_id
+        except Exception:  # noqa: BLE001 - store check must never block a local run
             render.warning(
                 f"Memory store '{memory_store}' is declared but not created yet — long-term memory "
                 "is disabled locally. Run `mason deploy` to create it."
             )
-        else:
-            store_id = (render.field(resolved, "name") or "").split("/", 1)[-1] or None
-            if store_id:
-                local_env[MEMORY_STORE_ENV] = store_id
     if session_store:
-        with render.status("Checking session store…"):
-            try:
+        try:
+            with render.status("Checking session store…"):
                 obj.client().get_session_store(session_store)
-            except AgentCliError:
-                render.warning(
-                    f"Session store '{session_store}' is declared but not created yet — conversation "
-                    "history is in-memory (not durable). Run `mason deploy` to create it."
-                )
+        except AgentCliError:
+            render.warning(
+                f"Session store '{session_store}' is declared but not created yet — conversation "
+                "history is in-memory (not durable). Run `mason deploy` to create it."
+            )
+        except Exception:  # noqa: BLE001 - store check must never block a local run
+            render.warning(
+                f"Session store '{session_store}' is declared but not created yet — conversation "
+                "history is in-memory (not durable). Run `mason deploy` to create it."
+            )
     # Tracing is best-effort: build the client and provision inside the try so ANY failure (no auth /
     # offline, no mlflow, permission) degrades to running without traces rather than aborting a purely
     # local run.

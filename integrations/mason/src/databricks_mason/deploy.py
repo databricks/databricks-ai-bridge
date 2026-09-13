@@ -462,7 +462,7 @@ def deploy(
     instance_args = _instance_args(instances)
     client = obj.client()
 
-    # 0. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
+    # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
     #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
     memory_store, session_store = store_bindings(source_dir)
     memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
