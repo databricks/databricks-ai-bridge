@@ -53,50 +53,64 @@ def test_configure_tracing_requires_both_halves(monkeypatch):
     assert tracing._enabled is False
 
 
-def test_root_span_is_noop_when_disabled(monkeypatch):
+def test_start_trace_is_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", False)
     with mock.patch.object(tracing.mlflow, "start_span") as start:
-        with tracing.root_span(name="agent", inputs={"a": 1}) as span:
+        with tracing.start_trace(name="agent", inputs={"a": 1}) as span:
             assert span is None
     start.assert_not_called()  # no span, no mlflow touched when tracing is off
 
 
-def test_root_span_opens_span_and_sets_inputs_when_enabled(monkeypatch):
+def test_start_trace_opens_span_and_sets_inputs_when_enabled(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
     fake_span = mock.Mock()
     cm = mock.MagicMock()
     cm.__enter__.return_value = fake_span
     with mock.patch.object(tracing.mlflow, "start_span", return_value=cm) as start:
-        with tracing.root_span(name="agent", inputs={"a": 1}) as span:
+        with tracing.start_trace(name="agent", inputs={"a": 1}) as span:
             assert span is fake_span
     start.assert_called_once_with(name="agent")
     fake_span.set_inputs.assert_called_once_with({"a": 1})
 
 
-def test_root_span_skips_inputs_when_none(monkeypatch):
+def test_start_trace_skips_inputs_when_none(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
     fake_span = mock.Mock()
     cm = mock.MagicMock()
     cm.__enter__.return_value = fake_span
     with mock.patch.object(tracing.mlflow, "start_span", return_value=cm):
-        with tracing.root_span() as span:
+        with tracing.start_trace(name="agent") as span:
             assert span is fake_span
     fake_span.set_inputs.assert_not_called()
 
 
-def test_tag_session_updates_current_trace_when_enabled(monkeypatch):
+def test_start_trace_tags_session_when_given(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
-    with mock.patch.object(tracing.mlflow, "update_current_trace") as upd:
-        tracing.tag_session("sess-1")
-    upd.assert_called_once()
+    cm = mock.MagicMock()
+    cm.__enter__.return_value = mock.Mock()
+    with mock.patch.object(tracing.mlflow, "start_span", return_value=cm):
+        with mock.patch.object(tracing.mlflow, "update_current_trace") as upd:
+            with tracing.start_trace(name="agent", session_id="sess-1"):
+                pass
+    upd.assert_called_once_with(metadata={"mlflow.trace.session": "sess-1"})
 
 
-def test_tag_session_noop_when_disabled_or_empty(monkeypatch):
+def test_start_trace_skips_session_tag_when_absent(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", True)
-    with mock.patch.object(tracing.mlflow, "update_current_trace") as upd:
-        tracing.tag_session("")  # no session id -> nothing to tag
+    cm = mock.MagicMock()
+    cm.__enter__.return_value = mock.Mock()
+    with mock.patch.object(tracing.mlflow, "start_span", return_value=cm):
+        with mock.patch.object(tracing.mlflow, "update_current_trace") as upd:
+            with tracing.start_trace(
+                name="agent", inputs={"a": 1}
+            ):  # no session_id -> nothing to tag
+                pass
     upd.assert_not_called()
+
+
+def test_start_trace_does_not_tag_session_when_disabled(monkeypatch):
     monkeypatch.setattr(tracing, "_enabled", False)
     with mock.patch.object(tracing.mlflow, "update_current_trace") as upd:
-        tracing.tag_session("sess-1")  # tracing off -> nothing to tag
+        with tracing.start_trace(name="agent", session_id="sess-1") as span:  # tracing off
+            assert span is None
     upd.assert_not_called()
