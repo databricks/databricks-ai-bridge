@@ -308,30 +308,6 @@ def _reconcile_declared_stores(
     return memory_store_id
 
 
-def validate_stores(client, *, memory_store: Optional[str], session_store: Optional[str]) -> None:
-    """Validate the agent's bound stores exist. Shared by `mason deploy` and `mason dev`.
-
-    Stores are created by `mason memory/sessions bind` and read from agent.toml at runtime, so this
-    neither creates them nor writes them to app.yaml — it only checks a bound store still exists (a
-    typo or unbound clone fails here, not at runtime).
-    """
-    if memory_store and _resolve_memory_store(client, memory_store) is None:
-        # Resolve by display name: get_memory_store looks up by resource id, not the bound name.
-        raise AgentCliError(
-            f"Memory store '{memory_store}' does not exist.",
-            hint=f"Run `mason deploy` to create it, or `mason memory stores create {memory_store}`.",
-        )
-    if session_store:
-        try:
-            client.get_session_store(session_store)
-        except AgentCliError as exc:
-            raise AgentCliError(
-                f"Session store '{session_store}' does not exist.",
-                hint=f"Run `mason deploy` to create it, or `mason sessions stores create {session_store}`.",
-                error_code=exc.error_code,
-            ) from exc
-
-
 def resolve_trace_experiment_id(
     source: pathlib.Path, project_name: str, client, profile
 ) -> Optional[str]:
