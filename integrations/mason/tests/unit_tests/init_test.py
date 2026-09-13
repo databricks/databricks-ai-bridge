@@ -262,6 +262,8 @@ def test_init_custom_server_uses_minimal_template(
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
     assert manifest["durability"] == {"enabled": False}
+    assert "memory_store" not in manifest
+    assert "session_store" not in manifest
     with (dest / ".mason" / "project.toml").open("rb") as config_file:
         config = tomli.load(config_file)
     assert config["template"] == f"custom-agent-{framework}"
@@ -317,6 +319,8 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         "schema_version": 1,
         "agent": {"framework": "openai"},
         "durability": {"enabled": True},
+        "memory_store": {"name": "proj-memory"},
+        "session_store": {"name": "proj-session"},
     }
 
 
@@ -703,3 +707,26 @@ def test_fetch_template_accepts_commit_sha(tmp_path: pathlib.Path):
 
     assert resolved == commit
     assert (destination / "value.txt").read_text() == "first\n"
+
+
+def test_init_store_name_overrides(tmp_path: pathlib.Path):
+    dest = tmp_path / "proj"
+    with mock.patch.object(init_mod, "_fetch_template", side_effect=lambda *a: a[3].mkdir()):
+        result = CliRunner().invoke(
+            init_mod.init,
+            [
+                "--framework",
+                "openai",
+                "--memory-store",
+                "mem-x",
+                "--session-store",
+                "sess-y",
+                str(dest),
+            ],
+            obj=_Ctx(),
+        )
+    assert result.exit_code == 0, result.output
+    with (dest / "agent.toml").open("rb") as manifest_file:
+        manifest = tomli.load(manifest_file)
+    assert manifest["memory_store"] == {"name": "mem-x"}
+    assert manifest["session_store"] == {"name": "sess-y"}
