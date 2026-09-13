@@ -164,7 +164,7 @@ def _bind_ctx(tmp_path):
     return _Ctx(_BindClient())
 
 
-def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
+def test_memory_bind_only_edits_agent_toml(tmp_path):
     from databricks_mason.agent_project import AgentProject
     from databricks_mason.memory import memory as memory_group
 
@@ -174,12 +174,14 @@ def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert ctx.client().created == ["agent-mem"]  # created by default
-    # Bind tells the user it created the store (vs reused an existing one).
-    assert "Created and bound memory store 'agent-mem'" in result.output
+    assert ctx.client().created == []  # bind never provisions — that's `mason deploy`'s job
+    assert "Bound memory store 'agent-mem'" in result.output
+    # Point the user at the create-now escape hatch (whitespace-normalized to survive Rich wrapping).
+    assert "mason memory stores create" in " ".join(result.output.split())
     project = AgentProject.load(tmp_path)
     assert project.memory_store == "agent-mem"
-    assert project.memory_store_id == "mem-id-123"  # bare id recorded for the runtime
+    # No remote id is recorded — deploy/dev resolve it at runtime via AGENT_MEMORY_STORE.
+    assert project.memory_store_id is None
 
 
 def test_memory_unbind_clears_agent_toml(tmp_path):

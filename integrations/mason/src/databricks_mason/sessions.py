@@ -55,56 +55,31 @@ def _source_option(function):
 @sessions.command("bind")
 @click.argument("store")
 @_source_option
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require the store to already exist. By default a missing store is created (idempotent).",
-)
 @click.pass_obj
-def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
-    """Bind session STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
+def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
+    """Bind session STORE to the agent by declaring it in agent.toml.
 
-    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
-    service principal access to it. Pass --no-create-stores to require the store to already exist.
+    This only edits agent.toml — it does not create the store. `mason deploy` creates any declared
+    store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.deploy import _ensure_session_store
-
-    client = obj.client()
-    if no_create_stores:
-        try:
-            with render.status(f"Resolving session store '{store}'…"):
-                client.get_session_store(store)
-        except AgentCliError as exc:
-            raise AgentCliError(
-                f"Session store '{store}' does not exist (drop --no-create-stores to create it).",
-                error_code=exc.error_code,
-            ) from exc
-        created = False
-    else:
-        with render.status(f"Provisioning session store '{store}'…"):
-            _, created = _ensure_session_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
     project.write()
     if obj.output == "json":
-        render.emit_json(
-            {"session_store": store, "created": created, "manifest": str(project.path)}
-        )
+        render.emit_json({"session_store": store, "manifest": str(project.path)})
         return
-    # Say whether the store was newly created or an existing one was reused.
-    title = (
-        f"Created and bound session store '{store}'"
-        if created
-        else f"Bound session store '{store}'"
-    )
     render.success(
-        title,
+        f"Bound session store '{store}'",
         fields={"agent.toml": str(project.path)},
         next_steps=[
+            (
+                f"mason sessions stores create --name {store}",
+                "Create the store now without deploying",
+            ),
             ("mason dev", "Re-run to pick up the store locally"),
-            ("mason deploy <name>", "Redeploy to grant the app access"),
+            ("mason deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
