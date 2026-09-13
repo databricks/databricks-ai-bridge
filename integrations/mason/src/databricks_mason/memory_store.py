@@ -21,8 +21,10 @@ def _resource_id(name: str) -> str:
 @dataclass(frozen=True, kw_only=True)
 class Memory:
     name: str
-    actor_id: str
-    path: str
+    # actor_id and path are normally always present, but a caller-supplied read_mask
+    # (on list/get/search) can project them out of the response, so they may be None.
+    actor_id: Optional[str] = None
+    path: Optional[str] = None
     session_id: Optional[str] = None
     content: Optional[str] = None
     description: Optional[str] = None
@@ -354,9 +356,10 @@ class MemoryStores:
     def _memory_from_response(self, response: dict[str, Any], store: MemoryStore) -> Memory:
         return Memory(
             name=response["name"],
-            actor_id=response["actor_id"],
+            # Use .get() for maskable fields: a read_mask can omit them from the response.
+            actor_id=response.get("actor_id"),
             session_id=response.get("session_id"),
-            path=response["path"],
+            path=response.get("path"),
             content=response.get("content"),
             description=response.get("description"),
             source_type=response.get("source_type"),
