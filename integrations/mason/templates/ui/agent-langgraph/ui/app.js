@@ -460,17 +460,28 @@ function renderSessionTranscript(items) {
     const data = item?.data || {};
     const storedRole = String(data.role || data.type || "").toLowerCase();
     const content = extractText(data.content ?? data);
-    if (!content) continue;
+    const hasToolCalls = Array.isArray(data.tool_calls) && data.tool_calls.length > 0;
+    // Keep every message on re-hydrate: skip only genuinely empty items, and render an assistant
+    // tool-call as a "Tool request" bubble even when its text is empty (mirrors the streaming path),
+    // so no re-hydrate path (reload, open-session, Refresh) silently drops messages.
+    if (!content && !hasToolCalls) continue;
     if (storedRole === "human_decision") {
       appendMessage("system", content, "Human decision");
       continue;
     }
     const role = normalizeRole(data);
-    if (role === "assistant") state.lastAssistantText = content;
+    if (role === "assistant") {
+      if (content) {
+        state.lastAssistantText = content;
+        appendMessage("assistant", content, "Agent");
+      }
+      if (hasToolCalls) appendMessage("tool", toolSummary(data), "Tool request");
+      continue;
+    }
     appendMessage(
       role,
       role === "tool" ? toolSummary(data) : content,
-      role === "user" ? "You" : role === "assistant" ? "Agent" : role === "tool" ? "Tool result" : "System",
+      role === "user" ? "You" : role === "tool" ? "Tool result" : "System",
     );
   }
 }
