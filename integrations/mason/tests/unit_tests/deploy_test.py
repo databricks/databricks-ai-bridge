@@ -103,6 +103,54 @@ def test_ensure_memory_store_reports_created():
     )
 
 
+def test_ensure_memory_store_permission_denied_gives_admin_hint():
+    # ML-69282: admin-restricted Lakebase project creation -> actionable message, not a raw error.
+    client = mock.Mock()
+    client.create_memory_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
+    with pytest.raises(AgentCliError) as excinfo:
+        deploy_mod._ensure_memory_store(client, "mem")
+    err = excinfo.value
+    assert "permission to create memory store 'mem'" in err.message
+    assert err.hint is not None and "workspace admin" in err.hint
+    assert "--no-create-stores" in err.hint
+
+
+def test_ensure_memory_store_already_exists_but_inaccessible():
+    # ML-69292: name taken but not visible to the caller -> "you don't have access", not "could
+    # not be resolved".
+    client = mock.Mock()
+    client.create_memory_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    client.list_memory_stores.return_value = {"managed_memory_stores": []}
+    with pytest.raises(AgentCliError) as excinfo:
+        deploy_mod._ensure_memory_store(client, "mem")
+    err = excinfo.value
+    assert "already exists but you don't have access" in err.message
+    assert err.hint is not None and "grant you access" in err.hint
+
+
+def test_ensure_session_store_permission_denied_gives_admin_hint():
+    client = mock.Mock()
+    client.create_session_store.side_effect = AgentCliError(
+        "denied", error_code="PERMISSION_DENIED"
+    )
+    with pytest.raises(AgentCliError) as excinfo:
+        deploy_mod._ensure_session_store(client, "s")
+    err = excinfo.value
+    assert "permission to create session store 's'" in err.message
+    assert err.hint is not None and "workspace admin" in err.hint
+
+
+def test_ensure_session_store_already_exists_but_inaccessible():
+    client = mock.Mock()
+    client.create_session_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    client.get_session_store.side_effect = AgentCliError("denied", error_code="PERMISSION_DENIED")
+    with pytest.raises(AgentCliError) as excinfo:
+        deploy_mod._ensure_session_store(client, "s")
+    err = excinfo.value
+    assert "already exists but you don't have access" in err.message
+    assert err.hint is not None and "grant you access" in err.hint
+
+
 class _FakeClient:
     host = "https://ws"
     current_user = "me@example.com"
