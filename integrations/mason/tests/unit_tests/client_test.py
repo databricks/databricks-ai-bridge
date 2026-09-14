@@ -38,7 +38,7 @@ def test_mason_client_wraps_workspace_client(api_client):
     assert client.session_stores._api is api_client.return_value
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_create_memory_store(workspace_client):
     c, do = _client(workspace_client)
     c.create_memory_store("acme", "desc")
@@ -50,7 +50,7 @@ def test_create_memory_store(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)
@@ -59,7 +59,7 @@ def test_list_memory_stores_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_mcp_services_query(workspace_client):
     c, do = _client(workspace_client)
 
@@ -73,14 +73,14 @@ def test_list_mcp_services_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_get_memory_store_normalizes_id(workspace_client):
     c, do = _client(workspace_client)
     c.get_memory_store("abc123")
     do.assert_called_once_with("GET", "/api/agents/v1/memory-stores/abc123", query=None, body=None)
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_update_memory_store_retains_empty_description(workspace_client):
     client, do = _client(workspace_client)
 
@@ -94,7 +94,7 @@ def test_update_memory_store_retains_empty_description(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_get_memory_entry_passes_read_mask(workspace_client):
     client, do = _client(workspace_client)
 
@@ -108,7 +108,7 @@ def test_get_memory_entry_passes_read_mask(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_search_memory_entries(workspace_client):
     c, do = _client(workspace_client)
     c.search_memory_entries("s1", "alice", "style", limit=5)
@@ -120,7 +120,7 @@ def test_search_memory_entries(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_search_memory_entries_with_resource_filters(workspace_client):
     client, do = _client(workspace_client)
 
@@ -149,7 +149,7 @@ def test_search_memory_entries_with_resource_filters(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_create_session_puts_session_id_in_query(workspace_client):
     c, do = _client(workspace_client)
     c.create_session("store1", "alice", session_id="sid")
@@ -161,7 +161,7 @@ def test_create_session_puts_session_id_in_query(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_get_session_scoped_vs_unscoped(workspace_client):
     c, do = _client(workspace_client)
     c.get_session("sid", store="store1")
@@ -170,7 +170,7 @@ def test_get_session_scoped_vs_unscoped(workspace_client):
     assert do.call_args_list[1].args[1] == "/api/agents/v1/sessions/sid"
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_append_wraps_items_in_data(workspace_client):
     c, do = _client(workspace_client)
     c.append_session_items("store1", "sid", [{"role": "user", "content": "hi"}])
@@ -182,7 +182,7 @@ def test_append_wraps_items_in_data(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_session_without_force(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid")
@@ -194,7 +194,7 @@ def test_delete_session_without_force(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_session_with_force(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid", force=True)
@@ -206,7 +206,7 @@ def test_delete_session_with_force(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_grant_session_store_permission(workspace_client):
     c, do = _client(workspace_client)
     c.grant_session_store_permission("sess-1", "sp-abc")
@@ -218,7 +218,7 @@ def test_grant_session_store_permission(workspace_client):
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_client):
     c, do = _client(workspace_client)
     c.grant_memory_store_permission("memory-stores/uuid-x", "sp-abc", permission="READ")
@@ -230,7 +230,7 @@ def test_grant_memory_store_permission_takes_resource_id_and_level(workspace_cli
     )
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_preview_error_is_mapped_with_hint(workspace_client):
     c, do = _client(workspace_client)
 
@@ -326,7 +326,7 @@ class _TransientError(RuntimeError):
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
     client, do = _client(workspace_client)
     do.side_effect = [_TransientError(None), {"session_store_name": "s"}]
@@ -339,7 +339,7 @@ def test_do_retries_transient_error_then_succeeds(workspace_client, sleep):
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 @pytest.mark.parametrize(
     ("method_name", "args"),
     [
@@ -361,7 +361,7 @@ def test_create_store_does_not_retry_transient_error_by_default(
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_stops_after_max_attempts(workspace_client, sleep):
     client, do = _client(workspace_client)
     do.side_effect = _TransientError(None)
@@ -375,7 +375,7 @@ def test_do_stops_after_max_attempts(workspace_client, sleep):
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
     client, do = _client(workspace_client)
 
@@ -392,7 +392,7 @@ def test_do_does_not_retry_non_transient_error(workspace_client, sleep):
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_do_does_not_retry_transient_error_for_pop(workspace_client, sleep):
     client, do = _client(workspace_client)
     do.side_effect = _TransientError(None)
@@ -411,9 +411,7 @@ def test_account_routed_profile_uses_configured_host_and_workspace_header():
     routed = mock.Mock()
 
     with (
-        mock.patch(
-            "databricks_mason._api_client.WorkspaceClient", side_effect=[resolved, routed]
-        ) as wc,
+        mock.patch("databricks.sdk.WorkspaceClient", side_effect=[resolved, routed]) as wc,
         mock.patch(
             "databricks_mason._api_client._profile_host",
             return_value="https://account.example.com",
@@ -460,7 +458,7 @@ def test_memory_entry_path_rejects_empty_entry():
         memory_entry_path("s", "")
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_update_memory_store_no_fields_raises_without_calling_api(workspace_client):
     client, do = _client(workspace_client)
     with pytest.raises(AgentCliError):
@@ -468,7 +466,7 @@ def test_update_memory_store_no_fields_raises_without_calling_api(workspace_clie
     do.assert_not_called()
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_update_session_store_no_fields_raises_without_calling_api(workspace_client):
     client, do = _client(workspace_client)
     with pytest.raises(AgentCliError):
@@ -476,7 +474,7 @@ def test_update_session_store_no_fields_raises_without_calling_api(workspace_cli
     do.assert_not_called()
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_client):
     client, do = _client(workspace_client)
     with pytest.raises(AgentCliError):
@@ -484,7 +482,7 @@ def test_update_memory_entry_no_fields_raises_without_calling_api(workspace_clie
     do.assert_not_called()
 
 
-@mock.patch("databricks_mason._api_client.WorkspaceClient")
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_session_store_normalizes_path(workspace_client):
     client, do = _client(workspace_client)
     client.delete_session_store("session-stores/s1")

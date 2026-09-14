@@ -12,12 +12,13 @@ import configparser
 import os
 import pathlib
 import time
-from typing import Any, Optional
-
-from databricks.sdk import WorkspaceClient
+from typing import TYPE_CHECKING, Any, Optional
 
 from databricks_mason import models
 from databricks_mason.errors import TRANSIENT_ERROR_CODES, AgentCliError, wrap_api_error
+
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/agents/v1"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
@@ -107,6 +108,10 @@ def _bound_retry_timeout(client: WorkspaceClient) -> WorkspaceClient:
 
 
 def _workspace_client(profile: Optional[str]) -> WorkspaceClient:
+    # Imported here (not at module top) so the ~0.7s databricks.sdk import is paid only when a
+    # command actually builds a client, not on every CLI invocation.
+    from databricks.sdk import WorkspaceClient
+
     client = _bound_retry_timeout(WorkspaceClient(profile=profile))
     if not profile or not client.config.workspace_id:
         return client
