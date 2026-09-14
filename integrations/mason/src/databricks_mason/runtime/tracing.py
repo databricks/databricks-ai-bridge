@@ -5,13 +5,14 @@ Tracing turns on only when a full config is present: a destination (``MLFLOW_TRA
 ``MLFLOW_EXPERIMENT_NAME``) — whichever pair the user or the Apps resource binding provides. MLflow
 resolves the specific value itself; this only decides on/off. Requiring both halves avoids the
 half-configured case where traces silently export to a local file store instead of the workspace.
-When unconfigured, tracing is disabled outright so the per-request span ``runtime/runtime.py`` opens
-has nothing to export to. No user decision lives here — it's all driven by env — so this whole module
-is a candidate to move behind an SDK helper.
+When unconfigured, tracing is disabled outright so ``start_trace`` (which agents open around each
+invocation) has nothing to export to.
 """
 
+import contextlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import mlflow
 
@@ -41,12 +42,30 @@ def configure_tracing(autolog: Callable[[], None] | None = None) -> None:
         if autolog is not None:
             autolog()
     else:
-        # runtime/runtime.py wraps every request in a span regardless; without an experiment it
-        # would try to export to a missing one (INVALID_PARAMETER_VALUE), so disable.
+        # Agents wrap each invocation in start_trace; without an experiment it would try to export to a
+        # missing one (INVALID_PARAMETER_VALUE), so disable tracing outright.
         mlflow.tracing.disable()
 
 
-def tag_session(session_id: str) -> None:
-    """Tag the active MLflow trace with the session id, when tracing is enabled."""
-    if _enabled and session_id:
-        mlflow.update_current_trace(metadata={"mlflow.trace.session": session_id})
+@contextlib.contextmanager
+def start_trace(name: str, inputs: Any = None, session_id: str | None = None) -> Iterator[Any]:
+    """Start a trace by opening a root MLflow span around an operation (no-op when tracing is disabled).
+
+    Use this wherever tracing needs a root span to already exist. Framework autolog records spans
+    only when a trace is active and does not always start one itself (notably for streaming
+    invocations), so without a root span the operation can produce zero traces. Wrapping it in this
+    span gives autolog a parent to nest its spans under.
+
+    When ``session_id`` is given, the span's trace is tagged with it so traces group by session.
+
+    Yields the live span (so the caller can set outputs) when enabled, else ``None``.
+    """
+    if not _enabled:
+        yield None
+        return
+    with mlflow.start_span(name=name) as span:
+        if session_id:
+            mlflow.update_current_trace(metadata={"mlflow.trace.session": session_id})
+        if inputs is not None:
+            span.set_inputs(inputs)
+        yield span
