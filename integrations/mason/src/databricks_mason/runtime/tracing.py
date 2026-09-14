@@ -6,8 +6,7 @@ Tracing turns on only when a full config is present: a destination (``MLFLOW_TRA
 resolves the specific value itself; this only decides on/off. Requiring both halves avoids the
 half-configured case where traces silently export to a local file store instead of the workspace.
 When unconfigured, tracing is disabled outright so ``start_trace`` (which agents open around each
-invocation) has nothing to export to. No user decision lives here — it's all driven by env — so this
-whole module is a candidate to move behind an SDK helper.
+invocation) has nothing to export to.
 """
 
 import contextlib
