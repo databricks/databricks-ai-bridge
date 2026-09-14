@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -251,25 +254,91 @@ def _load_project(source: pathlib.Path):
     return AgentProject.load(source)
 
 
-def _reject_local_mason_source(source: pathlib.Path) -> None:
-    """Fail fast on a machine-local databricks-mason pin the Apps build can't reach.
+# The bundled wheel lives under vendor/ in the synced source: unlike dist/ or wheels/, it isn't
+# matched by the template's .gitignore, so `databricks sync` (which honors .gitignore) keeps it.
+_VENDOR_DIR = "vendor"
+
+# Skip these when copying the source into the staging dir. `databricks sync` honors .gitignore and
+# would drop them anyway, so this only spares copytree the work — chiefly the agent's .venv, which
+# `mason dev` leaves behind at hundreds of MB to a GB. `.git` isn't .gitignored but sync skips it too.
+_STAGE_IGNORE = (".git", ".venv", "venv")
+
+
+def _local_mason_checkout(source: pathlib.Path, override: Optional[str]) -> Optional[pathlib.Path]:
+    """The local databricks-mason checkout to build into a wheel for this deploy, or None.
 
     `mason init` from an editable checkout pins databricks-mason to a local `path` for the fast
-    `mason dev` loop; a `file://` git pin is the same problem. The in-sandbox Apps build can't see
-    the developer's filesystem, so surface the fix up front instead of a cryptic build failure.
-    To deploy unreleased Mason, install it from git and re-run init so the scaffold pins a git ref.
+    `mason dev` loop. Rather than reject that pin (the Apps build can't see the developer's
+    filesystem), deploy builds the checkout into a wheel and ships it with the app — so a developer's
+    unreleased/uncommitted SDK changes run on Apps compute. `--mason-source` overrides the pin to
+    point at a checkout explicitly. A `file://` git pin names a local clone the build still can't
+    reach and this path can't turn into a wheel, so it's rejected with guidance.
     """
+    if override is not None:
+        checkout = pathlib.Path(override)
+        if not (checkout / "pyproject.toml").is_file():
+            raise AgentCliError(
+                f"--mason-source {override!r} is not a databricks-mason package directory.",
+                hint="Point it at the integrations/mason directory of a databricks-ai-bridge checkout.",
+            )
+        return checkout
     pin = mason_source.read(source / "pyproject.toml")
     if not pin:
-        return
-    if isinstance(pin.get("path"), str) or str(pin.get("git", "")).startswith("file://"):
+        return None
+    if isinstance(pin.get("path"), str):
+        return pathlib.Path(pin["path"])
+    if str(pin.get("git", "")).startswith("file://"):
         raise AgentCliError(
-            "This project pins databricks-mason to a local checkout, which the Apps build can't "
-            "reach.",
-            hint="Install Mason from git and re-run `mason init` to deploy your changes: "
-            "pip install 'git+<repo>@<pushed-sha>#subdirectory=integrations/mason'. "
-            "The editable checkout stays for `mason dev`.",
+            "This project pins databricks-mason to a local git checkout, which the Apps build "
+            "can't reach.",
+            hint="Re-run `mason init` from an editable install (`pip install -e`) so deploy can "
+            "build and ship your checkout as a wheel, or pin a pushed git ref.",
         )
+    return None
+
+
+def _build_mason_wheel(mason_dir: pathlib.Path, out_dir: pathlib.Path) -> pathlib.Path:
+    """Build the databricks-mason package at `mason_dir` into a wheel in `out_dir`; return the wheel.
+
+    Only the built `.whl` is copied into the app bundle later — never `out_dir` itself, which `uv
+    build` seeds with a `.gitignore` of `*` that `databricks sync` would honor and silently drop the
+    wheel with.
+    """
+    if not (mason_dir / "pyproject.toml").is_file():
+        raise AgentCliError(f"No databricks-mason package found at {mason_dir}.")
+    result = subprocess.run(
+        ["uv", "build", "--wheel", str(mason_dir), "--out-dir", str(out_dir)],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise AgentCliError(
+            f"Could not build a databricks-mason wheel from {mason_dir}.",
+            hint=(result.stderr or result.stdout or "").strip() or None,
+        )
+    wheels = sorted(out_dir.glob("*.whl"))
+    if not wheels:
+        raise AgentCliError(f"Building databricks-mason at {mason_dir} produced no wheel.")
+    return wheels[-1]
+
+
+def _stage_source_with_local_mason(
+    source: pathlib.Path, mason_dir: pathlib.Path, tmp: pathlib.Path
+) -> pathlib.Path:
+    """Copy `source` into `tmp`, vendor a freshly built databricks-mason wheel, re-pin to it.
+
+    Returns the staged directory to sync. The working tree is never touched: the wheel and the
+    rewritten `[tool.uv.sources]` pin land only in the throwaway copy, so a concurrent `mason dev`
+    and a killed deploy both leave the developer's pyproject.toml intact.
+    """
+    wheel = _build_mason_wheel(mason_dir, tmp / "wheel")
+    staged = tmp / "source"
+    shutil.copytree(source, staged, ignore=shutil.ignore_patterns(*_STAGE_IGNORE))
+    vendor = staged / _VENDOR_DIR
+    vendor.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(wheel, vendor / wheel.name)
+    mason_source.write(staged / "pyproject.toml", mason_source.wheel(f"{_VENDOR_DIR}/{wheel.name}"))
+    return staged
 
 
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
@@ -471,6 +540,14 @@ def _grant_store_access(
     is_flag=True,
     help="Don't auto-create the default memory/session stores for slots unbound in agent.toml.",
 )
+@click.option(
+    "--mason-source",
+    "mason_source_dir",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help="Path to a local databricks-mason checkout (its integrations/mason directory) to build "
+    "into a wheel and ship with the app. Defaults to the local checkout the scaffold is pinned to.",
+)
 @click.pass_obj
 def deploy(
     obj,
@@ -480,6 +557,7 @@ def deploy(
     workspace_path,
     instances,
     no_create_stores,
+    mason_source_dir,
 ) -> None:
     """Deploy an agent: validate its bound stores, wire in tracing, and roll out the deployment.
 
@@ -491,6 +569,10 @@ def deploy(
     By default any memory/session store not yet bound in agent.toml is created and bound as
     `<name>-memory` / `<name>-session`; pass --no-create-stores to skip that.
 
+    If the scaffold pins databricks-mason to a local editable checkout (or --mason-source is given),
+    deploy builds that checkout into a wheel and ships it with the app, so unreleased SDK changes
+    run on Apps compute without publishing them first.
+
     Horizontally scaled deployments use best-effort sticky routing (session affinity). Browsers
     preserve the routing cookie automatically.
 
@@ -499,7 +581,9 @@ def deploy(
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
-    _reject_local_mason_source(source_dir)
+    # A local editable pin (or --mason-source) means ship the checkout as a wheel; resolve it up
+    # front so a file:// git pin or a bad --mason-source fails fast, before any provisioning.
+    mason_checkout = _local_mason_checkout(source_dir, mason_source_dir)
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
@@ -631,11 +715,24 @@ def deploy(
     # Don't ship uv.lock: it pins exact package URLs from whatever index the developer's machine
     # resolved against (often an internal proxy). The Apps build must resolve against its own
     # configured index, so let it lock fresh in-sandbox instead of inheriting the local lock.
-    _databricks(
-        ["sync", str(source_dir), ws_path, "--exclude", "uv.lock"],
-        obj.profile,
-        action=f"Could not upload the agent source for '{name}'.",
-    )
+    sync_exclude = ["--exclude", "uv.lock"]
+    upload_error = f"Could not upload the agent source for '{name}'."
+    if mason_checkout is None:
+        _databricks(
+            ["sync", str(source_dir), ws_path, *sync_exclude], obj.profile, action=upload_error
+        )
+    else:
+        # Build the pinned local databricks-mason checkout into a wheel and sync from a throwaway
+        # copy carrying it (with the pin rewritten to the wheel), so the in-sandbox Apps build
+        # installs the exact local SDK. The temp copy is discarded once synced.
+        with tempfile.TemporaryDirectory(prefix="mason-deploy-") as tmp:
+            with render.status("Building the local databricks-mason wheel…"):
+                staged = _stage_source_with_local_mason(
+                    source_dir, mason_checkout, pathlib.Path(tmp)
+                )
+            _databricks(
+                ["sync", str(staged), ws_path, *sync_exclude], obj.profile, action=upload_error
+            )
     _databricks(
         ["apps", "deploy", name, "--source-code-path", ws_path],
         obj.profile,

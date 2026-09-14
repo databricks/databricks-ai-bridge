@@ -12,6 +12,7 @@ import yaml
 from click.testing import CliRunner
 
 from databricks_mason import deploy as deploy_mod
+from databricks_mason import mason_source as mason_source_mod
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
@@ -104,26 +105,83 @@ def test_ensure_memory_store_reports_created():
 
 
 @pytest.mark.parametrize(
-    ("pin_toml", "rejected"),
+    ("pin_toml", "expected_checkout"),
     [
-        ('[tool.uv.sources]\ndatabricks-mason = { path = "/repo", editable = true }\n', True),
-        ('[tool.uv.sources]\ndatabricks-mason = { git = "file:///repo" }\n', True),
+        # An editable path pin names the checkout deploy builds into a wheel and ships.
+        ('[tool.uv.sources]\ndatabricks-mason = { path = "/repo", editable = true }\n', "/repo"),
+        # A remote git pin the Apps build can reach, and a plain PyPI dep, ship the pin as-is.
         (
             '[tool.uv.sources]\ndatabricks-mason = { git = "https://github.com/x/y", rev = "a" }\n',
-            False,
+            None,
         ),
-        ("", False),  # no pin (a plain PyPI dependency)
+        ("", None),  # no pin (a plain PyPI dependency)
     ],
 )
-def test_reject_local_mason_source(tmp_path: pathlib.Path, pin_toml: str, rejected: bool):
-    # A local editable path or a file:// git pin can't be reached by the Apps build, so deploy must
-    # fail fast; a remote git pin or a plain PyPI dependency deploys fine.
+def test_local_mason_checkout_resolves_pin(
+    tmp_path: pathlib.Path, pin_toml: str, expected_checkout
+):
     (tmp_path / "pyproject.toml").write_text(f'[project]\nname = "t"\n\n{pin_toml}')
-    if rejected:
-        with pytest.raises(AgentCliError, match="local checkout"):
-            deploy_mod._reject_local_mason_source(tmp_path)
-    else:
-        deploy_mod._reject_local_mason_source(tmp_path)  # no raise
+    resolved = deploy_mod._local_mason_checkout(tmp_path, None)
+    assert resolved == (None if expected_checkout is None else pathlib.Path(expected_checkout))
+
+
+def test_local_mason_checkout_rejects_file_git_pin(tmp_path: pathlib.Path):
+    # A file:// git pin names a local clone the Apps build can't reach and this path can't wheel.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "t"\n\n[tool.uv.sources]\ndatabricks-mason = { git = "file:///repo" }\n'
+    )
+    with pytest.raises(AgentCliError, match="local git checkout"):
+        deploy_mod._local_mason_checkout(tmp_path, None)
+
+
+def test_local_mason_checkout_override_wins_over_pin(tmp_path: pathlib.Path):
+    # --mason-source overrides whatever the scaffold is pinned to, and must name a package dir.
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "t"\n')
+    checkout = tmp_path / "mason"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text('[project]\nname = "databricks-mason"\n')
+    assert deploy_mod._local_mason_checkout(tmp_path, str(checkout)) == checkout
+    with pytest.raises(AgentCliError, match="not a databricks-mason package directory"):
+        deploy_mod._local_mason_checkout(tmp_path, str(tmp_path / "missing"))
+
+
+def test_stage_source_with_local_mason_vendors_wheel_without_touching_source(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # Staging vendors the built wheel and re-pins to it in a throwaway copy — the working-tree
+    # pyproject.toml (still the editable pin) is left untouched. Build is mocked; the real wheel
+    # build + `databricks sync` interaction is covered by the deploy E2E.
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        '[project]\nname = "agent"\ndependencies = ["databricks-mason[runtime]"]\n\n'
+        '[tool.uv.sources]\ndatabricks-mason = { path = "/checkout", editable = true }\n'
+    )
+    (source / "app.yaml").write_text("command: ['uv', 'run', 'start-server']\n")
+
+    def _fake_build(mason_dir, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        wheel = out_dir / "databricks_mason-0.1.0-py3-none-any.whl"
+        wheel.write_bytes(b"PK\x03\x04")  # a stand-in wheel; contents don't matter here
+        return wheel
+
+    monkeypatch.setattr(deploy_mod, "_build_mason_wheel", _fake_build)
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    staged = deploy_mod._stage_source_with_local_mason(source, pathlib.Path("/checkout"), tmp)
+
+    vendored = staged / "vendor" / "databricks_mason-0.1.0-py3-none-any.whl"
+    assert vendored.is_file()
+    assert mason_source_mod.read(staged / "pyproject.toml") == {
+        "path": "vendor/databricks_mason-0.1.0-py3-none-any.whl"
+    }
+    assert (staged / "app.yaml").read_text() == "command: ['uv', 'run', 'start-server']\n"
+    # Working tree untouched: still the editable pin, no vendored wheel.
+    assert mason_source_mod.read(source / "pyproject.toml") == {
+        "path": "/checkout",
+        "editable": True,
+    }
+    assert not (source / "vendor").exists()
 
 
 class _FakeClient:

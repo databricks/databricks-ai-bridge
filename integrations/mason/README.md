@@ -372,13 +372,17 @@ to the released version or the recorded commit instead.
 | --- | --- | --- | --- |
 | `mason init` | picked up from the working tree | writes an editable-path pin into the scaffold | `importlib.resources` resolves to the source tree |
 | `mason dev` | (already in the scaffold) | live, no reinstall | `uv` follows the editable pin |
-| `mason deploy` | (already in the scaffold) | needs a git-installed Mason | see below |
+| `mason deploy` | (already in the scaffold) | built into a wheel, shipped with the app | see below |
 
 `mason dev` is the fast local loop for iterating on the SDK — an editable install, no reinstall per
-edit. `mason deploy`, though, ships the source to the Databricks Apps build sandbox, which **can't
-reach your local editable checkout**, so deploy rejects an editable (or `file://`) pin with guidance.
-To deploy SDK changes onto Apps compute, install Mason from git and re-run `init` so the scaffold
-pins a reachable git ref the build can clone:
+edit. `mason deploy` ships the source to the Databricks Apps build sandbox, which **can't reach your
+local editable checkout**. So when the scaffold pins an editable checkout, deploy builds that
+checkout into a wheel, vendors it into the synced bundle, and rewrites the pin to it — the build
+installs the exact local SDK, uncommitted changes and all, without publishing it first. Pass
+`--mason-source <path>` to build from a checkout other than the pinned one.
+
+A `file://` git pin (a local clone) still can't be reached and isn't built here, so deploy rejects it
+with guidance. To deploy from a pushed git ref instead, install Mason from git and re-run `init`:
 
 ```sh
 pip install 'git+https://github.com/<you>/databricks-ai-bridge@<pushed-sha>#subdirectory=integrations/mason'

@@ -27,6 +27,12 @@ def test_editable_pin():
     }
 
 
+def test_wheel_pin():
+    assert mason_source.wheel("vendor/databricks_mason-0.1.0-py3-none-any.whl") == {
+        "path": "vendor/databricks_mason-0.1.0-py3-none-any.whl",
+    }
+
+
 def test_read_returns_pin_or_none(tmp_path: pathlib.Path):
     pyproject = tmp_path / "pyproject.toml"
     assert mason_source.read(pyproject) is None  # missing file

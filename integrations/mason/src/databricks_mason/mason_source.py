@@ -1,9 +1,9 @@
 """Read and write the databricks-mason source pin in a generated project's pyproject.toml.
 
 A Mason project can override where `databricks-mason` is installed from via `[tool.uv.sources]`.
-`mason init` writes that pin (a git repo or a local editable checkout) and `mason deploy` reads it
-to reject a machine-local pin the Apps build can't reach. This module owns the pin's shapes and the
-tomlkit plumbing so init and deploy don't each reimplement them.
+`mason init` writes that pin (a git repo or a local editable checkout); `mason deploy` reads it and,
+for a local checkout, builds it into a wheel it ships with the app and re-pins to (`wheel`). This
+module owns the pin's shapes and the tomlkit plumbing so init and deploy don't each reimplement them.
 """
 
 from __future__ import annotations
@@ -30,6 +30,15 @@ def editable(mason_dir: pathlib.Path) -> dict:
     Resolves only on this machine, so `mason deploy` rejects it.
     """
     return {"path": str(mason_dir.resolve()), "editable": True}
+
+
+def wheel(relative_path: str) -> dict:
+    """Pin to a wheel shipped inside the synced app bundle (a path relative to the project root).
+
+    `mason deploy` builds a local editable checkout into a wheel, drops it under `vendor/`, and
+    rewrites the pin to it — so the in-sandbox Apps build installs the exact local SDK.
+    """
+    return {"path": relative_path}
 
 
 def read(pyproject: pathlib.Path) -> dict | None:
