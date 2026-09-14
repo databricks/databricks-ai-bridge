@@ -10,6 +10,7 @@ import pytest
 from databricks_ai_bridge.genie import (
     Genie,
     _count_tokens,
+    _extract_follow_up_question_from_attachments,
     _extract_suggested_questions_from_attachment,
     _extract_text_attachment_content_from_attachments,
     _parse_attachments,
@@ -1022,6 +1023,35 @@ def test_extract_text_content(attachments, expected):
     assert _extract_text_attachment_content_from_attachments(attachments) == expected
 
 
+def test_text_attachment_purposes_keep_answers_and_clarifications_separate():
+    attachments = [
+        {
+            "text": {
+                "content": "The current answer is 42.",
+                "purpose": "TEXT_ATTACHMENT_PURPOSE_ANSWER",
+            }
+        },
+        {
+            "text": {
+                "content": "Which region should I use?",
+                "purpose": "FOLLOW_UP_QUESTION",
+            }
+        },
+    ]
+
+    assert _extract_text_attachment_content_from_attachments(attachments) == (
+        "The current answer is 42."
+    )
+    assert _extract_follow_up_question_from_attachments(attachments) == (
+        "Which region should I use?"
+    )
+
+
+@pytest.mark.parametrize("attachments", [None, [], "invalid", [{"text": {}}]])
+def test_missing_follow_up_question_returns_none(attachments):
+    assert _extract_follow_up_question_from_attachments(attachments) is None
+
+
 def test_poll_with_all_attachments(genie, mock_workspace_client):
     """Test with suggested questions, text, and query."""
     mock_workspace_client.genie._api.do.side_effect = [
@@ -1058,8 +1088,21 @@ def test_poll_text_only_no_query(genie, mock_workspace_client):
             "status": "COMPLETED",
             "conversation_id": "conv_456",
             "attachments": [
-                {"attachment_id": "1", "text": {"content": "Just text"}},
-                {"attachment_id": "2", "suggested_questions": {"questions": ["Follow-up?"]}},
+                {
+                    "attachment_id": "1",
+                    "text": {
+                        "content": "Just text",
+                        "purpose": "TEXT_ATTACHMENT_PURPOSE_ANSWER",
+                    },
+                },
+                {
+                    "attachment_id": "2",
+                    "text": {
+                        "content": "Which region?",
+                        "purpose": "FOLLOW_UP_QUESTION",
+                    },
+                },
+                {"attachment_id": "3", "suggested_questions": {"questions": ["Follow-up?"]}},
             ],
         }
     ]
@@ -1068,6 +1111,7 @@ def test_poll_text_only_no_query(genie, mock_workspace_client):
     assert result.result == "Just text"
     assert result.text_attachment_content == "Just text"
     assert result.suggested_questions == ["Follow-up?"]
+    assert result.follow_up_question == "Which region?"
 
 
 def test_poll_query_only(genie, mock_workspace_client):

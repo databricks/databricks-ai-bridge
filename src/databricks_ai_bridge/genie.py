@@ -38,6 +38,7 @@ class GenieResponse:
     conversation_id: Optional[str] = None
     suggested_questions: Optional[List[str]] = None
     text_attachment_content: Optional[str] = ""
+    follow_up_question: Optional[str] = None
 
 
 @mlflow_trace(span_type="PARSER")
@@ -238,7 +239,7 @@ def _extract_suggested_questions_from_attachment(attachment) -> Optional[List[st
 
 
 def _extract_text_attachment_content_from_attachments(attachments) -> Optional[str]:
-    """Join the text summaries from a list of Genie API response text attachments."""
+    """Join answer text while excluding blocking follow-up questions."""
     if not isinstance(attachments, list):
         return ""
 
@@ -249,11 +250,31 @@ def _extract_text_attachment_content_from_attachments(attachments) -> Optional[s
         text_obj = attachment.get("text")
         if not isinstance(text_obj, dict):
             continue
+        if text_obj.get("purpose") == "FOLLOW_UP_QUESTION":
+            continue
         content = text_obj.get("content", "")
         if content:
             contents.append(content)
 
     return "\n\n".join(contents)
+
+
+def _extract_follow_up_question_from_attachments(attachments) -> Optional[str]:
+    """Return Genie's blocking clarification, distinct from suggested questions."""
+    if not isinstance(attachments, list):
+        return None
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        text_obj = attachment.get("text")
+        if not isinstance(text_obj, dict):
+            continue
+        if text_obj.get("purpose") != "FOLLOW_UP_QUESTION":
+            continue
+        content = text_obj.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return None
 
 
 class Genie:
@@ -305,6 +326,7 @@ class Genie:
             conversation_id=conversation_id,
             suggested_questions=None,
             text_attachment_content=None,
+            follow_up_question=None,
         ):
             iteration_count = 0
             while iteration_count < MAX_ITERATIONS:
@@ -325,6 +347,7 @@ class Genie:
                         returned_conversation_id,
                         suggested_questions,
                         text_attachment_content,
+                        follow_up_question,
                     )
                 elif state in ["RUNNING", "PENDING"]:
                     logging.debug("Waiting for query result...")
@@ -337,6 +360,7 @@ class Genie:
                         returned_conversation_id,
                         suggested_questions,
                         text_attachment_content,
+                        follow_up_question,
                     )
             return GenieResponse(
                 f"Genie query for result timed out after {MAX_ITERATIONS} iterations of 5 seconds",
@@ -345,6 +369,7 @@ class Genie:
                 conversation_id,
                 suggested_questions,
                 text_attachment_content,
+                follow_up_question,
             )
 
         @mlflow_trace
@@ -413,6 +438,9 @@ class Genie:
                         text_attachment_content = _extract_text_attachment_content_from_attachments(
                             parsed["text_attachments"]
                         )
+                        follow_up_question = _extract_follow_up_question_from_attachments(
+                            parsed["text_attachments"]
+                        )
 
                         if parsed["query_attachment"]:
                             query_obj = parsed["query_attachment"].get("query") or {}
@@ -426,6 +454,7 @@ class Genie:
                                     suggested_questions=suggested_questions,
                                     conversation_id=returned_conversation_id,
                                     text_attachment_content=text_attachment_content,
+                                    follow_up_question=follow_up_question,
                                 )
 
                         # if there is no query attachment, use text attachment as result
@@ -434,6 +463,7 @@ class Genie:
                             suggested_questions=suggested_questions,
                             conversation_id=returned_conversation_id,
                             text_attachment_content=text_attachment_content,
+                            follow_up_question=follow_up_question,
                         )
 
                     elif current_status in {"CANCELLED", "QUERY_RESULT_EXPIRED"}:
