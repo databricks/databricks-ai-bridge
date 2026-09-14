@@ -80,16 +80,19 @@ def wrap_api_error(exc: Exception) -> AgentCliError:
     """
     # When the SDK exhausts its retry budget it raises a TimeoutError chaining the last underlying
     # error as __cause__; surface that original service error, not the generic retry wrapper.
+    # __cause__ is typed BaseException, so use a separate BaseException-typed local rather than
+    # reassigning the Exception-typed parameter.
+    effective: BaseException = exc
     if isinstance(exc, TimeoutError) and exc.__cause__ is not None:
-        exc = exc.__cause__
-    error_code = getattr(exc, "error_code", None)
-    # A message-less DatabricksError wraps `IOError(None)`, so `str(exc)` is the literal
+        effective = exc.__cause__
+    error_code = getattr(effective, "error_code", None)
+    # A message-less DatabricksError wraps `IOError(None)`, so `str(effective)` is the literal
     # "None". Treat that (and an empty string) as "no detail" so we surface the error code
     # instead of a bare `Error [CANCELLED]: None`.
-    detail = str(exc).strip()
+    detail = str(effective).strip()
     if detail == "None":
         detail = ""
-    message = detail or _no_detail_message(error_code) or exc.__class__.__name__
+    message = detail or _no_detail_message(error_code) or effective.__class__.__name__
     if error_code in _PREVIEW_ERROR_CODES:
         hint = _PREVIEW_HINT
     elif error_code in TRANSIENT_ERROR_CODES:

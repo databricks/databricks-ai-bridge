@@ -18,7 +18,6 @@ import sys
 from typing import Optional
 
 import click
-from databricks.sdk.errors import Unauthenticated
 
 from databricks_mason import render
 from databricks_mason._api_client import _MasonApiClient
@@ -71,6 +70,10 @@ def _run_databricks_login(profile: str) -> None:
 
 
 def _authenticate_profile(profile: str) -> tuple[_MasonApiClient, str]:
+    # Local import: pulling databricks.sdk.errors loads the full SDK (~0.7s), which we defer off
+    # the CLI startup path. This function already builds a client, so the cost lands here anyway.
+    from databricks.sdk.errors import Unauthenticated
+
     try:
         return _validate_profile(profile)
     except (AgentCliError, Unauthenticated) as initial_error:

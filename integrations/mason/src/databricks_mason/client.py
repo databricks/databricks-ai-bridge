@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from databricks.sdk import WorkspaceClient
+from typing import TYPE_CHECKING, Optional
 
 from databricks_mason._api_client import _MasonApiClient
 from databricks_mason.memory_store import MemoryStores
 from databricks_mason.session_store import SessionStores
+
+if TYPE_CHECKING:
+    # Imported lazily elsewhere: pulling databricks.sdk costs ~0.7s, so keeping it out of the
+    # import path lets local CLI commands (help, init, tools, bind, completion) start fast.
+    from databricks.sdk import WorkspaceClient
 
 
 class MasonClient:
