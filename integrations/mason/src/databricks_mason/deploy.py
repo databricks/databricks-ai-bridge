@@ -250,6 +250,58 @@ def _load_project(source: pathlib.Path):
     return AgentProject.load(source)
 
 
+def _local_mason_source(source: pathlib.Path) -> Optional[str]:
+    """Return the local databricks-mason source pinned in pyproject.toml, if any.
+
+    `mason init` under an editable/local mason install records a `file://` git source (or a
+    filesystem `path`) for databricks-mason in `[tool.uv.sources]`. That resolves for local
+    `mason dev`, but the Databricks Apps build environment has no such path, so `uv` can't fetch
+    it and the deployed app crashes at startup with an opaque error. Detect it so deploy can fail
+    fast. Returns the offending source string, or None when the pin is deployable (a reachable git
+    URL / registry version) or absent.
+    """
+    pyproject = source / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    try:
+        try:
+            import tomllib  # Python 3.11+
+        except ModuleNotFoundError:  # pragma: no cover - exercised on 3.10
+            import tomli as tomllib  # type: ignore[no-redef]
+        data = tomllib.loads(pyproject.read_text())
+    except Exception:  # noqa: BLE001 - never block deploy on a parse hiccup
+        return None
+    pin = (((data.get("tool") or {}).get("uv") or {}).get("sources") or {}).get("databricks-mason")
+    if not isinstance(pin, dict):
+        return None
+    git = pin.get("git")
+    if isinstance(git, str) and git.startswith("file://"):
+        return git
+    path = pin.get("path")
+    if isinstance(path, str) and path:
+        return path
+    return None
+
+
+def _check_deployable_mason_source(source: pathlib.Path) -> None:
+    """Fail fast (before the multi-minute sync) if databricks-mason is pinned to a local path."""
+    local = _local_mason_source(source)
+    if local is None:
+        return
+    raise AgentCliError(
+        f"This project pins databricks-mason to a local path ({local}), which won't exist in "
+        "the Databricks Apps build environment — the deployed app can't install it and will "
+        "crash at startup.",
+        hint=(
+            "This happens when mason itself was installed editable from a local checkout. Re-"
+            "scaffold from a released or git install of mason (e.g. `pip install databricks-mason`"
+            " or `pip install 'git+https://github.com/databricks/databricks-ai-bridge.git"
+            "#subdirectory=integrations/mason'`), or edit [tool.uv.sources].databricks-mason in "
+            "pyproject.toml to a reachable git URL + rev before deploying."
+        ),
+    )
+
+
 def store_bindings(source: pathlib.Path) -> tuple[Optional[str], Optional[str]]:
     """The (memory, session) stores bound in agent.toml via `mason memory/sessions bind`.
 
@@ -477,6 +529,9 @@ def deploy(
       __Host-databricks-app-router=<uuid>
     """
     source_dir = pathlib.Path(source)
+    # Fail fast before the multi-minute sync if databricks-mason is pinned to a local path that
+    # can't resolve in the Apps build (otherwise the app crashes opaquely at startup).
+    _check_deployable_mason_source(source_dir)
     project = _load_project(source_dir)
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)

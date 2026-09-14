@@ -152,3 +152,84 @@ def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatc
     assert names.count("postgres") == 1  # not duplicated
     pg = next(r for r in payload["resources"] if r["name"] == "postgres")
     assert "db-new" in pg["postgres"]["database"]  # updated to ours
+
+
+# --- ML-69653: fail fast when databricks-mason is pinned to a local (file://) path ------------
+
+_FILE_SRC = (
+    '[project]\nname = "x"\ndependencies = ["databricks-mason[runtime]>=0.1.5"]\n'
+    "[tool.uv.sources]\n"
+    'databricks-mason = {git = "file:///home/dev/checkout", rev = "abc", '
+    'subdirectory = "integrations/mason"}\n'
+)
+_PATH_SRC = (
+    '[project]\nname = "x"\ndependencies = ["databricks-mason[runtime]>=0.1.5"]\n'
+    "[tool.uv.sources]\n"
+    'databricks-mason = {path = "../checkout/integrations/mason"}\n'
+)
+_GIT_SRC = (
+    '[project]\nname = "x"\ndependencies = ["databricks-mason[runtime]>=0.1.5"]\n'
+    "[tool.uv.sources]\n"
+    'databricks-mason = {git = "https://github.com/databricks/databricks-ai-bridge.git", '
+    'rev = "abc", subdirectory = "integrations/mason"}\n'
+)
+_REGISTRY_SRC = '[project]\nname = "x"\ndependencies = ["databricks-mason[runtime]>=0.1.5"]\n'
+
+
+def _proj(tmp_path, pyproject_text=None):
+    if pyproject_text is not None:
+        (tmp_path / "pyproject.toml").write_text(pyproject_text)
+    return tmp_path
+
+
+def test_local_mason_source_detects_file_uri(tmp_path):
+    assert deploy_mod._local_mason_source(_proj(tmp_path, _FILE_SRC)) == "file:///home/dev/checkout"
+
+
+def test_local_mason_source_detects_path(tmp_path):
+    assert (
+        deploy_mod._local_mason_source(_proj(tmp_path, _PATH_SRC))
+        == "../checkout/integrations/mason"
+    )
+
+
+def test_local_mason_source_none_for_remote_git(tmp_path):
+    assert deploy_mod._local_mason_source(_proj(tmp_path, _GIT_SRC)) is None
+
+
+def test_local_mason_source_none_for_registry(tmp_path):
+    assert deploy_mod._local_mason_source(_proj(tmp_path, _REGISTRY_SRC)) is None
+
+
+def test_local_mason_source_none_when_no_pyproject(tmp_path):
+    assert deploy_mod._local_mason_source(tmp_path) is None
+
+
+def test_check_deployable_raises_for_local_source(tmp_path):
+    with pytest.raises(AgentCliError, match="local path"):
+        deploy_mod._check_deployable_mason_source(_proj(tmp_path, _FILE_SRC))
+
+
+def test_check_deployable_passes_for_remote_git(tmp_path):
+    deploy_mod._check_deployable_mason_source(_proj(tmp_path, _GIT_SRC))  # no raise
+
+
+def test_deploy_fails_fast_on_local_source_without_touching_client(tmp_path, monkeypatch):
+    # A file://-pinned project must be rejected before any client/sync work happens.
+    (tmp_path / "agent.toml").write_text('schema_version = 1\n[agent]\nframework = "langgraph"\n')
+    (tmp_path / "pyproject.toml").write_text(_FILE_SRC)
+    (tmp_path / "app.yaml").write_text('command: ["uv", "run", "start-server"]\n')
+    called = {"client": False, "databricks": False}
+
+    class _C(_Ctx):
+        def client(self):
+            called["client"] = True
+            raise AssertionError("client() must not be reached")
+
+    monkeypatch.setattr(
+        deploy_mod, "_databricks", lambda *a, **k: called.__setitem__("databricks", True)
+    )
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(tmp_path)], obj=_C())
+    assert result.exit_code != 0
+    assert "local path" in result.output
+    assert called == {"client": False, "databricks": False}
