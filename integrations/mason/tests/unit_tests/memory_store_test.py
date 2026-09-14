@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 from resource_test_fixtures import (
     MEMORY_ID,
+    MEMORY_NAME,
     MEMORY_STORE_NAME,
     STORE_ID,
     mem_store_payload,
@@ -150,6 +151,33 @@ def test_get_update_and_delete_memory() -> None:
         description=None,
     )
     api.delete_memory_entry.assert_called_once_with(STORE_ID, MEMORY_ID)
+
+
+def test_read_mask_projecting_out_fields_does_not_crash() -> None:
+    # A caller-supplied read_mask can project actor_id/path out of the response. Parsing must
+    # tolerate their absence (regression: previously raised KeyError: 'actor_id').
+    masked = {"name": MEMORY_NAME, "content": "c"}  # read_mask="name,content"
+    client, api = resource_client()
+    api.get_memory_store.return_value = mem_store_payload()
+    api.get_memory_entry.return_value = masked
+    api.list_memory_entries.return_value = {"managed_memory_entries": [masked]}
+    api.search_memory_entries.return_value = {
+        "results": [{"managed_memory_entry": masked, "score": 0.5}]
+    }
+    store = client.memory_stores.get(STORE_ID)
+
+    got = store.get(MEMORY_ID, read_mask="name,content")
+    assert got.id == MEMORY_ID
+    assert got.actor_id is None and got.path is None
+    assert got.content == "c"
+
+    listed = list(store.list(actor_id="alice", page_size=10, read_mask="name,content"))
+    assert [m.id for m in listed] == [MEMORY_ID]
+    assert listed[0].actor_id is None
+
+    results = store.search(actor_id="alice", query="q", read_mask="name,content")
+    assert results[0].memory.id == MEMORY_ID
+    assert results[0].memory.actor_id is None
 
 
 def test_search_preserves_scores_and_translates_limit() -> None:
