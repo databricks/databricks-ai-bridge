@@ -18,8 +18,9 @@ from click.testing import CliRunner
 from databricks_mason import init as init_mod
 from databricks_mason.errors import AgentCliError
 
-# Captured before the autouse fixture stubs it, so its own tests exercise the real implementation.
+# Captured before the autouse fixture stubs them, so their own tests exercise the real implementation.
 _real_installed_git_template_source = init_mod._installed_git_template_source
+_real_editable_checkout_root = init_mod._editable_checkout_root
 
 
 class _Ctx:
@@ -82,6 +83,16 @@ def test_installed_git_template_source_uses_recorded_commit(monkeypatch: pytest.
         "https://github.com/example/databricks-ai-bridge",
         commit,
     )
+
+
+def test_editable_checkout_root_none_when_git_missing(monkeypatch: pytest.MonkeyPatch):
+    # A machine without git must not crash `mason init`: _git turns the OSError into an
+    # AgentCliError, which _editable_checkout_root catches to fall back to a registry scaffold.
+    def _no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(init_mod.subprocess, "run", _no_git)
+    assert _real_editable_checkout_root() is None
 
 
 @pytest.mark.parametrize("direct_url", [None, "not json", '{"url": "file:///tmp/mason"}'])

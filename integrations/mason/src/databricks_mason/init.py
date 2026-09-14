@@ -40,7 +40,14 @@ _CHAT_APP_TEMPLATES = {"langgraph": "ui/agent-langgraph", "openai": "ui/agent-op
 
 
 def _git(args: list[str], *, cwd: Optional[pathlib.Path] = None) -> subprocess.CompletedProcess:
-    result = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
+        )
+    except OSError as exc:
+        # git not installed / not on PATH: raise the error `_editable_checkout_root` already handles,
+        # so a registry install with no git falls back to a plain scaffold instead of crashing init.
+        raise AgentCliError("`git` is not available", hint=str(exc)) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise AgentCliError(
