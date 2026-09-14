@@ -264,11 +264,11 @@ def _local_mason_source(source: pathlib.Path) -> Optional[str]:
     if not pyproject.is_file():
         return None
     try:
-        try:
-            import tomllib  # Python 3.11+
-        except ModuleNotFoundError:  # pragma: no cover - exercised on 3.10
-            import tomli as tomllib  # type: ignore[no-redef]
-        data = tomllib.loads(pyproject.read_text())
+        # tomli is a direct dependency and resolves on every supported Python (unlike stdlib
+        # tomllib, which is 3.11+ and trips the 3.10-targeted type checker).
+        import tomli
+
+        data = tomli.loads(pyproject.read_text())
     except Exception:  # noqa: BLE001 - never block deploy on a parse hiccup
         return None
     pin = (((data.get("tool") or {}).get("uv") or {}).get("sources") or {}).get("databricks-mason")
