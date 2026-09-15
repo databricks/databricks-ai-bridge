@@ -343,6 +343,6 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
-      - name: Run mason dev functional test
+      - name: Run mason functional tests
         working-directory: integrations/mason
-        run: uv run --exact --group tests pytest tests/functional/dev_runtime_test.py
+        run: uv run --exact --group tests pytest tests/functional/
