@@ -2,8 +2,9 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents use a dedicated, app-owned Lakebase project. The managed stores
-are read from `agent.toml` at runtime, so they are not written into `app.yaml`. `mason deployments`
+the deployment. Durable agents use a dedicated, app-owned Lakebase project. `agent.toml` is the
+CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` / `AGENT_SESSION_STORE` env
+vars written into `app.yaml` — the runtime reads those, never `agent.toml`. `mason deployments`
 covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
 
@@ -35,7 +36,7 @@ from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV
+from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -542,6 +543,8 @@ def deploy(
         )
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
+    if session_store:
+        env_updates[SESSION_STORE_ENV] = session_store
 
     durability_backend = None
     durability_enabled = bool(project and project.durability_enabled)
@@ -560,7 +563,7 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 3. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
+    # 3. Patch the app.yaml manifest with the resolved store, trace, and index env vars.
     scaffolded = False
     if env_updates:
         scaffolded = _upsert_manifest_env(source_dir, env_updates)

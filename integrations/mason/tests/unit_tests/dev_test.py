@@ -153,8 +153,8 @@ def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Pa
 
 
 def test_dev_checks_stores_when_bound_and_keeps_app_yaml_clean(tmp_path: pathlib.Path, monkeypatch):
-    # When stores are declared and exist, dev resolves the memory store's id (for the local manifest)
-    # and does NOT write any store env into app.yaml — stores live in agent.toml, not the manifest.
+    # When stores are declared and exist, dev resolves them into the dev-only manifest and does NOT
+    # touch the deployable app.yaml (deploy owns that; dev's overrides live in app.masondev.yaml).
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(tmp_path, memory="m", session="s")
     (tmp_path / ".venv").mkdir()
@@ -168,7 +168,7 @@ def test_dev_checks_stores_when_bound_and_keeps_app_yaml_clean(tmp_path: pathlib
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert resolve_calls == ["m"]  # resolved by display name
-    # Stores are read from agent.toml at runtime, so no store env is written into app.yaml.
+    # Store env goes into the dev-only manifest, so the deployable app.yaml stays clean.
     env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
     assert {e["name"] for e in env_entries} == set()
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
@@ -504,13 +504,13 @@ def test_dev_degrades_gracefully_when_store_client_raises_offline(
     assert not dev_yaml_path.exists()  # cleaned up by finally block after run
 
 
-def test_dev_injects_memory_id_into_dev_manifest_only(tmp_path: pathlib.Path, monkeypatch):
-    # When the memory store exists, its bare id is injected into the dev-only manifest
-    # (app.masondev.yaml) but NOT into the deployable app.yaml.
+def test_dev_injects_store_env_into_dev_manifest_only(tmp_path: pathlib.Path, monkeypatch):
+    # When the stores exist, the memory id and session name are injected into the dev-only manifest
+    # (app.masondev.yaml) but NOT into the deployable app.yaml — the runtime reads env, not agent.toml.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
-    _write_agent_manifest(src, memory="mem")
+    _write_agent_manifest(src, memory="mem", session="sess")
 
     monkeypatch.setattr(
         dev_mod, "_resolve_memory_store", lambda client, name: {"name": "memory-stores/mem-id-123"}
@@ -531,8 +531,10 @@ def test_dev_injects_memory_id_into_dev_manifest_only(tmp_path: pathlib.Path, mo
     assert result.exit_code == 0, result.output
     dev_env = {e["name"]: e["value"] for e in captured_dev.get("env", [])}
     assert dev_env["AGENT_MEMORY_STORE"] == "mem-id-123"
+    assert dev_env["AGENT_SESSION_STORE"] == "sess"
     real_env = {
         e["name"]: e["value"]
         for e in (yaml.safe_load((src / "app.yaml").read_text()).get("env") or [])
     }
     assert "AGENT_MEMORY_STORE" not in real_env  # real app.yaml is untouched for stores
+    assert "AGENT_SESSION_STORE" not in real_env

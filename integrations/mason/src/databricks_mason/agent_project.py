@@ -498,9 +498,9 @@ class AgentProject:
     def bind_memory_store(self, name: str, store_id: str | None = None) -> bool:
         """Declare the memory store binding in agent.toml. Returns True if it changed.
 
-        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). The runtime needs
-        the id, not the display name, to build the entries API path, so we record it alongside the
-        name to keep resolution a pure agent.toml read.
+        ``store_id`` is the bare store id (``memory-stores/<id>`` minus the prefix). `mason deploy`
+        resolves the id fresh and injects it via ``AGENT_MEMORY_STORE``; the field is only recorded for
+        legacy/hand-written bindings that pin the id in the manifest.
         """
         return self._set_store(MEMORY_STORE_TABLE, name, store_id)
 
