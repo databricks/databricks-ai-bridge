@@ -1,78 +1,86 @@
-"""Provision and locate the Lakebase database used by Mason durability."""
+"""Resolve the Lakebase database provisioned by the Runtime Store API."""
 
 from __future__ import annotations
 
 import hashlib
-import json
 import re
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any
 
-from databricks_mason.app_resources import LakebaseBackend, _databricks
 from databricks_mason.errors import AgentCliError
 
+_PROJECT = "databricks-internal-agent-runtime-store"
 _BRANCH = "production"
 _ENDPOINT = "primary"
-_DATABASE = "databricks-postgres"
-_RESOURCE_NAME = "postgres-durability"
 
 
-def backend(app: str) -> LakebaseBackend:
-    """Return the dedicated fallback backend for a Mason deployment."""
-    project = _project_id(app)
-    return LakebaseBackend(
-        project=project,
-        branch=_BRANCH,
-        endpoint_id=_ENDPOINT,
-        database=_DATABASE,
-        schema=get_lakebase_schema(app),
-        tables=(),
-        resource_name=_RESOURCE_NAME,
-    )
+@dataclass(frozen=True)
+class LakebaseBackend:
+    project: str
+    branch: str
+    endpoint_id: str
+    database: str
+    schema: str
+
+    @property
+    def branch_path(self) -> str:
+        return f"projects/{self.project}/branches/{self.branch}"
+
+    @property
+    def database_path(self) -> str:
+        return f"{self.branch_path}/databases/{self.database}"
+
+    @property
+    def endpoint_path(self) -> str:
+        return f"{self.branch_path}/endpoints/{self.endpoint_id}"
 
 
-def get_or_create_backend(app: str, profile: Optional[str], *, create: bool) -> LakebaseBackend:
-    """Reuse the deployment's durability project or create it when allowed."""
-    selected = backend(app)
-    project_path = f"projects/{selected.project}"
-    existing = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if existing.returncode == 0:
-        return selected
-    if not create:
-        raise AgentCliError(
-            f"Durability store '{selected.project}' does not exist.",
-            hint="Bind a Session Store to reuse its Lakebase database.",
-        )
-
-    payload = {"spec": {"display_name": f"Mason durability for {app}"}}
-    created = _databricks(
-        ["postgres", "create-project", selected.project, "--json", json.dumps(payload)],
-        profile,
-        capture=True,
-        check=False,
-    )
-    if created.returncode == 0:
-        return selected
-
-    resolved = _databricks(
-        ["postgres", "get-project", project_path], profile, capture=True, check=False
-    )
-    if resolved.returncode == 0:
-        return selected
-    detail = (created.stderr or created.stdout or "").strip() or "unknown error"
-    raise AgentCliError(f"Could not create durability store '{selected.project}'.", hint=detail)
-
-
-def _project_id(app: str) -> str:
-    normalized = re.sub(r"[^a-z0-9-]+", "-", app.lower()).strip("-")
-    normalized = normalized or "mason-app"
+def runtime_store_id(app: str, app_service_principal_id: str) -> str:
+    """Return the stable store ID for one Databricks App identity."""
+    normalized = re.sub(r"[^a-z0-9-]+", "-", app.lower()).strip("-") or "mason-app"
     if not normalized[0].isalpha():
         normalized = f"mason-{normalized}"
-    return f"{normalized}-durability"[:63].rstrip("-")
+    suffix = hashlib.sha256(app_service_principal_id.encode("utf-8")).hexdigest()[:12]
+    return f"{normalized[: 62 - len(suffix)].rstrip('-')}-{suffix}"
+
+
+def backend(app: str, store_id: str) -> LakebaseBackend:
+    """Return the deterministic backend for an already-existing Runtime Store."""
+    return LakebaseBackend(
+        project=_PROJECT,
+        branch=_BRANCH,
+        endpoint_id=_ENDPOINT,
+        database=store_id,
+        schema=get_lakebase_schema(app),
+    )
+
+
+def backend_from_api(app: str, store_id: str, runtime_store: Any) -> LakebaseBackend:
+    """Validate and convert the Runtime Store API response."""
+    lakebase = runtime_store.get("lakebase_backend") if isinstance(runtime_store, dict) else None
+    project = lakebase.get("project_id") if isinstance(lakebase, dict) else None
+    branch_path = lakebase.get("branch") if isinstance(lakebase, dict) else None
+    database = lakebase.get("database_id") if isinstance(lakebase, dict) else None
+    expected_branch = f"projects/{project}/branches/"
+    if (
+        not project
+        or not isinstance(branch_path, str)
+        or not branch_path.startswith(expected_branch)
+        or not database
+    ):
+        raise AgentCliError("Runtime Store API returned an incomplete Lakebase backend.")
+    if project != _PROJECT or database != store_id:
+        raise AgentCliError("Runtime Store API returned an unexpected Lakebase backend.")
+    return LakebaseBackend(
+        project=project,
+        branch=branch_path[len(expected_branch) :],
+        endpoint_id=_ENDPOINT,
+        database=database,
+        schema=get_lakebase_schema(app),
+    )
 
 
 def get_lakebase_schema(app: str) -> str:
-    """Return the schema owned by one deployed app's durability runtime."""
+    """Return the schema owned by one deployed app's Runtime Store."""
     digest = hashlib.sha256(app.encode("utf-8")).hexdigest()[:12]
     return f"databricks_mason_runtime_{digest}"

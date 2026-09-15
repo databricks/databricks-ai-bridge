@@ -40,6 +40,30 @@ class StorageBackend(_Model):
         return self.get("backend_id")
 
 
+class RuntimeStoreLakebaseBackend(_Model):
+    @property
+    def project_id(self) -> Optional[str]:
+        return self.get("project_id")
+
+    @property
+    def branch(self) -> Optional[str]:
+        return self.get("branch")
+
+    @property
+    def database_id(self) -> Optional[str]:
+        return self.get("database_id")
+
+
+class RuntimeStore(_Model):
+    @property
+    def name(self) -> Optional[str]:
+        return self.get("name")
+
+    @property
+    def lakebase_backend(self) -> Optional[RuntimeStoreLakebaseBackend]:
+        return _wrap(self.get("lakebase_backend"), RuntimeStoreLakebaseBackend)
+
+
 class MemoryStore(_Model):
     @property
     def name(self) -> Optional[str]:

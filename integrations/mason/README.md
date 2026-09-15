@@ -147,13 +147,14 @@ process and horizontally scaled clients need sticky routing. With the durable ru
 persists the input, attempt status, heartbeats, lifecycle events, application events, and output.
 
 Durability is enabled by default for both framework templates. Mason writes the durability setting
-to `agent.toml`, and `mason deploy` reuses or provisions a dedicated `<app>-durability` Lakebase
-project. Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database,
-giving each app one owned schema. A replacement worker claims a stale heartbeat and calls the
-`@app.on_recovery` handler. If that handler is omitted, startup warns that automatic crash recovery
-is disabled; register the same function for both decorators when replaying the initial invocation is
-safe. Agent checkpoint restoration and idempotent external side effects remain the developer's
-responsibility.
+to `agent.toml`, and `mason deploy` asks Conversation Store to provision a dedicated Runtime Store
+database in the workspace-managed Lakebase project. Conversation Store makes the app service
+principal the database owner, so deployment does not require user-managed Lakebase permissions.
+Mason adds its `databricks_mason_runtime_<app-hash>` schema and tables to that database. A
+replacement worker claims a stale heartbeat and calls the `@app.on_recovery` handler. If that
+handler is omitted, startup warns that automatic crash recovery is disabled; register the same
+function for both decorators when replaying the initial invocation is safe. Agent checkpoint
+restoration and idempotent external side effects remain the developer's responsibility.
 
 Bare `mason init`, `--framework langgraph`, and `--framework openai` scaffold `AgentApp` with its
 durable runtime enabled. Pass `--no-durable-runtime` for the same Mason HTTP contract with

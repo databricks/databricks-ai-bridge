@@ -40,6 +40,8 @@ class _AsyncLakebase(Protocol):
 
 DEFAULT_DURABILITY_SCHEMA = "databricks_mason_runtime"
 RUNTIME_ENDPOINT_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+RUNTIME_DATABASE_ENV = "DATABRICKS_MASON_RUNTIME_DATABASE"
+RUNTIME_USERNAME_ENV = "DATABRICKS_MASON_RUNTIME_USERNAME"
 RUNTIME_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 RUNTIME_LOCAL_ENV = "DATABRICKS_MASON_RUNTIME_LOCAL"
 _SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -56,19 +58,18 @@ def _validate_execution_id(execution_id: str) -> None:
         raise ValueError("execution_id must not be empty")
 
 
-class _AppsPostgresLakebase:
-    """SQLAlchemy connection for a Databricks Apps Postgres resource.
+class _RuntimeStoreLakebaseConnection:
+    """SQLAlchemy connection to an API-provisioned Runtime Store database.
 
-    Apps injects the selected resource's connection coordinates through the standard ``PG*``
-    variables. The endpoint resource path is kept separately because OAuth credentials must be
-    refreshed through the Databricks Postgres API.
+    Mason receives the dedicated database and endpoint resource path during deployment. OAuth
+    credentials are refreshed through the Databricks Postgres API using the app service principal.
     """
 
     def __init__(
         self,
         *,
         endpoint: str,
-        host: str,
+        host: str | None,
         port: int,
         database: str,
         username: str,
@@ -76,8 +77,8 @@ class _AppsPostgresLakebase:
         workspace_client: WorkspaceClient | None,
         schema: str,
     ) -> None:
-        if not endpoint or not host or not database or not username:
-            raise ValueError("endpoint, host, database, and username must not be empty")
+        if not endpoint or not database or not username:
+            raise ValueError("endpoint, database, and username must not be empty")
         if port <= 0:
             raise ValueError("port must be positive")
 
@@ -85,6 +86,14 @@ class _AppsPostgresLakebase:
             from databricks.sdk import WorkspaceClient
 
             workspace_client = WorkspaceClient()
+
+        if not host:
+            endpoint_details = workspace_client.postgres.get_endpoint(name=endpoint)
+            status = getattr(endpoint_details, "status", None)
+            hosts = getattr(status, "hosts", None)
+            host = getattr(hosts, "host", None)
+            if not host:
+                raise RuntimeError(f"Lakebase endpoint {endpoint!r} did not return a host")
 
         self._endpoint = endpoint
         self._workspace_client = workspace_client
@@ -141,9 +150,9 @@ class LakebaseDurabilityStore:
     app replica connects to the same schema, another replica can detect a stale heartbeat, claim the
     next attempt, and continue after process or pod loss.
 
-    This store requires a Lakebase Postgres database. ``mason deploy`` reuses or provisions a
-    dedicated app-owned durability project, then assigns the app its own schema. ``mason dev`` uses
-    ``InMemoryDurabilityStore`` instead.
+    This store requires a Lakebase Postgres database. ``mason deploy`` asks Conversation Store to
+    provision a dedicated database owned by the app service principal, then Mason creates its own
+    schema and tables. ``mason dev`` uses ``InMemoryDurabilityStore`` instead.
     """
 
     def __init__(
@@ -183,7 +192,7 @@ class LakebaseDurabilityStore:
         self._events_table = f"{schema}.execution_events"
 
     @classmethod
-    def from_app_resource(
+    def from_runtime_store(
         cls,
         *,
         endpoint: str,
@@ -195,37 +204,32 @@ class LakebaseDurabilityStore:
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_DURABILITY_SCHEMA,
     ) -> "LakebaseDurabilityStore":
-        """Use connection coordinates injected for a Databricks Apps Postgres resource."""
+        """Connect to the Runtime Store database provisioned for this app."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid durability schema name: {schema!r}")
         host = host or os.getenv("PGHOST")
-        database = database or os.getenv("PGDATABASE")
-        username = username or os.getenv("PGUSER")
+        database = database or os.getenv(RUNTIME_DATABASE_ENV) or os.getenv("PGDATABASE")
+        username = username or os.getenv(RUNTIME_USERNAME_ENV) or os.getenv("PGUSER")
         if port is None:
             raw_port = os.getenv("PGPORT")
             try:
-                port = int(raw_port or "")
+                port = int(raw_port) if raw_port else 5432
             except ValueError as exc:
                 raise RuntimeError("PGPORT must be an integer") from exc
         missing = [
             name
             for name, value in {
-                "PGHOST": host,
-                "PGPORT": port,
-                "PGDATABASE": database,
-                "PGUSER": username,
+                RUNTIME_DATABASE_ENV: database,
+                RUNTIME_USERNAME_ENV: username,
             }.items()
             if not value
         ]
         if missing:
-            raise RuntimeError(
-                "Databricks Apps Postgres resource is missing: " + ", ".join(missing)
-            )
-        assert host is not None
+            raise RuntimeError("Runtime Store configuration is missing: " + ", ".join(missing))
         assert port is not None
         assert database is not None
         assert username is not None
-        lakebase = _AppsPostgresLakebase(
+        lakebase = _RuntimeStoreLakebaseConnection(
             endpoint=endpoint,
             host=host,
             port=port,
@@ -777,7 +781,12 @@ def default_durability_store() -> DurabilityStore:
         return InMemoryDurabilityStore()
     if endpoint := os.getenv(RUNTIME_ENDPOINT_ENV):
         schema = os.getenv(RUNTIME_SCHEMA_ENV) or get_lakebase_schema(app_name)
-        return LakebaseDurabilityStore.from_app_resource(endpoint=endpoint, schema=schema)
+        return LakebaseDurabilityStore.from_runtime_store(
+            endpoint=endpoint,
+            database=os.getenv(RUNTIME_DATABASE_ENV),
+            username=os.getenv(RUNTIME_USERNAME_ENV),
+            schema=schema,
+        )
     raise RuntimeError(
         f"{RUNTIME_ENDPOINT_ENV} is required for durable execution in Databricks Apps"
     )

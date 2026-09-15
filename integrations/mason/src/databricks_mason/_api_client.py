@@ -1,4 +1,4 @@
-"""Private transport for the agents/v1 memory and session APIs.
+"""Private transport for the managed agent store APIs.
 
 The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/agents/v1"
+_RUNTIME_STORES_PATH = "/api/2.0/agents/runtime-stores"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
 # Transient backend failures (e.g. a CANCELLED RPC) usually clear on a retry, so retry safe
@@ -167,6 +168,30 @@ class _MasonApiClient:
         path, so callers make the parent dir first.
         """
         self._w.workspace.mkdirs(path)
+
+    def create_runtime_store(
+        self,
+        runtime_store_id: str,
+        app_service_principal_id: str,
+        *,
+        retry_transient: bool = False,
+    ) -> models.RuntimeStore:
+        """Create the deployment's Runtime Store through Conversation Store."""
+        return _as(
+            models.RuntimeStore,
+            self._do(
+                "POST",
+                _RUNTIME_STORES_PATH,
+                query={"runtime_store_id": runtime_store_id},
+                body={
+                    "app_principal": {
+                        "type": "SERVICE_PRINCIPAL",
+                        "name": app_service_principal_id,
+                    }
+                },
+                safe_to_retry=retry_transient,
+            ),
+        )
 
     def _do(
         self,
