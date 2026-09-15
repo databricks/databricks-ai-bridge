@@ -366,7 +366,7 @@ class Runner:
                 else:
                     self._author_direct(project, framework)
                 self._write_python_marker(project)
-                app_name = f"mason-tools-{framework[:2]}-{authoring[:2]}-{run_suffix}"
+                app_name = f"agent-mason-t-{framework[:2]}-{authoring[:2]}-{run_suffix}"
                 cases.append(ProjectCase(framework, authoring, project, app_name))
         return cases
 
