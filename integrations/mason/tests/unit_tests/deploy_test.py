@@ -34,6 +34,13 @@ def _no_tracing_by_default(monkeypatch):
     monkeypatch.setattr(deploy_mod, "resolve_trace_experiment_id", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_app_resource_mutation_by_default(monkeypatch):
+    # Custom-server deploys detach stale Mason-managed resources through the Databricks CLI. Keep
+    # deploy tests hermetic; the cleanup-specific test overrides this stub and verifies the call.
+    monkeypatch.setattr(deploy_mod, "remove_app_resources", lambda *a, **k: None)
+
+
 def test_upsert_manifest_env_scaffolds_when_missing(tmp_path: pathlib.Path):
     scaffolded = deploy_mod._upsert_manifest_env(
         tmp_path, {"AGENT_MEMORY_STORE": "memory-stores/x"}
