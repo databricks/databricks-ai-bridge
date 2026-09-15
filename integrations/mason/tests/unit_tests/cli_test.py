@@ -118,7 +118,11 @@ def test_tools_add_help_explains_types_and_project_targeting():
         "mason tools add uc-function catalog.schema.lookup_ticket",
     ):
         assert example in result.output
-    assert "python" not in result.output.lower()
+    # `mason tools add python` was removed (Python tools are code-first); the subcommand must not be
+    # advertised. Checked as the command invocation, not a bare "python" substring, so the legitimate
+    # `system.ai.python_exec` MCP example above is still allowed.
+    assert "mason tools add python" not in result.output
+    assert "\n  python " not in result.output  # no `python` row in the add-group command list
 
 
 def test_help_examples_recommend_the_default_happy_path():
