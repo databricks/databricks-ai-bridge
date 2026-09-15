@@ -1,4 +1,4 @@
-"""Private transport for the agents/v1 memory and session APIs.
+"""Private transport for the managed agent store APIs.
 
 The public SDK is the resource-oriented :class:`databricks_mason.MasonClient`.
 This module temporarily owns the one-method-per-endpoint transport used by that
@@ -11,6 +11,7 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
+import re
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
 _BASE = "/api/agents/v1"
-# ExtractMemories only binds the 2.0 path (no /agents/v1 alias), so it needs its own base.
+# ExtractMemories and Runtime Stores only bind the 2.0 path (no /agents/v1 alias).
 _BASE_2_0 = "/api/2.0/agents"
 _MCP_SERVICES_PATH = "/api/2.1/unity-catalog/mcp-services"
 
@@ -77,6 +78,14 @@ def session_store_path(name: str) -> str:
     if not raw:
         raise AgentCliError("A session store name is required.")
     return f"session-stores/{raw}"
+
+
+def runtime_store_path(name: str) -> str:
+    """Normalize a logical ID or resource name for the internal Runtime Store API."""
+    raw = name.removeprefix("runtime-stores/")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,61}[a-z0-9]", raw):
+        raise AgentCliError(f"Invalid runtime store id or resource name: {name!r}")
+    return f"runtime-stores/{raw}"
 
 
 def memory_entry_path(store: str, entry: str) -> str:
@@ -169,6 +178,44 @@ class _MasonApiClient:
         path, so callers make the parent dir first.
         """
         self._w.workspace.mkdirs(path)
+
+    def create_runtime_store(
+        self,
+        runtime_store_id: str,
+        app_service_principal_id: str,
+        *,
+        app_name: str,
+        retry_transient: bool = False,
+    ) -> models.RuntimeStore:
+        """Create the deployment's Runtime Store through Conversation Store."""
+        return _as(
+            models.RuntimeStore,
+            self._do(
+                "POST",
+                f"{_BASE_2_0}/runtime-stores",
+                query={"runtime_store_id": runtime_store_id},
+                body={
+                    "owner": {
+                        "app": {
+                            "name": app_name,
+                            "service_principal_id": app_service_principal_id,
+                        }
+                    }
+                },
+                safe_to_retry=retry_transient,
+            ),
+        )
+
+    def get_runtime_store(self, name: str) -> models.RuntimeStore:
+        """Resolve the service-managed backend and app owner before reusing a store."""
+        return _as(
+            models.RuntimeStore,
+            self._do("GET", f"{_BASE_2_0}/{runtime_store_path(name)}"),
+        )
+
+    def delete_runtime_store(self, name: str) -> dict:
+        """Delete a deployment's Runtime Store and its dedicated database."""
+        return self._do("DELETE", f"{_BASE_2_0}/{runtime_store_path(name)}", safe_to_retry=True)
 
     def _do(
         self,

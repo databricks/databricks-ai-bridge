@@ -11,9 +11,11 @@ from databricks_mason.runtime.durability.lakebase_runtime_store import (
 )
 from databricks_mason.runtime.durability.store import DurableRuntimeStore
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_LOCAL_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
     InMemoryRuntimeStore,
     runtime_store_from_environment,
 )
@@ -64,6 +66,87 @@ def test_only_lakebase_store_has_durable_runtime_capabilities():
 
     assert not isinstance(InMemoryRuntimeStore(), DurableRuntimeStore)
     assert isinstance(LakebaseDurableRuntimeStore(lakebase=lakebase), DurableRuntimeStore)
+
+
+@pytest.mark.parametrize("managed", [True, False])
+def test_connection_selects_complete_managed_or_apps_coordinates(monkeypatch, managed):
+    endpoint = "projects/project/branches/production/endpoints/primary"
+    client = MagicMock()
+    client.postgres.get_endpoint.return_value.status.hosts.host = "managed.example.com"
+    client.postgres.generate_database_credential.return_value.token = "test-oauth-token"
+    monkeypatch.setenv("PGHOST", "attached.example.com")
+    monkeypatch.setenv("PGPORT", "6543")
+    monkeypatch.setenv("PGDATABASE", "attached-db")
+    monkeypatch.setenv("PGUSER", "attached-user")
+    monkeypatch.setenv("PGSSLMODE", "verify-full")
+    for key, value in (
+        (RUNTIME_STORE_DATABASE_ENV, "runtime-db"),
+        (RUNTIME_STORE_USERNAME_ENV, "app-sp"),
+    ):
+        if managed:
+            monkeypatch.setenv(key, value)
+        else:
+            monkeypatch.delenv(key, raising=False)
+    from databricks_mason.runtime.durability import lakebase_runtime_store as module
+
+    create_engine = MagicMock()
+    hooks = []
+    monkeypatch.setattr(module, "create_async_engine", create_engine)
+    monkeypatch.setattr(module.event, "listens_for", lambda *args: lambda fn: hooks.append(fn))
+
+    LakebaseDurableRuntimeStore.from_app_resource(endpoint=endpoint, workspace_client=client)
+
+    url = create_engine.call_args.args[0]
+    if managed:
+        client.postgres.get_endpoint.assert_called_once_with(name=endpoint)
+        assert (url.host, url.port, url.database, url.username) == (
+            "managed.example.com",
+            5432,
+            "runtime-db",
+            "app-sp",
+        )
+        assert create_engine.call_args.kwargs["connect_args"] == {"sslmode": "require"}
+    else:
+        client.postgres.get_endpoint.assert_not_called()
+        assert (url.host, url.port, url.database, url.username) == (
+            "attached.example.com",
+            6543,
+            "attached-db",
+            "attached-user",
+        )
+        assert create_engine.call_args.kwargs["connect_args"] == {"sslmode": "verify-full"}
+    params = {}
+    hooks[0](None, None, None, params)
+    assert params["password"] == "test-oauth-token"
+    client.postgres.generate_database_credential.assert_called_once_with(endpoint=endpoint)
+
+
+@pytest.mark.parametrize("missing", [RUNTIME_STORE_DATABASE_ENV, RUNTIME_STORE_USERNAME_ENV])
+def test_partial_managed_configuration_does_not_fall_back_to_apps_resource(monkeypatch, missing):
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db")
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+    monkeypatch.delenv(missing)
+    monkeypatch.setenv("PGDATABASE", "unrelated-db")
+    monkeypatch.setenv("PGUSER", "unrelated-user")
+    client = MagicMock()
+    with pytest.raises(RuntimeError, match=missing):
+        LakebaseDurableRuntimeStore.from_app_resource(
+            endpoint="projects/project/branches/production/endpoints/primary",
+            workspace_client=client,
+        )
+    client.postgres.get_endpoint.assert_not_called()
+
+
+def test_managed_connection_rejects_endpoint_without_host(monkeypatch):
+    monkeypatch.setenv(RUNTIME_STORE_DATABASE_ENV, "runtime-db")
+    monkeypatch.setenv(RUNTIME_STORE_USERNAME_ENV, "app-sp")
+    client = MagicMock()
+    client.postgres.get_endpoint.return_value.status.hosts.host = None
+    with pytest.raises(RuntimeError, match="has no host"):
+        LakebaseDurableRuntimeStore.from_app_resource(
+            endpoint="projects/project/branches/production/endpoints/primary",
+            workspace_client=client,
+        )
 
 
 def test_environment_store_uses_the_attached_lakebase_resource(monkeypatch):

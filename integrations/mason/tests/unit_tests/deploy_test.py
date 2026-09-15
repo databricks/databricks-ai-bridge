@@ -205,6 +205,28 @@ class _FakeClient:
     def create_session_store(self, name, *, retry_transient=False):
         return {"session_store_name": name}
 
+    def create_runtime_store(self, store_id, sp, *, app_name, retry_transient=False):
+        return {
+            "name": f"runtime-stores/{store_id}",
+            "owner": {"app": {"name": app_name, "service_principal_id": sp}},
+            "storage_backend": {
+                "lakebase": {
+                    "project_id": "databricks-internal-custom-agents",
+                    "branch": "projects/databricks-internal-custom-agents/branches/production",
+                    "database_id": "runtime-agent-mason-myapp-550e8400-e29b-41d4-a716-446655440000",
+                }
+            },
+        }
+
+    def get_runtime_store(self, name):
+        raise AgentCliError("absent", error_code="NOT_FOUND")
+
+    def grant_session_store_permission(self, store, principal):
+        return None
+
+    def grant_memory_store_permission(self, store, principal):
+        return None
+
 
 class _FakeCtx:
     profile = "prof"
@@ -443,39 +465,11 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-def test_reconcile_runtime_store_creates_or_reuses_for_mason_server(monkeypatch) -> None:
-    selected = deploy_mod.lakebase_store.backend("mason-myapp")
-    get_or_create = mock.Mock(return_value=selected)
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
-
-    result = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="mason"), "mason-myapp", "prof"
-    )
-
-    assert result == selected
-    get_or_create.assert_called_once_with("mason-myapp", "prof", create=True)
-
-
-def test_reconcile_runtime_store_skips_custom_server(monkeypatch) -> None:
-    get_or_create = mock.Mock()
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
-
-    result = deploy_mod._reconcile_runtime_store(
-        types.SimpleNamespace(server="custom"), "mason-myapp", "prof"
-    )
-
-    assert result is None
-    get_or_create.assert_not_called()
-
-
-def test_reconcile_runtime_store_skips_project_without_agent_manifest(monkeypatch) -> None:
-    get_or_create = mock.Mock()
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
-
-    result = deploy_mod._reconcile_runtime_store(None, "mason-myapp", "prof")
-
-    assert result is None
-    get_or_create.assert_not_called()
+@pytest.mark.parametrize("project", [None, types.SimpleNamespace(server="custom")])
+def test_reconcile_runtime_store_skips_non_mason_server(project):
+    client = mock.Mock()
+    assert deploy_mod._reconcile_runtime_store(project, "agent-mason-myapp", client, None) is None
+    client.create_runtime_store.assert_not_called()
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
@@ -494,8 +488,7 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
     )
     _write_agent_manifest(src, framework=framework, server="custom")
 
-    get_or_create = mock.Mock()
-    attach = mock.Mock()
+    create = mock.Mock(side_effect=AssertionError("custom server must not provision a store"))
     calls = []
 
     def fake_databricks(args, profile, **kwargs):
@@ -504,8 +497,7 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
         return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: False)
-    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
-    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
+    monkeypatch.setattr(_FakeClient, "create_runtime_store", create)
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
 
     result = CliRunner().invoke(
@@ -515,8 +507,7 @@ def test_deploy_custom_server_skips_runtime_store_provisioning_and_binding(
     )
 
     assert result.exit_code == 0, result.output
-    get_or_create.assert_not_called()
-    attach.assert_not_called()
+    create.assert_not_called()
     assert any(args[:3] == ["apps", "create", "agent-mason-myapp"] for args in calls)
     assert any(args[:3] == ["apps", "deploy", "agent-mason-myapp"] for args in calls)
     assert not any(args[:2] in (["apps", "update"], ["apps", "create-update"]) for args in calls)
@@ -536,12 +527,7 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_store,
-        "get_or_create_backend",
-        lambda app, *args, **kwargs: deploy_mod.lakebase_store.backend(app),
-    )
-    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -570,108 +556,58 @@ def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, mo
     assert "DATABRICKS_MASON_RUNTIME_STORE_SCHEMA" in deployed_env
 
 
-def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
-    tmp_path: pathlib.Path, monkeypatch
+@pytest.mark.parametrize("store_kind", ["session", "memory"])
+def test_deploy_runtime_store_uses_dedicated_backend_with_managed_store(
+    tmp_path: pathlib.Path, monkeypatch, store_kind: str
 ) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, session="sessions")
-    selected = deploy_mod.lakebase_store.backend("agent-mason-myapp")
+    _write_agent_manifest(src, **{store_kind: "other-store"})
     events = []
+    client = _FakeClient()
+    create = client.create_runtime_store
 
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_store,
-        "get_or_create_backend",
-        lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_postgres_resources",
-        lambda app, backends, profile: events.append(("attach", backends)) or None,
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
+    def create_store(*args, **kwargs):
+        events.append("runtime-store")
+        return create(*args, **kwargs)
+
+    monkeypatch.setattr(client, "create_runtime_store", create_store)
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda *args: False)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
 
     def fake_databricks(args, profile, **kwargs):
+        assert args[:1] != ["postgres"]
+        assert args[:2] != ["apps", "update"]
+        if args[:2] == ["apps", "create"]:
+            events.append("app-created")
         if args[:2] == ["apps", "deploy"]:
-            manifest = yaml.safe_load((src / "app.yaml").read_text())
-            deployed_env = {entry["name"]: entry["value"] for entry in manifest.get("env", [])}
-            events.append(("deploy", deployed_env))
+            env = {
+                entry["name"]: entry["value"]
+                for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+            }
+            assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV].startswith(
+                "runtime-agent-mason-myapp-"
+            )
+            assert env[deploy_mod.RUNTIME_STORE_DATABASE_ENV] != "other-store"
+            assert env[deploy_mod.RUNTIME_STORE_USERNAME_ENV] == "sp-123"
+            assert (
+                env[deploy_mod.RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV]
+                == "projects/databricks-internal-custom-agents/branches/production/endpoints/primary"
+            )
+            assert env[
+                deploy_mod.RUNTIME_STORE_SCHEMA_ENV
+            ] == deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
+            events.append("app-deployed")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
+    ctx = types.SimpleNamespace(profile="prof", output="text", client=lambda: client)
+    result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=ctx)
 
     assert result.exit_code == 0, result.output
-    assert [event[0] for event in events] == ["attach", "deploy"]
-    backend = events[0][1][0]
-    assert backend == selected
-    assert backend.database != "sessions"  # dedicated Runtime Store, not the Session Store
-    assert (
-        backend.resource_name == "postgres-runtime-store"
-    )  # distinct from a session store's resource
-    assert backend.schema == deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
-    assert backend.tables == ()
-    deployed_env = events[1][1]
-    assert deployed_env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
-    assert deployed_env["DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"] == backend.schema
-    env = {
-        entry["name"]: entry["value"]
-        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
-    }
-    assert env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
-    assert env["DATABRICKS_MASON_RUNTIME_STORE_SCHEMA"] == (
-        deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
-    )
-
-
-def test_deploy_runtime_store_does_not_reuse_memory_store(
-    tmp_path: pathlib.Path, monkeypatch
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _write_agent_manifest(src, memory="mem")
-    selected = deploy_mod.lakebase_store.backend("agent-mason-myapp")
-    events = []
-
-    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_store,
-        "get_or_create_backend",
-        lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_postgres_resources",
-        lambda app, backends, profile: events.append(("attach", backends)) or None,
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
-    monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
-
-    def fake_databricks(args, profile, **kwargs):
-        if args[:2] == ["apps", "deploy"]:
-            events.append(("deploy", args))
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(deploy_mod, "_databricks", fake_databricks)
-
-    result = CliRunner().invoke(
-        deploy_mod.deploy,
-        ["myapp", "--source", str(src)],
-        obj=_FakeCtx(),
-    )
-
-    assert result.exit_code == 0, result.output
-    assert [event[0] for event in events] == ["attach", "deploy"]
-    assert events[0][1] == [selected]
+    assert events == ["app-created", "runtime-store", "app-deployed"]
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):
@@ -859,12 +795,7 @@ def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    monkeypatch.setattr(
-        deploy_mod.lakebase_store,
-        "get_or_create_backend",
-        lambda app, profile, create: deploy_mod.lakebase_store.backend(app),
-    )
-    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
@@ -1166,12 +1097,12 @@ def test_deploy_empty_pip_index_disables_override(tmp_path: pathlib.Path, monkey
     assert "PIP_INDEX_URL" not in env  # empty -> no override, use the build's default index
 
 
-class _JsonCtx:
-    profile = "prof"
+class _JsonCtx(_FakeCtx):
     output = "json"
 
 
 def test_lifecycle_commands_honor_json_output(monkeypatch):
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda *args: "sp-123")
     # start/stop/delete must emit JSON (not the Rich success panel) under --output json.
     monkeypatch.setattr(
         deploy_mod,

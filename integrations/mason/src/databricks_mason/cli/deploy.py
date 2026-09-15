@@ -2,7 +2,7 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Mason Runtime deployments receive an app-owned Runtime Store. `agent.toml` is the
+the deployment. Mason Runtime deployments receive a service-managed Runtime Store. `agent.toml` is the
 CLI's authoring source, resolved here into the `AGENT_MEMORY_STORE` / `AGENT_SESSION_STORE` env
 vars written into `app.yaml` — the runtime reads those, never `agent.toml`. `mason deployments`
 covers the lifecycle verbs
@@ -31,7 +31,6 @@ from databricks_mason import (
 from databricks_mason.app_resources import (
     LakebaseBackend,
     apply_experiment_resource,
-    apply_postgres_resources,
 )
 from databricks_mason.cli.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
@@ -48,8 +47,10 @@ from databricks_mason.project_config import (
 from databricks_mason.project_types import AgentServer
 from databricks_mason.render import field
 from databricks_mason.runtime.store import (
+    RUNTIME_STORE_DATABASE_ENV,
     RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV,
     RUNTIME_STORE_SCHEMA_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
 )
 from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
@@ -448,16 +449,49 @@ def _grant_store_access(
 def _reconcile_runtime_store(
     project,
     deployment_name: str,
-    profile: Optional[str],
+    client,
+    app_service_principal_id: Optional[str],
 ) -> Optional[LakebaseBackend]:
     """Create or reuse the implicit Runtime Store for a Mason Runtime deployment."""
     if project is None or project.server != AgentServer.MASON:
         return None
 
-    # TODO: Replace this temporary direct Lakebase provisioning path with the Conversation Store
-    # POST /api/2.0/agents/runtime-stores API once that backend contract is available.
+    if not app_service_principal_id:
+        raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
+    store_id = lakebase_store.runtime_store_id(deployment_name, app_service_principal_id)
     with render.status("Reconciling Runtime Store…"):
-        return lakebase_store.get_or_create_backend(deployment_name, profile, create=True)
+        try:
+            store = client.create_runtime_store(
+                store_id,
+                app_service_principal_id,
+                app_name=deployment_name,
+                retry_transient=True,
+            )
+        except AgentCliError as exc:
+            if exc.error_code != "ALREADY_EXISTS":
+                raise
+            store = client.get_runtime_store(store_id)
+    return lakebase_store.backend_from_api(
+        deployment_name, store_id, app_service_principal_id, store
+    )
+
+
+def _delete_runtime_store(client, deployment_name: str, app_service_principal_id: str) -> None:
+    """Keep the app available for cleanup retries until its Runtime Store is gone."""
+    store_id = lakebase_store.runtime_store_id(deployment_name, app_service_principal_id)
+    try:
+        store = client.get_runtime_store(store_id)
+        lakebase_store.validate_owner(deployment_name, store_id, app_service_principal_id, store)
+        client.delete_runtime_store(store_id)
+    except AgentCliError as exc:
+        if exc.error_code == "NOT_FOUND":
+            return
+        raise AgentCliError(
+            f"Could not delete Runtime Store '{store_id}': {exc.message}",
+            error_code=exc.error_code,
+            hint=f"The deployment was retained. Retry `mason deployments delete {deployment_name}` "
+            "after resolving the Runtime Store error.",
+        ) from exc
 
 
 # --- mason deploy -----------------------------------------------------------
@@ -569,11 +603,6 @@ def deploy(
     if session_store:
         env_updates[SESSION_STORE_ENV] = session_store
 
-    runtime_backend = _reconcile_runtime_store(project, name, obj.profile)
-    if runtime_backend is not None:
-        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
-        env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
-        provisioned["Runtime Store"] = runtime_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -581,13 +610,8 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 3. Patch the app.yaml manifest with the resolved store, trace, and index env vars.
-    scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
-
-    # 4. Ensure the Databricks App exists and its compute is active. Create only when the app is new
-    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    # 3. Ensure the app exists before provisioning its Runtime Store, which needs the app SP.
+    #    Create only when new; the compute wait runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
@@ -625,13 +649,24 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
+    app_service_principal_id = (
+        _app_service_principal(name, obj.profile)
+        if project is not None and project.server == AgentServer.MASON
+        else None
+    )
+    runtime_backend = _reconcile_runtime_store(project, name, client, app_service_principal_id)
     if runtime_backend is not None:
-        resource_error = apply_postgres_resources(name, [runtime_backend], obj.profile)
-        if resource_error:
-            raise AgentCliError(
-                "Could not attach the Lakebase resource required for the Runtime Store.",
-                hint=resource_error,
-            )
+        assert app_service_principal_id is not None
+        env_updates[RUNTIME_STORE_LAKEBASE_ENDPOINT_ENV] = runtime_backend.endpoint_path
+        env_updates[RUNTIME_STORE_DATABASE_ENV] = runtime_backend.database
+        env_updates[RUNTIME_STORE_USERNAME_ENV] = app_service_principal_id
+        env_updates[RUNTIME_STORE_SCHEMA_ENV] = runtime_backend.schema
+        provisioned["Runtime Store"] = runtime_backend.database_path
+
+    # 4. Patch the manifest with the resolved store, trace, and index env vars.
+    scaffolded = False
+    if env_updates:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
     # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -851,9 +886,17 @@ def deployments_stop(obj, name, yes) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_obj
 def deployments_delete(obj, name, yes) -> None:
-    """Delete a deployment."""
+    """Delete a deployment and its Runtime Store, including persisted invocation state."""
     _validate_deployment_name(name)
-    _confirm_destroy(f"Delete deployment '{name}'", assume_yes=yes)
+    _confirm_destroy(f"Delete deployment '{name}' and its Runtime Store data", assume_yes=yes)
+    app_service_principal_id = _app_service_principal(name, obj.profile)
+    if not app_service_principal_id:
+        raise AgentCliError(
+            "Could not resolve the app's service principal for Runtime Store cleanup.",
+            hint="The deployment was retained. Check access to the app and retry deletion.",
+        )
+    with render.status("Deleting Runtime Store…"):
+        _delete_runtime_store(obj.client(), name, app_service_principal_id)
     _databricks(
         ["apps", "delete", name], obj.profile, action=f"Could not delete deployment '{name}'."
     )

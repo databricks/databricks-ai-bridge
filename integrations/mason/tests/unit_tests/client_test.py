@@ -15,6 +15,7 @@ from databricks_mason._api_client import (
     _workspace_client,
     memory_entry_path,
     memory_store_path,
+    runtime_store_path,
     session_store_path,
 )
 from databricks_mason.errors import AgentCliError
@@ -48,6 +49,42 @@ def test_create_memory_store(workspace_client):
         query=None,
         body={"display_name": "acme", "description": "desc"},
     )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_create_runtime_store_uses_v2_api_and_app_owner(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.create_runtime_store(
+        "mason-app-abc123", "sp-123", app_name="mason-app", retry_transient=True
+    )
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/runtime-stores",
+        query={"runtime_store_id": "mason-app-abc123"},
+        body={"owner": {"app": {"name": "mason-app", "service_principal_id": "sp-123"}}},
+    )
+
+
+@pytest.mark.parametrize("name", ["mason-app-abc123", "runtime-stores/mason-app-abc123"])
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_get_and_delete_runtime_store_use_v2_resource_path(workspace_client, name):
+    client, do = _client(workspace_client)
+    client.get_runtime_store(name)
+    client.delete_runtime_store(name)
+    assert do.call_args_list == [
+        mock.call("GET", "/api/2.0/agents/runtime-stores/mason-app-abc123", query=None, body=None),
+        mock.call(
+            "DELETE", "/api/2.0/agents/runtime-stores/mason-app-abc123", query=None, body=None
+        ),
+    ]
+
+
+@pytest.mark.parametrize("name", ["", "ab", "../app", "a/b", "app?other=id", "app#frag", "a" * 64])
+def test_runtime_store_path_rejects_invalid_ids(name):
+    with pytest.raises(AgentCliError, match="Invalid runtime store"):
+        runtime_store_path(name)
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
@@ -360,6 +397,17 @@ def test_profile_auth_is_forwarded_when_multiple_profiles_share_a_host(
 
 class _TransientError(RuntimeError):
     error_code = "CANCELLED"
+
+
+@mock.patch("databricks_mason._api_client.time.sleep")
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_delete_runtime_store_retries_transient_errors(workspace_client, sleep):
+    client, do = _client(workspace_client)
+    do.side_effect = [_TransientError("interrupted"), {}]
+
+    assert client.delete_runtime_store("mason-app-abc123") == {}
+    assert do.call_count == 2
+    sleep.assert_called_once()
 
 
 @mock.patch("databricks_mason._api_client.time.sleep")

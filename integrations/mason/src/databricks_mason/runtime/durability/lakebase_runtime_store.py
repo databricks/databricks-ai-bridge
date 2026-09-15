@@ -15,7 +15,11 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from databricks_mason.runtime.durability.store import DurableRuntimeStore
-from databricks_mason.runtime.store import DEFAULT_RUNTIME_STORE_SCHEMA
+from databricks_mason.runtime.store import (
+    DEFAULT_RUNTIME_STORE_SCHEMA,
+    RUNTIME_STORE_DATABASE_ENV,
+    RUNTIME_STORE_USERNAME_ENV,
+)
 from databricks_mason.runtime.types import (
     Invocation,
     InvocationConflictError,
@@ -50,11 +54,10 @@ def _validate_invocation_id(invocation_id: str) -> None:
 
 
 class _AppsPostgresLakebase:
-    """SQLAlchemy connection for a Databricks Apps Postgres resource.
+    """SQLAlchemy connection to the app's Runtime Store database.
 
-    Apps injects the selected resource's connection coordinates through the standard ``PG*``
-    variables. The endpoint resource path is kept separately because OAuth credentials must be
-    refreshed through the Databricks Postgres API.
+    Coordinates come from the managed Runtime Store or an existing Apps Postgres resource.
+    OAuth credentials are refreshed as the app SP through the Databricks Postgres API.
     """
 
     def __init__(
@@ -188,14 +191,21 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         workspace_client: WorkspaceClient | None = None,
         schema: str = DEFAULT_RUNTIME_STORE_SCHEMA,
     ) -> "LakebaseDurableRuntimeStore":
-        """Use connection coordinates injected for a Databricks Apps Postgres resource."""
+        """Use a managed Runtime Store, or the coordinates of an existing Apps resource."""
         if not _SCHEMA_NAME.fullmatch(schema):
             raise ValueError(f"invalid Runtime Store schema name: {schema!r}")
-        host = host or os.getenv("PGHOST")
-        database = database or os.getenv("PGDATABASE")
-        username = username or os.getenv("PGUSER")
+        managed = bool(
+            os.getenv(RUNTIME_STORE_DATABASE_ENV) or os.getenv(RUNTIME_STORE_USERNAME_ENV)
+        )
+        # Another Apps resource may inject PG* for a different database/project. Managed Runtime
+        # Store coordinates must take precedence as a complete set, never mix the two backends.
+        database_env = RUNTIME_STORE_DATABASE_ENV if managed else "PGDATABASE"
+        username_env = RUNTIME_STORE_USERNAME_ENV if managed else "PGUSER"
+        host = host or (None if managed else os.getenv("PGHOST"))
+        database = database or os.getenv(database_env)
+        username = username or os.getenv(username_env)
         if port is None:
-            raw_port = os.getenv("PGPORT")
+            raw_port = "5432" if managed else os.getenv("PGPORT")
             try:
                 port = int(raw_port or "")
             except ValueError as exc:
@@ -203,17 +213,26 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
         missing = [
             name
             for name, value in {
-                "PGHOST": host,
+                **({} if managed else {"PGHOST": host}),
                 "PGPORT": port,
-                "PGDATABASE": database,
-                "PGUSER": username,
+                database_env: database,
+                username_env: username,
             }.items()
             if not value
         ]
         if missing:
             raise RuntimeError(
-                "Databricks Apps Postgres resource is missing: " + ", ".join(missing)
+                "Runtime Store connection configuration is missing: " + ", ".join(missing)
             )
+        if not host:
+            if workspace_client is None:
+                from databricks.sdk import WorkspaceClient
+
+                workspace_client = WorkspaceClient()
+            resolved = workspace_client.postgres.get_endpoint(name=endpoint)
+            host = getattr(getattr(getattr(resolved, "status", None), "hosts", None), "host", None)
+            if not host:
+                raise RuntimeError(f"Lakebase endpoint {endpoint!r} has no host")
         assert host is not None
         assert port is not None
         assert database is not None
@@ -224,7 +243,7 @@ class LakebaseDurableRuntimeStore(DurableRuntimeStore):
             port=port,
             database=database,
             username=username,
-            sslmode=sslmode or os.getenv("PGSSLMODE", "require"),
+            sslmode=sslmode or ("require" if managed else os.getenv("PGSSLMODE", "require")),
             workspace_client=workspace_client,
             schema=schema,
         )
