@@ -259,6 +259,30 @@ def test_auth_error_hint_explains_profile_selection_and_login(_workspace_client)
     assert "`databricks auth login --profile <name>`" not in hint
 
 
+@mock.patch("databricks_mason._api_client._workspace_client", side_effect=RuntimeError("no auth"))
+def test_auth_error_hint_flags_stray_databricks_token(_workspace_client, monkeypatch):
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapiSTRAY")
+    with pytest.raises(AgentCliError) as exc_info:
+        _MasonApiClient()
+
+    hint = exc_info.value.hint
+    assert hint is not None
+    assert "DATABRICKS_TOKEN" in hint and "unset it" in hint
+    assert "`mason login --profile <name>`" in hint  # base guidance still present
+
+
+@mock.patch("databricks_mason._api_client._workspace_client", side_effect=RuntimeError("no auth"))
+def test_auth_error_hint_omits_token_note_when_unset(_workspace_client, monkeypatch):
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    with pytest.raises(AgentCliError) as exc_info:
+        _MasonApiClient()
+
+    hint = exc_info.value.hint
+    assert hint is not None
+    assert "DATABRICKS_TOKEN" not in hint
+    assert "`mason --profile <name> <command>`" in hint
+
+
 def test_profile_auth_is_forwarded_when_multiple_profiles_share_a_host(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
