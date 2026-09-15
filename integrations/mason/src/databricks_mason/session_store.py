@@ -22,6 +22,21 @@ class SessionItem:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ExtractedMemory:
+    """A memory entry produced by `Session.extract_memories` (a read-only result view)."""
+
+    name: str
+    actor_id: Optional[str] = None
+    path: Optional[str] = None
+    content: Optional[str] = None
+    description: Optional[str] = None
+    session_id: Optional[str] = None
+    source_type: Optional[str] = None
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class Session:
     store_name: str
     session_id: str
@@ -76,6 +91,22 @@ class Session:
 
     def clear_items(self) -> None:
         self._client._clear_items(self)
+
+    def extract_memories(
+        self,
+        *,
+        memory_store: str,
+        instructions: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> List[ExtractedMemory]:
+        """Synchronously distill this session's transcript into memory entries.
+
+        Writes the entries to `memory_store` and returns them; pass `dry_run=True` to return the
+        extracted entries without persisting them.
+        """
+        return self._client._extract_memories(
+            self, memory_store=memory_store, instructions=instructions, dry_run=dry_run
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -329,6 +360,37 @@ class SessionStores:
 
     def _clear_items(self, session: Session) -> None:
         self._api.clear_session_items(session.store_name, session.session_id)
+
+    def _extract_memories(
+        self,
+        session: Session,
+        *,
+        memory_store: str,
+        instructions: Optional[str],
+        dry_run: bool,
+    ) -> List[ExtractedMemory]:
+        response = self._api.extract_memories(
+            session.store_name,
+            session.session_id,
+            memory_store,
+            instructions=instructions,
+            dry_run=dry_run,
+        )
+        return [self._extracted_from_response(e) for e in response.get("entries") or []]
+
+    @staticmethod
+    def _extracted_from_response(response: dict[str, Any]) -> ExtractedMemory:
+        return ExtractedMemory(
+            name=response["name"],
+            actor_id=response.get("actor_id"),
+            path=response.get("path"),
+            content=response.get("content"),
+            description=response.get("description"),
+            session_id=response.get("session_id"),
+            source_type=response.get("source_type"),
+            create_time=parse_timestamp(response.get("create_time")),
+            update_time=parse_timestamp(response.get("update_time")),
+        )
 
     def _store_from_response(self, response: dict[str, Any]) -> SessionStore:
         return SessionStore(

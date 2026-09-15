@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING
 
 from databricks_mason.client import MasonClient
 from databricks_mason.memory_store import Memory, MemorySearchResult, MemoryStore
-from databricks_mason.session_store import Session, SessionItem, SessionStore
+from databricks_mason.session_store import (
+    ExtractedMemory,
+    Session,
+    SessionItem,
+    SessionStore,
+)
 
 if TYPE_CHECKING:
     from databricks_mason.runtime import (
@@ -21,6 +26,7 @@ __all__ = [
     "Memory",
     "MemorySearchResult",
     "MemoryStore",
+    "ExtractedMemory",
     "Session",
     "SessionItem",
     "SessionStore",

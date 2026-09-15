@@ -12,6 +12,7 @@ def test_public_surface() -> None:
         "Memory",
         "MemorySearchResult",
         "MemoryStore",
+        "ExtractedMemory",
         "Session",
         "SessionItem",
         "SessionStore",
