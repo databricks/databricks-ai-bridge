@@ -772,9 +772,10 @@ def test_wait_for_running_times_out(monkeypatch):
         pass
 
 
-def test_deploy_injects_memory_store_id_env(tmp_path: pathlib.Path, monkeypatch):
-    # The memory entries API is keyed by id, so deploy wires the resolved id into app.yaml as
-    # AGENT_MEMORY_STORE. Session stores resolve by name and need no env.
+def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
+    # The runtime reads stores from env, never agent.toml: deploy wires the resolved memory id
+    # (AGENT_MEMORY_STORE — the entries API is keyed by id) and the session name (AGENT_SESSION_STORE)
+    # into app.yaml.
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
@@ -793,7 +794,7 @@ def test_deploy_injects_memory_store_id_env(tmp_path: pathlib.Path, monkeypatch)
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
     env = {entry["name"]: entry["value"] for entry in env_entries}
     assert env["AGENT_MEMORY_STORE"] == "mem-id-123"  # _FakeClient resolves "mem" -> mem-id-123
-    assert "AGENT_SESSION_STORE" not in env
+    assert env["AGENT_SESSION_STORE"] == "sessions"
 
 
 def test_deploy_wires_tracing_env_and_grants_experiment_resource(
@@ -1260,10 +1261,10 @@ def test_deploy_grants_bound_store(tmp_path: pathlib.Path, monkeypatch):
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
     assert result.exit_code == 0, result.output
-    # The grant fired for the bound session store, resolved from agent.toml.
-    # Session stores write no env (they resolve by name at runtime); AGENT_MEMORY_STORE is absent
-    # because no memory store is declared in this agent.toml.
+    # The grant fired for the bound session store, and its name was wired into app.yaml as
+    # AGENT_SESSION_STORE. AGENT_MEMORY_STORE is absent because no memory store is declared.
     assert grant_args == {"sp": "sp-123", "session_store": "bound-sess", "memory_store": None}
     env_entries = yaml.safe_load((src / "app.yaml").read_text()).get("env") or []
-    assert "AGENT_SESSION_STORE" not in {e["name"] for e in env_entries}
-    assert "AGENT_MEMORY_STORE" not in {e["name"] for e in env_entries}
+    env = {e["name"]: e["value"] for e in env_entries}
+    assert env["AGENT_SESSION_STORE"] == "bound-sess"
+    assert "AGENT_MEMORY_STORE" not in env

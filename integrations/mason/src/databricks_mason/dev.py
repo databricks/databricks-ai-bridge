@@ -32,7 +32,7 @@ from databricks_mason.project_config import (
     load_project_metadata,
     require_managed_tool_support,
 )
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV
+from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV, SESSION_STORE_ENV
 
 # Default local port; `databricks apps run-local` listens here unless --app-port overrides it.
 _DEFAULT_APP_PORT = 8000
@@ -84,9 +84,9 @@ def dev(
     Tracing is on by default: dev sends the agent's traces to the default mason experiment based on
     the project name (the same one `mason deploy` uses), created and pinned into agent.toml on first
     run — configure or turn it off with `mason tracing configure` / `disable`. Stores bound with
-    `mason memory/sessions bind` are validated here and read from agent.toml at runtime. Locally you
-    already have access, so no service-principal grant is needed; that grant happens at `mason
-    deploy` time.
+    `mason memory/sessions bind` are resolved here and injected into the dev-only manifest as env, so
+    the runtime picks them up the same way a deployment does. Locally you already have access, so no
+    service-principal grant is needed; that grant happens at `mason deploy` time.
     """
     source_dir = pathlib.Path(source)
     app_yaml = source_dir / "app.yaml"
@@ -100,10 +100,10 @@ def dev(
     if project is not None and project.tools:
         require_managed_tool_support(source_dir)
 
-    # Validate the agent.toml store bindings and wire tracing into app.yaml. Stores are read from
-    # agent.toml at runtime (not written here); tracing is on by default, so resolve/create the
-    # per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set up
-    # (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
+    # Read the declared store bindings and wire tracing into app.yaml. The store bindings are
+    # resolved into the dev-only manifest as env (below); tracing is on by default, so resolve/create
+    # the per-project experiment and wire its env. Tracing is best-effort locally — if it can't be set
+    # up (e.g. no mlflow installed, or offline), dev still runs the agent, just without traces.
     memory_store, session_store = store_bindings(source_dir)
     # `mason dev` never provisions stores (unlike `mason deploy`); warn so the missing durability /
     # long-term memory isn't a silent surprise.
@@ -118,11 +118,12 @@ def dev(
         )
     env_updates: dict[str, str] = {}
     local_env: dict[str, str] = {}
-    # Stores are declared in agent.toml but created by `mason deploy`; dev never creates them. Check
-    # existence for a friendly warning, and wire the memory store's id (the entries API key) into the
-    # local-only manifest so long-term memory works locally when the store already exists.
-    # Best-effort: if the client/auth is unavailable (offline, no credentials), degrade to the same
-    # "declared but not created yet" warning and keep running, mirroring the tracing block below.
+    # Declared stores are created by `mason deploy`, not dev — dev never creates them. Check
+    # existence for a friendly warning, and wire the resolved store bindings into the local-only
+    # manifest (memory store's id — the entries API key; session store's name) so sessions/memory
+    # work locally when the store already exists. The runtime reads these from the env.
+    # Best-effort: if the client/auth is unavailable (offline, no credentials), degrade to the
+    # same "declared but not created yet" warning and keep running, mirroring tracing below.
     if memory_store:
         try:
             with render.status("Checking memory store…"):
@@ -145,6 +146,7 @@ def dev(
         try:
             with render.status("Checking session store…"):
                 obj.client().get_session_store(session_store)
+            local_env[SESSION_STORE_ENV] = session_store
         except AgentCliError:
             render.warning(
                 f"Session store '{session_store}' is declared but not created yet — conversation "
