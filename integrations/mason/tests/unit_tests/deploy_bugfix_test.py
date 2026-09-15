@@ -8,7 +8,6 @@ import types
 import pytest
 from click.testing import CliRunner
 
-from databricks_mason import app_resources as sa
 from databricks_mason import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
 
@@ -97,43 +96,3 @@ def test_delete_proceeds_with_yes(monkeypatch):
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert called and called[0][:3] == ["apps", "delete", "myapp"]
-
-
-# --- ML-69245: postgres resources are MERGED, not replaced -------------------
-
-
-def test_apply_postgres_resources_preserves_existing_and_updates_ours(monkeypatch):
-    # A typed backend whose postgres_resource() is named "postgres".
-    backend = sa.LakebaseBackend(
-        project="p",
-        branch="production",
-        endpoint_id="primary",
-        database="db-new",
-        schema="public",
-        tables=(),
-        resource_name="postgres",
-    )
-    existing = {
-        "resources": [
-            {"name": "sql-warehouse", "sql_warehouse": {"id": "w1"}},  # user-owned, must survive
-            {"name": "postgres", "postgres": {"database": "db-old"}},  # ours, must be replaced
-        ]
-    }
-    calls = {}
-
-    def fake_databricks(args, profile, **kw):
-        if args[:2] == ["apps", "get"]:
-            return types.SimpleNamespace(returncode=0, stdout=json.dumps(existing), stderr="")
-        # the update call
-        calls["update"] = args
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(sa, "_databricks", fake_databricks)
-    assert sa.apply_postgres_resources("myapp", [backend], "prof") is None
-
-    payload = json.loads(calls["update"][calls["update"].index("--json") + 1])
-    names = [r["name"] for r in payload["resources"]]
-    assert "sql-warehouse" in names  # preserved
-    assert names.count("postgres") == 1  # not duplicated
-    pg = next(r for r in payload["resources"] if r["name"] == "postgres")
-    assert "db-new" in pg["postgres"]["database"]  # updated to ours

@@ -2,7 +2,7 @@
 
 `mason deploy` is the integrated entry point: it provisions the memory/session stores
 bound in `agent.toml`, grants the app's service principal access to them, then rolls out
-the deployment. Durable agents use a dedicated, app-owned Lakebase project. The managed stores
+the deployment. Durable agents use a Conversation Store-managed Runtime Store. The managed stores
 are read from `agent.toml` at runtime, so they are not written into `app.yaml`. `mason deployments`
 covers the lifecycle verbs
 (`list`/`get`/`logs`/`start`/`stop`/`delete`).
@@ -27,10 +27,7 @@ from databricks_mason import (
     render,
     timefmt,
 )
-from databricks_mason.app_resources import (
-    apply_experiment_resource,
-    apply_postgres_resources,
-)
+from databricks_mason.app_resources import apply_experiment_resource
 from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
@@ -45,6 +42,8 @@ from databricks_mason.tracing import (
 )
 
 _AGENT_DURABILITY_STORE_ENV = "DATABRICKS_MASON_RUNTIME_ENDPOINT"
+_AGENT_DURABILITY_DATABASE_ENV = "DATABRICKS_MASON_RUNTIME_DATABASE"
+_AGENT_DURABILITY_USERNAME_ENV = "DATABRICKS_MASON_RUNTIME_USERNAME"
 _AGENT_DURABILITY_SCHEMA_ENV = "DATABRICKS_MASON_RUNTIME_SCHEMA"
 # TEMPORARY: the Apps build environment currently can't reach the internal pypi proxy, so builds
 # time out installing dependencies. Point the build at public PyPI (sanctioned interim workaround)
@@ -434,6 +433,27 @@ def _grant_store_access(
     return None
 
 
+def _reconcile_durability_store(
+    client,
+    deployment_name: str,
+    app_service_principal_id: Optional[str],
+) -> lakebase_durability_store.LakebaseBackend:
+    """Create or reuse the Runtime Store dedicated to this Databricks App identity."""
+    if app_service_principal_id is None:
+        raise AgentCliError("Could not resolve the app's service principal for its Runtime Store.")
+    store_id = lakebase_durability_store.runtime_store_id(deployment_name, app_service_principal_id)
+    with render.status("Reconciling Runtime Store…"):
+        try:
+            store = client.create_runtime_store(
+                store_id, app_service_principal_id, retry_transient=True
+            )
+        except AgentCliError as exc:
+            if exc.error_code != "ALREADY_EXISTS":
+                raise
+            return lakebase_durability_store.backend(deployment_name, store_id)
+    return lakebase_durability_store.backend_from_api(deployment_name, store_id, store)
+
+
 # --- mason deploy -----------------------------------------------------------
 
 
@@ -536,16 +556,7 @@ def deploy(
     if memory_store_id:
         env_updates[MEMORY_STORE_ENV] = memory_store_id
 
-    durability_backend = None
     durability_enabled = bool(project and project.durability_enabled)
-    if durability_enabled:
-        durability_schema = lakebase_durability_store.get_lakebase_schema(name)
-        durability_backend = lakebase_durability_store.get_or_create_backend(
-            name, obj.profile, create=True
-        )
-        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
-        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_schema
-        provisioned["Agent durability store"] = durability_backend.database_path
     if pip_index_url:
         for env in _PIP_INDEX_ENVS:
             env_updates[env] = pip_index_url
@@ -553,13 +564,9 @@ def deploy(
     if instances is not None:
         provisioned["Instances"] = str(instances)
 
-    # 3. Patch the app.yaml manifest with any trace/index env (stores are read from agent.toml).
-    scaffolded = False
-    if env_updates:
-        scaffolded = _upsert_manifest_env(source_dir, env_updates)
-
-    # 4. Ensure the Databricks App exists and its compute is active. Create only when the app is new
-    #    (`apps create` errors on an existing app); the compute wait runs every deploy.
+    # 3. Ensure the Databricks App exists and its compute is active. The Runtime Store API needs the
+    #    app service principal created by this step. Create only when the app is new (`apps create`
+    #    errors on an existing app); the compute wait runs every deploy.
     #
     #    `apps create` itself blocks for minutes (it provisions and waits for compute) and we capture
     #    its output to relabel "App compute" → "Agent compute", so nothing streams meanwhile. Wrap it
@@ -598,13 +605,23 @@ def deploy(
     with render.progress("Waiting for agent compute to start (this can take a few minutes)…"):
         _wait_for_running(name, obj.profile)
 
-    if durability_backend is not None:
-        resource_error = apply_postgres_resources(name, [durability_backend], obj.profile)
-        if resource_error:
-            raise AgentCliError(
-                "Could not attach the Lakebase resource required for durable execution.",
-                hint=resource_error,
-            )
+    grants_stores = bool(session_store or memory_store)
+    app_service_principal_id = (
+        _app_service_principal(name, obj.profile) if durability_enabled or grants_stores else None
+    )
+    if durability_enabled:
+        durability_backend = _reconcile_durability_store(client, name, app_service_principal_id)
+        env_updates[_AGENT_DURABILITY_STORE_ENV] = durability_backend.endpoint_path
+        env_updates[_AGENT_DURABILITY_DATABASE_ENV] = durability_backend.database
+        assert app_service_principal_id is not None
+        env_updates[_AGENT_DURABILITY_USERNAME_ENV] = app_service_principal_id
+        env_updates[_AGENT_DURABILITY_SCHEMA_ENV] = durability_backend.schema
+        provisioned["Agent durability store"] = durability_backend.database_path
+
+    # 4. Patch the app.yaml manifest with trace, Runtime Store, and package-index env.
+    scaffolded = False
+    if env_updates:
+        scaffolded = _upsert_manifest_env(source_dir, env_updates)
 
     # 5. Upload the source and roll out the deployment.
     ws_path = workspace_path or f"/Workspace/Users/{client.current_user}/mason_deployments/{name}"
@@ -627,15 +644,15 @@ def deploy(
     #      underlying Lakebase grant, so no store ownership / Lakebase MANAGE is required here);
     #    - tracing: bind the experiment as an `experiment` resource (CAN_EDIT) so it can write traces.
     #    The experiment resource is the platform-managed grant — no manual SQL grant needed.
-    grants_stores = bool(session_store or memory_store)
     grant_error: Optional[str] = None
     if grants_stores:
         with render.status("Granting the app access to its stores…"):
-            sp = _app_service_principal(name, obj.profile)
-            if sp is None:
+            if app_service_principal_id is None:
                 grant_error = "could not resolve the app's service principal."
             else:
-                grant_error = _grant_store_access(client, sp, session_store, memory_store)
+                grant_error = _grant_store_access(
+                    client, app_service_principal_id, session_store, memory_store
+                )
     trace_grant_error: Optional[str] = None
     if trace_experiment_id:
         with render.status("Granting the app access to its trace experiment…"):

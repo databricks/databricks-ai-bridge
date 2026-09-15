@@ -26,6 +26,7 @@ def _compute_active(monkeypatch):
     # `mason deploy` now waits for compute on every deploy; report ACTIVE so the wait returns
     # immediately. Tests that exercise _wait_for_running directly override _app_compute_state.
     monkeypatch.setattr(deploy_mod, "_app_compute_state", lambda name, profile: "ACTIVE")
+    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda name, profile: "sp-123")
 
 
 @pytest.fixture(autouse=True)
@@ -181,6 +182,22 @@ class _FakeClient:
 
     def create_session_store(self, name, *, retry_transient=False):
         return {"session_store_name": name}
+
+    def create_runtime_store(self, runtime_store_id, app_service_principal_id, **kwargs):
+        return {
+            "name": f"runtime-stores/{runtime_store_id}",
+            "lakebase_backend": {
+                "project_id": "databricks-internal-agent-runtime-store",
+                "branch": "projects/databricks-internal-agent-runtime-store/branches/production",
+                "database_id": runtime_store_id,
+            },
+        }
+
+    def grant_session_store_permission(self, store, principal):
+        return None
+
+    def grant_memory_store_permission(self, store, principal):
+        return None
 
 
 class _FakeCtx:
@@ -435,6 +452,38 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
+def test_reconcile_durability_store_creates_with_app_service_principal() -> None:
+    client = mock.Mock()
+    store_id = deploy_mod.lakebase_durability_store.runtime_store_id("mason-myapp", "sp-123")
+    client.create_runtime_store.return_value = {
+        "lakebase_backend": {
+            "project_id": "databricks-internal-agent-runtime-store",
+            "branch": "projects/databricks-internal-agent-runtime-store/branches/production",
+            "database_id": store_id,
+        }
+    }
+
+    result = deploy_mod._reconcile_durability_store(client, "mason-myapp", "sp-123")
+
+    assert result == deploy_mod.lakebase_durability_store.backend("mason-myapp", store_id)
+    client.create_runtime_store.assert_called_once_with(store_id, "sp-123", retry_transient=True)
+
+
+def test_reconcile_durability_store_reuses_on_already_exists() -> None:
+    client = mock.Mock()
+    client.create_runtime_store.side_effect = AgentCliError("exists", error_code="ALREADY_EXISTS")
+    store_id = deploy_mod.lakebase_durability_store.runtime_store_id("mason-myapp", "sp-123")
+
+    result = deploy_mod._reconcile_durability_store(client, "mason-myapp", "sp-123")
+
+    assert result == deploy_mod.lakebase_durability_store.backend("mason-myapp", store_id)
+
+
+def test_reconcile_durability_store_requires_app_service_principal() -> None:
+    with pytest.raises(AgentCliError, match="app's service principal"):
+        deploy_mod._reconcile_durability_store(mock.Mock(), "mason-myapp", None)
+
+
 def test_deploy_non_durable_template_does_not_enable_runtime_store(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
@@ -445,11 +494,8 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
-        "get_or_create_backend",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not provision")),
-    )
+    reconcile = mock.Mock(side_effect=AssertionError("must not provision"))
+    monkeypatch.setattr(deploy_mod, "_reconcile_durability_store", reconcile)
     deployed_env = None
 
     def fake_databricks(args, profile, **kwargs):
@@ -476,6 +522,7 @@ def test_deploy_non_durable_template_does_not_enable_runtime_store(
     assert deployed_env is not None
     assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in deployed_env
     assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in deployed_env
+    reconcile.assert_not_called()
 
 
 def test_deploy_rejects_invalid_project_instead_of_silently_skipping_durability(
@@ -505,21 +552,9 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, session="sessions")
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
-        "get_or_create_backend",
-        lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_postgres_resources",
-        lambda app, backends, profile: events.append(("attach", backends)) or None,
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
     monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
 
     def fake_databricks(args, profile, **kwargs):
@@ -538,23 +573,23 @@ def test_deploy_durability_binding_uses_dedicated_backend_with_session_store(
     )
 
     assert result.exit_code == 0, result.output
-    assert [event[0] for event in events] == ["attach", "deploy"]
-    backend = events[0][1][0]
-    assert backend == selected
+    assert [event[0] for event in events] == ["deploy"]
+    store_id = deploy_mod.lakebase_durability_store.runtime_store_id("mason-myapp", "sp-123")
+    backend = deploy_mod.lakebase_durability_store.backend("mason-myapp", store_id)
     assert backend.database != "sessions"  # dedicated durability db, not the session store's
-    assert (
-        backend.resource_name == "postgres-durability"
-    )  # distinct from a session store's resource
     assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
-    assert backend.tables == ()
-    deployed_env = events[1][1]
+    deployed_env = events[0][1]
     assert deployed_env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_DATABASE"] == backend.database
+    assert deployed_env["DATABRICKS_MASON_RUNTIME_USERNAME"] == "sp-123"
     assert deployed_env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == backend.schema
     env = {
         entry["name"]: entry["value"]
         for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
     }
     assert env["DATABRICKS_MASON_RUNTIME_ENDPOINT"] == backend.endpoint_path
+    assert env["DATABRICKS_MASON_RUNTIME_DATABASE"] == backend.database
+    assert env["DATABRICKS_MASON_RUNTIME_USERNAME"] == "sp-123"
     assert env["DATABRICKS_MASON_RUNTIME_SCHEMA"] == (
         deploy_mod.lakebase_durability_store.get_lakebase_schema("mason-myapp")
     )
@@ -567,21 +602,9 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, durability=True, memory="mem")
-    selected = deploy_mod.lakebase_durability_store.backend("mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
-    monkeypatch.setattr(
-        deploy_mod.lakebase_durability_store,
-        "get_or_create_backend",
-        lambda app, profile, create: selected,
-    )
-    monkeypatch.setattr(
-        deploy_mod,
-        "apply_postgres_resources",
-        lambda app, backends, profile: events.append(("attach", backends)) or None,
-    )
-    monkeypatch.setattr(deploy_mod, "_app_service_principal", lambda app, profile: "sp")
     monkeypatch.setattr(deploy_mod, "_grant_store_access", lambda *args, **kwargs: None)
 
     def fake_databricks(args, profile, **kwargs):
@@ -598,8 +621,7 @@ def test_deploy_durability_binding_does_not_reuse_memory_store(
     )
 
     assert result.exit_code == 0, result.output
-    assert [event[0] for event in events] == ["attach", "deploy"]
-    assert events[0][1] == [selected]
+    assert [event[0] for event in events] == ["deploy"]
 
 
 def test_deploy_renames_underlying_app_compute_output(tmp_path: pathlib.Path, monkeypatch):

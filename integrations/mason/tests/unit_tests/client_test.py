@@ -51,6 +51,20 @@ def test_create_memory_store(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_create_runtime_store_uses_v2_api_and_app_principal(workspace_client):
+    client, do = _client(workspace_client)
+
+    client.create_runtime_store("mason-app-abc123", "sp-123", retry_transient=True)
+
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/runtime-stores",
+        query={"runtime_store_id": "mason-app-abc123"},
+        body={"app_principal": {"type": "SERVICE_PRINCIPAL", "name": "sp-123"}},
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_list_memory_stores_query(workspace_client):
     c, do = _client(workspace_client)
     c.list_memory_stores(page_size=10)

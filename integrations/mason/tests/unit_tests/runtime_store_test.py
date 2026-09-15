@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from databricks_mason.runtime.durability.store import (
+    RUNTIME_DATABASE_ENV,
     RUNTIME_ENDPOINT_ENV,
     RUNTIME_LOCAL_ENV,
     RUNTIME_SCHEMA_ENV,
+    RUNTIME_USERNAME_ENV,
     InMemoryDurabilityStore,
     LakebaseDurabilityStore,
     default_durability_store,
@@ -57,22 +59,69 @@ def test_default_store_is_local_without_an_attached_resource(monkeypatch):
     assert isinstance(default_durability_store(), InMemoryDurabilityStore)
 
 
-def test_default_store_uses_the_attached_lakebase_resource(monkeypatch):
+def test_default_store_uses_the_provisioned_runtime_store(monkeypatch):
     expected = MagicMock()
     monkeypatch.delenv(RUNTIME_LOCAL_ENV, raising=False)
     monkeypatch.setenv("DATABRICKS_APP_NAME", "mason-app")
     monkeypatch.setenv(
         RUNTIME_ENDPOINT_ENV, "projects/project/branches/production/endpoints/primary"
     )
+    monkeypatch.setenv(RUNTIME_DATABASE_ENV, "mason-app-store")
+    monkeypatch.setenv(RUNTIME_USERNAME_ENV, "00000000-0000-0000-0000-000000000001")
     monkeypatch.setenv(RUNTIME_SCHEMA_ENV, "databricks_mason_runtime_app")
-    from_app_resource = MagicMock(return_value=expected)
-    monkeypatch.setattr(LakebaseDurabilityStore, "from_app_resource", from_app_resource)
+    from_runtime_store = MagicMock(return_value=expected)
+    monkeypatch.setattr(LakebaseDurabilityStore, "from_runtime_store", from_runtime_store)
 
     assert default_durability_store() is expected
-    from_app_resource.assert_called_once_with(
+    from_runtime_store.assert_called_once_with(
         endpoint="projects/project/branches/production/endpoints/primary",
+        database="mason-app-store",
+        username="00000000-0000-0000-0000-000000000001",
         schema="databricks_mason_runtime_app",
     )
+
+
+def test_app_runtime_store_resolves_endpoint_host(monkeypatch):
+    endpoint = "projects/project/branches/production/endpoints/primary"
+    workspace_client = MagicMock()
+    workspace_client.postgres.get_endpoint.return_value.status.hosts.host = "lakebase.example.com"
+    engine = MagicMock()
+    create_async_engine = MagicMock(return_value=engine)
+    monkeypatch.setattr(
+        "databricks_mason.runtime.durability.store.create_async_engine", create_async_engine
+    )
+    monkeypatch.setattr(
+        "databricks_mason.runtime.durability.store.event.listens_for",
+        lambda *args, **kwargs: lambda function: function,
+    )
+
+    store = LakebaseDurabilityStore.from_runtime_store(
+        endpoint=endpoint,
+        database="mason-app-store",
+        username="00000000-0000-0000-0000-000000000001",
+        workspace_client=workspace_client,
+    )
+
+    workspace_client.postgres.get_endpoint.assert_called_once_with(name=endpoint)
+    url = create_async_engine.call_args.args[0]
+    assert url.host == "lakebase.example.com"
+    assert url.port == 5432
+    assert url.database == "mason-app-store"
+    assert url.username == "00000000-0000-0000-0000-000000000001"
+    assert store._lakebase.engine is engine
+
+
+def test_app_runtime_store_rejects_endpoint_without_host():
+    workspace_client = MagicMock()
+    workspace_client.postgres.get_endpoint.return_value.status.hosts.host = None
+
+    with pytest.raises(RuntimeError, match="did not return a host"):
+        LakebaseDurabilityStore.from_runtime_store(
+            endpoint="projects/project/branches/production/endpoints/primary",
+            database="mason-app-store",
+            username="00000000-0000-0000-0000-000000000001",
+            workspace_client=workspace_client,
+        )
 
 
 def test_default_store_ignores_deploy_env_outside_apps(monkeypatch):
