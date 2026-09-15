@@ -183,6 +183,43 @@ def test_append_wraps_items_in_data(workspace_client):
 
 
 @mock.patch("databricks.sdk.WorkspaceClient")
+def test_extract_memories_posts_to_2_0_extractions(workspace_client):
+    c, do = _client(workspace_client)
+    c.extract_memories("store1", "sid", "mem", instructions="only prefs")
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/session-stores/store1/sessions/sid/extractions",
+        query=None,
+        # memory_store is normalized to its resource form; dry_run defaults off (omitted).
+        body={"memory_store": "memory-stores/mem", "instructions": "only prefs"},
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_extract_memories_dry_run_and_bare_memory_store(workspace_client):
+    c, do = _client(workspace_client)
+    c.extract_memories("store1", "sid", "memory-stores/mem", dry_run=True)
+    do.assert_called_once_with(
+        "POST",
+        "/api/2.0/agents/session-stores/store1/sessions/sid/extractions",
+        query=None,
+        body={"memory_store": "memory-stores/mem", "dry_run": True},
+    )
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
+def test_extract_memories_wraps_entries(workspace_client):
+    c, do = _client(workspace_client)
+    do.return_value = {
+        "name": "extractions/abc",
+        "entries": [{"name": "memory-stores/m/entries/e1", "path": "/prefs/style.md"}],
+    }
+    result = c.extract_memories("store1", "sid", "mem")
+    assert result.name == "extractions/abc"
+    assert [e.path for e in result.entries] == ["/prefs/style.md"]
+
+
+@mock.patch("databricks.sdk.WorkspaceClient")
 def test_delete_session_without_force(workspace_client):
     c, do = _client(workspace_client)
     c.delete_session("store1", "sid")

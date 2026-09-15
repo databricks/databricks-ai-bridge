@@ -132,6 +132,16 @@ class MemoryEntryList(_Model):
         return self.get("next_page_token")
 
 
+class ExtractMemoriesResponse(_Model):
+    @property
+    def name(self) -> Optional[str]:
+        return self.get("name")
+
+    @property
+    def entries(self) -> list[MemoryEntry]:
+        return _wrap_list(self.get("entries"), MemoryEntry)
+
+
 class MemorySearchHit(_Model):
     @property
     def entry(self) -> Optional[MemoryEntry]:
