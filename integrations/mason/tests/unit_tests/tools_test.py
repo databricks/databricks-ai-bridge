@@ -176,7 +176,8 @@ def test_add_python_is_not_a_cli_command_and_does_not_mutate_project(tmp_path: p
     )
 
     assert result.exit_code != 0
-    assert "No such command 'python'" in result.output
+    # The facelift renders unknown commands in the diagnostic grammar (with a did-you-mean hint).
+    assert "unknown command `python`" in result.output
     assert manifest.read_text(encoding="utf-8") == before
     assert list((project / "agent" / "tools").iterdir()) == []
 
