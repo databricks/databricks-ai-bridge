@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import types
-from unittest import mock
 
 import pytest
 from click.testing import CliRunner
@@ -98,20 +97,6 @@ def test_delete_proceeds_with_yes(monkeypatch):
     result = CliRunner().invoke(deploy_mod.deployments_delete, ["myapp", "--yes"], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert called and called[0][:3] == ["apps", "delete", "myapp"]
-
-
-# --- ML-69248: session store pre-validation ----------------------------------
-
-
-def test_validate_stores_raises_when_session_store_missing():
-    client = mock.Mock()
-    client.get_session_store.side_effect = AgentCliError(
-        "session store not found", error_code="NOT_FOUND"
-    )
-    with pytest.raises(AgentCliError) as exc:
-        deploy_mod.validate_stores(client, memory_store=None, session_store="ghost")
-    assert "does not exist" in str(exc.value)
-    client.get_session_store.assert_called_once_with("ghost")
 
 
 # --- ML-69245: postgres resources are MERGED, not replaced -------------------

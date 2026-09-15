@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
+from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
 from databricks_mason.errors import AgentCliError
 
 
@@ -152,16 +152,31 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     assert final.memory_store == "mem"
 
 
-def test_create_scaffolds_commented_store_examples(tmp_path: pathlib.Path):
+def test_create_declares_given_store_names(tmp_path: pathlib.Path):
+    AgentProject.create(
+        tmp_path, framework="openai", memory_store="mem-x", session_store="sess-y"
+    ).write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store == "mem-x"
+    assert reloaded.session_store == "sess-y"
+
+
+def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
+    # create() declares only the names it is given; init applies the dir-derived defaults.
     AgentProject.create(tmp_path, framework="openai").write()
-    text = (tmp_path / "agent.toml").read_text(encoding="utf-8")
-    # Commented example bindings show the shape without activating a store.
-    assert "# [memory_store]" in text
-    assert "# [session_store]" in text
-    assert "mason memory bind" in text and "mason sessions bind" in text
+
     reloaded = AgentProject.load(tmp_path)
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+)
+def test_default_store_name_sanitizes(raw: str, expected: str):
+    assert default_store_name(raw, "memory") == expected
 
 
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
