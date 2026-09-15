@@ -108,7 +108,10 @@ def test_init_defaults_to_langgraph_with_chat_app(tmp_path: pathlib.Path):
         }
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest == {"schema_version": 1, "agent": {"framework": "langgraph"}}
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": "langgraph", "server": "mason"},
+    }
 
 
 @pytest.mark.parametrize("framework", ["langgraph", "openai"])
@@ -125,7 +128,10 @@ def test_init_custom_server_uses_minimal_template(tmp_path: pathlib.Path, framew
     assert copied.call_args.args[2] == ()  # no chat-app overlay for the custom server
     with (dest / "agent.toml").open("rb") as manifest_file:
         manifest = tomli.load(manifest_file)
-    assert manifest == {"schema_version": 1, "agent": {"framework": framework}}
+    assert manifest == {
+        "schema_version": 1,
+        "agent": {"framework": framework, "server": "custom"},
+    }
     assert "memory_store" not in manifest
     assert "session_store" not in manifest
     with (dest / ".mason" / "project.toml").open("rb") as config_file:
@@ -142,7 +148,7 @@ def test_init_creates_canonical_agent_manifest(tmp_path: pathlib.Path):
         manifest = tomli.load(manifest_file)
     assert manifest == {
         "schema_version": 1,
-        "agent": {"framework": "openai"},
+        "agent": {"framework": "openai", "server": "mason"},
     }
 
 
@@ -267,25 +273,3 @@ def test_init_no_profile_writes_no_env(tmp_path: pathlib.Path):
         result = CliRunner().invoke(init_mod.init, [str(dest)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert not (dest / ".env").exists()  # no profile -> scaffold-only, no .env
-
-
-def test_init_store_name_overrides(tmp_path: pathlib.Path):
-    dest = tmp_path / "proj"
-    result = CliRunner().invoke(
-        init_mod.init,
-        [
-            "--framework",
-            "openai",
-            "--memory-store",
-            "mem-x",
-            "--session-store",
-            "sess-y",
-            str(dest),
-        ],
-        obj=_Ctx(),
-    )
-    assert result.exit_code == 0, result.output
-    with (dest / "agent.toml").open("rb") as manifest_file:
-        manifest = tomli.load(manifest_file)
-    assert manifest["memory_store"] == {"name": "mem-x"}
-    assert manifest["session_store"] == {"name": "sess-y"}

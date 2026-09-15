@@ -21,8 +21,7 @@ def _project(tmp_path: pathlib.Path, framework: str = "langgraph") -> pathlib.Pa
     (project / "agent" / "tools").mkdir(parents=True)
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
-    write_project_metadata(project, framework=framework, template=f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    AgentProject.create(project, framework=framework, server="mason").write()
     return project
 
 

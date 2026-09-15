@@ -78,6 +78,27 @@ def test_apply_postgres_resources_reports_failure(monkeypatch):
     assert err == "denied: needs MANAGE"
 
 
+def test_remove_app_resources_preserves_resources_mason_does_not_own(monkeypatch):
+    resources: list[dict[str, Any]] = [
+        {"name": "user-owned", "secret": {}},
+        {"name": "postgres-runtime-store", "postgres": {}},
+    ]
+
+    def fake_db(args, profile, **kw):
+        if args[:2] == ["apps", "get"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout=json.dumps({"resources": resources}), stderr=""
+            )
+        payload = json.loads(args[args.index("--json") + 1])
+        resources[:] = payload["resources"]
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sa, "_databricks", fake_db)
+
+    assert sa.remove_app_resources("app", {"postgres-runtime-store"}, "prof") is None
+    assert resources == [{"name": "user-owned", "secret": {}}]
+
+
 def test_runtime_store_resource_coexists_with_a_second_managed_resource(monkeypatch):
     resources: list[dict[str, Any]] = []
 

@@ -163,6 +163,10 @@ Mason Runtime. Use `--disable-chat-app` independently for API-only Mason server 
 is a FastAPI application, so developers can add their own endpoints alongside Mason's invocation
 API.
 
+`mason init` records that choice as `[agent].server = "mason"` or `"custom"` in `agent.toml`.
+`mason deploy` uses this field as the source of truth: Mason-server deployments create or reuse an
+isolated Runtime Store, while custom-server deployments do not provision one.
+
 ## Commands
 
 ```text
@@ -262,11 +266,11 @@ mason deploy my-agent
 
 ## Agent tools
 
-For projects created with `mason init --server mason` (the default), `agent.toml` is the declarative
-source of truth for Databricks-managed infrastructure: sandbox, managed MCP, and Unity Catalog
-function bindings, plus memory and session resources. `mason tools add` updates only
-this file; direct TOML edits have the same behavior. Both Mason-server framework adapters read the
-managed bindings at runtime without generating or patching agent source:
+For projects with `[agent].server = "mason"` (the default from `mason init`), `agent.toml` is the
+declarative source of truth for Databricks-managed infrastructure: the Runtime Store, sandbox,
+managed MCP and Unity Catalog function bindings, plus memory and session resources. `mason tools
+add` updates only this file; direct TOML edits have the same behavior. Both Mason-server framework
+adapters read the managed bindings at runtime without generating or patching agent source:
 
 ```sh
 mason tools add sandbox --scope table:samples.nyctaxi.trips
@@ -297,9 +301,9 @@ command or `agent.toml` entry to keep in sync. Customer-managed MCP servers are 
 code in `agent/mcps.py` and are joined with the managed bindings by `mcp_tools(...)` or
 `mcp_servers(...)`.
 
-Projects created with `--server custom` do not auto-discover `agent/tools/` or load managed tool
-bindings from `agent.toml`, so `mason tools add` rejects those projects. Wire framework-native Python
-tools and MCP servers directly in `agent/agent.py` instead.
+Projects with `[agent].server = "custom"` do not provision a Runtime Store, auto-discover
+`agent/tools/`, or load managed tool bindings from `agent.toml`, so `mason tools add` rejects those
+projects. Wire framework-native Python tools and MCP servers directly in `agent/agent.py` instead.
 
 If an older Mason-server manifest contains `source = { kind = "python", ... }`, remove that
 `[[tools]]` entry; the decorated tool in `agent/tools/` remains active. `mason dev` and `mason deploy`

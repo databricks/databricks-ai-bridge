@@ -14,7 +14,6 @@ from click.testing import CliRunner
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.cli import deploy as deploy_mod
 from databricks_mason.errors import AgentCliError
-from databricks_mason.project_config import write_project_metadata
 
 # The autouse fixture below stubs `resolve_trace_experiment_id` for deploy-command tests; capture the
 # real function here so its own unit tests can exercise the actual logic.
@@ -191,19 +190,14 @@ class _FakeCtx:
         return _FakeClient()
 
 
-def _mark_template(source: pathlib.Path, template: str) -> None:
-    config = source / ".mason" / "project.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text(f'schema_version = 1\nframework = "langgraph"\ntemplate = "{template}"\n')
-
-
 def _write_agent_manifest(
     source: pathlib.Path,
     *,
+    server: str = "mason",
     memory: str | None = None,
     session: str | None = None,
 ) -> None:
-    body = 'schema_version = 1\n\n[agent]\nframework = "langgraph"\n'
+    body = f'schema_version = 1\n\n[agent]\nframework = "langgraph"\nserver = "{server}"\n'
     if memory:
         body += f'\n[memory_store]\nname = "{memory}"\n'
     if session:
@@ -211,25 +205,17 @@ def _write_agent_manifest(
     (source / "agent.toml").write_text(body)
 
 
-@pytest.mark.parametrize(
-    ("framework", "template"),
-    [
-        ("langgraph", "custom-agent-langgraph"),
-        ("openai", "custom-agent-openai"),
-    ],
-)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
     tmp_path: pathlib.Path,
     framework: str,
-    template: str,
 ):
-    source = tmp_path / template
+    source = tmp_path / f"custom-agent-{framework}"
     source.mkdir()
     (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    project = AgentProject.create(source, framework=framework)
+    project = AgentProject.create(source, framework=framework, server="custom")
     project.add_tool(ToolSpec.mcp("web", service="system.ai.web_search"))
     project.write()
-    write_project_metadata(source, framework=framework, template=template)
     manifest = source / "agent.toml"
     before = manifest.read_text(encoding="utf-8")
     ctx = _FakeCtx()
@@ -245,35 +231,27 @@ def test_deploy_rejects_custom_server_manifest_tools_before_mutation_or_network(
         )
 
     assert result.exit_code != 0
-    assert "require a Mason server template" in " ".join(result.output.split())
+    assert '[agent].server = "mason"' in " ".join(result.output.split())
     assert manifest.read_text(encoding="utf-8") == before
     client.assert_not_called()
     db.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("framework", "template"),
-    [
-        ("langgraph", "custom-agent-langgraph"),
-        ("openai", "custom-agent-openai"),
-    ],
-)
+@pytest.mark.parametrize("framework", ["langgraph", "openai"])
 def test_deploy_surfaces_invalid_custom_server_manifest_before_mutation_or_network(
     tmp_path: pathlib.Path,
     framework: str,
-    template: str,
 ):
-    source = tmp_path / template
+    source = tmp_path / f"custom-agent-{framework}"
     source.mkdir()
     (source / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     manifest = source / "agent.toml"
     manifest.write_text(
-        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\n'
+        f'schema_version = 1\n\n[agent]\nframework = "{framework}"\nserver = "custom"\n'
         '\n[[tools]]\nid = "legacy"\nsource = { kind = "python", '
         'entrypoint = "agent.tools:legacy" }\n',
         encoding="utf-8",
     )
-    write_project_metadata(source, framework=framework, template=template)
     before = manifest.read_text(encoding="utf-8")
     ctx = _FakeCtx()
 
@@ -432,56 +410,104 @@ def test_deploy_help_exposes_instances_and_sticky_routing():
     assert "Databricks Apps instances" not in result.output
 
 
-def test_reconcile_runtime_store_creates_or_reuses_for_mason_template(
-    tmp_path: pathlib.Path, monkeypatch
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    _mark_template(src, "agent-langgraph")
+def test_reconcile_runtime_store_creates_or_reuses_for_mason_server(monkeypatch) -> None:
     selected = deploy_mod.lakebase_store.backend("mason-myapp")
     get_or_create = mock.Mock(return_value=selected)
     monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
 
-    result = deploy_mod._reconcile_runtime_store(object(), src, "mason-myapp", "prof")
+    result = deploy_mod._reconcile_runtime_store(
+        types.SimpleNamespace(server="mason"), "mason-myapp", "prof"
+    )
 
     assert result == selected
     get_or_create.assert_called_once_with("mason-myapp", "prof", create=True)
 
 
-def test_reconcile_runtime_store_skips_custom_server(tmp_path: pathlib.Path, monkeypatch) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
-    _mark_template(src, "custom-agent-langgraph")
+def test_reconcile_runtime_store_skips_custom_server(monkeypatch) -> None:
     get_or_create = mock.Mock()
     monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
 
-    result = deploy_mod._reconcile_runtime_store(object(), src, "mason-myapp", "prof")
+    result = deploy_mod._reconcile_runtime_store(
+        types.SimpleNamespace(server="custom"), "mason-myapp", "prof"
+    )
 
     assert result is None
     get_or_create.assert_not_called()
 
 
-def test_reconcile_runtime_store_skips_project_without_template_metadata(
-    tmp_path: pathlib.Path, monkeypatch
-) -> None:
-    src = tmp_path / "app"
-    src.mkdir()
+def test_reconcile_runtime_store_skips_project_without_agent_manifest(monkeypatch) -> None:
     get_or_create = mock.Mock()
     monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
 
-    result = deploy_mod._reconcile_runtime_store(object(), src, "mason-myapp", "prof")
+    result = deploy_mod._reconcile_runtime_store(None, "mason-myapp", "prof")
 
     assert result is None
     get_or_create.assert_not_called()
 
 
-def test_deploy_mason_template_provisions_runtime_store(
+def test_deploy_custom_server_removes_stale_runtime_store_wiring(
     tmp_path: pathlib.Path, monkeypatch
 ) -> None:
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "command": ["x"],
+                "env": [
+                    {"name": "DATABRICKS_MASON_RUNTIME_ENDPOINT", "value": "old-endpoint"},
+                    {"name": "DATABRICKS_MASON_RUNTIME_SCHEMA", "value": "old-schema"},
+                    {"name": "USER_ENV", "value": "keep"},
+                ],
+            }
+        )
+    )
+    _write_agent_manifest(src, server="custom")
+
+    get_or_create = mock.Mock()
+    attach = mock.Mock()
+    removed: dict[str, object] = {}
+    monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda app, profile: True)
+    monkeypatch.setattr(deploy_mod.lakebase_store, "get_or_create_backend", get_or_create)
+    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", attach)
+    monkeypatch.setattr(
+        deploy_mod,
+        "remove_app_resources",
+        lambda app, names, profile: removed.update(app=app, names=names, profile=profile),
+    )
+    monkeypatch.setattr(
+        deploy_mod,
+        "_databricks",
+        lambda args, profile, **kwargs: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    result = CliRunner().invoke(
+        deploy_mod.deploy,
+        ["myapp", "--source", str(src)],
+        obj=_FakeCtx(),
+    )
+
+    assert result.exit_code == 0, result.output
+    get_or_create.assert_not_called()
+    attach.assert_not_called()
+    assert removed == {
+        "app": "agent-mason-myapp",
+        "names": frozenset({"postgres-runtime-store"}),
+        "profile": "prof",
+    }
+    env = {
+        entry["name"]: entry["value"]
+        for entry in yaml.safe_load((src / "app.yaml").read_text())["env"]
+    }
+    assert env["USER_ENV"] == "keep"
+    assert "DATABRICKS_MASON_RUNTIME_ENDPOINT" not in env
+    assert "DATABRICKS_MASON_RUNTIME_SCHEMA" not in env
+
+
+def test_deploy_mason_server_provisions_runtime_store(tmp_path: pathlib.Path, monkeypatch) -> None:
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    _mark_template(src, "agent-langgraph")
     _write_agent_manifest(src)
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -526,7 +552,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, session="sessions")
-    selected = deploy_mod.lakebase_durability_store.backend("agent-mason-myapp")
+    selected = deploy_mod.lakebase_store.backend("agent-mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -566,9 +592,7 @@ def test_deploy_runtime_store_uses_dedicated_backend_with_session_store(
     assert (
         backend.resource_name == "postgres-runtime-store"
     )  # distinct from a session store's resource
-    assert backend.schema == deploy_mod.lakebase_durability_store.get_lakebase_schema(
-        "agent-mason-myapp"
-    )
+    assert backend.schema == deploy_mod.lakebase_store.get_lakebase_schema("agent-mason-myapp")
     assert backend.tables == ()
     deployed_env = events[1][1]
     assert deployed_env["DATABRICKS_MASON_RUNTIME_STORE_LAKEBASE_ENDPOINT"] == backend.endpoint_path
@@ -590,7 +614,7 @@ def test_deploy_runtime_store_does_not_reuse_memory_store(
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
     _write_agent_manifest(src, memory="mem")
-    selected = deploy_mod.lakebase_durability_store.backend("agent-mason-myapp")
+    selected = deploy_mod.lakebase_store.backend("agent-mason-myapp")
     events = []
 
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
@@ -694,7 +718,9 @@ def test_deploy_sync_keeps_directly_edited_agent_manifest(tmp_path: pathlib.Path
     src = tmp_path / "app"
     src.mkdir()
     (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    (src / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    (src / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "custom"\n'
+    )
     calls: list[list[str]] = []
     monkeypatch.setattr(deploy_mod, "_deployment_exists", lambda a, p: True)
     monkeypatch.setattr(
@@ -808,6 +834,12 @@ def test_deploy_injects_store_env(tmp_path: pathlib.Path, monkeypatch):
         "_databricks",
         lambda args, profile, **kw: types.SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
+    monkeypatch.setattr(
+        deploy_mod.lakebase_store,
+        "get_or_create_backend",
+        lambda app, profile, create: deploy_mod.lakebase_store.backend(app),
+    )
+    monkeypatch.setattr(deploy_mod, "apply_postgres_resources", lambda *args, **kwargs: None)
 
     result = CliRunner().invoke(deploy_mod.deploy, ["myapp", "--source", str(src)], obj=_FakeCtx())
 
@@ -1020,7 +1052,7 @@ def test_mlflow_tracing_config_binds_experiment_by_id_and_workspace():
 
 def test_resolve_trace_experiment_none_when_disabled(tmp_path: pathlib.Path):
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[tracing]\ndisabled = true\n'
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[tracing]\ndisabled = true\n'
     )
     assert _REAL_RESOLVE_TRACE(tmp_path, "app", _FakeClient(), None) is None
 
@@ -1029,7 +1061,7 @@ def test_resolve_trace_experiment_uses_pinned_id_without_creating(
     tmp_path: pathlib.Path, monkeypatch
 ):
     (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[tracing]\nexperiment_id = "pinned-1"\n'
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[tracing]\nexperiment_id = "pinned-1"\n'
     )
     # A pinned id is used directly — no experiment creation.
     monkeypatch.setattr(
@@ -1039,7 +1071,9 @@ def test_resolve_trace_experiment_uses_pinned_id_without_creating(
 
 
 def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.Path, monkeypatch):
-    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
+    )
     created: dict = {}
     monkeypatch.setattr(
         deploy_mod,
@@ -1058,7 +1092,9 @@ def test_resolve_trace_experiment_creates_per_project_default(tmp_path: pathlib.
 def test_resolve_trace_experiment_reuses_pinned_default_on_second_run(
     tmp_path: pathlib.Path, monkeypatch
 ):
-    (tmp_path / "agent.toml").write_text('schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n'
+    )
     calls: list[str] = []
     monkeypatch.setattr(
         deploy_mod,
@@ -1127,8 +1163,15 @@ def test_lifecycle_commands_honor_json_output(monkeypatch):
         assert json.loads(result.output) == {key: "myapp"}
 
 
-def _agent_toml(source: pathlib.Path, *, memory=None, session=None, deployment_name=None) -> None:
-    text = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+def _agent_toml(
+    source: pathlib.Path,
+    *,
+    server: str = "custom",
+    memory=None,
+    session=None,
+    deployment_name=None,
+) -> None:
+    text = f'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "{server}"\n'
     if deployment_name:
         text += f'deployment_name = "{deployment_name}"\n'
     if memory:

@@ -28,8 +28,8 @@ def _project(
     (project / "agent" / "tools").mkdir(parents=True)
     (project / "tests" / "tools").mkdir(parents=True)
     (project / "agent" / "mcps.py").write_text("ORIGINAL = True\n", encoding="utf-8")
-    write_project_metadata(project, framework=framework, template=template or f"agent-{framework}")
-    AgentProject.create(project, framework=framework).write()
+    server = "custom" if (template or "").startswith("custom-agent-") else "mason"
+    AgentProject.create(project, framework=framework, server=server).write()
     return project
 
 
@@ -158,7 +158,7 @@ def test_add_managed_tool_rejects_custom_server_template_without_manifest_change
 
     assert result.exit_code != 0
     output = " ".join(result.output.split())
-    assert "require a Mason server template" in output
+    assert '[agent].server = "mason"' in output
     assert "mason init --server mason" in output
     assert "agent/agent.py" in output
     assert manifest.read_text(encoding="utf-8") == before

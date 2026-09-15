@@ -13,7 +13,8 @@ from databricks_mason.errors import AgentCliError
 def _write_manifest(root: pathlib.Path, body: str | None = None) -> pathlib.Path:
     path = root / "agent.toml"
     path.write_text(
-        body or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\n',
+        body
+        or 'schema_version = 1\n# keep me\n\n[agent]\nframework = "langgraph"\nserver = "mason"\n',
         encoding="utf-8",
     )
     return path
@@ -32,6 +33,7 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
     assert "# keep me" in path.read_text(encoding="utf-8")
     loaded = AgentProject.load(tmp_path)
     assert loaded.framework == "langgraph"
+    assert loaded.server == "mason"
     assert loaded.tools[0].source.kind == "sandbox"
     assert loaded.tools[0].policy.downscope == (
         Scope(kind="table", value="samples.nyctaxi.trips", permission="read_only"),
@@ -39,7 +41,10 @@ def test_agent_project_round_trips_tool_specs_without_losing_comments(tmp_path: 
 
 
 def test_add_same_tool_is_idempotent(tmp_path: pathlib.Path):
-    _write_manifest(tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\n')
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
+    )
     project = AgentProject.load(tmp_path)
     spec = ToolSpec.mcp("web", service="system.ai.web_search")
 
@@ -94,6 +99,7 @@ def test_load_rejects_python_tool_entries_with_code_first_migration(tmp_path: pa
 
 [agent]
 framework = "langgraph"
+server = "mason"
 
 [[tools]]
 id = "lookup-ticket"
@@ -152,21 +158,15 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     assert final.memory_store == "mem"
 
 
-def test_create_declares_given_store_names(tmp_path: pathlib.Path):
-    AgentProject.create(
-        tmp_path, framework="openai", memory_store="mem-x", session_store="sess-y"
-    ).write()
-
+def test_create_scaffolds_server_and_commented_store_examples(tmp_path: pathlib.Path):
+    AgentProject.create(tmp_path, framework="openai", server="custom").write()
+    text = (tmp_path / "agent.toml").read_text(encoding="utf-8")
+    # Commented example bindings show the shape without activating a store.
+    assert "# [memory_store]" in text
+    assert "# [session_store]" in text
+    assert "mason memory bind" in text and "mason sessions bind" in text
     reloaded = AgentProject.load(tmp_path)
-    assert reloaded.memory_store == "mem-x"
-    assert reloaded.session_store == "sess-y"
-
-
-def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
-    # create() declares only the names it is given; init applies the dir-derived defaults.
-    AgentProject.create(tmp_path, framework="openai").write()
-
-    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.server == "custom"
     assert reloaded.memory_store is None
     assert reloaded.session_store is None
 
@@ -177,6 +177,18 @@ def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
 )
 def test_default_store_name_sanitizes(raw: str, expected: str):
     assert default_store_name(raw, "memory") == expected
+
+
+@pytest.mark.parametrize("server", ["", "other"])
+def test_load_rejects_missing_or_unsupported_server(tmp_path: pathlib.Path, server: str):
+    server_line = f'server = "{server}"\n' if server else ""
+    _write_manifest(
+        tmp_path,
+        f'schema_version = 1\n\n[agent]\nframework = "openai"\n{server_line}',
+    )
+
+    with pytest.raises(AgentCliError, match="server"):
+        AgentProject.load(tmp_path)
 
 
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
@@ -199,7 +211,8 @@ def test_deployment_name_round_trips(tmp_path: pathlib.Path):
 
 def test_load_rejects_empty_deployment_name(tmp_path: pathlib.Path):
     _write_manifest(
-        tmp_path, 'schema_version = 1\n\n[agent]\nframework = "openai"\ndeployment_name = ""\n'
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\ndeployment_name = ""\n',
     )
     with pytest.raises(AgentCliError, match="deployment_name"):
         AgentProject.load(tmp_path)
@@ -238,7 +251,7 @@ def test_bind_memory_store_records_id(tmp_path: pathlib.Path):
 def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[session_store]\ndescription = "x"\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n\n[session_store]\ndescription = "x"\n',
     )
     with pytest.raises(AgentCliError, match="session_store"):
         AgentProject.load(tmp_path)
@@ -249,7 +262,7 @@ def test_load_without_root_finds_project_from_working_directory(
 ) -> None:
     _write_manifest(
         tmp_path,
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n',
+        'schema_version = 1\n\n[agent]\nframework = "openai"\nserver = "mason"\n',
     )
     nested = tmp_path / "runtime"
     nested.mkdir()

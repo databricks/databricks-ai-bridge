@@ -98,7 +98,7 @@ def dev(
 
     project = _load_project(source_dir)
     if project is not None and project.tools:
-        require_managed_tool_support(source_dir)
+        require_managed_tool_support(project.server)
 
     # Read the declared store bindings and wire tracing into app.yaml. The store bindings are
     # resolved into the dev-only manifest as env (below); tracing is on by default, so resolve/create
@@ -195,7 +195,9 @@ def dev(
     # `run-local` prints a generic "go to http://localhost:<port>" line that points at the chat UI —
     # misleading for an API-only project, which serves no page there (404). Print an accurate line up
     # front, keyed on whether this project actually carries the chat-app overlay.
-    _announce_local_url(source_dir, app_port or _DEFAULT_APP_PORT)
+    _announce_local_url(
+        source_dir, app_port or _DEFAULT_APP_PORT, project.server if project else None
+    )
 
     # Run in the project dir so run-local finds the app; stream output (no capture). Remove the
     # local-only manifest afterward so a later `mason deploy` cannot sync it to the workspace.
@@ -210,17 +212,13 @@ def dev(
         entry_point.unlink(missing_ok=True)
 
 
-def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
+def _announce_local_url(source_dir: pathlib.Path, port: int, server: str | None) -> None:
     """Print how to reach the running app: the chat UI if present, else a sample invoke request."""
     base = f"http://localhost:{port}"
     deploy_name = source_dir.resolve().name
-    try:
-        template = load_project_metadata(source_dir).template
-    except AgentCliError:
-        template = None
     tool_step: str | tuple[str, str] = (
         "Edit agent/agent.py to give the agent a tool"
-        if is_custom_server_template(template)
+        if server == "custom"
         else ("mason tools add mcp <service>", "Give the agent a tool")
     )
     if (source_dir / "runtime" / "ui.py").is_file():
@@ -236,7 +234,7 @@ def _announce_local_url(source_dir: pathlib.Path, port: int) -> None:
         )
     else:
         # No page is served at `/`, so give a copy-pasteable request instead of just the URL.
-        uses_runtime_api = template in {"agent-langgraph", "agent-openai"}
+        uses_runtime_api = server == "mason"
         endpoint = f"{base}/api/invocations" if uses_runtime_api else f"{base}/invocations"
         body = (
             '{"id": "00000000-0000-4000-8000-000000000000", '

@@ -29,17 +29,18 @@ _SCHEMA_VERSION = 1
 # Commented-out store bindings written into a freshly scaffolded agent.toml (None = blank line).
 _STORE_EXAMPLE_LINES = (
     None,
-    "Managed long-term memory (optional): `mason deploy` creates + binds one by default;",
+    "Managed long-term memory (optional): declare a store for `mason deploy` to create it;",
     "run `mason memory bind <name>`, or uncomment and set a store name here:",
     "[memory_store]",
     'name = "my-memory-store"',
     None,
-    "Durable conversation history (optional): `mason deploy` creates + binds one by default;",
+    "Durable conversation history (optional): declare a store for `mason deploy` to create it;",
     "run `mason sessions bind <name>`, or uncomment and set a store name here:",
     "[session_store]",
     'name = "my-session-store"',
 )
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
+_SUPPORTED_SERVERS = {"custom", "mason"}
 _SUPPORTED_SCOPE_KINDS = {"table", "volume", "workspace"}
 _SUPPORTED_PERMISSIONS = {"read_only", "read_write"}
 _TOOL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -300,13 +301,14 @@ def _tool_table(spec: ToolSpec) -> Any:
 
 
 class AgentProject:
-    """Loaded mutable view of a project's canonical tool manifest."""
+    """Loaded mutable view of a project's canonical agent manifest."""
 
     def __init__(
         self,
         root: pathlib.Path,
         document: TOMLDocument,
         framework: str,
+        server: str,
         tools: list[ToolSpec],
         memory_store: str | None = None,
         session_store: str | None = None,
@@ -319,13 +321,16 @@ class AgentProject:
         self.path = root / "agent.toml"
         self._document = document
         self.framework = framework
+        # Server selection is deployment behavior, so agent.toml—not hidden template metadata—is
+        # the source of truth for whether Mason provisions and wires a Runtime Store.
+        self.server = server
         self.tools = tools
         # Managed store bindings declared in agent.toml; None = unbound. memory_store_id is the bare
         # store id the runtime needs for the entries API (the display name can't be used there).
         self.memory_store = memory_store
         self.session_store = session_store
         self.memory_store_id = memory_store_id
-        # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
+        # The deployment's base name (`mason deploy` prefixes it with `agent-mason-`); None until named.
         self.deployment_name = deployment_name
         # Tracing config: an explicit experiment id override (None = default per-project experiment), and
         # whether tracing is disabled (tracing is on by default; this flag turns it off).
@@ -364,6 +369,9 @@ class AgentProject:
         framework = _required_string(agent.get("framework"), "agent.framework")
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        server = _required_string(agent.get("server"), "agent.server")
+        if server not in _SUPPORTED_SERVERS:
+            raise AgentCliError(f"Unsupported Mason server {server!r}.")
         deployment_name = agent.get("deployment_name")
         if deployment_name is not None and not (
             isinstance(deployment_name, str) and deployment_name
@@ -396,6 +404,7 @@ class AgentProject:
             project_root,
             document,
             framework,
+            server,
             tools,
             memory_store,
             session_store,
@@ -411,25 +420,30 @@ class AgentProject:
         root: pathlib.Path | str,
         *,
         framework: str,
+        server: str,
     ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
+        if server not in _SUPPORTED_SERVERS:
+            raise AgentCliError(f"Unsupported Mason server {server!r}.")
         project_root = pathlib.Path(root).expanduser().resolve()
         document = tomlkit.document()
         document.add("schema_version", _SCHEMA_VERSION)
         document.add(tomlkit.nl())
         agent = tomlkit.table()
         agent.add("framework", framework)
+        agent.add("server", server)
         document.add("agent", agent)
-        # Commented examples so a fresh project shows how managed stores are bound. `mason deploy`
-        # creates + binds these by default; uncomment (or run `mason memory/sessions bind`) to pin
-        # specific store names. They're comments, so `load` treats the project as unbound until then.
+        # Commented examples show how managed stores are declared. Uncomment them (or run
+        # `mason memory/sessions bind`) to make deploy reconcile those exact names. They're comments,
+        # so `load` treats the project as unbound until then.
         for line in _STORE_EXAMPLE_LINES:
             document.add(tomlkit.nl() if line is None else tomlkit.comment(line))
         return cls(
             project_root,
             document,
             framework,
+            server,
             [],
         )
 

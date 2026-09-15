@@ -76,8 +76,9 @@ mason dev
 mason deploy my-agent
 ```
 
-- `mason deploy my-agent` creates a dedicated Runtime Store database for the Mason server and grants
-  the app access to it. Redeployments reuse that database.
+- `mason init` records the selected server in `agent.toml`. `server = "mason"` makes `mason deploy`
+  create a dedicated Runtime Store database and grant the app access; `server = "custom"` skips
+  Runtime Store provisioning. Redeployments of a Mason server reuse its database.
 
 The runtime- and store-related fields in `agent.toml` then look like:
 
@@ -86,6 +87,7 @@ schema_version = 1
 
 [agent]
 framework = "langgraph"
+server = "mason"
 deployment_name = "my-agent"
 
 [memory_store]
@@ -96,8 +98,8 @@ id = "<resolved-store-id>"
 name = "agent-sessions"
 ```
 
-Binding stores explicitly makes the project configuration clear. If a store is not bound,
-`mason deploy` can create and bind default `<name>-memory` and `<name>-session` stores.
+Memory and Session Stores are optional and explicit. `mason deploy` creates or reuses only the
+stores declared in `agent.toml`; use `mason memory bind` and `mason sessions bind` to add them.
 
 ## Terminology
 
@@ -113,6 +115,8 @@ Binding stores explicitly makes the project configuration clear. If a store is n
 
 - `mason deploy` creates and initializes one isolated database for a new Mason Runtime deployment,
   grants the app access, and reuses the same database on later deployments.
+- `[agent].server` in `agent.toml` is the source of truth for provisioning: `"mason"` uses the
+  managed Runtime Store and `"custom"` does not.
 - The Runtime Store is not named, bound, or shared by developers. Mason manages its database,
   schema, permissions, and lifecycle together so one deployment cannot expose or recover another
   deployment's work.

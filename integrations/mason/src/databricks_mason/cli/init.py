@@ -182,6 +182,7 @@ def init(
         project = AgentProject.create(
             dest,
             framework=selected_framework,
+            server=server,
         )
         project.write()
         env_profile = profile or obj.profile
