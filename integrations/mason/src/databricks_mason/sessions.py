@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import Any, Optional
 
 import click
@@ -54,56 +55,31 @@ def _source_option(function):
 @sessions.command("bind")
 @click.argument("store")
 @_source_option
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require the store to already exist. By default a missing store is created (idempotent).",
-)
 @click.pass_obj
-def sessions_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
-    """Bind session STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
+def sessions_bind(obj, store: str, source: pathlib.Path) -> None:
+    """Bind session STORE to the agent by declaring it in agent.toml.
 
-    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
-    service principal access to it. Pass --no-create-stores to require the store to already exist.
+    This only edits agent.toml — it does not create the store. `mason deploy` creates any declared
+    store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.deploy import _ensure_session_store
-
-    client = obj.client()
-    if no_create_stores:
-        try:
-            with render.status(f"Resolving session store '{store}'…"):
-                client.get_session_store(store)
-        except AgentCliError as exc:
-            raise AgentCliError(
-                f"Session store '{store}' does not exist (drop --no-create-stores to create it).",
-                error_code=exc.error_code,
-            ) from exc
-        created = False
-    else:
-        with render.status(f"Provisioning session store '{store}'…"):
-            _, created = _ensure_session_store(client, store)
 
     project = AgentProject.load(source)
     project.bind_session_store(store)
     project.write()
     if obj.output == "json":
-        render.emit_json(
-            {"session_store": store, "created": created, "manifest": str(project.path)}
-        )
+        render.emit_json({"session_store": store, "manifest": str(project.path)})
         return
-    # Say whether the store was newly created or an existing one was reused.
-    title = (
-        f"Created and bound session store '{store}'"
-        if created
-        else f"Bound session store '{store}'"
-    )
     render.success(
-        title,
+        f"Bound session store '{store}'",
         fields={"agent.toml": str(project.path)},
         next_steps=[
+            (
+                f"mason sessions stores create --name {store}",
+                "Create the store now without deploying",
+            ),
             ("mason dev", "Re-run to pick up the store locally"),
-            ("mason deploy <name>", "Redeploy to grant the app access"),
+            ("mason deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
@@ -131,13 +107,16 @@ def sessions_unbind(obj, source: pathlib.Path) -> None:
 
 
 def _render_store_detail(store: dict) -> None:
+    name = field(store, "session_store_name")
     render.detail(
         f"{_BREADCRUMB} Store",
-        field(store, "session_store_name") or "—",
+        name or "—",
         {
-            "Name": field(store, "session_store_name"),
+            "Name": name,
+            "Resource name": f"session-stores/{name}" if name else None,
             "Store ID": field(store, "session_store_id"),
             "Creator": field(store, "creator_user_id"),
+            "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
             "Created": timefmt.absolute(field(store, "create_time")),
             "Updated": timefmt.absolute(field(store, "update_time")),
@@ -182,38 +161,49 @@ def stores_create(obj, name, description, metadata) -> None:
 
 
 @stores.command("list")
-@click.option("--page-size", type=int, default=None)
+@click.option("--page-size", type=int, default=25, show_default=True)
 @click.option("--page-token", default=None)
 @click.pass_obj
 def stores_list(obj, page_size, page_token) -> None:
-    """List session stores in the workspace."""
-    data = obj.client().list_session_stores(page_size, page_token)
+    """List session stores in the workspace (25 per page; paginates interactively on a terminal)."""
+    client = obj.client()
     if obj.output == "json":
-        render.emit_json(data)
+        render.emit_json(client.list_session_stores(page_size, page_token))
         return
-    items_ = field(data, "session_stores") or []
-    rows = [
-        [
-            field(s, "session_store_name"),
-            field(s, "creator_user_id"),
-            timefmt.relative(field(s, "create_time")),
-            timefmt.relative(field(s, "update_time")),
-            _truncate(field(s, "description"), 40),
+    # On a terminal, offer to fetch the next page instead of only printing the --page-token hint.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    while True:
+        data = client.list_session_stores(page_size, page_token)
+        items_ = field(data, "session_stores") or []
+        rows = [
+            [
+                field(s, "session_store_name"),
+                timefmt.relative(field(s, "create_time")),
+                timefmt.relative(field(s, "update_time")),
+                _truncate(field(s, "description"), 40),
+            ]
+            for s in items_
         ]
-        for s in items_
-    ]
-    render.resource_table(
-        "Session Stores",
-        [
-            ("Name", "left"),
-            ("Creator", "left"),
-            ("Created", "left"),
-            ("Updated", "left"),
-            ("Description", "left"),
-        ],
-        rows,
-        subtitle=_page_note(data),
-    )
+        token = field(data, "next_page_token")
+        render.resource_table(
+            "Session Stores",
+            [
+                # A session store's resource name is its workspace-unique, human-readable name.
+                ("Resource name", "left"),
+                ("Created", "left"),
+                ("Updated", "left"),
+                ("Description", "left"),
+            ],
+            rows,
+            # In an interactive session the prompt below replaces the token hint.
+            subtitle=None if (interactive and token) else _page_note(data),
+            no_wrap=[0],  # keep the resource name full-width; other columns narrow to fit
+        )
+        if not token or not interactive:
+            break
+        if not click.confirm("Show next page?", default=False):
+            break
+        page_token = token
 
 
 @stores.command("get")

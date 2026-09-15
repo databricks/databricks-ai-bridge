@@ -35,7 +35,11 @@ if TYPE_CHECKING:
     from databricks_mason.langgraph.mcp import mcp_tools
     from databricks_mason.langgraph.memory import memory_tools
     from databricks_mason.langgraph.session_store import checkpointer, thread_config
-    from databricks_mason.runtime import tag_session, workspace_client, workspace_headers
+    from databricks_mason.runtime import (
+        start_trace,
+        workspace_client,
+        workspace_headers,
+    )
 
 
 def configure_tracing() -> None:
@@ -62,7 +66,8 @@ __all__ = [
     "thread_config",
     # MLflow tracing (LangChain autolog bound in) — call configure_tracing() once at startup.
     "configure_tracing",
-    "tag_session",
+    # Wrap each invocation in start_trace() so a trace is recorded (pass session_id= to tag it).
+    "start_trace",
     # Workspace SDK client construction.
     "workspace_client",
     "workspace_headers",
@@ -75,7 +80,7 @@ _MODULE_BY_NAME = {
     "memory_tools": "databricks_mason.langgraph.memory",
     "checkpointer": "databricks_mason.langgraph.session_store",
     "thread_config": "databricks_mason.langgraph.session_store",
-    "tag_session": "databricks_mason.runtime",
+    "start_trace": "databricks_mason.runtime",
     "workspace_client": "databricks_mason.runtime",
     "workspace_headers": "databricks_mason.runtime",
 }

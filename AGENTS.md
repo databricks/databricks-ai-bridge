@@ -8,6 +8,7 @@
 - **`databricks-langchain`** -- LangChain/LangGraph integration (chat models, embeddings, vector stores, tools, checkpointing)
 - **`databricks-openai`** -- OpenAI SDK integration (client wrappers, agent session, MCP toolkits)
 - **`databricks-mcp`** -- MCP client for Databricks-hosted MCP servers (UC functions, Vector Search, Genie, DBSQL)
+- **`databricks-mason`** -- experimental CLI + runtime for scaffolding, running, and deploying Databricks custom agents. See [`integrations/mason/README.md`](integrations/mason/README.md) (esp. "Developing Mason") for the dev loop
 
 ## Repo Structure
 
@@ -16,6 +17,7 @@ src/databricks_ai_bridge/          # Core package
 integrations/langchain/            # databricks-langchain (own pyproject.toml, .venv, tests/)
 integrations/openai/               # databricks-openai (own pyproject.toml, .venv, tests/)
 databricks_mcp/                    # databricks-mcp (own pyproject.toml, .venv, tests/)
+integrations/mason/                # databricks-mason (own pyproject.toml, .venv, tests/)
 tests/                             # Core package tests + integration tests
 ```
 

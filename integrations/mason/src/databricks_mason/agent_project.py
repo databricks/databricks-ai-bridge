@@ -15,7 +15,15 @@ from tomlkit import TOMLDocument
 from tomlkit.exceptions import ParseError
 
 from databricks_mason.errors import AgentCliError
-from databricks_mason.runtime.tool_manifest import MEMORY_STORE_TABLE, SESSION_STORE_TABLE
+from databricks_mason.runtime import tool_manifest
+from databricks_mason.runtime.tool_manifest import (
+    MEMORY_STORE_TABLE,
+    SESSION_STORE_TABLE,
+)
+
+# The tracing binding (`mason tracing configure` / `disable`). Tracing is on by default (a per-project
+# MLflow experiment); this table only records an explicit experiment override or a disable.
+TRACING_TABLE = "tracing"
 
 _SCHEMA_VERSION = 1
 _DURABILITY_TABLE = "durability"
@@ -103,7 +111,6 @@ class ToolSource:
     kind: str
     service: str | None = None
     function: str | None = None
-    entrypoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,15 +150,10 @@ class ToolSpec:
             if self.policy.downscope:
                 raise AgentCliError("UC function tools do not accept sandbox scopes.")
         elif kind == "python":
-            entrypoint = self.source.entrypoint or ""
-            module, separator, callable_name = entrypoint.partition(":")
-            if not separator or not module or not callable_name.isidentifier():
-                raise AgentCliError(
-                    f"Invalid Python tool entrypoint {entrypoint!r}.",
-                    hint="Use module.path:callable_name.",
-                )
-            if self.policy.downscope:
-                raise AgentCliError("Python tools do not accept sandbox scopes.")
+            raise AgentCliError(
+                "Python tools are code-first and cannot be declared in agent.toml.",
+                hint="Remove this entry and wire the tool through framework-native agent code.",
+            )
         else:
             raise AgentCliError(f"Unsupported tool source kind {kind!r}.")
 
@@ -179,18 +181,21 @@ class ToolSpec:
             source=ToolSource(kind="uc_function", function=function),
         )
 
-    @classmethod
-    def python(cls, tool_id: str, *, entrypoint: str) -> "ToolSpec":
-        return cls(
-            id=tool_id,
-            source=ToolSource(kind="python", entrypoint=entrypoint),
-        )
-
 
 def _required_string(value: object, description: str) -> str:
     if not isinstance(value, str) or not value:
         raise AgentCliError(f"Tool manifest must declare {description}.")
     return value
+
+
+def default_store_name(project_name: str, suffix: str) -> str:
+    """A store display name derived from the project directory, e.g. ``my-agent`` -> ``my-agent-memory``.
+
+    Sanitized to the store display-name charset (lower-case alphanumerics and hyphens); a name that
+    reduces to nothing (e.g. a directory of only punctuation) falls back to ``agent``.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", project_name.lower()).strip("-") or "agent"
+    return f"{slug}-{suffix}"
 
 
 def _store_name_from_manifest(value: object, table: str) -> str | None:
@@ -207,9 +212,10 @@ def _durability_from_manifest(value: object) -> bool:
         return False
     if not isinstance(value, Mapping):
         raise AgentCliError("agent.toml [durability] must be a table.")
-    if cast(Mapping[str, Any], value).get("enabled") is not True:
-        raise AgentCliError("agent.toml [durability] must set enabled = true.")
-    return True
+    enabled = cast(Mapping[str, Any], value).get("enabled")
+    if not isinstance(enabled, bool):
+        raise AgentCliError("agent.toml [durability] must set enabled = true or false.")
+    return enabled
 
 
 def _store_id_from_manifest(value: object) -> str | None:
@@ -259,9 +265,6 @@ def _tool_from_manifest(value: object) -> ToolSpec:
             kind=kind,
             service=source.get("service") if isinstance(source.get("service"), str) else None,
             function=source.get("function") if isinstance(source.get("function"), str) else None,
-            entrypoint=source.get("entrypoint")
-            if isinstance(source.get("entrypoint"), str)
-            else None,
         ),
         policy=ToolPolicy(tuple(_scope_from_manifest(item) for item in downscope_value)),
     )
@@ -278,7 +281,7 @@ def _tool_table(spec: ToolSpec) -> Any:
     table = tomlkit.table()
     table.add("id", spec.id)
     source_values = {"kind": spec.source.kind}
-    for key in ("service", "function", "entrypoint"):
+    for key in ("service", "function"):
         value = getattr(spec.source, key)
         if value is not None:
             source_values[key] = value
@@ -309,6 +312,8 @@ class AgentProject:
         memory_store_id: str | None = None,
         deployment_name: str | None = None,
         durability_enabled: bool = False,
+        trace_experiment_id: str | None = None,
+        trace_disabled: bool = False,
     ) -> None:
         self.root = root
         self.path = root / "agent.toml"
@@ -323,10 +328,21 @@ class AgentProject:
         # The deployment's base name (`mason deploy` prefixes it with `mason-`); None until named.
         self.deployment_name = deployment_name
         self.durability_enabled = durability_enabled
+        # Tracing config: an explicit experiment id override (None = default per-project experiment), and
+        # whether tracing is disabled (tracing is on by default; this flag turns it off).
+        self.trace_experiment_id = trace_experiment_id
+        self.trace_disabled = trace_disabled
 
     @classmethod
-    def load(cls, root: pathlib.Path | str) -> "AgentProject":
-        project_root = pathlib.Path(root).expanduser().resolve()
+    def load(cls, root: pathlib.Path | str | None = None) -> "AgentProject":
+        try:
+            project_root = (
+                tool_manifest.project_root()
+                if root is None
+                else pathlib.Path(root).expanduser().resolve()
+            )
+        except RuntimeError as exc:
+            raise AgentCliError(str(exc)) from exc
         path = project_root / "agent.toml"
         try:
             document = tomlkit.parse(path.read_text(encoding="utf-8"))
@@ -369,6 +385,15 @@ class AgentProject:
             document.get(SESSION_STORE_TABLE), SESSION_STORE_TABLE
         )
         durability_enabled = _durability_from_manifest(document.get(_DURABILITY_TABLE))
+        tracing_table = document.get(TRACING_TABLE)
+        trace_experiment_id: str | None = None
+        trace_disabled = False
+        if isinstance(tracing_table, Mapping):
+            raw_experiment = tracing_table.get("experiment_id")
+            trace_experiment_id = (
+                str(raw_experiment) if isinstance(raw_experiment, str) and raw_experiment else None
+            )
+            trace_disabled = bool(tracing_table.get("disabled"))
         return cls(
             project_root,
             document,
@@ -379,6 +404,8 @@ class AgentProject:
             memory_store_id,
             str(deployment_name) if deployment_name is not None else None,
             durability_enabled,
+            trace_experiment_id,
+            trace_disabled,
         )
 
     @classmethod
@@ -388,6 +415,8 @@ class AgentProject:
         *,
         framework: str,
         durability_enabled: bool = False,
+        memory_store: str | None = None,
+        session_store: str | None = None,
     ) -> "AgentProject":
         if framework not in _SUPPORTED_FRAMEWORKS:
             raise AgentCliError(f"Unsupported Mason framework {framework!r}.")
@@ -398,17 +427,23 @@ class AgentProject:
         agent = tomlkit.table()
         agent.add("framework", framework)
         document.add("agent", agent)
-        if durability_enabled:
-            durability = tomlkit.table()
-            durability.add("enabled", True)
-            document.add(_DURABILITY_TABLE, durability)
-        return cls(
+        durability = tomlkit.table()
+        durability.add("enabled", durability_enabled)
+        document.add(_DURABILITY_TABLE, durability)
+        project = cls(
             project_root,
             document,
             framework,
             [],
             durability_enabled=durability_enabled,
         )
+        # agent.toml is the source of truth for stores: declare the ones we were given as active
+        # bindings (name only — `mason deploy` creates them and resolves the id at deploy time).
+        if memory_store:
+            project.bind_memory_store(memory_store)
+        if session_store:
+            project.bind_session_store(session_store)
+        return project
 
     def set_deployment_name(self, name: str) -> bool:
         """Record the deployment's base name under [agent].deployment_name. True if it changed."""
@@ -431,7 +466,7 @@ class AgentProject:
 
             def _summary(s: ToolSpec) -> str:
                 src = s.source
-                return src.service or src.function or src.entrypoint or src.kind
+                return src.service or src.function or src.kind
 
             raise AgentCliError(
                 f"Tool id {spec.id!r} already exists with a different configuration "
@@ -480,6 +515,41 @@ class AgentProject:
     def unbind_session_store(self) -> bool:
         """Remove the session store binding from agent.toml. Returns True if it was present."""
         return self._clear_store(SESSION_STORE_TABLE)
+
+    def configure_tracing(self, experiment_id: str | None) -> bool:
+        """Enable tracing and (optionally) pin an explicit experiment id. Returns True if changed.
+
+        ``experiment_id=None`` means "use the default per-project experiment": any prior override is
+        cleared. Enabling always clears a previous ``disabled`` flag (tracing is on by default, so an
+        absent ``[tracing]`` table is the enabled default).
+        """
+        if self.trace_experiment_id == experiment_id and not self.trace_disabled:
+            return False
+        table = self._document.get(TRACING_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            self._document.append(TRACING_TABLE, table)
+        if "disabled" in table:
+            del table["disabled"]
+        if experiment_id:
+            table["experiment_id"] = experiment_id
+        elif "experiment_id" in table:
+            del table["experiment_id"]
+        self.trace_experiment_id = experiment_id
+        self.trace_disabled = False
+        return True
+
+    def disable_tracing(self) -> bool:
+        """Turn tracing off (records ``[tracing] disabled = true``). Returns True if changed."""
+        if self.trace_disabled:
+            return False
+        table = self._document.get(TRACING_TABLE)
+        if not isinstance(table, Mapping):
+            table = tomlkit.table()
+            self._document.append(TRACING_TABLE, table)
+        table["disabled"] = True
+        self.trace_disabled = True
+        return True
 
     def _set_store(self, table: str, name: str, store_id: str | None = None) -> bool:
         name = _required_string(name, f"[{table}] name")

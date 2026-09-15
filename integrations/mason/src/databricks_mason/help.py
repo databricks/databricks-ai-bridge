@@ -171,18 +171,19 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ),
     ),
     ("tracing",): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+        (
+            "mason tracing configure",
+            "use the default per-project experiment (tracing is on by default)",
+        ),
+        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
+        ("mason tracing disable", "turn tracing off"),
     ),
-    ("tracing", "setup"): (
-        ("mason tracing setup --catalog main --schema agent_traces", "link a UC trace destination"),
+    ("tracing", "configure"): (
+        ("mason tracing configure --experiment 12345", "trace to a specific experiment id"),
     ),
-    ("tracing", "list"): (
-        ("mason tracing list --experiment /Users/me/mason-traces/my-agent", "list recent traces"),
-    ),
+    ("tracing", "disable"): (("mason tracing disable", "turn tracing off"),),
+    ("tracing", "list"): (("mason tracing list --experiment 12345", "list recent traces"),),
     ("tracing", "get"): (("mason tracing get <trace-id>", "show one trace"),),
-    ("tracing", "instrument"): (
-        ("mason tracing instrument --destination main.agent_traces", "print instrumentation code"),
-    ),
     ("deploy",): (
         ("mason deploy my-agent", "deploy the agent"),
         ("mason deploy my-agent --instances 2", "deploy with two instances"),
@@ -204,6 +205,29 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ("deployments", "delete"): (
         ("mason deployments delete agent-mason-my-agent", "delete a deployment"),
     ),
+    ("endpoint",): (
+        (
+            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
+        ),
+    ),
+    ("endpoint", "invoke"): (
+        (
+            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
+            "--json "
+            '\'{"id":"00000000-0000-4000-8000-000000000001",'
+            '"input":[{"role":"user","content":"Hello"}]}\'',
+            "invoke a deployed HTTP agent",
+        ),
+        (
+            "mason endpoint invoke --url http://localhost:8000 --path /custom/run "
+            '--json \'{"input":"hello"}\'',
+            "invoke a local or arbitrary HTTP server",
+        ),
+    ),
     ("tools",): (
         ("mason tools add --help", "see all tool types you can add"),
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
@@ -215,7 +239,6 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
         ("mason tools add mcp system.ai.web_search", "add a managed MCP tool"),
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-        ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "add", "sandbox"): (
         ("mason tools add sandbox --scope table:samples.nyctaxi.trips", "add a data sandbox tool"),
@@ -225,9 +248,6 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("tools", "add", "uc-function"): (
         ("mason tools add uc-function catalog.schema.lookup_ticket", "add a UC function tool"),
-    ),
-    ("tools", "add", "python"): (
-        ("mason tools add python lookup-ticket", "scaffold a local Python tool"),
     ),
     ("tools", "remove"): (
         ("mason tools remove mcp system.ai.web_search", "remove an MCP tool by service"),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 from typing import Any
 
 import click
@@ -85,52 +86,31 @@ def _source_option(function):
 @memory.command("bind")
 @click.argument("store")
 @_source_option
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Require the store to already exist. By default a missing store is created (idempotent).",
-)
 @click.pass_obj
-def memory_bind(obj, store: str, source: pathlib.Path, no_create_stores: bool) -> None:
-    """Bind memory STORE to the agent, declaring it in agent.toml (creating it if it doesn't exist).
+def memory_bind(obj, store: str, source: pathlib.Path) -> None:
+    """Bind memory STORE to the agent by declaring it in agent.toml.
 
-    The agent reads the store from agent.toml at runtime; `mason deploy` grants the deployed app's
-    service principal access to it. Pass --no-create-stores to require the store to already exist.
+    This only edits agent.toml — it does not create the store. `mason deploy` creates any declared
+    store that doesn't exist yet and grants the deployed app's service principal access to it.
     """
     from databricks_mason.agent_project import AgentProject
-    from databricks_mason.deploy import _ensure_memory_store, _resolve_memory_store
 
-    client = obj.client()
-    if no_create_stores:
-        with render.status(f"Resolving memory store '{store}'…"):
-            resolved = _resolve_memory_store(client, store)
-        if resolved is None:
-            raise AgentCliError(
-                f"Memory store '{store}' does not exist (drop --no-create-stores to create it)."
-            )
-        created = False
-    else:
-        with render.status(f"Provisioning memory store '{store}'…"):
-            resolved, created = _ensure_memory_store(client, store)
-
-    # Record the bare store id: the runtime needs it (not the display name) for the entries API.
-    store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
     project = AgentProject.load(source)
-    project.bind_memory_store(store, store_id)
+    project.bind_memory_store(store)
     project.write()
     if obj.output == "json":
-        render.emit_json({"memory_store": store, "created": created, "manifest": str(project.path)})
+        render.emit_json({"memory_store": store, "manifest": str(project.path)})
         return
-    # Say whether the store was newly created or an existing one was reused.
-    title = (
-        f"Created and bound memory store '{store}'" if created else f"Bound memory store '{store}'"
-    )
     render.success(
-        title,
+        f"Bound memory store '{store}'",
         fields={"agent.toml": str(project.path)},
         next_steps=[
+            (
+                f"mason memory stores create --name {store}",
+                "Create the store now without deploying",
+            ),
             ("mason dev", "Re-run to pick up the store locally"),
-            ("mason deploy <name>", "Redeploy to grant the app access"),
+            ("mason deploy <name>", "Create it if missing and grant the app access"),
         ],
     )
 
@@ -197,10 +177,10 @@ def _render_store_detail(obj, store: dict) -> None:
         _BREADCRUMB,
         field(store, "display_name") or _store_id(store),
         {
-            "Name": field(store, "name"),
-            "Store ID": _store_id(store),
+            "Name": field(store, "display_name"),
+            "Resource name": field(store, "name"),
             "Workspace": field(store, "workspace_id"),
-            "Owner": field(store, "owner_user_id"),
+            "Creator": field(store, "owner_user_id"),
             "Storage": render.field(field(store, "storage_backend") or {}, "backend_id"),
             "Description": field(store, "description"),
             "Created": timefmt.absolute(_store_created(store)),
@@ -247,38 +227,50 @@ def stores_create(obj, display_name, description) -> None:
 
 
 @stores.command("list")
-@click.option("--page-size", type=int, default=None)
+@click.option("--page-size", type=int, default=25, show_default=True)
 @click.option("--page-token", default=None)
 @click.pass_obj
 def stores_list(obj, page_size, page_token) -> None:
-    """List memory stores in the workspace."""
-    data = obj.client().list_memory_stores(page_size, page_token)
+    """List memory stores in the workspace (25 per page; paginates interactively on a terminal)."""
+    client = obj.client()
     if obj.output == "json":
-        render.emit_json(data)
+        render.emit_json(client.list_memory_stores(page_size, page_token))
         return
-    items = field(data, "managed_memory_stores") or []
-    rows = [
-        [
-            field(s, "display_name"),
-            _store_id(s),
-            timefmt.relative(_store_created(s)),
-            timefmt.relative(_store_updated(s)),
-            _truncate(field(s, "description"), 40),
+    # On a terminal, offer to fetch the next page instead of only printing the --page-token hint.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    while True:
+        data = client.list_memory_stores(page_size, page_token)
+        items = field(data, "managed_memory_stores") or []
+        rows = [
+            [
+                field(s, "display_name"),
+                _store_id(s),
+                timefmt.relative(_store_created(s)),
+                timefmt.relative(_store_updated(s)),
+                _truncate(field(s, "description"), 40),
+            ]
+            for s in items
         ]
-        for s in items
-    ]
-    render.resource_table(
-        "Managed Memory Stores",
-        [
-            ("Name", "left"),
-            ("Store ID", "left"),
-            ("Created", "left"),
-            ("Updated", "left"),
-            ("Description", "left"),
-        ],
-        rows,
-        subtitle=_page_note(data),
-    )
+        token = field(data, "next_page_token")
+        render.resource_table(
+            "Managed Memory Stores",
+            [
+                ("Name", "left"),
+                ("Resource name", "left"),
+                ("Created", "left"),
+                ("Updated", "left"),
+                ("Description", "left"),
+            ],
+            rows,
+            # In an interactive session the prompt below replaces the token hint.
+            subtitle=None if (interactive and token) else _page_note(data),
+            no_wrap=[1],  # keep the resource name full-width; other columns narrow to fit
+        )
+        if not token or not interactive:
+            break
+        if not click.confirm("Show next page?", default=False):
+            break
+        page_token = token
 
 
 @stores.command("get")

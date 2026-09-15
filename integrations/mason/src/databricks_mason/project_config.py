@@ -15,6 +15,7 @@ from databricks_mason.errors import AgentCliError
 _CONFIG_PATH = pathlib.Path(".mason/project.toml")
 _SCHEMA_VERSION = 1
 _SUPPORTED_FRAMEWORKS = {"langgraph", "openai"}
+_CUSTOM_SERVER_TEMPLATES = frozenset({"custom-agent-langgraph", "custom-agent-openai"})
 
 
 @dataclass(frozen=True)
@@ -139,3 +140,27 @@ def load_project_metadata(
             )
         return persisted or ProjectMetadata(framework=override, template=None)
     return persisted or _infer_legacy_framework(project)
+
+
+def is_custom_server_template(template: str | None) -> bool:
+    """Whether ``template`` is one of Mason's custom HTTP server templates."""
+    return template in _CUSTOM_SERVER_TEMPLATES
+
+
+def uses_custom_server(project: pathlib.Path) -> bool:
+    """Whether persisted project metadata selects a Mason custom server template."""
+    metadata_path = project / _CONFIG_PATH
+    if not metadata_path.is_file():
+        return False
+    return is_custom_server_template(load_project_metadata(project).template)
+
+
+def require_managed_tool_support(project: pathlib.Path) -> None:
+    """Reject managed tool bindings for known templates that do not consume them."""
+    if not uses_custom_server(project):
+        return
+    raise AgentCliError(
+        "Managed tool bindings in agent.toml require a Mason server template.",
+        hint="Wire tools directly in agent/agent.py, or create a project with "
+        "`mason init --server mason`.",
+    )

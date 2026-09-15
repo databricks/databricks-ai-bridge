@@ -172,3 +172,60 @@ def test_manifest_reader_rejects_wrong_framework(tmp_path: pathlib.Path, monkeyp
 
     with pytest.raises(RuntimeError, match="framework"):
         manifest.load_tools(expected_framework="langgraph")
+
+
+def test_manifest_reader_rejects_python_tool_entries_with_code_first_migration(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    project = _project(tmp_path)
+    (project / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
+    sys.modules.pop("databricks_mason.runtime.tool_manifest", None)
+    manifest = importlib.import_module("databricks_mason.runtime.tool_manifest")
+
+    with pytest.raises(RuntimeError, match="Python tools are code-first") as error:
+        manifest.load_tools(expected_framework="langgraph")
+
+    assert "Remove this entry" in str(error.value)
+    assert "agent/tools" in str(error.value)
+
+
+def test_openai_adapter_propagates_manifest_validation_errors(tmp_path: pathlib.Path, monkeypatch):
+    project = _project(tmp_path)
+    (project / "agent.toml").write_text(
+        """schema_version = 1
+
+[agent]
+framework = "openai"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+""",
+        encoding="utf-8",
+    )
+
+    databricks_openai = types.ModuleType("databricks_openai")
+    databricks_openai.__path__ = []
+    databricks_openai_agents = types.ModuleType("databricks_openai.agents")
+    databricks_openai_agents.__dict__["McpServer"] = type("McpServer", (), {})
+    monkeypatch.setitem(sys.modules, "databricks_openai", databricks_openai)
+    monkeypatch.setitem(sys.modules, "databricks_openai.agents", databricks_openai_agents)
+    monkeypatch.setenv("MASON_PROJECT_ROOT", str(project))
+    for name in ("databricks_mason.openai.mcp", "databricks_mason.runtime.tool_manifest"):
+        sys.modules.pop(name, None)
+    mcp = importlib.import_module("databricks_mason.openai.mcp")
+
+    with pytest.raises(RuntimeError, match="Python tools are code-first"):
+        asyncio.run(mcp.mcp_servers())

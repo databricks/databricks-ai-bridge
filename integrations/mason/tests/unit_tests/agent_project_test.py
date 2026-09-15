@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from databricks_mason.agent_project import AgentProject, Scope, ToolSpec
+from databricks_mason.agent_project import AgentProject, Scope, ToolSpec, default_store_name
 from databricks_mason.errors import AgentCliError
 
 
@@ -87,6 +87,32 @@ def test_load_rejects_unsupported_schema_before_mutation(tmp_path: pathlib.Path)
     assert path.read_text(encoding="utf-8") == before
 
 
+def test_load_rejects_python_tool_entries_with_code_first_migration(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        """schema_version = 1
+
+[agent]
+framework = "langgraph"
+
+[[tools]]
+id = "lookup-ticket"
+source = { kind = "python", entrypoint = "agent.tools.lookup_ticket:lookup_ticket" }
+""",
+    )
+
+    with pytest.raises(AgentCliError) as error:
+        AgentProject.load(tmp_path)
+
+    assert (
+        error.value.message == "Python tools are code-first and cannot be declared in agent.toml."
+    )
+    assert error.value.hint is not None
+    assert "Remove this entry" in error.value.hint
+    assert "framework-native agent code" in error.value.hint
+    assert "remain active" not in error.value.hint
+
+
 def test_write_is_atomic_when_replace_fails(tmp_path: pathlib.Path, monkeypatch):
     path = _write_manifest(tmp_path)
     project = AgentProject.load(tmp_path)
@@ -124,6 +150,33 @@ def test_bind_and_unbind_stores_round_trip(tmp_path: pathlib.Path):
     final = AgentProject.load(tmp_path)
     assert final.session_store is None
     assert final.memory_store == "mem"
+
+
+def test_create_declares_given_store_names(tmp_path: pathlib.Path):
+    AgentProject.create(
+        tmp_path, framework="openai", memory_store="mem-x", session_store="sess-y"
+    ).write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store == "mem-x"
+    assert reloaded.session_store == "sess-y"
+
+
+def test_create_without_store_names_declares_none(tmp_path: pathlib.Path):
+    # create() declares only the names it is given; init applies the dir-derived defaults.
+    AgentProject.create(tmp_path, framework="openai").write()
+
+    reloaded = AgentProject.load(tmp_path)
+    assert reloaded.memory_store is None
+    assert reloaded.session_store is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("My_Agent", "my-agent-memory"), ("a.b c", "a-b-c-memory"), ("___", "agent-memory")],
+)
+def test_default_store_name_sanitizes(raw: str, expected: str):
+    assert default_store_name(raw, "memory") == expected
 
 
 def test_deployment_name_round_trips(tmp_path: pathlib.Path):
@@ -191,10 +244,41 @@ def test_load_rejects_store_table_without_name(tmp_path: pathlib.Path):
         AgentProject.load(tmp_path)
 
 
-def test_load_rejects_invalid_durability_table(tmp_path: pathlib.Path):
+def test_load_accepts_disabled_durability_table(tmp_path: pathlib.Path):
     _write_manifest(
         tmp_path,
         'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = false\n',
     )
-    with pytest.raises(AgentCliError, match="enabled = true"):
+    assert AgentProject.load(tmp_path).durability_enabled is False
+
+
+def test_load_without_root_finds_project_from_working_directory(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = true\n',
+    )
+    nested = tmp_path / "runtime"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+
+    assert AgentProject.load().durability_enabled is True
+
+
+def test_load_without_discoverable_project_uses_cli_error(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AgentCliError, match="Could not locate agent.toml"):
+        AgentProject.load()
+
+
+def test_load_rejects_non_boolean_durability_setting(tmp_path: pathlib.Path):
+    _write_manifest(
+        tmp_path,
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n\n[durability]\nenabled = "no"\n',
+    )
+    with pytest.raises(AgentCliError, match="enabled = true or false"):
         AgentProject.load(tmp_path)

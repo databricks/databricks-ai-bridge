@@ -11,7 +11,7 @@ if TYPE_CHECKING:
         AgentApp,
         DurableAgentContext,
         configure_tracing,
-        tag_session,
+        start_trace,
         workspace_client,
         workspace_headers,
     )
@@ -27,7 +27,7 @@ __all__ = [
     "AgentApp",
     "DurableAgentContext",
     "configure_tracing",
-    "tag_session",
+    "start_trace",
     "workspace_client",
     "workspace_headers",
 ]
@@ -37,7 +37,7 @@ _RUNTIME_REEXPORTS = frozenset(
         "AgentApp",
         "DurableAgentContext",
         "configure_tracing",
-        "tag_session",
+        "start_trace",
         "workspace_client",
         "workspace_headers",
     }

@@ -64,6 +64,24 @@ def test_store_get_renders_timestamps_from_create_time():
     assert "2026" in result.output
 
 
+def test_store_get_unifies_name_resource_name_and_creator():
+    store = {
+        "name": "memory-stores/abc123",
+        "display_name": "demo",
+        "owner_user_id": "owner-1",
+        "storage_backend": {"backend_id": "projects/.../databases/abc123"},
+        "create_time": "2026-08-15T01:29:00Z",
+        "update_time": "2026-08-16T01:29:00Z",
+    }
+    result = CliRunner().invoke(stores, ["get", "abc123"], obj=_Ctx(_Client(store=store)))
+    assert result.exit_code == 0, result.output
+    assert "Name" in result.output and "demo" in result.output  # human-readable name
+    assert "Resource name" in result.output and "memory-stores/abc123" in result.output
+    assert "Creator" in result.output and "owner-1" in result.output  # was "Owner"
+    assert "Owner" not in result.output
+    assert "Store ID" not in result.output  # memory has no separate id row
+
+
 def test_store_create_suggests_binding_the_store():
     store = {"name": "memory-stores/abc123", "display_name": "demo"}
     result = CliRunner().invoke(
@@ -90,6 +108,39 @@ def test_store_list_renders_timestamps_from_create_time():
     assert "ago" in result.output or "just now" in result.output
 
 
+def test_store_list_shows_bare_resource_name_without_prefix():
+    page = {"managed_memory_stores": [{"name": "memory-stores/abc123", "display_name": "demo"}]}
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_Client(page=page)))
+    assert result.exit_code == 0, result.output
+    assert "abc123" in result.output  # resource name shown without the memory-stores/ prefix
+    assert "memory-stores/abc123" not in result.output
+    assert "STORE ID" not in result.output.upper()  # column renamed to "Resource name"
+
+
+def test_store_list_defaults_page_size_to_25():
+    calls = []
+
+    class _RecClient(_Client):
+        def list_memory_stores(self, page_size=None, page_token=None):
+            calls.append((page_size, page_token))
+            return {"managed_memory_stores": []}
+
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_RecClient()))
+    assert result.exit_code == 0, result.output
+    assert calls == [(25, None)]  # defaults to a 25-result page
+
+
+def test_store_list_hints_next_page_when_not_interactive():
+    page = {
+        "managed_memory_stores": [{"name": "memory-stores/a", "display_name": "d"}],
+        "next_page_token": "tok-2",
+    }
+    # CliRunner has no TTY, so it prints the --page-token hint rather than prompting.
+    result = CliRunner().invoke(stores, ["list"], obj=_Ctx(_Client(page=page)))
+    assert result.exit_code == 0, result.output
+    assert "--page-token tok-2" in result.output
+
+
 def _bind_ctx(tmp_path):
     """A CLI context whose client records memory-store creation, over a scaffolded agent.toml."""
     (tmp_path / "agent.toml").write_text(
@@ -113,7 +164,7 @@ def _bind_ctx(tmp_path):
     return _Ctx(_BindClient())
 
 
-def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
+def test_memory_bind_only_edits_agent_toml(tmp_path):
     from databricks_mason.agent_project import AgentProject
     from databricks_mason.memory import memory as memory_group
 
@@ -123,12 +174,14 @@ def test_memory_bind_writes_agent_toml_and_creates_store(tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert ctx.client().created == ["agent-mem"]  # created by default
-    # Bind tells the user it created the store (vs reused an existing one).
-    assert "Created and bound memory store 'agent-mem'" in result.output
+    assert ctx.client().created == []  # bind never provisions — that's `mason deploy`'s job
+    assert "Bound memory store 'agent-mem'" in result.output
+    # Point the user at the create-now escape hatch (whitespace-normalized to survive Rich wrapping).
+    assert "mason memory stores create" in " ".join(result.output.split())
     project = AgentProject.load(tmp_path)
     assert project.memory_store == "agent-mem"
-    assert project.memory_store_id == "mem-id-123"  # bare id recorded for the runtime
+    # No remote id is recorded — deploy/dev resolve it at runtime via AGENT_MEMORY_STORE.
+    assert project.memory_store_id is None
 
 
 def test_memory_unbind_clears_agent_toml(tmp_path):
