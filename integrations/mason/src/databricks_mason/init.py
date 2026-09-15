@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pathlib
 import shutil
+from dataclasses import dataclass
 from importlib import resources
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
@@ -29,10 +30,21 @@ from databricks_mason.project_config import write_project_metadata
 # against. For an editable install `resources.files` resolves to the source tree, so a Mason
 # developer's uncommitted template edits are scaffolded too.
 
-# Framework -> template name (a directory under databricks_mason/templates/).
-_TEMPLATES = {"openai": "agent-openai", "langgraph": "agent-langgraph"}
-_CUSTOM_SERVER_TEMPLATES = {"openai": "custom-agent-openai", "langgraph": "custom-agent-langgraph"}
-_CHAT_APP_TEMPLATES = {"langgraph": "ui/agent-langgraph", "openai": "ui/agent-openai"}
+
+@dataclass(frozen=True)
+class _AgentTemplate:
+    """The bundled templates for one framework (directories under databricks_mason/templates/)."""
+
+    mason_server: str  # scaffold for Mason's invocation server (the default)
+    custom_server: str  # scaffold for the minimal custom FastAPI server (--server custom)
+    chat_app: str  # browser chat-app template, overlaid on the Mason-server scaffold
+
+
+# Framework -> its bundled templates.
+_TEMPLATES = {
+    "langgraph": _AgentTemplate("agent-langgraph", "custom-agent-langgraph", "ui/agent-langgraph"),
+    "openai": _AgentTemplate("agent-openai", "custom-agent-openai", "ui/agent-openai"),
+}
 
 
 def _copy_packaged_template(
@@ -156,11 +168,9 @@ def init(
     if not mason_server and no_durable_runtime:
         raise click.UsageError("--no-durable-runtime only applies to --server mason")
     durable_runtime = mason_server and not no_durable_runtime
-    templates = _TEMPLATES if mason_server else _CUSTOM_SERVER_TEMPLATES
-    template_name = templates[selected_framework]
-    chat_app_enabled = (
-        mason_server and selected_framework in _CHAT_APP_TEMPLATES and not disable_chat_app
-    )
+    template = _TEMPLATES[selected_framework]
+    template_name = template.mason_server if mason_server else template.custom_server
+    chat_app_enabled = mason_server and not disable_chat_app
     dest = pathlib.Path(directory) if directory else pathlib.Path(template_name)
 
     if dest.exists():
@@ -169,7 +179,7 @@ def init(
             hint="Choose a new directory or remove the existing one.",
         )
 
-    overlay_names = (_CHAT_APP_TEMPLATES[selected_framework],) if chat_app_enabled else ()
+    overlay_names = (template.chat_app,) if chat_app_enabled else ()
     try:
         # Copy the template bundled with the installed CLI. The scaffold keeps the template's own
         # databricks-mason PyPI dependency; it can't drift from the CLI because both ship together.

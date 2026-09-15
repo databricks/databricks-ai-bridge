@@ -183,8 +183,9 @@ mason [-p <profile>] [-o text|json]
     stores     create | list | get | update | delete
     items      list | append | pop | clear
   tracing
-    setup      --catalog C --schema S [--experiment E]
-    list | get | instrument
+    configure  [--experiment E] [--source PATH]
+    disable    [--source PATH]
+    list | get
   mcp
     list             [--schema CATALOG.SCHEMA]
   tools
@@ -375,5 +376,29 @@ needs no reinstall — **except** a dependency change (a branch that adds or bum
 pip install -e integrations/mason     # only when dependencies changed
 ```
 
-The generated project keeps a normal `databricks-mason` PyPI dependency, so `mason dev` and
-`mason deploy` install the released SDK; a scaffold is not wired to run *unreleased* SDK changes.
+### Running a scaffold against unreleased Mason (SDK changes)
+
+A scaffold uses a normal `databricks-mason` PyPI dependency, so `mason dev` and `mason deploy`
+install the **released** SDK — editing `databricks_mason.runtime`/`.langgraph`/`.openai` in your
+checkout does **not** change what a scaffold runs. To exercise local or unreleased SDK changes in a
+scaffolded project, add a `[tool.uv.sources]` override to the scaffold's `pyproject.toml`. It's a
+dev-loop-only edit — don't ship it in a real deployment.
+
+**`mason dev` — your local checkout (editable, picks up uncommitted edits):**
+
+```toml
+[tool.uv.sources]
+databricks-mason = { path = "/abs/path/to/databricks-ai-bridge/integrations/mason", editable = true }
+```
+
+`mason dev` builds the scaffold's venv from this, so your working-tree SDK edits run live.
+
+**`mason deploy` — a pushed git ref (the Apps build can't reach a local path):**
+
+```toml
+[tool.uv.sources]
+databricks-mason = { git = "https://github.com/<you>/databricks-ai-bridge", rev = "<pushed-sha>", subdirectory = "integrations/mason" }
+```
+
+Commit and push first — the Apps build clones that commit. A `path` or `file://` pin won't resolve
+in the build sandbox, so use a git ref (or a released version) for deploys.

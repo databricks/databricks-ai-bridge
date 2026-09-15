@@ -47,15 +47,18 @@ def _hermetic_install(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_framework_templates_map_to_names():
-    assert init_mod._TEMPLATES == {"openai": "agent-openai", "langgraph": "agent-langgraph"}
-    assert init_mod._CUSTOM_SERVER_TEMPLATES == {
-        "openai": "custom-agent-openai",
-        "langgraph": "custom-agent-langgraph",
-    }
-    assert init_mod._CHAT_APP_TEMPLATES == {
-        "langgraph": "ui/agent-langgraph",
-        "openai": "ui/agent-openai",
-    }
+    langgraph = init_mod._TEMPLATES["langgraph"]
+    assert (langgraph.mason_server, langgraph.custom_server, langgraph.chat_app) == (
+        "agent-langgraph",
+        "custom-agent-langgraph",
+        "ui/agent-langgraph",
+    )
+    openai = init_mod._TEMPLATES["openai"]
+    assert (openai.mason_server, openai.custom_server, openai.chat_app) == (
+        "agent-openai",
+        "custom-agent-openai",
+        "ui/agent-openai",
+    )
 
 
 def test_init_scaffolds_default_directory(tmp_path: pathlib.Path):
