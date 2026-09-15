@@ -212,18 +212,24 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("deployments",): (("mason deployments list", "list agent deployments"),),
     ("deployments", "list"): (("mason deployments list", "list agent deployments"),),
-    ("deployments", "get"): (("mason deployments get mason-my-agent", "show one deployment"),),
-    ("deployments", "logs"): (
-        ("mason deployments logs mason-my-agent", "stream a deployment's logs"),
+    ("deployments", "get"): (
+        ("mason deployments get agent-mason-my-agent", "show one deployment"),
     ),
-    ("deployments", "start"): (("mason deployments start mason-my-agent", "start a deployment"),),
-    ("deployments", "stop"): (("mason deployments stop mason-my-agent", "stop a deployment"),),
+    ("deployments", "logs"): (
+        ("mason deployments logs agent-mason-my-agent", "stream a deployment's logs"),
+    ),
+    ("deployments", "start"): (
+        ("mason deployments start agent-mason-my-agent", "start a deployment"),
+    ),
+    ("deployments", "stop"): (
+        ("mason deployments stop agent-mason-my-agent", "stop a deployment"),
+    ),
     ("deployments", "delete"): (
-        ("mason deployments delete mason-my-agent", "delete a deployment"),
+        ("mason deployments delete agent-mason-my-agent", "delete a deployment"),
     ),
     ("endpoint",): (
         (
-            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',
@@ -232,7 +238,7 @@ _EXAMPLES: dict[CommandPath, tuple[Example, ...]] = {
     ),
     ("endpoint", "invoke"): (
         (
-            "mason endpoint invoke mason-my-agent --path /api/invocations "
+            "mason endpoint invoke agent-mason-my-agent --path /api/invocations "
             "--json "
             '\'{"id":"00000000-0000-4000-8000-000000000001",'
             '"input":[{"role":"user","content":"Hello"}]}\'',

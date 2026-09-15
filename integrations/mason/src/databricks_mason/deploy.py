@@ -35,6 +35,7 @@ from databricks_mason.databricks_cli import _databricks
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import require_managed_tool_support
 from databricks_mason.render import field
+from databricks_mason.runtime.tool_manifest import MEMORY_STORE_ENV
 from databricks_mason.tracing import (
     TRACES_EXPERIMENT_ID_ENV,
     TRACES_TRACKING_URI_ENV,
@@ -53,8 +54,10 @@ _DEFAULT_PIP_INDEX_URL = "https://pypi.org/simple/"
 _PIP_INDEX_ENVS = ("PIP_INDEX_URL", "UV_INDEX_URL", "UV_DEFAULT_INDEX")
 _AGENT_COMPUTE_OUTPUT = ("App compute", "Agent compute")
 
-# Mason names every deployment `mason-<name>` so `deployments list` can filter to its own apps.
-_DEPLOYMENT_PREFIX = "mason-"
+# Mason names every deployment `agent-mason-<name>` so `deployments list` can filter to its own apps.
+# The `agent-` prefix is what the Databricks agent registry keys on to surface these apps; the
+# `-mason-` segment narrows `deployments list` to Mason's own agents, not every `agent-*` app.
+_DEPLOYMENT_PREFIX = "agent-mason-"
 _MAX_DEPLOYMENT_NAME_LEN = 30  # Databricks Apps name limit
 
 
@@ -133,7 +136,7 @@ def _instance_args(instances: Optional[int]) -> list[str]:
 
 
 def _prefixed_name(name: str) -> str:
-    """Mason deployments carry a `mason-` prefix so `deployments list` can find only its own apps."""
+    """Mason deployments carry an `agent-mason-` prefix so `deployments list` finds only its own apps."""
     return name if name.startswith(_DEPLOYMENT_PREFIX) else f"{_DEPLOYMENT_PREFIX}{name}"
 
 
@@ -218,16 +221,49 @@ def _resolve_memory_store(client, display_name: str) -> Optional[dict]:
             return None
 
 
+_LAKEBASE_PERMISSION_DOCS = (
+    "https://docs.databricks.com/aws/en/oltp/projects/manage-project-permissions"
+)
+
+
+def _store_create_permission_error(name: str, kind: str, cause: AgentCliError) -> AgentCliError:
+    """PERMISSION_DENIED on create: the workspace admin has restricted Lakebase project creation."""
+    return AgentCliError(
+        f"You don't have permission to create {kind} store '{name}'.",
+        error_code=cause.error_code,
+        hint=(
+            "Creating a managed store provisions a Lakebase project, which your workspace admin "
+            "has restricted. Ask your workspace admin to grant you permission to create Lakebase "
+            f"projects ({_LAKEBASE_PERMISSION_DOCS}), or bind an existing store you can access "
+            "with --no-create-stores."
+        ),
+    )
+
+
+def _store_access_error(name: str, kind: str) -> AgentCliError:
+    """The store already exists but isn't accessible to the caller."""
+    return AgentCliError(
+        f"{kind.capitalize()} store '{name}' already exists but you don't have access to it.",
+        hint=(
+            "Ask the store's owner or your workspace admin to grant you access, or bind a "
+            "different store you can access with --no-create-stores."
+        ),
+    )
+
+
 def _ensure_memory_store(client, display_name: str) -> tuple[dict, bool]:
     """Create the memory store, or resolve it if it already exists. Returns (store, created)."""
     try:
         return client.create_memory_store(display_name, retry_transient=True), True
     except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_create_permission_error(display_name, "memory", exc) from exc
         if exc.error_code != "ALREADY_EXISTS":
             raise
     store = _resolve_memory_store(client, display_name)
     if store is None:
-        raise AgentCliError(f"Memory store '{display_name}' exists but could not be resolved.")
+        # ALREADY_EXISTS but not in the caller's listing: the store isn't accessible to them.
+        raise _store_access_error(display_name, "memory")
     return store, False
 
 
@@ -236,9 +272,16 @@ def _ensure_session_store(client, name: str) -> tuple[dict, bool]:
     try:
         return client.create_session_store(name, retry_transient=True), True
     except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_create_permission_error(name, "session", exc) from exc
         if exc.error_code != "ALREADY_EXISTS":
             raise
-    return client.get_session_store(name), False
+    try:
+        return client.get_session_store(name), False
+    except AgentCliError as exc:
+        if exc.error_code == "PERMISSION_DENIED":
+            raise _store_access_error(name, "session") from exc
+        raise
 
 
 def _load_project(source: pathlib.Path):
@@ -281,52 +324,30 @@ def _resolve_deployment_name(project, name: Optional[str]) -> str:
     )
 
 
-def _ensure_default_stores(project, base_name: str, client) -> None:
-    """Create + bind default memory/session stores for any slot not already bound in agent.toml.
+def _reconcile_declared_stores(
+    memory_store: Optional[str], session_store: Optional[str], client
+) -> Optional[str]:
+    """Create any store DECLARED in agent.toml that doesn't exist yet; return the memory store's id.
 
-    Fills only the gaps: a store already bound is left untouched. Defaults are named
-    ``<base_name>-memory`` / ``<base_name>-session`` (create-or-reuse), and the new bindings are
-    persisted so later deploys reuse them and the validate/grant steps pick them up. There is no way
-    to tell from the agent's code whether it uses a store — the binding is the signal — so
-    `mason deploy` provisions both by default; pass --no-create-stores to skip.
+    `mason deploy` is the only verb that provisions stores. It reconciles to the names declared in
+    agent.toml (by `mason init` or `mason memory/sessions bind`) — never inventing a name and never
+    writing bindings back into the manifest. A store created here gets a one-line notice. The memory
+    store's bare id is returned so the caller can wire AGENT_MEMORY_STORE (the entries API is keyed
+    by id, not display name); session stores resolve by name and need nothing here.
     """
-    changed = False
-    if not project.memory_store:
-        store = f"{base_name}-memory"
-        resolved, _ = _ensure_memory_store(client, store)
-        store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
-        project.bind_memory_store(store, store_id)
-        changed = True
-    if not project.session_store:
-        _ensure_session_store(client, f"{base_name}-session")
-        project.bind_session_store(f"{base_name}-session")
-        changed = True
-    if changed:
-        project.write()
-
-
-def validate_stores(client, *, memory_store: Optional[str], session_store: Optional[str]) -> None:
-    """Validate the agent's bound stores exist. Shared by `mason deploy` and `mason dev`.
-
-    Stores are created by `mason memory/sessions bind` and read from agent.toml at runtime, so this
-    neither creates them nor writes them to app.yaml — it only checks a bound store still exists (a
-    typo or unbound clone fails here, not at runtime).
-    """
-    if memory_store and _resolve_memory_store(client, memory_store) is None:
-        # Resolve by display name: get_memory_store looks up by resource id, not the bound name.
-        raise AgentCliError(
-            f"Memory store '{memory_store}' does not exist.",
-            hint=f"Run `mason memory bind {memory_store}` to create and bind it.",
-        )
+    memory_store_id: Optional[str] = None
+    if memory_store:
+        with render.status(f"Reconciling memory store '{memory_store}'…"):
+            resolved, created = _ensure_memory_store(client, memory_store)
+        memory_store_id = (field(resolved, "name") or "").split("/", 1)[-1] or None
+        if created:
+            render.console().print(f"[green]✓[/] Created memory store {memory_store!r}")
     if session_store:
-        try:
-            client.get_session_store(session_store)
-        except AgentCliError as exc:
-            raise AgentCliError(
-                f"Session store '{session_store}' does not exist.",
-                hint=f"Run `mason sessions bind {session_store}` to create and bind it.",
-                error_code=exc.error_code,
-            ) from exc
+        with render.status(f"Reconciling session store '{session_store}'…"):
+            _, created = _ensure_session_store(client, session_store)
+        if created:
+            render.console().print(f"[green]✓[/] Created session store {session_store!r}")
+    return memory_store_id
 
 
 def resolve_trace_experiment_id(
@@ -444,11 +465,6 @@ def _grant_store_access(
     default=None,
     help="Number of deployment instances.",
 )
-@click.option(
-    "--no-create-stores",
-    is_flag=True,
-    help="Don't auto-create the default memory/session stores for slots unbound in agent.toml.",
-)
 @click.pass_obj
 def deploy(
     obj,
@@ -457,21 +473,21 @@ def deploy(
     pip_index_url,
     workspace_path,
     instances,
-    no_create_stores,
 ) -> None:
     """Deploy your agent to Databricks Apps and get back a hosted URL to try it.
 
     Rolls the agent out to Databricks Apps and prints the URL where you (or anyone you share it with)
     can use it. The deployed agent reaches Databricks model serving through the AI Gateway using the
-    app's own identity — no model keys to configure — and `deploy` also provisions the stores bound
+    app's own identity — no model keys to configure — and `deploy` also reconciles the stores declared
     in agent.toml and wires in any tracing.
 
     NAME is recorded in agent.toml on the first deploy, so a later `mason deploy` from the project
     directory can omit it (passing NAME again updates the recorded name). The deployed app is named
-    `mason-<name>`; use that full name with the `mason deployments` commands.
+    `agent-mason-<name>` (Mason adds the prefix if absent); use that full name with the `mason
+    deployments` commands. `deployments list` shows only apps carrying this prefix.
 
-    By default any memory/session store not yet bound in agent.toml is created and bound as
-    `<name>-memory` / `<name>-session`; pass --no-create-stores to skip that.
+    Any memory/session store declared in agent.toml (by `mason init` or `mason memory/sessions
+    bind`) is created if it doesn't exist yet; agent.toml itself is never modified for stores.
 
     Scaling to multiple instances (--instances) uses best-effort sticky routing, so a browser
     session automatically stays on one instance.
@@ -493,26 +509,14 @@ def deploy(
     instance_args = _instance_args(instances)
     client = obj.client()
 
-    # 0. Create + bind default memory/session stores for any slot unbound in agent.toml (unless
-    #    --no-create-stores). Writes the bindings so the store_bindings read below picks them up.
-    if (
-        project is not None
-        and not no_create_stores
-        and not (project.memory_store and project.session_store)
-    ):
-        with render.status("Provisioning default memory/session stores…"):
-            _ensure_default_stores(project, base_name, client)
-
-    # 1. Validate the agent's bound stores (`mason memory/sessions bind` creates them). Stores are
-    #    read from agent.toml at runtime, not wired into app.yaml; the bindings also drive the store
-    #    access grant (step 6).
+    # 1. Reconcile the stores DECLARED in agent.toml: create any that don't exist yet. `mason deploy`
+    #    is the only reconcile-to-cloud verb; agent.toml is the source of truth and is never rewritten.
     memory_store, session_store = store_bindings(source_dir)
-    with render.status("Checking stores…"):
-        validate_stores(client, memory_store=memory_store, session_store=session_store)
+    memory_store_id = _reconcile_declared_stores(memory_store, session_store, client)
 
     # 2. Provision tracing (on by default): resolve/create the agent's MLflow experiment and wire the
-    #    two env vars the runtime reads. Keyed on the source dir name (NOT the mason-prefixed
-    #    deployment name), matching `mason dev`, so dev and deploy trace to the same per-project
+    #    two env vars the runtime reads. Keyed on the source dir name (NOT the deployment's
+    #    agent-mason-prefixed name), matching `mason dev`, so dev and deploy trace to the same project
     #    experiment. On first run the resolved default experiment id is pinned into agent.toml, so
     #    later runs reuse it. The app's SP is granted write access to it in step 5 (an experiment app
     #    resource). Best-effort: if it can't be set up (no mlflow, offline, permission), the deploy
@@ -536,6 +540,8 @@ def deploy(
         provisioned["Traces"] = (
             experiment_url(client.host, trace_experiment_id) or trace_experiment_id
         )
+    if memory_store_id:
+        env_updates[MEMORY_STORE_ENV] = memory_store_id
 
     durability_backend = None
     durability_enabled = bool(project and project.durability_enabled)
@@ -722,7 +728,7 @@ def _deployment_status(a: dict) -> Optional[str]:
 @deployments.command("list")
 @click.pass_obj
 def deployments_list(obj) -> None:
-    """List Mason agent deployments (apps named `mason-*`) in the workspace."""
+    """List Mason agent deployments (apps named `agent-mason-*`) in the workspace."""
     result = _databricks(
         ["apps", "list", "-o", "json"],
         obj.profile,

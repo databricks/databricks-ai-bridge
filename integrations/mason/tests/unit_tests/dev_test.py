@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import types
 from unittest import mock
 
 import pytest
@@ -13,6 +14,20 @@ from databricks_mason import dev as dev_mod
 from databricks_mason.agent_project import AgentProject, ToolSpec
 from databricks_mason.errors import AgentCliError
 from databricks_mason.project_config import write_project_metadata
+
+
+def _write_agent_manifest(
+    source: pathlib.Path,
+    *,
+    memory: str | None = None,
+    session: str | None = None,
+) -> None:
+    body = 'schema_version = 1\n\n[agent]\nframework = "openai"\n'
+    if memory:
+        body += f'\n[memory_store]\nname = "{memory}"\n'
+    if session:
+        body += f'\n[session_store]\nname = "{session}"\n'
+    (source / "agent.toml").write_text(body)
 
 
 class _Ctx:
@@ -137,40 +152,40 @@ def test_dev_removes_local_entry_point_when_run_local_fails(tmp_path: pathlib.Pa
     assert not (tmp_path / "app.masondev.yaml").exists()
 
 
-def test_dev_validates_bound_stores_without_writing_store_env(tmp_path: pathlib.Path):
-    import yaml
-
+def test_dev_checks_stores_when_bound_and_keeps_app_yaml_clean(tmp_path: pathlib.Path, monkeypatch):
+    # When stores are declared and exist, dev resolves the memory store's id (for the local manifest)
+    # and does NOT write any store env into app.yaml — stores live in agent.toml, not the manifest.
     (tmp_path / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
-        '\n[memory_store]\nname = "m"\n\n[session_store]\nname = "s"\n',
-        encoding="utf-8",
-    )
+    _write_agent_manifest(tmp_path, memory="m", session="s")
     (tmp_path / ".venv").mkdir()
-    with (
-        mock.patch.object(dev_mod, "_databricks") as db,
-        mock.patch.object(dev_mod, "validate_stores") as validate,
-    ):
+    resolve_calls: list[str] = []
+    monkeypatch.setattr(
+        dev_mod,
+        "_resolve_memory_store",
+        lambda client, name: (resolve_calls.append(name), {"name": "memory-stores/m-id"})[1],
+    )
+    with mock.patch.object(dev_mod, "_databricks") as db:
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    validate.assert_called_once()  # bound stores are validated, same path as deploy
+    assert resolve_calls == ["m"]  # resolved by display name
     # Stores are read from agent.toml at runtime, so no store env is written into app.yaml.
     env_entries = yaml.safe_load((tmp_path / "app.yaml").read_text()).get("env") or []
     assert {e["name"] for e in env_entries} == set()
     assert db.call_args.args[0][:2] == ["apps", "run-local"]
 
 
-def test_dev_without_bindings_does_not_validate(tmp_path: pathlib.Path):
-    # No agent.toml store bindings -> nothing to validate (tracing is stubbed by the autouse fixture).
+def test_dev_skips_store_check_when_no_bindings(tmp_path: pathlib.Path, monkeypatch):
+    # No agent.toml store bindings -> store-check block is skipped entirely.
     (tmp_path / "app.yaml").write_text("command: []\n")
     (tmp_path / ".venv").mkdir()
-    with (
-        mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "validate_stores") as validate,
-    ):
+    resolve_calls: list[str] = []
+    monkeypatch.setattr(
+        dev_mod, "_resolve_memory_store", lambda client, name: resolve_calls.append(name)
+    )
+    with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
-    validate.assert_not_called()
+    assert resolve_calls == []  # no store bound -> no resolution attempted
 
 
 def test_dev_wires_tracing_env_on_by_default(tmp_path: pathlib.Path, monkeypatch):
@@ -422,17 +437,102 @@ def test_dev_warns_when_stores_unbound(tmp_path: pathlib.Path):
     assert "No session store bound" in result.output
 
 
-def test_dev_silent_when_stores_bound(tmp_path: pathlib.Path):
+def test_dev_silent_when_stores_bound(tmp_path: pathlib.Path, monkeypatch):
     (tmp_path / "app.yaml").write_text("command: []\n")
-    (tmp_path / "agent.toml").write_text(
-        'schema_version = 1\n\n[agent]\nframework = "openai"\n'
-        '\n[memory_store]\nname = "mem"\n\n[session_store]\nname = "sess"\n'
+    _write_agent_manifest(tmp_path, memory="mem", session="sess")
+    monkeypatch.setattr(
+        dev_mod,
+        "_resolve_memory_store",
+        lambda client, name: {"name": "memory-stores/mem-id"},
     )
-    with (
-        mock.patch.object(dev_mod, "_databricks"),
-        mock.patch.object(dev_mod, "validate_stores"),
-    ):
+    with mock.patch.object(dev_mod, "_databricks"):
         result = CliRunner().invoke(dev_mod.dev, ["--source", str(tmp_path)], obj=_Ctx())
     assert result.exit_code == 0, result.output
     assert "No memory store bound" not in result.output
     assert "No session store bound" not in result.output
+
+
+def test_dev_warns_when_declared_store_is_missing(tmp_path: pathlib.Path, monkeypatch):
+    # init declares a store before it exists remotely; dev must warn and keep running, not error.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, memory="declared-mem")
+
+    monkeypatch.setattr(dev_mod, "_resolve_memory_store", lambda client, name: None)  # missing
+
+    with mock.patch.object(
+        dev_mod, "_databricks", return_value=types.SimpleNamespace(returncode=0)
+    ):
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(src)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    assert "declared-mem" in result.output and "not created" in result.output.lower()
+
+
+def test_dev_degrades_gracefully_when_store_client_raises_offline(
+    tmp_path: pathlib.Path, monkeypatch
+):
+    # When a store is declared but the client RAISES (offline / no auth), dev must exit 0 with a
+    # warning and must NOT abort — mirrors the tracing block's best-effort pattern.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"]}))
+    _write_agent_manifest(src, memory="my-memory", session="my-session")
+    (src / ".venv").mkdir()
+
+    def _boom_resolve(client, name):
+        raise RuntimeError("offline: could not reach the workspace")
+
+    monkeypatch.setattr(dev_mod, "_resolve_memory_store", _boom_resolve)
+
+    class _OfflineCtx:
+        output = "text"
+        profile = None
+
+        def client(self):
+            raise AgentCliError("no databricks auth configured")
+
+    with mock.patch.object(dev_mod, "_databricks") as db:
+        result = CliRunner().invoke(dev_mod.dev, ["--source", str(src)], obj=_OfflineCtx())
+
+    assert result.exit_code == 0, result.output
+    assert "not created" in result.output.lower()  # warning, not abort
+    assert db.call_args.args[0][:2] == ["apps", "run-local"]  # agent still ran
+    # No AGENT_MEMORY_STORE injected when client/resolve failed
+    dev_yaml_path = src / "app.masondev.yaml"
+    assert not dev_yaml_path.exists()  # cleaned up by finally block after run
+
+
+def test_dev_injects_memory_id_into_dev_manifest_only(tmp_path: pathlib.Path, monkeypatch):
+    # When the memory store exists, its bare id is injected into the dev-only manifest
+    # (app.masondev.yaml) but NOT into the deployable app.yaml.
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "app.yaml").write_text(yaml.safe_dump({"command": ["x"], "env": []}))
+    _write_agent_manifest(src, memory="mem")
+
+    monkeypatch.setattr(
+        dev_mod, "_resolve_memory_store", lambda client, name: {"name": "memory-stores/mem-id-123"}
+    )
+
+    captured_dev: dict = {}
+
+    def _fake_databricks(args, *a, **kw):
+        # Read the dev manifest while it still exists (before finally-block cleanup).
+        dev_yaml = pathlib.Path(kw["cwd"]) / "app.masondev.yaml"
+        captured_dev.update(yaml.safe_load(dev_yaml.read_text()))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dev_mod, "_databricks", _fake_databricks)
+
+    result = CliRunner().invoke(dev_mod.dev, ["--source", str(src)], obj=_Ctx())
+
+    assert result.exit_code == 0, result.output
+    dev_env = {e["name"]: e["value"] for e in captured_dev.get("env", [])}
+    assert dev_env["AGENT_MEMORY_STORE"] == "mem-id-123"
+    real_env = {
+        e["name"]: e["value"]
+        for e in (yaml.safe_load((src / "app.yaml").read_text()).get("env") or [])
+    }
+    assert "AGENT_MEMORY_STORE" not in real_env  # real app.yaml is untouched for stores

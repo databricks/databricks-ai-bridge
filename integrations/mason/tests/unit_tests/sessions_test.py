@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from databricks_mason.sessions import items, stores
+from databricks_mason.sessions import items, sessions, stores
 
 
 class _Client:
@@ -107,3 +107,27 @@ def test_store_get_unifies_name_resource_name_store_id_and_storage():
     assert "session-stores/ann-session-store" in result.output
     assert "Store ID" in result.output and "847efa51-dc53-4cf7" in result.output
     assert "Storage" in result.output  # storage now shown for session stores
+
+
+def test_sessions_bind_only_edits_agent_toml(tmp_path):
+    from databricks_mason.agent_project import AgentProject
+
+    (tmp_path / "agent.toml").write_text(
+        'schema_version = 1\n\n[agent]\nframework = "openai"\n', encoding="utf-8"
+    )
+
+    class _NoRemote:
+        def get_session_store(self, name):
+            raise AssertionError("bind must not touch the workspace")
+
+        def create_session_store(self, *a, **k):
+            raise AssertionError("bind must not create stores")
+
+    result = CliRunner().invoke(
+        sessions, ["bind", "agent-sess", "--source", str(tmp_path)], obj=_Ctx(_NoRemote())
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Bound session store 'agent-sess'" in result.output
+    assert "mason sessions stores create" in " ".join(result.output.split())
+    assert AgentProject.load(tmp_path).session_store == "agent-sess"
